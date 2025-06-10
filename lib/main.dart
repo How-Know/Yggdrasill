@@ -96,6 +96,8 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
     switch (_selectedIndex) {
       case 4: // 설정 메뉴
         return const SettingsScreen();
+      case 1: // 학생 메뉴
+        return const StudentScreen();
       default:
         return const Center(
           child: Text(
@@ -909,6 +911,512 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+class StudentScreen extends StatefulWidget {
+  const StudentScreen({super.key});
+
+  @override
+  State<StudentScreen> createState() => _StudentScreenState();
+}
+
+class _StudentScreenState extends State<StudentScreen> {
+  StudentViewType _selectedView = StudentViewType.all;
+  final List<ClassInfo> _classes = [];
+
+  Future<void> _showClassRegistrationDialog({
+    bool editMode = false,
+    ClassInfo? classInfo,
+    int? index,
+  }) async {
+    String className = classInfo?.name ?? '';
+    String description = classInfo?.description ?? '';
+    String capacity = editMode ? classInfo!.capacity.toString() : '';
+    Color selectedColor = classInfo?.color ?? classColors.first;
+
+    await showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          title: Text(
+            editMode ? '클래스 수정' : '클래스 등록',
+            style: const TextStyle(color: Colors.white),
+          ),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: TextEditingController(text: className)..selection = TextSelection.fromPosition(TextPosition(offset: className.length)),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: '클래스명',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    onChanged: (value) => className = value,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: TextEditingController(text: description)..selection = TextSelection.fromPosition(TextPosition(offset: description.length)),
+                    style: const TextStyle(color: Colors.white),
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: '설명',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    onChanged: (value) => description = value,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: TextEditingController(text: capacity)..selection = TextSelection.fromPosition(TextPosition(offset: capacity.length)),
+                    style: const TextStyle(color: Colors.white),
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: '정원',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    onChanged: (value) => capacity = value,
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    '클래스 색상',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  StatefulBuilder(
+                    builder: (context, setState) {
+                      return Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: classColors.map((color) {
+                          return InkWell(
+                            onTap: () {
+                              setState(() => selectedColor = color);
+                            },
+                            child: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                                border: color == selectedColor
+                                    ? Border.all(color: Colors.white, width: 2)
+                                    : null,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text(
+                '취소',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+            FilledButton(
+              onPressed: () {
+                final int? capacityValue = int.tryParse(capacity);
+                if (className.isNotEmpty && capacityValue != null && capacityValue > 0) {
+                  setState(() {
+                    if (editMode) {
+                      _classes[index!] = ClassInfo(
+                        name: className,
+                        description: description,
+                        capacity: capacityValue,
+                        color: selectedColor,
+                      );
+                    } else {
+                      _classes.add(ClassInfo(
+                        name: className,
+                        description: description,
+                        capacity: capacityValue,
+                        color: selectedColor,
+                      ));
+                    }
+                  });
+                  Navigator.of(context).pop();
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2),
+              ),
+              child: Text(
+                editMode ? '수정' : '등록',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        children: [
+          const Center(
+            child: Text(
+              '학생',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 30),
+          Stack(
+            children: [
+              Align(
+                alignment: Alignment.center,
+                child: SizedBox(
+                  width: 400,
+                  child: SegmentedButton<StudentViewType>(
+                    segments: const [
+                      ButtonSegment<StudentViewType>(
+                        value: StudentViewType.all,
+                        label: Text('모든 학생'),
+                      ),
+                      ButtonSegment<StudentViewType>(
+                        value: StudentViewType.byClass,
+                        label: Text('클래스'),
+                      ),
+                      ButtonSegment<StudentViewType>(
+                        value: StudentViewType.bySchool,
+                        label: Text('학교별'),
+                      ),
+                    ],
+                    selected: {_selectedView},
+                    onSelectionChanged: (Set<StudentViewType> newSelection) {
+                      setState(() {
+                        _selectedView = newSelection.first;
+                      });
+                    },
+                    style: ButtonStyle(
+                      backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                        (Set<MaterialState> states) {
+                          if (states.contains(MaterialState.selected)) {
+                            return const Color(0xFF1CB1F5).withOpacity(0.4);
+                          }
+                          return Colors.transparent;
+                        },
+                      ),
+                      foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                        (Set<MaterialState> states) {
+                          if (states.contains(MaterialState.selected)) {
+                            return Colors.white;
+                          }
+                          return Colors.white70;
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                child: SizedBox(
+                  width: 120,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      if (_selectedView == StudentViewType.byClass) {
+                        _showClassRegistrationDialog(
+                          editMode: false,
+                          classInfo: null,
+                          index: -1,
+                        );
+                      } else {
+                        // TODO: 학생 등록 기능 구현
+                      }
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1976D2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                    icon: const Icon(Icons.add, size: 24),
+                    label: const Text(
+                      '등록',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              child: _buildContent(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_selectedView == StudentViewType.byClass) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 24.0),
+        child: ReorderableListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          padding: EdgeInsets.zero,
+          proxyDecorator: (child, index, animation) {
+            return AnimatedBuilder(
+              animation: animation,
+              builder: (BuildContext context, Widget? child) {
+                return Material(
+                  color: Colors.transparent,
+                  child: child,
+                );
+              },
+              child: child,
+            );
+          },
+          itemCount: _classes.length,
+          itemBuilder: (context, index) {
+            final classInfo = _classes[index];
+            return Padding(
+              key: ValueKey(classInfo),
+              padding: const EdgeInsets.only(bottom: 17.6),
+              child: Container(
+                height: 88,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF121212),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 24),
+                    Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        color: classInfo.color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Text(
+                            classInfo.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          if (classInfo.description.isNotEmpty) ...[
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Text(
+                                classInfo.description,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 18,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    Text(
+                      '0/${classInfo.capacity}명',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 24),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          onPressed: () {
+                            _showClassRegistrationDialog(
+                              editMode: true,
+                              classInfo: classInfo,
+                              index: index,
+                            );
+                          },
+                          icon: const Icon(Icons.edit_rounded),
+                          style: IconButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (BuildContext context) {
+                                return AlertDialog(
+                                  backgroundColor: const Color(0xFF1F1F1F),
+                                  title: Text(
+                                    '${classInfo.name} 삭제',
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  content: const Text(
+                                    '정말로 이 클래스를 삭제하시겠습니까?',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () {
+                                        Navigator.of(context).pop();
+                                      },
+                                      child: const Text(
+                                        '취소',
+                                        style: TextStyle(color: Colors.white70),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () {
+                                        setState(() {
+                                          _classes.removeAt(index);
+                                        });
+                                        Navigator.of(context).pop();
+                                      },
+                                      child: const Text(
+                                        '삭제',
+                                        style: TextStyle(
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                          },
+                          icon: const Icon(Icons.delete_rounded),
+                          style: IconButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                          ),
+                        ),
+                        ReorderableDragStartListener(
+                          index: index,
+                          child: IconButton(
+                            onPressed: () {},
+                            icon: const Icon(Icons.drag_handle_rounded),
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              minimumSize: const Size(40, 40),
+                              padding: EdgeInsets.zero,
+                              foregroundColor: Colors.white70,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+          onReorder: (oldIndex, newIndex) {
+            setState(() {
+              if (newIndex > oldIndex) {
+                newIndex -= 1;
+              }
+              final ClassInfo item = _classes.removeAt(oldIndex);
+              _classes.insert(newIndex, item);
+            });
+          },
+        ),
+      );
+    }
+    return Container(); // 다른 뷰 타입에 대한 내용은 추후 구현
+  }
+}
+
+class ClassInfo {
+  final String name;
+  final String description;
+  final int capacity;
+  final Color color;
+
+  ClassInfo({
+    required this.name,
+    required this.description,
+    required this.capacity,
+    required this.color,
+  });
+}
+
+// 20가지 클래스 색상 정의
+const classColors = [
+  Color(0xFF1976D2), // Blue
+  Color(0xFF2196F3), // Light Blue
+  Color(0xFF00BCD4), // Cyan
+  Color(0xFF009688), // Teal
+  Color(0xFF4CAF50), // Green
+  Color(0xFF8BC34A), // Light Green
+  Color(0xFFCDDC39), // Lime
+  Color(0xFFFFEB3B), // Yellow
+  Color(0xFFFFC107), // Amber
+  Color(0xFFFF9800), // Orange
+  Color(0xFFFF5722), // Deep Orange
+  Color(0xFFF44336), // Red
+  Color(0xFFE91E63), // Pink
+  Color(0xFF9C27B0), // Purple
+  Color(0xFF673AB7), // Deep Purple
+  Color(0xFF3F51B5), // Indigo
+  Color(0xFF795548), // Brown
+  Color(0xFF607D8B), // Blue Grey
+  Color(0xFF9E9E9E), // Grey
+  Color(0xFF455A64), // Dark Blue Grey
+];
+
 enum SettingType {
   academy,
   general,
@@ -950,4 +1458,10 @@ class TimeBlock {
   final TimeOfDay end;
 
   TimeBlock(this.start, this.end);
+}
+
+enum StudentViewType {
+  all,
+  byClass,
+  bySchool,
 } 
