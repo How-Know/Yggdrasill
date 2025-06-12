@@ -932,7 +932,7 @@ class StudentScreen extends StatefulWidget {
 }
 
 class _StudentScreenState extends State<StudentScreen> with SingleTickerProviderStateMixin {
-  StudentViewType _selectedView = StudentViewType.all;
+  StudentViewType _viewType = StudentViewType.all;
   final List<ClassInfo> _classes = [];
   final List<Student> _students = [];
   final TextEditingController _searchController = TextEditingController();
@@ -1003,12 +1003,12 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
   }
 
   Widget _buildContent() {
-    if (_selectedView == StudentViewType.byClass) {
+    if (_viewType == StudentViewType.byClass) {
       return _buildClassView();
-    } else if (_selectedView == StudentViewType.bySchool) {
+    } else if (_viewType == StudentViewType.bySchool) {
       return _buildSchoolView();
-    } else if (_selectedView == StudentViewType.byGrade) {
-      return _buildGradeView();
+    } else if (_viewType == StudentViewType.byDate) {
+      return _buildDateView();
     } else {
       return _buildAllStudentsView();
     }
@@ -1041,7 +1041,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                     width: 120,
                     child: FilledButton.icon(
                       onPressed: () {
-                        if (_selectedView == StudentViewType.byClass) {
+                        if (_viewType == StudentViewType.byClass) {
                           _showClassRegistrationDialog(
                             editMode: false,
                             classInfo: null,
@@ -1085,18 +1085,18 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                           label: Text('클래스'),
                         ),
                         ButtonSegment<StudentViewType>(
-                          value: StudentViewType.byGrade,
-                          label: Text('학년별'),
-                        ),
-                        ButtonSegment<StudentViewType>(
                           value: StudentViewType.bySchool,
                           label: Text('학교별'),
                         ),
+                        ButtonSegment<StudentViewType>(
+                          value: StudentViewType.byDate,
+                          label: Text('수강 일자'),
+                        ),
                       ],
-                      selected: {_selectedView},
+                      selected: {_viewType},
                       onSelectionChanged: (Set<StudentViewType> newSelection) {
                         setState(() {
-                          _selectedView = newSelection.first;
+                          _viewType = newSelection.first;
                         });
                       },
                       style: ButtonStyle(
@@ -1479,42 +1479,297 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
   }
 
   Widget _buildSchoolView() {
-    // 임시로 빈 컨테이너 반환
-    return Container();
-  }
-
-  Widget _buildGradeView() {
-    final Map<EducationLevel, Map<int, List<Student>>> groupedStudents = {
-      EducationLevel.elementary: {},
-      EducationLevel.middle: {},
-      EducationLevel.high: {},
+    // 교육과정별, 학교별로 학생들을 그룹화
+    final Map<EducationLevel, Map<String, List<Student>>> groupedStudents = {
+      EducationLevel.elementary: <String, List<Student>>{},
+      EducationLevel.middle: <String, List<Student>>{},
+      EducationLevel.high: <String, List<Student>>{},
     };
 
     for (final student in filteredStudents) {
-      groupedStudents[student.educationLevel]![student.grade.value] ??= [];
-      groupedStudents[student.educationLevel]![student.grade.value]!.add(student);
+      final level = student.educationLevel;
+      final school = student.school;
+      if (groupedStudents[level]![school] == null) {
+        groupedStudents[level]![school] = [];
+      }
+      groupedStudents[level]![school]!.add(student);
     }
 
-    // 각 그룹 내에서 이름순으로 정렬
+    // 각 교육과정 내에서 학교를 가나다순으로 정렬하고,
+    // 각 학교 내에서 학생들을 이름순으로 정렬
     for (final level in groupedStudents.keys) {
-      for (final gradeStudents in groupedStudents[level]!.values) {
-        gradeStudents.sort((a, b) => a.name.compareTo(b.name));
+      final schoolMap = groupedStudents[level]!;
+      for (final students in schoolMap.values) {
+        students.sort((a, b) => a.name.compareTo(b.name));
       }
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
-          _buildEducationLevelGroup('중등', EducationLevel.middle, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
-          _buildEducationLevelGroup('고등', EducationLevel.high, groupedStudents),
+    return SingleChildScrollView(
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(30.0, 24.0, 30.0, 24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedStudents),
+              if (groupedStudents[EducationLevel.elementary]!.isNotEmpty &&
+                  (groupedStudents[EducationLevel.middle]!.isNotEmpty ||
+                   groupedStudents[EducationLevel.high]!.isNotEmpty))
+                const Divider(color: Colors.white24, height: 48),
+              _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedStudents),
+              if (groupedStudents[EducationLevel.middle]!.isNotEmpty &&
+                  groupedStudents[EducationLevel.high]!.isNotEmpty)
+                const Divider(color: Colors.white24, height: 48),
+              _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedStudents),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEducationLevelSchoolGroup(
+    String levelTitle,
+    EducationLevel level,
+    Map<EducationLevel, Map<String, List<Student>>> groupedStudents,
+  ) {
+    final schoolMap = groupedStudents[level]!;
+    if (schoolMap.isEmpty) return const SizedBox.shrink();
+
+    // 학교들을 가나다순으로 정렬
+    final sortedSchools = schoolMap.keys.toList()..sort();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: Text(
+            levelTitle,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        for (final school in sortedSchools) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12.0),
+            child: Text(
+              school,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Colors.white70,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 24.0),
+            child: Wrap(
+              alignment: WrapAlignment.start,
+              spacing: 16.0,
+              runSpacing: 16.0,
+              children: [
+                for (final student in schoolMap[school]!)
+                  _buildStudentCard(student, 220),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildStudentCard(Student student, double width) {
+    return GestureDetector(
+      onTapUp: (TapUpDetails details) {
+        final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+        final Offset position = details.globalPosition;
+        
+        showMenu(
+          context: context,
+          color: const Color(0xFF1F1F1F),
+          position: RelativeRect.fromRect(
+            Rect.fromLTWH(position.dx, position.dy, 0, 0),
+            Offset.zero & overlay.size,
+          ),
+          items: [
+            PopupMenuItem(
+              child: ListTile(
+                leading: const Icon(Icons.edit, color: Colors.white70),
+                title: const Text(
+                  '수정',
+                  style: TextStyle(color: Colors.white),
+                ),
+                contentPadding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showStudentRegistrationDialog(
+                    editMode: true,
+                    editingStudent: student,
+                  );
+                },
+              ),
+            ),
+            PopupMenuItem(
+              child: ListTile(
+                leading: const Icon(Icons.info_outline, color: Colors.white70),
+                title: const Text(
+                  '상세정보',
+                  style: TextStyle(color: Colors.white),
+                ),
+                contentPadding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showStudentDetails(student);
+                },
+              ),
+            ),
+            PopupMenuItem(
+              child: ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text(
+                  '삭제',
+                  style: TextStyle(color: Colors.red),
+                ),
+                contentPadding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showDeleteConfirmationDialog(student);
+                },
+              ),
+            ),
+          ],
+        );
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: width,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      student.name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    student.school,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Text(
+                    getEducationLevelName(student.educationLevel),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${student.grade.value}학년',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (student.classInfo != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: student.classInfo!.color,
+                          width: 1,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        student.classInfo!.name,
+                        style: TextStyle(
+                          color: student.classInfo!.color,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDeleteConfirmationDialog(Student student) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        title: const Text(
+          '학생 삭제',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          '정말 이 학생을 삭제하시겠습니까?',
+          style: TextStyle(color: Colors.white),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              '취소',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text('삭제'),
+          ),
         ],
       ),
     );
+
+    if (confirmed == true) {
+      setState(() {
+        _students.remove(student);
+      });
+    }
+  }
+
+  Widget _buildDateView() {
+    // 임시로 빈 컨테이너 반환
+    return Container();
   }
 
   Widget _buildAllStudentsView() {
@@ -1529,6 +1784,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
       groupedStudents[student.educationLevel]![student.grade.value]!.add(student);
     }
 
+    // 각 교육과정 내에서 학년별로 학생들을 정렬
     for (final level in groupedStudents.keys) {
       for (final gradeStudents in groupedStudents[level]!.values) {
         gradeStudents.sort((a, b) => a.name.compareTo(b.name));
@@ -1559,45 +1815,32 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
 
     final List<Widget> gradeWidgets = students.entries
-      .toList()
-      .where((entry) => entry.value.isNotEmpty)
-      .map<Widget>((entry) {
-        final gradeStudents = entry.value;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 16, bottom: 8),
-              child: Text(
-                gradeStudents.first.grade.name,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
+        .where((entry) => entry.value.isNotEmpty)
+        .map<Widget>((entry) {
+          final gradeStudents = entry.value;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 16, bottom: 8),
+                child: Text(
+                  '${entry.key}학년',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-            ),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final cardWidth = (constraints.maxWidth - 16 * 4) / 5;
-                return Wrap(
-                  spacing: 16,
-                  runSpacing: 16,
-                  children: gradeStudents.map((student) => _buildStudentCard(student, cardWidth)).toList(),
-                );
-              },
-            ),
-          ],
-        );
-      })
-      .toList()
-      ..sort((a, b) {
-        final aGrade = (a as Column).children[0] as Padding;
-        final bGrade = (b as Column).children[0] as Padding;
-        final aText = (aGrade.child as Text).data!;
-        final bText = (bGrade.child as Text).data!;
-        return aText.compareTo(bText);
-      });
+              Wrap(
+                spacing: 16,
+                runSpacing: 16,
+                children: gradeStudents.map((student) => _buildStudentCard(student, 220)).toList(),
+              ),
+            ],
+          );
+        })
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1628,237 +1871,50 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildStudentCard(Student student, double width) {
-    return InkWell(
-      onTap: () => _showStudentDetailsDialog(student),
-      child: Container(
-        width: 196,
-        decoration: BoxDecoration(
-          color: const Color(0xFF333333),
-          borderRadius: BorderRadius.circular(8),
+  void _showStudentDetails(Student student) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: Text(
+          student.name,
+          style: const TextStyle(color: Colors.white),
         ),
-        child: Column(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      student.name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: const Icon(
-                      Icons.more_vert,
-                      color: Colors.white70,
-                      size: 20,
-                    ),
-                    color: const Color(0xFF1F1F1F),
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: 'edit',
-                        child: Text(
-                          '수정',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Text(
-                          '퇴원',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    ],
-                    onSelected: (value) async {
-                      if (value == 'edit') {
-                        _showStudentRegistrationDialog(
-                          editMode: true,
-                          editingStudent: student,
-                        );
-                      } else if (value == 'delete') {
-                        final bool? confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            backgroundColor: const Color(0xFF1F1F1F),
-                            title: const Text(
-                              '학생 퇴원',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                            content: const Text(
-                              '삭제된 파일은 복구가 불가능합니다.\n퇴원시키겠습니까?',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(false),
-                                child: const Text(
-                                  '취소',
-                                  style: TextStyle(color: Colors.white70),
-                                ),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.of(context).pop(true),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                ),
-                                child: const Text('퇴원'),
-                              ),
-                            ],
-                          ),
-                        );
-
-                        if (confirmed == true) {
-                          setState(() {
-                            _students.remove(student);
-                          });
-                        }
-                      }
-                    },
-                  ),
-                ],
-              ),
+            Text(
+              '학교: ${student.school}',
+              style: const TextStyle(color: Colors.white70),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                children: [
-                  Text(
-                    '${_getEducationLevelName(student.educationLevel)} ${student.grade.name}',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
+            const SizedBox(height: 8),
+            Text(
+              '과정: ${getEducationLevelName(student.educationLevel)}',
+              style: const TextStyle(color: Colors.white70),
             ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      student.school,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (student.classInfo != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: student.classInfo!.color.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        student.classInfo!.name,
-                        style: TextStyle(
-                          color: student.classInfo!.color,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+            const SizedBox(height: 8),
+            Text(
+              '학년: ${student.grade.value}학년',
+              style: const TextStyle(color: Colors.white70),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showStudentDetailsDialog(Student student) async {
-    await showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          title: Text(
-            student.name,
-            style: const TextStyle(color: Colors.white),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildDetailRow('과정', _getEducationLevelName(student.educationLevel)),
-              _buildDetailRow('학년', student.grade.name),
-              _buildDetailRow('학교', student.school),
-              _buildDetailRow('클래스', student.classInfo?.name ?? '미소속'),
-              _buildDetailRow('연락처', student.phoneNumber),
-              _buildDetailRow('부모님 연락처', student.parentPhoneNumber),
-              _buildDetailRow(
-                '등록일',
-                '${student.registrationDate.year}년 ${student.registrationDate.month}월 ${student.registrationDate.day}일',
+            if (student.classInfo != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                '클래스: ${student.classInfo!.name}',
+                style: TextStyle(color: student.classInfo!.color),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text(
-                '닫기',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
           ],
-        );
-      },
-    );
-  }
-
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-              ),
-            ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('닫기'),
           ),
         ],
       ),
     );
-  }
-
-  String _getEducationLevelName(EducationLevel level) {
-    return getEducationLevelName(level);
   }
 
   Future<void> _showStudentRegistrationDialog({
@@ -1883,24 +1939,36 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _showClassRegistrationDialog({
-    required bool editMode,
+  void _showClassRegistrationDialog({
+    bool editMode = false,
     ClassInfo? classInfo,
-    required int index,
+    int? index,
   }) async {
     final result = await showDialog<ClassInfo>(
       context: context,
       builder: (context) => ClassRegistrationDialog(
         editMode: editMode,
         classInfo: classInfo,
+        index: index,
       ),
     );
+
     if (result != null) {
-      if (editMode) {
-        _updateClass(result, index);
-      } else {
-        _addClass(result);
-      }
+      setState(() {
+        if (editMode && index != null) {
+          // 수정된 클래스 정보로 업데이트
+          _classes[index] = result;
+          
+          // 해당 클래스에 소속된 학생들의 클래스 정보도 업데이트
+          for (var i = 0; i < _students.length; i++) {
+            if (_students[i].classInfo?.id == result.id) {
+              _students[i] = _students[i].copyWith(classInfo: result);
+            }
+          }
+        } else {
+          _classes.add(result);
+        }
+      });
     }
   }
 }
@@ -1908,8 +1976,8 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
 enum StudentViewType {
   all,
   byClass,
-  byGrade,
   bySchool,
+  byDate,
 }
 
 enum SettingType {
@@ -1963,6 +2031,17 @@ class TimeBlock {
   final TimeOfDay end;
 
   const TimeBlock(this.start, this.end);
+}
+
+String getEducationLevelName(EducationLevel level) {
+  switch (level) {
+    case EducationLevel.elementary:
+      return '초등';
+    case EducationLevel.middle:
+      return '중등';
+    case EducationLevel.high:
+      return '고등';
+  }
 }
 
  
