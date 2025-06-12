@@ -6,6 +6,7 @@ import 'models/class_info.dart';
 import 'widgets/student_registration_dialog.dart';
 import 'widgets/class_registration_dialog.dart';
 import 'widgets/class_student_card.dart';
+import 'services/data_manager.dart';
 
 void main() {
   runApp(const MyApp());
@@ -58,6 +59,9 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
   late Animation<double> _rotationAnimation;
   late Animation<double> _sideSheetAnimation;
   
+  // FAB 확장 상태 추가
+  bool _isFabExtended = false;
+
   @override
   void initState() {
     super.initState();
@@ -241,6 +245,66 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
           ),
         ],
       ),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (_isFabExtended) ...[
+              FloatingActionButton.extended(
+                heroTag: 'registration',
+                backgroundColor: const Color(0xFF42A5F5),
+                foregroundColor: Colors.white,
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => StudentRegistrationDialog(
+                      classes: DataManager.instance.classes,
+                    ),
+                  );
+                },
+                label: const Text('수강 등록'),
+                icon: const Icon(Icons.person_add),
+              ),
+              const SizedBox(height: 8),
+              FloatingActionButton.extended(
+                heroTag: 'makeup',
+                backgroundColor: const Color(0xFF42A5F5),
+                foregroundColor: Colors.white,
+                onPressed: () {
+                  // TODO: 보강 기능 구현
+                },
+                label: const Text('보강'),
+                icon: const Icon(Icons.event_repeat),
+              ),
+              const SizedBox(height: 8),
+              FloatingActionButton.extended(
+                heroTag: 'consultation',
+                backgroundColor: const Color(0xFF42A5F5),
+                foregroundColor: Colors.white,
+                onPressed: () {
+                  // TODO: 상담 기능 구현
+                },
+                label: const Text('상담'),
+                icon: const Icon(Icons.chat),
+              ),
+              const SizedBox(height: 8),
+            ],
+            FloatingActionButton(
+              backgroundColor: const Color(0xFF42A5F5),
+              foregroundColor: Colors.white,
+              onPressed: () {
+                setState(() {
+                  _isFabExtended = !_isFabExtended;
+                });
+              },
+              child: Icon(_isFabExtended ? Icons.close : Icons.add),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }

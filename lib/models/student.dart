@@ -13,6 +13,18 @@ class Grade {
   final int value;
 
   const Grade(this.level, this.name, this.value);
+
+  Map<String, dynamic> toJson() => {
+    'level': level.index,
+    'name': name,
+    'value': value,
+  };
+
+  factory Grade.fromJson(Map<String, dynamic> json) => Grade(
+    EducationLevel.values[json['level']],
+    json['name'],
+    json['value'],
+  );
 }
 
 final Map<EducationLevel, List<Grade>> gradesByLevel = {
@@ -83,6 +95,28 @@ class Student {
       registrationDate: registrationDate ?? this.registrationDate,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'school': school,
+    'educationLevel': educationLevel.index,
+    'grade': grade.toJson(),
+    'classId': classInfo?.id,
+    'phoneNumber': phoneNumber,
+    'parentPhoneNumber': parentPhoneNumber,
+    'registrationDate': registrationDate.toIso8601String(),
+  };
+
+  factory Student.fromJson(Map<String, dynamic> json, Map<String, ClassInfo> classesById) => Student(
+    name: json['name'],
+    school: json['school'],
+    educationLevel: EducationLevel.values[json['educationLevel']],
+    grade: Grade.fromJson(json['grade']),
+    classInfo: json['classId'] != null ? classesById[json['classId']] : null,
+    phoneNumber: json['phoneNumber'],
+    parentPhoneNumber: json['parentPhoneNumber'],
+    registrationDate: DateTime.parse(json['registrationDate']),
+  );
 }
 
 String getEducationLevelName(EducationLevel level) {
