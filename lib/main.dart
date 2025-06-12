@@ -5,6 +5,7 @@ import 'models/student.dart';
 import 'models/class_info.dart';
 import 'widgets/student_registration_dialog.dart';
 import 'widgets/class_registration_dialog.dart';
+import 'widgets/class_student_card.dart';
 
 void main() {
   runApp(const MyApp());
@@ -1377,7 +1378,10 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                           child: Wrap(
                             spacing: 16,
                             runSpacing: 16,
-                            children: studentsInClass.map((student) => _buildStudentCard(student, 196)).toList(),
+                            children: studentsInClass.map((student) => ClassStudentCard(
+                              student: student,
+                              width: 196,
+                            )).toList(),
                           ),
                         )
                       : const SizedBox.shrink(),
