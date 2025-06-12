@@ -1250,7 +1250,19 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                     children: [
                       Material(
                         color: Colors.transparent,
+                        borderRadius: candidateData.isNotEmpty
+                          ? const BorderRadius.vertical(
+                              top: Radius.circular(10),
+                              bottom: Radius.zero,
+                            )
+                          : BorderRadius.circular(12),
                         child: InkWell(
+                          borderRadius: candidateData.isNotEmpty
+                            ? const BorderRadius.vertical(
+                                top: Radius.circular(10),
+                                bottom: Radius.zero,
+                              )
+                            : BorderRadius.circular(12),
                           onTap: () {
                             setState(() {
                               if (isExpanded) {
@@ -1275,14 +1287,14 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                               children: [
                                 const SizedBox(width: 24),
                                 Container(
-                                  width: 20,
-                                  height: 20,
+                                  width: 12,
+                                  height: 40,
                                   decoration: BoxDecoration(
                                     color: classInfo.color,
-                                    shape: BoxShape.circle,
+                                    borderRadius: BorderRadius.circular(2),
                                   ),
                                 ),
-                                const SizedBox(width: 20),
+                                const SizedBox(width: 24),
                                 Expanded(
                                   child: Row(
                                     children: [
