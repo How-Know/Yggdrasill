@@ -65,7 +65,7 @@ class EducationLevelSchoolGroup extends StatelessWidget {
                 for (final student in schoolMap[school]!)
                   StudentCard(
                     student: student,
-                    width: 220,
+                    width: 160,
                     classes: classes,
                     onEdit: onEdit,
                     onDelete: onDelete,

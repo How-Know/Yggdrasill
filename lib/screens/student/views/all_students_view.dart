@@ -38,47 +38,32 @@ class AllStudentsView extends StatelessWidget {
       }
     }
 
-    return SingleChildScrollView(
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(30.0, 24.0, 30.0, 24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              EducationLevelGroup(
-                title: '초등',
-                level: EducationLevel.elementary,
-                groupedStudents: groupedStudents,
-                classes: classes,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                onShowDetails: onShowDetails,
-              ),
-              const Divider(color: Colors.white24, height: 48),
-              EducationLevelGroup(
-                title: '중등',
-                level: EducationLevel.middle,
-                groupedStudents: groupedStudents,
-                classes: classes,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                onShowDetails: onShowDetails,
-              ),
-              const Divider(color: Colors.white24, height: 48),
-              EducationLevelGroup(
-                title: '고등',
-                level: EducationLevel.high,
-                groupedStudents: groupedStudents,
-                classes: classes,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                onShowDetails: onShowDetails,
-              ),
-            ],
-          ),
-        ),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final level in EducationLevel.values)
+          if (groupedStudents[level]!.isNotEmpty)
+            EducationLevelGroup(
+              title: _getLevelTitle(level),
+              level: level,
+              groupedStudents: groupedStudents,
+              classes: classes,
+              onEdit: onEdit,
+              onDelete: onDelete,
+              onShowDetails: onShowDetails,
+            ),
+      ],
     );
+  }
+
+  String _getLevelTitle(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary:
+        return '초등학생';
+      case EducationLevel.middle:
+        return '중학생';
+      case EducationLevel.high:
+        return '고등학생';
+    }
   }
 } 

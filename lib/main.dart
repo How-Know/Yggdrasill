@@ -6,6 +6,7 @@ import 'models/class_info.dart';
 import 'widgets/student_registration_dialog.dart';
 import 'widgets/class_registration_dialog.dart';
 import 'widgets/class_student_card.dart';
+import 'widgets/student_card.dart';
 import 'services/data_manager.dart';
 
 void main() {
@@ -1513,7 +1514,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                                   runSpacing: 16,
                                   children: studentsInClass.map((student) => ClassStudentCard(
                                     student: student,
-                                    width: 196,
+                                    width: 160,
                                   )).toList(),
                                 ),
                               ),
@@ -1638,157 +1639,23 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
               runSpacing: 16.0,
               children: [
                 for (final student in schoolMap[school]!)
-                  _buildStudentCard(student, 220),
+                  StudentCard(
+                    student: student,
+                    width: 160,
+                    classes: _classes,
+                    onEdit: (student) => _showStudentRegistrationDialog(
+                      editMode: true,
+                      editingStudent: student,
+                    ),
+                    onDelete: _showDeleteConfirmationDialog,
+                    onTap: () => _showStudentDetails(student),
+                    isSimpleLayout: true,
+                  ),
               ],
             ),
           ),
         ],
       ],
-    );
-  }
-
-  Widget _buildStudentCard(Student student, double width) {
-    return GestureDetector(
-      onTapUp: (TapUpDetails details) {
-        final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-        final Offset position = details.globalPosition;
-        
-        showMenu(
-          context: context,
-          color: const Color(0xFF1F1F1F),
-          position: RelativeRect.fromRect(
-            Rect.fromLTWH(position.dx, position.dy, 0, 0),
-            Offset.zero & overlay.size,
-          ),
-          items: [
-            PopupMenuItem(
-              child: ListTile(
-                leading: const Icon(Icons.edit, color: Colors.white70),
-                title: const Text(
-                  '수정',
-                  style: TextStyle(color: Colors.white),
-                ),
-                contentPadding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showStudentRegistrationDialog(
-                    editMode: true,
-                    editingStudent: student,
-                  );
-                },
-              ),
-            ),
-            PopupMenuItem(
-              child: ListTile(
-                leading: const Icon(Icons.info_outline, color: Colors.white70),
-                title: const Text(
-                  '상세정보',
-                  style: TextStyle(color: Colors.white),
-                ),
-                contentPadding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showStudentDetails(student);
-                },
-              ),
-            ),
-            PopupMenuItem(
-              child: ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text(
-                  '삭제',
-                  style: TextStyle(color: Colors.red),
-                ),
-                contentPadding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showDeleteConfirmationDialog(student);
-                },
-              ),
-            ),
-          ],
-        );
-      },
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: width,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2A2A),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      student.name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    student.school,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Text(
-                    getEducationLevelName(student.educationLevel),
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${student.grade.value}학년',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (student.classInfo != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: student.classInfo!.color,
-                          width: 1,
-                        ),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        student.classInfo!.name,
-                        style: TextStyle(
-                          color: student.classInfo!.color,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
@@ -1899,7 +1766,18 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
               Wrap(
                 spacing: 16,
                 runSpacing: 16,
-                children: gradeStudents.map((student) => _buildStudentCard(student, 220)).toList(),
+                children: gradeStudents.map((student) => StudentCard(
+                  student: student,
+                  width: 160,
+                  classes: _classes,
+                  onEdit: (student) => _showStudentRegistrationDialog(
+                    editMode: true,
+                    editingStudent: student,
+                  ),
+                  onDelete: _showDeleteConfirmationDialog,
+                  onTap: () => _showStudentDetails(student),
+                  isSimpleLayout: true,
+                )).toList(),
               ),
             ],
           );

@@ -9,6 +9,17 @@ class StudentDetailsDialog extends StatelessWidget {
     required this.student,
   });
 
+  String _getEducationLevelName(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary:
+        return '초등';
+      case EducationLevel.middle:
+        return '중등';
+      case EducationLevel.high:
+        return '고등';
+    }
+  }
+
   Widget _buildDetailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -41,38 +52,57 @@ class StudentDetailsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: Text(
-          student.name,
-          style: const TextStyle(color: Colors.white),
-        ),
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_rounded,
-            color: Colors.white,
-            size: 32,
-            weight: 700,
-          ),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+    return Dialog(
+      backgroundColor: const Color(0xFF2A2A2A),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
+      child: Container(
+        width: 400,
+        padding: const EdgeInsets.all(24),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow('과정', getEducationLevelName(student.educationLevel)),
-            _buildDetailRow('학년', student.grade.name),
+            Row(
+              children: [
+                if (student.classInfo != null) ...[
+                  Container(
+                    width: 4,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: student.classInfo!.color,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Text(
+                  student.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
             _buildDetailRow('학교', student.school),
-            _buildDetailRow('클래스', student.classInfo?.name ?? '미소속'),
-            _buildDetailRow('연락처', student.phoneNumber),
-            _buildDetailRow('부모님 연락처', student.parentPhoneNumber),
-            _buildDetailRow(
-              '등록일',
-              '${student.registrationDate.year}년 ${student.registrationDate.month}월 ${student.registrationDate.day}일',
+            _buildDetailRow('과정', _getEducationLevelName(student.educationLevel)),
+            _buildDetailRow('학년', '${student.grade.value}학년'),
+            if (student.classInfo != null)
+              _buildDetailRow('소속 반', student.classInfo!.name),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('닫기'),
+              ),
             ),
           ],
         ),

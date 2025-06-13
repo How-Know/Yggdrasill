@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../models/student.dart';
+import '../../../models/class_info.dart';
 import '../../../widgets/student_card.dart';
 
 class EducationLevelGroup extends StatelessWidget {
@@ -50,11 +51,12 @@ class EducationLevelGroup extends StatelessWidget {
                 runSpacing: 16,
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
-                  width: 220,
+                  width: 160,
                   classes: classes,
                   onEdit: onEdit,
                   onDelete: onDelete,
-                  onShowDetails: onShowDetails,
+                  onTap: () => onShowDetails(student),
+                  isSimpleLayout: true,
                 )).toList(),
               ),
             ],
@@ -62,32 +64,35 @@ class EducationLevelGroup extends StatelessWidget {
         })
         .toList();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              '$totalCount명',
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 20,
+              const SizedBox(width: 12),
+              Text(
+                '$totalCount명',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 20,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ...gradeWidgets,
-      ],
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...gradeWidgets,
+        ],
+      ),
     );
   }
 } 
