@@ -1,9 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show protected;
 import '../models/student.dart';
 import '../models/class_info.dart';
 
 abstract class DataManagerBase {
-  static DataManagerBase? _instance;
+  static DataManagerBase? instance;
   static bool _initialized = false;
 
   final Map<String, ClassInfo> classesById = {};
@@ -14,6 +15,14 @@ abstract class DataManagerBase {
 
   List<ClassInfo> get classes => classesNotifier.value;
   List<Student> get students => studentsNotifier.value;
+
+  @protected
+  void initInstance() {
+    if (instance != null) {
+      throw StateError('DataManager instance already initialized');
+    }
+    instance = this;
+  }
 
   Future<void> initialize() async {
     if (_initialized) return;

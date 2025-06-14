@@ -8,6 +8,7 @@ import 'widgets/class_registration_dialog.dart';
 import 'widgets/class_student_card.dart';
 import 'widgets/student_card.dart';
 import 'services/data_manager.dart';
+import 'screens/timetable/timetable_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -63,11 +64,18 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
   // FAB 확장 상태 추가
   bool _isFabExtended = false;
 
+  StudentViewType _viewType = StudentViewType.all;
+  final List<ClassInfo> _classes = [];
+  final List<Student> _students = [];
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  final Set<ClassInfo> _expandedClasses = {};
+
   @override
   void initState() {
     super.initState();
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 200),
       vsync: this,
     );
     _rotationAnimation = Tween<double>(
@@ -84,11 +92,23 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
       parent: _animationController,
       curve: Curves.easeInOut,
     ));
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    await DataManager.instance.initialize();
+    setState(() {
+      _classes.clear();
+      _classes.addAll(DataManager.instance.classes);
+      _students.clear();
+      _students.addAll(DataManager.instance.students);
+    });
   }
 
   @override
   void dispose() {
     _animationController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -108,6 +128,10 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
       return const SettingsScreen();
     } else if (_selectedIndex == 1) {
       return const StudentScreen();
+    } else if (_selectedIndex == 2) {
+      return TimetableScreen(
+        classes: _classes,
+      );
     } else {
       return const Center(
         child: Text(
@@ -478,24 +502,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onSelectionChanged: (Set<ThemeMode> newSelection) {
             // TODO: 테마 변경 기능 구현
           },
-          style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return const Color(0xFF1CB1F5).withOpacity(0.4);
-                }
-                return Colors.transparent;
-              },
-            ),
-            foregroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return Colors.white;
-                }
-                return Colors.white70;
-              },
-            ),
-          ),
+                                style: ButtonStyle(
+                        backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                          (Set<MaterialState> states) {
+                            if (states.contains(MaterialState.selected)) {
+                              return const Color(0xFF78909C);
+                            }
+                            return Colors.transparent;
+                          },
+                        ),
+                        foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                          (Set<MaterialState> states) {
+                            if (states.contains(MaterialState.selected)) {
+                              return Colors.white;
+                            }
+                            return Colors.white70;
+                          },
+                        ),
+                      ),
         ),
         const SizedBox(height: 40),
         // 언어 설정
@@ -878,7 +902,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             backgroundColor: MaterialStateProperty.resolveWith<Color>(
               (Set<MaterialState> states) {
                 if (states.contains(MaterialState.selected)) {
-                  return const Color(0xFF1CB1F5).withOpacity(0.4);
+                  return const Color(0xFF78909C);
                 }
                 return Colors.transparent;
               },
@@ -960,7 +984,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 backgroundColor: MaterialStateProperty.resolveWith<Color>(
                   (Set<MaterialState> states) {
                     if (states.contains(MaterialState.selected)) {
-                      return const Color(0xFF1CB1F5).withOpacity(0.4);
+                      return const Color(0xFF78909C);
                     }
                     return Colors.transparent;
                   },
@@ -1005,6 +1029,22 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
   final Set<ClassInfo> _expandedClasses = {};
 
   @override
+  void initState() {
+    super.initState();
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    await DataManager.instance.initialize();
+    setState(() {
+      _classes.clear();
+      _classes.addAll(DataManager.instance.classes);
+      _students.clear();
+      _students.addAll(DataManager.instance.students);
+    });
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
@@ -1013,51 +1053,45 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
   void _addStudent(Student student) {
     setState(() {
       _students.add(student);
+      DataManager.instance.addStudent(student);
     });
   }
 
   void _updateStudent(Student student, int index) {
+    final oldStudent = _students[index];
     setState(() {
       _students[index] = student;
+      DataManager.instance.updateStudent(oldStudent, student);
     });
   }
 
   void _deleteStudent(Student student) {
     setState(() {
       _students.remove(student);
+      DataManager.instance.deleteStudent(student);
     });
   }
 
   void _addClass(ClassInfo classInfo) {
     setState(() {
       _classes.add(classInfo);
+      DataManager.instance.addClass(classInfo);
     });
   }
 
   void _updateClass(ClassInfo classInfo, int index) {
     setState(() {
       _classes[index] = classInfo;
+      DataManager.instance.updateClass(classInfo);
     });
   }
 
-  void _deleteClass(String classId) {
-    setState(() {
-      _classes.removeWhere((c) => c.id == classId);
-      for (var student in _students) {
-        if (student.classInfo?.id == classId) {
-          student.classInfo = null;
-        }
-      }
-    });
+  void deleteClass(ClassInfo classInfo) {
+    DataManager.instance.deleteClass(classInfo);
   }
 
-  void _moveStudent(Student student, ClassInfo? newClass) {
-    setState(() {
-      final index = _students.indexOf(student);
-      if (index != -1) {
-        _students[index] = student.copyWith(classInfo: newClass);
-      }
-    });
+  void moveStudent(Student student, ClassInfo? newClass) {
+    DataManager.instance.updateStudentClass(student, newClass);
   }
 
   List<Student> get filteredStudents {
@@ -1168,7 +1202,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                         backgroundColor: MaterialStateProperty.resolveWith<Color>(
                           (Set<MaterialState> states) {
                             if (states.contains(MaterialState.selected)) {
-                              return const Color(0xFF1CB1F5).withOpacity(0.4);
+                              return const Color(0xFF78909C);
                             }
                             return Colors.transparent;
                           },
@@ -1452,6 +1486,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                                                   onPressed: () {
                                                     setState(() {
                                                       _classes.removeAt(index);
+                                                      deleteClass(classInfo);
                                                     });
                                                     Navigator.of(context).pop();
                                                   },
@@ -1900,6 +1935,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
         if (editMode && index != null) {
           // 수정된 클래스 정보로 업데이트
           _classes[index] = result;
+          DataManager.instance.updateClass(result);
           
           // 해당 클래스에 소속된 학생들의 클래스 정보도 업데이트
           for (var i = 0; i < _students.length; i++) {
@@ -1909,6 +1945,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
           }
         } else {
           _classes.add(result);
+          DataManager.instance.addClass(result);
         }
       });
     }

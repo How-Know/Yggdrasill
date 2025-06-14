@@ -1,14 +1,18 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/class_info.dart';
 import 'data_manager_base.dart';
 
 class DataManager extends DataManagerBase {
-  static final DataManager _instance = DataManager._internal();
-  factory DataManager() => _instance;
-  DataManager._internal();
+  static final DataManager _singleton = DataManager._internal();
+  factory DataManager() => _singleton;
+  
+  DataManager._internal() {
+    initInstance();
+  }
 
   final Map<String, ClassInfo> classesById = {};
   final List<Student> studentsList = [];
@@ -21,19 +25,30 @@ class DataManager extends DataManagerBase {
 
   @override
   Future<void> saveData() async {
-    final data = {
-      'classes': classesById.values.map((c) => c.toJson()).toList(),
-      'students': studentsList.map((s) => s.toJson()).toList(),
-    };
-    html.window.localStorage['academy_data'] = jsonEncode(data);
+    try {
+      // 클래스 정보 저장
+      final classesData = {
+        'classes': classesById.values.map((c) => c.toJson()).toList(),
+      };
+      html.window.localStorage['classes'] = jsonEncode(classesData);
+
+      // 학생 정보 저장
+      final studentsData = {
+        'students': studentsList.map((s) => s.toJson()).toList(),
+      };
+      html.window.localStorage['students'] = jsonEncode(studentsData);
+    } catch (e) {
+      print('Error saving data: $e');
+    }
   }
 
   @override
   Future<void> loadData() async {
     try {
-      final jsonString = html.window.localStorage['academy_data'];
-      if (jsonString != null) {
-        final data = jsonDecode(jsonString) as Map<String, dynamic>;
+      // 클래스 정보 로드
+      final classesJson = html.window.localStorage['classes'];
+      if (classesJson != null) {
+        final data = jsonDecode(classesJson) as Map<String, dynamic>;
         
         classesById.clear();
         final classesList = (data['classes'] as List).cast<Map<String, dynamic>>();
@@ -41,15 +56,33 @@ class DataManager extends DataManagerBase {
           final classInfo = ClassInfo.fromJson(classData);
           classesById[classInfo.id] = classInfo;
         }
+      } else {
+        // 기본 클래스 생성
+        final defaultClass = ClassInfo(
+          id: '1',
+          name: '기본반',
+          description: '기본 학습반',
+          color: const Color(0xFF1976D2),
+          capacity: 10,
+        );
+        classesById[defaultClass.id] = defaultClass;
+        await saveData();
+      }
 
+      // 학생 정보 로드
+      final studentsJson = html.window.localStorage['students'];
+      if (studentsJson != null) {
+        final data = jsonDecode(studentsJson) as Map<String, dynamic>;
+        
         studentsList.clear();
         final students = (data['students'] as List).cast<Map<String, dynamic>>();
         for (final studentData in students) {
           final student = Student.fromJson(studentData, classesById);
           studentsList.add(student);
         }
-        notifyListeners();
       }
+
+      notifyListeners();
     } catch (e) {
       print('Error loading data: $e');
     }

@@ -1,142 +1,105 @@
-import 'dart:convert';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' if (dart.library.io) 'dart:io' as platform;
-import 'package:path_provider/path_provider.dart';
 import '../models/student.dart';
 import '../models/class_info.dart';
+import '../models/operating_hours.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:convert';
+
+// Web-specific imports
+import 'web_stub.dart'
+    if (dart.library.io) 'desktop.dart'
+    if (dart.library.html) 'web_stub.dart';
 
 class DataManager {
   static final DataManager instance = DataManager._internal();
-  static bool _initialized = false;
+  DataManager._internal();
 
-  final Map<String, ClassInfo> _classesById = {};
-  final List<Student> _students = [];
+  List<Student> _students = [];
+  List<ClassInfo> _classes = [];
+  List<OperatingHours> _operatingHours = [];
+  Map<String, ClassInfo> _classesById = {};
 
-  // 외부에서 변경 사항을 감지할 수 있도록 ValueNotifier 추가
   final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
   final ValueNotifier<List<Student>> studentsNotifier = ValueNotifier<List<Student>>([]);
 
-  factory DataManager() {
-    return instance;
-  }
-
-  DataManager._internal();
-
-  List<ClassInfo> get classes => classesNotifier.value;
-  List<Student> get students => studentsNotifier.value;
-
-  Future<String> get _localPath async {
-    if (kIsWeb) {
-      return '';
-    }
-    final directory = await getApplicationDocumentsDirectory();
-    return directory.path;
-  }
-
-  Future<File> get _localFile async {
-    final path = await _localPath;
-    return File('$path/academy_data.json');
-  }
+  List<ClassInfo> get classes => List.unmodifiable(_classes);
+  List<Student> get students => List.unmodifiable(_students);
 
   Future<void> initialize() async {
-    if (_initialized) return;
-    await loadData();
-    _initialized = true;
-  }
-
-  Future<void> saveData() async {
-    if (kIsWeb) {
-      // 웹에서는 localStorage 사용
-      final data = {
-        'classes': _classesById.values.map((c) => c.toJson()).toList(),
-        'students': _students.map((s) => s.toJson()).toList(),
-      };
-      platform.window.localStorage['academy_data'] = jsonEncode(data);
-      return;
-    }
-
-    final file = await _localFile;
-    final data = {
-      'classes': _classesById.values.map((c) => c.toJson()).toList(),
-      'students': _students.map((s) => s.toJson()).toList(),
-    };
-    await file.writeAsString(jsonEncode(data));
-  }
-
-  Future<void> loadData() async {
     try {
-      Map<String, dynamic>? data;
-      
-      if (kIsWeb) {
-        // 웹에서는 localStorage에서 데이터 로드
-        final jsonString = platform.window.localStorage['academy_data'];
-        if (jsonString != null) {
-          data = jsonDecode(jsonString) as Map<String, dynamic>;
-        }
-      } else {
-        // 파일에서 데이터 로드
-        final file = await _localFile;
-        if (await file.exists()) {
-          final jsonString = await file.readAsString();
-          data = jsonDecode(jsonString) as Map<String, dynamic>;
-        }
-      }
-
-      if (data != null) {
-        // 먼저 클래스 로드
-        _classesById.clear();
-        final classesList = (data['classes'] as List).cast<Map<String, dynamic>>();
-        for (final classData in classesList) {
-          final classInfo = ClassInfo.fromJson(classData);
-          _classesById[classInfo.id] = classInfo;
-        }
-
-        // 학생 로드
-        _students.clear();
-        final studentsList = (data['students'] as List).cast<Map<String, dynamic>>();
-        for (final studentData in studentsList) {
-          final student = Student.fromJson(studentData, _classesById);
-          _students.add(student);
-        }
-
-        // 알림 업데이트
-        _notifyListeners();
-      }
+      await loadClasses();
+      await loadStudents();
     } catch (e) {
-      print('Error loading data: $e');
+      print('Error initializing data: $e');
     }
+  }
+
+  Future<void> loadClasses() async {
+    try {
+      final jsonData = await loadData('classes.json') as List;
+      _classes = jsonData.map((json) => ClassInfo.fromJson(json)).toList();
+      _classesById = {for (var c in _classes) c.id: c};
+      _notifyListeners();
+    } catch (e) {
+      print('Error loading classes: $e');
+      _classes = [];
+      _classesById = {};
+      _notifyListeners();
+    }
+  }
+
+  Future<void> loadStudents() async {
+    try {
+      final jsonData = await loadData('students.json') as List;
+      _students = jsonData.map((json) => Student.fromJson(json as Map<String, dynamic>, _classesById)).toList();
+      _notifyListeners();
+    } catch (e) {
+      print('Error loading students: $e');
+      _students = [];
+      _notifyListeners();
+    }
+  }
+
+  void _notifyListeners() {
+    classesNotifier.value = List.unmodifiable(_classes);
+    studentsNotifier.value = List.unmodifiable(_students);
   }
 
   void addClass(ClassInfo classInfo) {
+    _classes.add(classInfo);
     _classesById[classInfo.id] = classInfo;
     _notifyListeners();
-    saveData();
+    saveData('classes.json', _classes.map((c) => c.toJson()).toList());
   }
 
   void updateClass(ClassInfo classInfo) {
     _classesById[classInfo.id] = classInfo;
+    _classes = _classesById.values.toList();
     _notifyListeners();
-    saveData();
+    saveData('classes.json', _classes.map((c) => c.toJson()).toList());
   }
 
-  void deleteClass(String classId) {
-    _classesById.remove(classId);
-    // 해당 클래스에 속한 학생들의 클래스 정보를 null로 설정
-    for (final student in _students) {
-      if (student.classInfo?.id == classId) {
-        student.classInfo = null;
+  void deleteClass(ClassInfo classInfo) {
+    if (_classesById.containsKey(classInfo.id)) {
+      _classesById.remove(classInfo.id);
+      _classes = _classesById.values.toList();
+      
+      // Remove class from students
+      for (var i = 0; i < _students.length; i++) {
+        if (_students[i].classInfo?.id == classInfo.id) {
+          _students[i] = _students[i].copyWith(classInfo: null);
+        }
       }
+      
+      _notifyListeners();
+      saveData('classes.json', _classes.map((c) => c.toJson()).toList());
+      saveData('students.json', _students.map((s) => s.toJson()).toList());
     }
-    _notifyListeners();
-    saveData();
   }
 
   void addStudent(Student student) {
     _students.add(student);
     _notifyListeners();
-    saveData();
+    saveData('students.json', _students.map((s) => s.toJson()).toList());
   }
 
   void updateStudent(Student oldStudent, Student newStudent) {
@@ -144,27 +107,61 @@ class DataManager {
     if (index != -1) {
       _students[index] = newStudent;
       _notifyListeners();
-      saveData();
+      saveData('students.json', _students.map((s) => s.toJson()).toList());
     }
   }
 
   void deleteStudent(Student student) {
     _students.remove(student);
     _notifyListeners();
-    saveData();
+    saveData('students.json', _students.map((s) => s.toJson()).toList());
   }
 
-  void moveStudent(Student student, ClassInfo? newClass) {
+  void updateStudentClass(Student student, ClassInfo? newClass) {
     final index = _students.indexOf(student);
     if (index != -1) {
       _students[index] = student.copyWith(classInfo: newClass);
       _notifyListeners();
-      saveData();
+      saveData('students.json', _students.map((s) => s.toJson()).toList());
     }
   }
 
-  void _notifyListeners() {
-    classesNotifier.value = _classesById.values.toList();
-    studentsNotifier.value = List.unmodifiable(_students);
+  Future<void> saveOperatingHours(List<OperatingHours> hours) async {
+    _operatingHours = hours;
+    final jsonData = hours.map((hour) => hour.toJson()).toList();
+    await saveData('operating_hours.json', jsonData);
+  }
+
+  Future<List<OperatingHours>> getOperatingHours() async {
+    if (_operatingHours.isNotEmpty) {
+      return _operatingHours;
+    }
+
+    try {
+      final jsonData = await loadData('operating_hours.json') as List;
+      _operatingHours = jsonData.map((json) => OperatingHours.fromJson(json)).toList();
+    } catch (e) {
+      // 기본 운영 시간 설정 (오전 9시 ~ 오후 6시)
+      final now = DateTime.now();
+      final startTime = DateTime(now.year, now.month, now.day, 9, 0);
+      final endTime = DateTime(now.year, now.month, now.day, 18, 0);
+      
+      _operatingHours = [
+        OperatingHours(
+          startTime: startTime,
+          endTime: endTime,
+          breakTimes: [
+            BreakTime(
+              startTime: DateTime(now.year, now.month, now.day, 12, 0),
+              endTime: DateTime(now.year, now.month, now.day, 13, 0),
+            ),
+          ],
+        ),
+      ];
+      
+      await saveOperatingHours(_operatingHours);
+    }
+
+    return _operatingHours;
   }
 } 

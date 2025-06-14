@@ -92,7 +92,7 @@ class StudentHeader extends StatelessWidget {
                       backgroundColor: MaterialStateProperty.resolveWith<Color>(
                         (Set<MaterialState> states) {
                           if (states.contains(MaterialState.selected)) {
-                            return const Color(0xFF1CB1F5).withOpacity(0.4);
+                            return const Color(0xFF78909C);
                           }
                           return Colors.transparent;
                         },
