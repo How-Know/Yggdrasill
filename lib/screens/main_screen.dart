@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'student/student_screen.dart';
 import '../widgets/student_registration_dialog.dart';
+import '../services/data_manager.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -28,7 +29,11 @@ class _MainScreenState extends State<MainScreen> {
                 onPressed: () {
                   showDialog(
                     context: context,
-                    builder: (context) => const StudentRegistrationDialog(),
+                    builder: (context) => StudentRegistrationDialog(
+                      onSave: (student) async {
+                        await DataManager.instance.addStudent(student);
+                      },
+                    ),
                   );
                 },
                 label: const Text('수강 등록'),

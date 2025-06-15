@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
-import '../../models/student.dart';
-import '../../widgets/student_registration_dialog.dart';
-import 'components/student_header.dart';
-import 'views/all_students_view.dart';
-import 'views/school_view.dart';
+import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/models/student_view_type.dart';
+import 'package:mneme_flutter/screens/student/components/student_header.dart';
+import 'package:mneme_flutter/screens/student/views/all_students_view.dart';
+import 'package:mneme_flutter/screens/student/views/class_view.dart';
+import 'package:mneme_flutter/screens/student/views/date_view.dart';
+import 'package:mneme_flutter/screens/student/views/school_view.dart';
+import 'package:mneme_flutter/services/data_manager.dart';
+import 'package:mneme_flutter/widgets/student_details_dialog.dart';
+import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
 
 class StudentScreen extends StatefulWidget {
-  const StudentScreen({super.key});
+  const StudentScreen({Key? key}) : super(key: key);
 
   @override
   State<StudentScreen> createState() => _StudentScreenState();
@@ -14,161 +19,114 @@ class StudentScreen extends StatefulWidget {
 
 class _StudentScreenState extends State<StudentScreen> {
   StudentViewType _viewType = StudentViewType.all;
-  final List<Student> _students = [];
-  final List<ClassInfo> _classes = [];
-  final TextEditingController _searchController = TextEditingController();
+  List<Student> _students = [];
   String _searchQuery = '';
 
-  List<Student> get filteredStudents {
-    if (_searchQuery.isEmpty) return _students;
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await DataManager.instance.loadStudents();
+    setState(() {
+      _students = List.from(DataManager.instance.students);
+    });
+  }
+
+  List<Student> get _filteredStudents {
+    if (_searchQuery.isEmpty) {
+      return _students;
+    }
     return _students.where((student) {
-      final name = student.name.toLowerCase();
-      final school = student.school.toLowerCase();
-      final query = _searchQuery.toLowerCase();
-      return name.contains(query) || school.contains(query);
+      final searchLower = _searchQuery.toLowerCase();
+      return student.name.toLowerCase().contains(searchLower) ||
+          student.school.toLowerCase().contains(searchLower);
     }).toList();
+  }
+
+  void _handleViewTypeChanged(StudentViewType viewType) {
+    setState(() {
+      _viewType = viewType;
+    });
+  }
+
+  void _handleSearch(String query) {
+    setState(() {
+      _searchQuery = query;
+    });
+  }
+
+  Future<void> _handleAddStudent() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StudentRegistrationDialog(
+        onSave: (student) async {
+          await DataManager.instance.addStudent(student);
+          setState(() {
+            _students = List.from(DataManager.instance.students);
+          });
+        },
+        classes: DataManager.instance.classes,
+      ),
+    );
+
+    if (result == true) {
+      await _loadData();
+    }
+  }
+
+  Future<void> _handleShowDetails(Student student) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StudentDetailsDialog(student: student),
+    );
+
+    if (result == true) {
+      await _loadData();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        children: [
-          StudentHeader(
-            viewType: _viewType,
-            onViewTypeChanged: (viewType) {
-              setState(() {
-                _viewType = viewType;
-              });
-            },
-            onAddStudent: () => _showStudentRegistrationDialog(null),
-            onSearch: (value) {
-              setState(() {
-                _searchQuery = value;
-              });
-            },
-            searchController: _searchController,
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              child: _buildContent(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContent() {
-    switch (_viewType) {
-      case StudentViewType.byClass:
-        return _buildClassView();
-      case StudentViewType.bySchool:
-        return SchoolView(
-          students: filteredStudents,
-          classes: _classes,
-          onEdit: _showStudentRegistrationDialog,
-          onDelete: _showDeleteConfirmationDialog,
-          onShowDetails: _showStudentDetails,
-        );
-      case StudentViewType.byDate:
-        return _buildDateView();
-      default:
-        return AllStudentsView(
-          students: filteredStudents,
-          classes: _classes,
-          onEdit: _showStudentRegistrationDialog,
-          onDelete: _showDeleteConfirmationDialog,
-          onShowDetails: _showStudentDetails,
-        );
-    }
-  }
-
-  Widget _buildClassView() {
-    // TODO: 클래스별 보기 구현
-    return const Center(
-      child: Text(
-        '클래스별 보기 준비 중...',
-        style: TextStyle(color: Colors.white70),
-      ),
-    );
-  }
-
-  Widget _buildDateView() {
-    // TODO: 수강 일자별 보기 구현
-    return const Center(
-      child: Text(
-        '수강 일자별 보기 준비 중...',
-        style: TextStyle(color: Colors.white70),
-      ),
-    );
-  }
-
-  void _showStudentDetails(Student student) {
-    showDialog(
-      context: context,
-      builder: (context) => StudentDetailsDialog(student: student),
-    );
-  }
-
-  Future<void> _showDeleteConfirmationDialog(Student student) async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        title: const Text(
-          '학생 삭제',
-          style: TextStyle(color: Colors.white),
+    return Column(
+      children: [
+        StudentHeader(
+          viewType: _viewType,
+          onViewTypeChanged: _handleViewTypeChanged,
+          onSearch: _handleSearch,
+          onAddStudent: _handleAddStudent,
         ),
-        content: const Text(
-          '정말 이 학생을 삭제하시겠습니까?',
-          style: TextStyle(color: Colors.white),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text(
-              '취소',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      setState(() {
-        _students.remove(student);
-      });
-    }
-  }
-
-  void _showStudentRegistrationDialog(Student? student) {
-    showDialog(
-      context: context,
-      builder: (context) => StudentRegistrationDialog(
-        editingStudent: student,
-        onSave: (updatedStudent) {
-          setState(() {
-            if (student != null) {
-              final index = _students.indexOf(student);
-              if (index != -1) {
-                _students[index] = updatedStudent;
+        Expanded(
+          child: Builder(
+            builder: (context) {
+              switch (_viewType) {
+                case StudentViewType.all:
+                  return AllStudentsView(
+                    students: _filteredStudents,
+                    onShowDetails: _handleShowDetails,
+                  );
+                case StudentViewType.byClass:
+                  return ClassView(
+                    students: _filteredStudents,
+                    onShowDetails: _handleShowDetails,
+                  );
+                case StudentViewType.bySchool:
+                  return SchoolView(
+                    students: _filteredStudents,
+                    onShowDetails: _handleShowDetails,
+                  );
+                case StudentViewType.byDate:
+                  return DateView(
+                    students: _filteredStudents,
+                    onShowDetails: _handleShowDetails,
+                  );
               }
-            } else {
-              _students.add(updatedStudent);
-            }
-          });
-        },
-      ),
+            },
+          ),
+        ),
+      ],
     );
   }
 } 

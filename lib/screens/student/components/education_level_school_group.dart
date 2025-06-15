@@ -6,74 +6,59 @@ class EducationLevelSchoolGroup extends StatelessWidget {
   final String levelTitle;
   final EducationLevel level;
   final Map<EducationLevel, Map<String, List<Student>>> groupedStudents;
-  final List<ClassInfo> classes;
-  final Function(Student) onEdit;
-  final Function(Student) onDelete;
   final Function(Student) onShowDetails;
 
   const EducationLevelSchoolGroup({
-    super.key,
+    Key? key,
     required this.levelTitle,
     required this.level,
     required this.groupedStudents,
-    required this.classes,
-    required this.onEdit,
-    required this.onDelete,
     required this.onShowDetails,
-  });
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final schoolMap = groupedStudents[level]!;
-    if (schoolMap.isEmpty) return const SizedBox.shrink();
+    if (schoolMap.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     final sortedSchools = schoolMap.keys.toList()..sort();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 16.0),
-          child: Text(
-            levelTitle,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
-          ),
-        ),
-        for (final school in sortedSchools) ...[
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12.0),
-            child: Text(
-              school,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.white70,
+        Text(
+          levelTitle,
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: Colors.white,
               ),
-            ),
+        ),
+        const SizedBox(height: 16),
+        for (final school in sortedSchools) ...[
+          Text(
+            school,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Colors.white70,
+                ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 24.0),
-            child: Wrap(
-              alignment: WrapAlignment.start,
-              spacing: 16.0,
-              runSpacing: 16.0,
-              children: [
-                for (final student in schoolMap[school]!)
-                  StudentCard(
-                    student: student,
-                    width: 160,
-                    classes: classes,
-                    onEdit: onEdit,
-                    onDelete: onDelete,
-                    onShowDetails: onShowDetails,
-                  ),
-              ],
-            ),
+          const SizedBox(height: 8),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: schoolMap[school]!.length,
+            itemBuilder: (context, index) {
+              final student = schoolMap[school]![index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: StudentCard(
+                  student: student,
+                  onShowDetails: onShowDetails,
+                ),
+              );
+            },
           ),
+          const SizedBox(height: 16),
         ],
       ],
     );

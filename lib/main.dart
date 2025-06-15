@@ -3,12 +3,15 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:uuid/uuid.dart';
 import 'models/student.dart';
 import 'models/class_info.dart';
+import 'models/operating_hours.dart';
 import 'widgets/student_registration_dialog.dart';
 import 'widgets/class_registration_dialog.dart';
 import 'widgets/class_student_card.dart';
 import 'widgets/student_card.dart';
 import 'services/data_manager.dart';
 import 'screens/timetable/timetable_screen.dart';
+import 'screens/student/student_screen.dart';
+import 'models/academy_settings.dart';
 
 void main() {
   runApp(const MyApp());
@@ -129,9 +132,7 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
     } else if (_selectedIndex == 1) {
       return const StudentScreen();
     } else if (_selectedIndex == 2) {
-      return TimetableScreen(
-        classes: _classes,
-      );
+      return TimetableScreen();
     } else {
       return const Center(
         child: Text(
@@ -285,6 +286,12 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                   showDialog(
                     context: context,
                     builder: (context) => StudentRegistrationDialog(
+                      onSave: (student) async {
+                        await DataManager.instance.addStudent(student);
+                        setState(() {
+                          _initializeData();
+                        });
+                      },
                       classes: DataManager.instance.classes,
                     ),
                   );
@@ -343,8 +350,14 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingType _selectedType = SettingType.academy;
-  PaymentType _paymentType = PaymentType.monthly;
-  final Map<DayOfWeek, OperatingHours?> _operatingHours = {
+  
+  // 학원 설정 컨트롤러들
+  final TextEditingController _academyNameController = TextEditingController();
+  final TextEditingController _sloganController = TextEditingController();
+  final TextEditingController _capacityController = TextEditingController(text: '30');
+  final TextEditingController _lessonDurationController = TextEditingController(text: '50');
+  
+  final Map<DayOfWeek, TimeRange?> _operatingHours = {
     DayOfWeek.monday: null,
     DayOfWeek.tuesday: null,
     DayOfWeek.wednesday: null,
@@ -355,7 +368,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   };
   
   // Break time을 저장하는 맵 추가
-  final Map<DayOfWeek, List<TimeBlock>> _breakTimes = {
+  final Map<DayOfWeek, List<TimeRange>> _breakTimes = {
     DayOfWeek.monday: [],
     DayOfWeek.tuesday: [],
     DayOfWeek.wednesday: [],
@@ -364,6 +377,116 @@ class _SettingsScreenState extends State<SettingsScreen> {
     DayOfWeek.saturday: [],
     DayOfWeek.sunday: [],
   };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _academyNameController.dispose();
+    _sloganController.dispose();
+    _capacityController.dispose();
+    _lessonDurationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      // 학원 기본 정보 로드
+      await DataManager.instance.loadAcademySettings();
+      setState(() {
+        _academyNameController.text = DataManager.instance.academySettings.name;
+        _sloganController.text = DataManager.instance.academySettings.slogan;
+        _capacityController.text = DataManager.instance.academySettings.defaultCapacity.toString();
+        _lessonDurationController.text = DataManager.instance.academySettings.lessonDuration.toString();
+      });
+
+      // 운영 시간 로드
+      final hours = await DataManager.instance.getOperatingHours();
+      setState(() {
+        for (var hour in hours) {
+          final day = DayOfWeek.values[hour.startTime.weekday - 1];
+          _operatingHours[day] = TimeRange(
+            start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
+            end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+          );
+          _breakTimes[day] = hour.breakTimes.map((breakTime) => TimeRange(
+            start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
+            end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+          )).toList();
+        }
+      });
+    } catch (e) {
+      print('Error loading settings: $e');
+    }
+  }
+
+  Future<void> _saveOperatingHours() async {
+    try {
+      final now = DateTime.now();
+      final hours = <OperatingHours>[];
+      
+      for (var day in DayOfWeek.values) {
+        final operatingHour = _operatingHours[day];
+        if (operatingHour != null) {
+          final startTime = DateTime(
+            now.year,
+            now.month,
+            now.day + day.index + 1,
+            operatingHour.start.hour,
+            operatingHour.start.minute,
+          );
+          final endTime = DateTime(
+            now.year,
+            now.month,
+            now.day + day.index + 1,
+            operatingHour.end.hour,
+            operatingHour.end.minute,
+          );
+          
+          final breakTimes = _breakTimes[day]?.map((block) {
+            final breakStartTime = DateTime(
+              now.year,
+              now.month,
+              now.day + day.index + 1,
+              block.start.hour,
+              block.start.minute,
+            );
+            final breakEndTime = DateTime(
+              now.year,
+              now.month,
+              now.day + day.index + 1,
+              block.end.hour,
+              block.end.minute,
+            );
+            return BreakTime(
+              startTime: breakStartTime,
+              endTime: breakEndTime,
+            );
+          }).toList() ?? [];
+
+          hours.add(OperatingHours(
+            startTime: startTime,
+            endTime: endTime,
+            breakTimes: breakTimes,
+          ));
+        }
+      }
+
+      await DataManager.instance.saveOperatingHours(hours);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('운영 시간이 저장되었습니다.')),
+      );
+    } catch (e) {
+      print('Error saving operating hours: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('운영 시간 저장에 실패했습니다.')),
+      );
+    }
+  }
 
   Future<void> _selectOperatingHours(BuildContext context, DayOfWeek day) async {
     final TimeOfDay? startTime = await showTimePicker(
@@ -410,62 +533,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (endTime != null) {
         setState(() {
-          _operatingHours[day] = OperatingHours(startTime, endTime);
+          _operatingHours[day] = TimeRange(start: startTime, end: endTime);
         });
       }
     }
-  }
-
-  Future<void> _addBreakTime(BuildContext context, DayOfWeek day) async {
-    final TimeOfDay? startTime = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (BuildContext context, Widget? child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF1976D2),
-              onPrimary: Colors.white,
-              surface: Color(0xFF1F1F1F),
-              onSurface: Colors.white,
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-
-    if (startTime != null) {
-      final TimeOfDay? endTime = await showTimePicker(
-        context: context,
-        initialTime: startTime,
-        builder: (BuildContext context, Widget? child) {
-          return Theme(
-            data: Theme.of(context).copyWith(
-              colorScheme: const ColorScheme.dark(
-                primary: Color(0xFF1976D2),
-                onPrimary: Colors.white,
-                surface: Color(0xFF1F1F1F),
-                onSurface: Colors.white,
-              ),
-            ),
-            child: child!,
-          );
-        },
-      );
-
-      if (endTime != null) {
-        setState(() {
-          _breakTimes[day]!.add(TimeBlock(startTime, endTime));
-        });
-      }
-    }
-  }
-
-  void _removeBreakTime(DayOfWeek day, int index) {
-    setState(() {
-      _breakTimes[day]!.removeAt(index);
-    });
   }
 
   Widget _buildGeneralSettings() {
@@ -623,30 +694,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
           activeColor: const Color(0xFF1976D2),
         ),
-        const SizedBox(height: 40),
-        // 저장 버튼
-        Center(
-          child: ElevatedButton(
-            onPressed: () {
-              // TODO: 저장 기능 구현
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1976D2),
-              minimumSize: const Size(200, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            child: const Text(
-              '저장',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -660,6 +707,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SizedBox(
           width: 300,
           child: TextField(
+            controller: _academyNameController,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: '학원명',
@@ -678,6 +726,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SizedBox(
           width: 600,
           child: TextField(
+            controller: _sloganController,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: '슬로건',
@@ -699,6 +748,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: 140,
               child: TextField(
+                controller: _capacityController,
                 style: const TextStyle(color: Colors.white),
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
@@ -718,6 +768,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: 140,
               child: TextField(
+                controller: _lessonDurationController,
                 style: const TextStyle(color: Colors.white),
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
@@ -776,7 +827,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   );
                   if (selectedDay != null) {
-                    await _addBreakTime(context, selectedDay);
+                    await _selectOperatingHours(context, selectedDay);
                   }
                 },
                 style: TextButton.styleFrom(
@@ -822,192 +873,142 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
-              const SizedBox(width: 20),
-              if (_breakTimes[day]!.isNotEmpty)
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: _breakTimes[day]!.asMap().entries.map((entry) =>
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8.0),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1976D2).withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${entry.value.start.format(context)} - ${entry.value.end.format(context)}',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                InkWell(
-                                  onTap: () => _removeBreakTime(day, entry.key),
-                                  child: const Icon(
-                                    Icons.close,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ).toList(),
-                    ),
+              if (_operatingHours[day] != null) ...[
+                const SizedBox(width: 5),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _operatingHours[day] = null;
+                      _breakTimes[day]?.clear();
+                    });
+                  },
+                  icon: const Icon(
+                    Icons.close,
+                    color: Colors.white54,
+                    size: 20,
                   ),
                 ),
+              ],
             ],
           ),
         )).toList(),
         const SizedBox(height: 30),
-        // 지불 방법
-        const Text(
-          '지불 방법',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 20),
-        SegmentedButton<PaymentType>(
-          segments: const [
-            ButtonSegment<PaymentType>(
-              value: PaymentType.monthly,
-              label: Text('매달'),
-            ),
-            ButtonSegment<PaymentType>(
-              value: PaymentType.perClass,
-              label: Text('횟수'),
-            ),
-          ],
-          selected: {_paymentType},
-          onSelectionChanged: (Set<PaymentType> newSelection) {
-            setState(() {
-              _paymentType = newSelection.first;
-            });
-          },
-          style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return const Color(0xFF78909C);
-                }
-                return Colors.transparent;
-              },
-            ),
-            foregroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return Colors.white;
-                }
-                return Colors.white70;
-              },
-            ),
-          ),
-        ),
-        const SizedBox(height: 40),
-        // 저장 버튼
-        Center(
-          child: ElevatedButton(
-            onPressed: () {
-              // TODO: 저장 기능 구현
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1976D2),
-              minimumSize: const Size(200, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            child: const Text(
-              '저장',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        children: [
-          const Center(
-            child: Text(
-              '설정',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
+    return Scaffold(
+      backgroundColor: const Color(0xFF1F1F1F),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1F1F1F),
+        title: const Text(
+          '설정',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(24.0, 8.0, 24.0, 24.0),  // 상단 여백 8 추가
+        child: Column(
+          children: [
+            Center(
+              child: SegmentedButton<SettingType>(
+                segments: const [
+                  ButtonSegment<SettingType>(
+                    value: SettingType.academy,
+                    label: Text('학원'),
+                  ),
+                  ButtonSegment<SettingType>(
+                    value: SettingType.general,
+                    label: Text('일반'),
+                  ),
+                ],
+                selected: {_selectedType},
+                onSelectionChanged: (Set<SettingType> newSelection) {
+                  setState(() {
+                    _selectedType = newSelection.first;
+                  });
+                },
+                style: ButtonStyle(
+                  backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                    (Set<MaterialState> states) {
+                      if (states.contains(MaterialState.selected)) {
+                        return const Color(0xFF78909C);
+                      }
+                      return Colors.transparent;
+                    },
+                  ),
+                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                    (Set<MaterialState> states) {
+                      if (states.contains(MaterialState.selected)) {
+                        return Colors.white;
+                      }
+                      return Colors.white70;
+                    },
+                  ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 30),
-          Center(
-            child: SegmentedButton<SettingType>(
-              segments: const [
-                ButtonSegment<SettingType>(
-                  value: SettingType.academy,
-                  label: Text('학원'),
+            Expanded(
+              child: SingleChildScrollView(
+                child: _selectedType == SettingType.academy
+                    ? _buildAcademySettings()
+                    : _buildGeneralSettings(),
+              ),
+            ),
+            const SizedBox(height: 40),
+            // 저장 버튼
+            Center(
+              child: ElevatedButton(
+                onPressed: () async {
+                  try {
+                    // 1. 학원 기본 정보 저장
+                    final academySettings = AcademySettings(
+                      name: _academyNameController.text.trim(),
+                      slogan: _sloganController.text.trim(),
+                      defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
+                      lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
+                    );
+                    await DataManager.instance.saveAcademySettings(academySettings);
+
+                    // 2. 운영 시간 및 Break Time 저장
+                    await _saveOperatingHours();
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('설정이 저장되었습니다.')),
+                    );
+                  } catch (e) {
+                    print('Error saving settings: $e');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('설정 저장에 실패했습니다.')),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1976D2),
+                  minimumSize: const Size(200, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
-                ButtonSegment<SettingType>(
-                  value: SettingType.general,
-                  label: Text('일반'),
-                ),
-              ],
-              selected: {_selectedType},
-              onSelectionChanged: (Set<SettingType> newSelection) {
-                setState(() {
-                  _selectedType = newSelection.first;
-                });
-              },
-              style: ButtonStyle(
-                backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                  (Set<MaterialState> states) {
-                    if (states.contains(MaterialState.selected)) {
-                      return const Color(0xFF78909C);
-                    }
-                    return Colors.transparent;
-                  },
-                ),
-                foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                  (Set<MaterialState> states) {
-                    if (states.contains(MaterialState.selected)) {
-                      return Colors.white;
-                    }
-                    return Colors.white70;
-                  },
+                child: const Text(
+                  '저장',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              child: _selectedType == SettingType.academy
-                  ? _buildAcademySettings()
-                  : _buildGeneralSettings(),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1058,17 +1059,16 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
   }
 
   void _updateStudent(Student student, int index) {
-    final oldStudent = _students[index];
     setState(() {
       _students[index] = student;
-      DataManager.instance.updateStudent(oldStudent, student);
+      DataManager.instance.updateStudent(student);
     });
   }
 
   void _deleteStudent(Student student) {
     setState(() {
       _students.remove(student);
-      DataManager.instance.deleteStudent(student);
+      DataManager.instance.deleteStudent(student.id);
     });
   }
 
@@ -1147,7 +1147,18 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                             index: -1,
                           );
                         } else {
-                          _showStudentRegistrationDialog();
+                          showDialog(
+                            context: context,
+                            builder: (context) => StudentRegistrationDialog(
+                              onSave: (student) async {
+                                await DataManager.instance.addStudent(student);
+                                setState(() {
+                                  _initializeData();
+                                });
+                              },
+                              classes: DataManager.instance.classes,
+                            ),
+                          );
                         }
                       },
                       style: FilledButton.styleFrom(
@@ -1549,7 +1560,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                                   runSpacing: 16,
                                   children: studentsInClass.map((student) => ClassStudentCard(
                                     student: student,
-                                    width: 160,
+                                    onShowDetails: (student) => _showStudentDetails(student),
                                   )).toList(),
                                 ),
                               ),
@@ -1676,15 +1687,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                 for (final student in schoolMap[school]!)
                   StudentCard(
                     student: student,
-                    width: 160,
-                    classes: _classes,
-                    onEdit: (student) => _showStudentRegistrationDialog(
-                      editMode: true,
-                      editingStudent: student,
-                    ),
-                    onDelete: _showDeleteConfirmationDialog,
-                    onTap: () => _showStudentDetails(student),
-                    isSimpleLayout: true,
+                    onShowDetails: (student) => _showStudentDetails(student),
                   ),
               ],
             ),
@@ -1746,8 +1749,8 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
     };
 
     for (final student in filteredStudents) {
-      groupedStudents[student.educationLevel]![student.grade.value] ??= [];
-      groupedStudents[student.educationLevel]![student.grade.value]!.add(student);
+      groupedStudents[student.educationLevel]![student.grade] ??= [];
+      groupedStudents[student.educationLevel]![student.grade]!.add(student);
     }
 
     // 각 교육과정 내에서 학년별로 학생들을 정렬
@@ -1803,15 +1806,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
                 runSpacing: 16,
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
-                  width: 160,
-                  classes: _classes,
-                  onEdit: (student) => _showStudentRegistrationDialog(
-                    editMode: true,
-                    editingStudent: student,
-                  ),
-                  onDelete: _showDeleteConfirmationDialog,
-                  onTap: () => _showStudentDetails(student),
-                  isSimpleLayout: true,
+                  onShowDetails: (student) => _showStudentDetails(student),
                 )).toList(),
               ),
             ],
@@ -1872,7 +1867,7 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
             ),
             const SizedBox(height: 8),
             Text(
-              '학년: ${student.grade.value}학년',
+              '학년: ${student.grade}학년',
               style: const TextStyle(color: Colors.white70),
             ),
             if (student.classInfo != null) ...[
@@ -1892,28 +1887,6 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
         ],
       ),
     );
-  }
-
-  Future<void> _showStudentRegistrationDialog({
-    bool editMode = false,
-    Student? editingStudent,
-  }) async {
-    final result = await showDialog<Student>(
-      context: context,
-      builder: (context) => StudentRegistrationDialog(
-        editMode: editMode,
-        editingStudent: editingStudent,
-        classes: _classes,
-      ),
-    );
-    if (result != null) {
-      if (editMode) {
-        final index = _students.indexOf(editingStudent!);
-        _updateStudent(result, index);
-      } else {
-        _addStudent(result);
-      }
-    }
   }
 
   void _showClassRegistrationDialog({
@@ -1950,6 +1923,18 @@ class _StudentScreenState extends State<StudentScreen> with SingleTickerProvider
       });
     }
   }
+
+  void _showSettingsDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => const SettingsScreen(),
+    );
+    if (result == true) {
+      setState(() {
+        // 설정이 변경되었을 때의 처리
+      });
+    }
+  }
 }
 
 enum StudentViewType {
@@ -1962,11 +1947,6 @@ enum StudentViewType {
 enum SettingType {
   academy,
   general,
-}
-
-enum PaymentType {
-  monthly,
-  perClass,
 }
 
 enum DayOfWeek {
@@ -1998,20 +1978,6 @@ enum DayOfWeek {
   }
 }
 
-class OperatingHours {
-  final TimeOfDay start;
-  final TimeOfDay end;
-
-  const OperatingHours(this.start, this.end);
-}
-
-class TimeBlock {
-  final TimeOfDay start;
-  final TimeOfDay end;
-
-  const TimeBlock(this.start, this.end);
-}
-
 String getEducationLevelName(EducationLevel level) {
   switch (level) {
     case EducationLevel.elementary:
@@ -2021,6 +1987,13 @@ String getEducationLevelName(EducationLevel level) {
     case EducationLevel.high:
       return '고등';
   }
+}
+
+class TimeRange {
+  final TimeOfDay start;
+  final TimeOfDay end;
+
+  const TimeRange({required this.start, required this.end});
 }
 
  

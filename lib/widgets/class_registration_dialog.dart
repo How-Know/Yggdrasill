@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/class_info.dart';
+import 'package:uuid/uuid.dart';
 
 class ClassRegistrationDialog extends StatefulWidget {
   final bool editMode;
@@ -21,6 +22,7 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _descriptionController;
   late final TextEditingController _capacityController;
+  late int _duration;
   Color _selectedColor = Colors.blue;
 
   final List<Color> _colors = [
@@ -52,6 +54,7 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
     _nameController = TextEditingController(text: widget.classInfo?.name ?? '');
     _descriptionController = TextEditingController(text: widget.classInfo?.description ?? '');
     _capacityController = TextEditingController(text: widget.classInfo?.capacity.toString() ?? '');
+    _duration = widget.classInfo?.duration ?? 60;
     if (widget.classInfo != null) {
       _selectedColor = widget.classInfo!.color;
     }
@@ -63,6 +66,42 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
     _descriptionController.dispose();
     _capacityController.dispose();
     super.dispose();
+  }
+
+  void _handleSave() {
+    final name = _nameController.text.trim();
+    final description = _descriptionController.text.trim();
+    final capacity = int.tryParse(_capacityController.text.trim()) ?? 30;
+    final duration = _duration;
+    final color = _selectedColor;
+
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('클래스명을 입력해주세요')),
+      );
+      return;
+    }
+
+    if (widget.editMode) {
+      final updatedClass = widget.classInfo!.copyWith(
+        name: name,
+        description: description,
+        capacity: capacity,
+        duration: duration,
+        color: color,
+      );
+      Navigator.pop(context, updatedClass);
+    } else {
+      final newClass = ClassInfo(
+        id: const Uuid().v4(),
+        name: name,
+        description: description,
+        capacity: capacity,
+        duration: duration,
+        color: color,
+      );
+      Navigator.pop(context, newClass);
+    }
   }
 
   @override
@@ -188,36 +227,7 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
           ),
         ),
         FilledButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final description = _descriptionController.text.trim();
-            final capacity = int.tryParse(_capacityController.text.trim()) ?? 30;
-
-            if (name.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('클래스명을 입력해주세요')),
-              );
-              return;
-            }
-
-            if (widget.editMode) {
-              final editedClass = widget.classInfo!.copyWith(
-                name: name,
-                description: description,
-                capacity: capacity,
-                color: _selectedColor,
-              );
-              Navigator.pop(context, editedClass);
-            } else {
-              final newClass = ClassInfo(
-                name: name,
-                description: description,
-                capacity: capacity,
-                color: _selectedColor,
-              );
-              Navigator.pop(context, newClass);
-            }
-          },
+          onPressed: _handleSave,
           style: FilledButton.styleFrom(
             backgroundColor: const Color(0xFF1976D2),
           ),

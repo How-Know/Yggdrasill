@@ -51,12 +51,7 @@ class EducationLevelGroup extends StatelessWidget {
                 runSpacing: 16,
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
-                  width: 160,
-                  classes: classes,
-                  onEdit: onEdit,
-                  onDelete: onDelete,
-                  onTap: () => onShowDetails(student),
-                  isSimpleLayout: true,
+                  onShowDetails: onShowDetails,
                 )).toList(),
               ),
             ],

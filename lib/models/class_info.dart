@@ -4,46 +4,56 @@ import 'package:uuid/uuid.dart';
 class ClassInfo {
   final String id;
   final String name;
-  final int capacity;
   final String description;
+  final int capacity;
+  final int duration; // 수업 시간 (분)
   final Color color;
 
   ClassInfo({
-    String? id,
+    required this.id,
     required this.name,
-    required this.capacity,
     required this.description,
+    required this.capacity,
+    required this.duration,
     required this.color,
-  }) : id = id ?? const Uuid().v4();
+  });
 
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'capacity': capacity,
-    'description': description,
-    'color': color.value,
-  };
+  factory ClassInfo.fromJson(Map<String, dynamic> json) {
+    return ClassInfo(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      description: json['description'] as String,
+      capacity: json['capacity'] as int,
+      duration: json['duration'] as int,
+      color: Color(json['color'] as int),
+    );
+  }
 
-  factory ClassInfo.fromJson(Map<String, dynamic> json) => ClassInfo(
-    id: json['id'],
-    name: json['name'],
-    capacity: json['capacity'],
-    description: json['description'],
-    color: Color(json['color']),
-  );
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'capacity': capacity,
+      'duration': duration,
+      'color': color.value,
+    };
+  }
 
   ClassInfo copyWith({
     String? id,
     String? name,
-    int? capacity,
     String? description,
+    int? capacity,
+    int? duration,
     Color? color,
   }) {
     return ClassInfo(
       id: id ?? this.id,
       name: name ?? this.name,
-      capacity: capacity ?? this.capacity,
       description: description ?? this.description,
+      capacity: capacity ?? this.capacity,
+      duration: duration ?? this.duration,
       color: color ?? this.color,
     );
   }

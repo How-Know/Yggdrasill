@@ -3,15 +3,17 @@ import '../models/student.dart';
 
 class ClassStudentCard extends StatelessWidget {
   final Student student;
-  final double width;
+  final double? width;
   final Function(Student)? onDragStarted;
+  final Function(Student) onShowDetails;
 
   const ClassStudentCard({
-    super.key,
+    Key? key,
     required this.student,
-    required this.width,
+    this.width,
     this.onDragStarted,
-  });
+    required this.onShowDetails,
+  }) : super(key: key);
 
   String _getEducationLevelName(EducationLevel level) {
     switch (level) {
@@ -24,9 +26,19 @@ class ClassStudentCard extends StatelessWidget {
     }
   }
 
+  String _getGradeName(Student student) {
+    final grades = gradesByLevel[student.educationLevel] ?? [];
+    final grade = grades.firstWhere(
+      (g) => g.value == student.grade,
+      orElse: () => grades.first,
+    );
+    return grade.name;
+  }
+
   Widget _buildCardContent({bool isOriginal = false}) {
     return Container(
-      width: width,
+      width: 160,
+      height: 80,
       decoration: BoxDecoration(
         color: isOriginal ? const Color(0xFF1F1F1F) : const Color(0xFF2A2A2A),
         borderRadius: BorderRadius.circular(12),
@@ -40,53 +52,62 @@ class ClassStudentCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Text(
-                  student.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
+            SizedBox(
+              width: 160,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    student.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: Text(
-                    student.school,
+                  Expanded(
+                    child: Text(
+                      student.school,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: 160,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _getEducationLevelName(student.educationLevel),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Text(
-                  _getEducationLevelName(student.educationLevel),
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
+                  const SizedBox(width: 8),
+                  Text(
+                    _getGradeName(student),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  student.grade.name,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ],
         ),

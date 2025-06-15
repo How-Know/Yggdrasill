@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
-import '../models/student.dart';
+import 'package:intl/intl.dart';
+import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/services/data_manager.dart';
+import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
 
 class StudentDetailsDialog extends StatelessWidget {
   final Student student;
 
   const StudentDetailsDialog({
-    super.key,
+    Key? key,
     required this.student,
-  });
+  }) : super(key: key);
 
   String _getEducationLevelName(EducationLevel level) {
     switch (level) {
@@ -20,93 +23,97 @@ class StudentDetailsDialog extends StatelessWidget {
     }
   }
 
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-              ),
-            ),
+  String _getGradeName(Student student) {
+    final grades = gradesByLevel[student.educationLevel] ?? [];
+    final grade = grades.firstWhere(
+      (g) => g.value == student.grade,
+      orElse: () => grades.first,
+    );
+    return grade.name;
+  }
+
+  Future<void> _handleEdit(BuildContext context) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StudentRegistrationDialog(
+        student: student,
+        onSave: (updatedStudent) async {
+          await DataManager.instance.updateStudent(updatedStudent);
+        },
+        classes: DataManager.instance.classes,
+      ),
+    );
+
+    if (result == true) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  Future<void> _handleDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('학생 삭제'),
+        content: const Text('정말로 이 학생을 삭제하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-              ),
-            ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('삭제'),
           ),
         ],
       ),
     );
+
+    if (confirmed == true) {
+      await DataManager.instance.deleteStudent(student.id);
+      Navigator.of(context).pop(true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Container(
-        width: 400,
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (student.classInfo != null) ...[
-                  Container(
-                    width: 4,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: student.classInfo!.color,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                Text(
-                  student.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            _buildDetailRow('학교', student.school),
-            _buildDetailRow('과정', _getEducationLevelName(student.educationLevel)),
-            _buildDetailRow('학년', '${student.grade.value}학년'),
-            if (student.classInfo != null)
-              _buildDetailRow('소속 반', student.classInfo!.name),
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('닫기'),
-              ),
-            ),
+    return AlertDialog(
+      title: Text(student.name),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('학교: ${student.school}'),
+          const SizedBox(height: 8),
+          Text('과정: ${_getEducationLevelName(student.educationLevel)}'),
+          const SizedBox(height: 8),
+          Text('학년: ${_getGradeName(student)}'),
+          const SizedBox(height: 8),
+          if (student.phoneNumber != null) ...[
+            Text('연락처: ${student.phoneNumber}'),
+            const SizedBox(height: 8),
           ],
-        ),
+          Text(
+            '등록일: ${DateFormat('yyyy년 MM월 dd일').format(student.registrationDate)}',
+          ),
+          const SizedBox(height: 8),
+          if (student.classInfo != null)
+            Text('소속 반: ${student.classInfo!.name}'),
+        ],
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('닫기'),
+        ),
+        TextButton(
+          onPressed: () => _handleEdit(context),
+          child: const Text('수정'),
+        ),
+        FilledButton(
+          onPressed: () => _handleDelete(context),
+          child: const Text('삭제'),
+        ),
+      ],
     );
   }
 } 

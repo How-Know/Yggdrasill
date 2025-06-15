@@ -13,31 +13,42 @@ enum TimetableViewType {
 }
 
 class TimetableScreen extends StatefulWidget {
-  final List<ClassInfo> classes;
-  
-  const TimetableScreen({
-    super.key,
-    required this.classes,
-  });
+  const TimetableScreen({Key? key}) : super(key: key);
 
   @override
   State<TimetableScreen> createState() => _TimetableScreenState();
 }
 
 class _TimetableScreenState extends State<TimetableScreen> {
+  DateTime _selectedDate = DateTime.now();
+  List<ClassInfo> _classes = [];
   TimetableViewType _viewType = TimetableViewType.classes;
   List<OperatingHours> _operatingHours = [];
 
   @override
   void initState() {
     super.initState();
+    _loadData();
     _loadOperatingHours();
+  }
+
+  Future<void> _loadData() async {
+    await DataManager.instance.loadClasses();
+    setState(() {
+      _classes = List.from(DataManager.instance.classes);
+    });
   }
 
   Future<void> _loadOperatingHours() async {
     final hours = await DataManager.instance.getOperatingHours();
     setState(() {
       _operatingHours = hours;
+    });
+  }
+
+  void _handleDateChanged(DateTime date) {
+    setState(() {
+      _selectedDate = date;
     });
   }
 
@@ -48,13 +59,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       child: Column(
         children: [
           TimetableHeader(
-            viewType: _viewType,
-            classes: widget.classes,
-            onViewTypeChanged: (viewType) {
-              setState(() {
-                _viewType = viewType;
-              });
-            },
+            selectedDate: _selectedDate,
+            onDateChanged: _handleDateChanged,
           ),
           const SizedBox(height: 24),
           Expanded(

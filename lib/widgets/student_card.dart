@@ -6,23 +6,15 @@ import 'student_registration_dialog.dart';
 
 class StudentCard extends StatelessWidget {
   final Student student;
-  final double width;
-  final List<ClassInfo> classes;
-  final Function(Student) onEdit;
-  final Function(Student) onDelete;
   final VoidCallback? onTap;
-  final bool isSimpleLayout;
+  final Function(Student) onShowDetails;
 
   const StudentCard({
-    super.key,
+    Key? key,
     required this.student,
-    required this.width,
-    required this.classes,
-    required this.onEdit,
-    required this.onDelete,
     this.onTap,
-    this.isSimpleLayout = false,
-  });
+    required this.onShowDetails,
+  }) : super(key: key);
 
   void _showMenu(BuildContext context) {
     final RenderBox button = context.findRenderObject() as RenderBox;
@@ -52,7 +44,6 @@ class StudentCard extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onTap: () {
               Navigator.of(context).pop();
-              onEdit(student);
             },
           ),
         ),
@@ -85,7 +76,6 @@ class StudentCard extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onTap: () {
               Navigator.of(context).pop();
-              onDelete(student);
             },
           ),
         ),
@@ -95,115 +85,60 @@ class StudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: width,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(8),
+    return Card(
+      color: const Color(0xFF2A2A2A),
+      margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8.0),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () {
-            showDialog(
-              context: context,
-              builder: (context) => StudentDetailsDialog(student: student),
-            );
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            child: isSimpleLayout
-                ? Row(
-                    children: [
-                      if (student.classInfo != null) ...[
-                        Container(
-                          width: 4,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: student.classInfo!.color,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                      ],
-                      Expanded(
-                        child: Text(
-                          student.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.more_vert, color: Colors.white70),
-                        splashRadius: 20,
-                        padding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => _showMenu(context),
-                      ),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        student.name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Text(
-                            _getEducationLevelName(student.educationLevel),
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            student.grade.name,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        student.school,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+      child: InkWell(
+        onTap: () => onShowDetails(student),
+        child: Container(
+          width: 120,
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          child: SizedBox(
+            width: 120,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                if (student.classInfo != null) ...[
+                  Container(
+                    width: 5,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: student.classInfo!.color,
+                      borderRadius: BorderRadius.circular(2.5),
+                    ),
                   ),
+                  const SizedBox(width: 10),
+                ],
+                Text(
+                  student.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(
+                    Icons.more_vert,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  onPressed: () => _showMenu(context),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  splashRadius: 20,
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
-  }
-
-  String _getEducationLevelName(EducationLevel level) {
-    switch (level) {
-      case EducationLevel.elementary:
-        return '초등';
-      case EducationLevel.middle:
-        return '중등';
-      case EducationLevel.high:
-        return '고등';
-    }
   }
 } 

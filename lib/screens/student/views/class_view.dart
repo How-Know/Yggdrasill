@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
-import '../../../models/student.dart';
-import '../../../widgets/student_card.dart';
-import '../components/education_level_school_group.dart';
+import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/widgets/student_card.dart';
 
-class SchoolView extends StatelessWidget {
+class ClassView extends StatelessWidget {
   final List<Student> students;
   final Function(Student) onShowDetails;
 
-  const SchoolView({
+  const ClassView({
     Key? key,
     required this.students,
     required this.onShowDetails,
@@ -15,21 +14,24 @@ class SchoolView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final schoolGroups = <String, List<Student>>{};
+    final classGroups = <String, List<Student>>{};
     
     for (final student in students) {
-      schoolGroups[student.school] ??= [];
-      schoolGroups[student.school]!.add(student);
+      if (student.classInfo != null) {
+        final className = student.classInfo!.name;
+        classGroups[className] ??= [];
+        classGroups[className]!.add(student);
+      }
     }
 
-    final sortedSchools = schoolGroups.keys.toList()..sort();
+    final sortedClasses = classGroups.keys.toList()..sort();
 
     return ListView.builder(
       padding: const EdgeInsets.all(16.0),
-      itemCount: sortedSchools.length,
+      itemCount: sortedClasses.length,
       itemBuilder: (context, index) {
-        final school = sortedSchools[index];
-        final schoolStudents = schoolGroups[school]!;
+        final className = sortedClasses[index];
+        final classStudents = classGroups[className]!;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,16 +39,16 @@ class SchoolView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Text(
-                school,
+                className,
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: schoolStudents.length,
+              itemCount: classStudents.length,
               itemBuilder: (context, index) {
-                final student = schoolStudents[index];
+                final student = classStudents[index];
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: StudentCard(

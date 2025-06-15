@@ -171,7 +171,6 @@ class ClassCard extends StatelessWidget {
                     children: classStudents
                         .map((student) => StudentCard(
                               student: student,
-                              width: 280,
                               classes: classes,
                               onEdit: onStudentEdit,
                               onDelete: onStudentDelete,

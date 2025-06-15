@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
-import '../../../models/student.dart';
-import '../../../widgets/student_card.dart';
-import '../components/education_level_school_group.dart';
+import 'package:intl/intl.dart';
+import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/widgets/student_card.dart';
 
-class SchoolView extends StatelessWidget {
+class DateView extends StatelessWidget {
   final List<Student> students;
   final Function(Student) onShowDetails;
 
-  const SchoolView({
+  const DateView({
     Key? key,
     required this.students,
     required this.onShowDetails,
@@ -15,21 +15,24 @@ class SchoolView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final schoolGroups = <String, List<Student>>{};
+    final dateGroups = <String, List<Student>>{};
+    final dateFormat = DateFormat('yyyy년 MM월');
     
     for (final student in students) {
-      schoolGroups[student.school] ??= [];
-      schoolGroups[student.school]!.add(student);
+      final dateKey = dateFormat.format(student.registrationDate);
+      dateGroups[dateKey] ??= [];
+      dateGroups[dateKey]!.add(student);
     }
 
-    final sortedSchools = schoolGroups.keys.toList()..sort();
+    final sortedDates = dateGroups.keys.toList()
+      ..sort((a, b) => dateFormat.parse(b).compareTo(dateFormat.parse(a)));
 
     return ListView.builder(
       padding: const EdgeInsets.all(16.0),
-      itemCount: sortedSchools.length,
+      itemCount: sortedDates.length,
       itemBuilder: (context, index) {
-        final school = sortedSchools[index];
-        final schoolStudents = schoolGroups[school]!;
+        final dateKey = sortedDates[index];
+        final dateStudents = dateGroups[dateKey]!;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,16 +40,16 @@ class SchoolView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Text(
-                school,
+                dateKey,
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: schoolStudents.length,
+              itemCount: dateStudents.length,
               itemBuilder: (context, index) {
-                final student = schoolStudents[index];
+                final student = dateStudents[index];
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: StudentCard(
