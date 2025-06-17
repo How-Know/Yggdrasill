@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/models/class_info.dart';
+import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
 

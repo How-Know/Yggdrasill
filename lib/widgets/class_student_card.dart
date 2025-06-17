@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/student.dart';
+import '../models/class_info.dart';
+import '../models/education_level.dart';
 
 class ClassStudentCard extends StatelessWidget {
   final Student student;

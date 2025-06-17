@@ -3,6 +3,7 @@ import '../models/student.dart';
 import '../models/class_info.dart';
 import 'student_details_dialog.dart';
 import 'student_registration_dialog.dart';
+import '../services/data_manager.dart';
 
 class StudentCard extends StatelessWidget {
   final Student student;
@@ -15,6 +16,57 @@ class StudentCard extends StatelessWidget {
     this.onTap,
     required this.onShowDetails,
   }) : super(key: key);
+
+  Future<void> _handleEdit(BuildContext context) async {
+    final result = await showDialog<Student>(
+      context: context,
+      builder: (context) => StudentRegistrationDialog(
+        student: student,
+        onSave: (updatedStudent) async {
+          await DataManager.instance.updateStudent(updatedStudent);
+        },
+        classes: DataManager.instance.classes,
+      ),
+    );
+    if (result != null) {
+      await DataManager.instance.updateStudent(result);
+    }
+  }
+
+  Future<void> _handleDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text(
+          '학생 삭제',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          '정말로 이 학생을 삭제하시겠습니까?',
+          style: TextStyle(color: Colors.white),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await DataManager.instance.deleteStudent(student.id);
+      Navigator.of(context).pop();
+    }
+  }
 
   void _showMenu(BuildContext context) {
     final RenderBox button = context.findRenderObject() as RenderBox;
@@ -44,6 +96,7 @@ class StudentCard extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onTap: () {
               Navigator.of(context).pop();
+              _handleEdit(context);
             },
           ),
         ),
@@ -58,10 +111,7 @@ class StudentCard extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onTap: () {
               Navigator.of(context).pop();
-              showDialog(
-                context: context,
-                builder: (context) => StudentDetailsDialog(student: student),
-              );
+              onShowDetails(student);
             },
           ),
         ),
@@ -76,6 +126,7 @@ class StudentCard extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             onTap: () {
               Navigator.of(context).pop();
+              _handleDelete(context);
             },
           ),
         ),

@@ -6,12 +6,14 @@ class ClassRegistrationDialog extends StatefulWidget {
   final bool editMode;
   final ClassInfo? classInfo;
   final int? index;
+  final Function(ClassInfo) onSave;
 
   const ClassRegistrationDialog({
     super.key,
     this.editMode = false,
     this.classInfo,
     this.index,
+    required this.onSave,
   });
 
   @override
@@ -90,7 +92,7 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
         duration: duration,
         color: color,
       );
-      Navigator.pop(context, updatedClass);
+      widget.onSave(updatedClass);
     } else {
       final newClass = ClassInfo(
         id: const Uuid().v4(),
@@ -100,7 +102,7 @@ class _ClassRegistrationDialogState extends State<ClassRegistrationDialog> {
         duration: duration,
         color: color,
       );
-      Navigator.pop(context, newClass);
+      widget.onSave(newClass);
     }
   }
 
