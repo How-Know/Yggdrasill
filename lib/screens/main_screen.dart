@@ -101,7 +101,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 1:
         return StudentScreen(key: _studentScreenKey);
       case 2:
-        return const Center(child: Text('시간', style: TextStyle(color: Colors.white)));
+        return TimetableScreen();
       case 3:
         return const Center(child: Text('학습', style: TextStyle(color: Colors.white)));
       case 4:
@@ -176,17 +176,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             color: const Color(0xFF1976D2),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Symbols.school_rounded, color: Colors.white, size: 24, weight: 500),
-                              const SizedBox(width: 12),
+                              const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+                              const SizedBox(width: 14),
                               Text(
                                 '수강 등록',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 18,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -199,17 +199,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             color: const Color(0xFF1976D2),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Symbols.contact_support_rounded, color: Colors.white, size: 24, weight: 500),
-                              const SizedBox(width: 12),
+                              const Icon(Icons.chat_outlined, color: Colors.white, size: 28),
+                              const SizedBox(width: 14),
                               Text(
                                 '상담',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 18,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -222,17 +222,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             color: const Color(0xFF1976D2),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Symbols.event_repeat_rounded, color: Colors.white, size: 24, weight: 500),
-                              const SizedBox(width: 12),
+                              const Icon(Icons.event_repeat_rounded, color: Colors.white, size: 28),
+                              const SizedBox(width: 14),
                               Text(
                                 '보강',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 18,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),

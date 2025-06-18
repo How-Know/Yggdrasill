@@ -36,7 +36,7 @@ class ClassesView extends StatelessWidget {
                   children: [
                     // Time indicator
                     SizedBox(
-                      width: 80,
+                      width: 60,
                       child: Center(
                         child: Text(
                           block.timeString,
@@ -47,14 +47,28 @@ class ClassesView extends StatelessWidget {
                         ),
                       ),
                     ),
-                    // Time block content
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border(
-                            left: BorderSide(
-                              color: Colors.white.withOpacity(0.1),
+                    // Day columns
+                    ...List.generate(7, (index) => 
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            border: Border(
+                              left: BorderSide(
+                                color: Colors.white.withOpacity(0.1),
+                              ),
                             ),
+                          ),
+                          child: DragTarget<String>(
+                            onAccept: (data) {
+                              // TODO: Handle class drop
+                            },
+                            builder: (context, candidateData, rejectedData) {
+                              return Container(
+                                color: candidateData.isNotEmpty 
+                                  ? Colors.blue.withOpacity(0.2) 
+                                  : Colors.transparent,
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -108,7 +122,7 @@ class TimeBlock {
   });
 
   String get timeString {
-    return '${_formatTime(startTime)} - ${_formatTime(endTime)}';
+    return _formatTime(startTime);
   }
 
   String _formatTime(DateTime time) {
