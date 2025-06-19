@@ -8,11 +8,17 @@ import '../timetable_screen.dart';  // TimetableViewType enum을 가져오기 �
 class TimetableHeader extends StatelessWidget {
   final Function(DateTime) onDateChanged;
   final DateTime selectedDate;
+  final int? selectedDayIndex;
+  final Function(int) onDaySelected;
+  final bool isRegistrationMode;
 
   const TimetableHeader({
     Key? key,
     required this.onDateChanged,
     required this.selectedDate,
+    this.selectedDayIndex,
+    required this.onDaySelected,
+    this.isRegistrationMode = false,
   }) : super(key: key);
 
   List<DateTime> _getWeekDays() {
@@ -61,26 +67,38 @@ class TimetableHeader extends StatelessWidget {
             ),
           ),
           // 요일 헤더들
-          ...weekDays.map((date) {
-            final isSelected = date.year == selectedDate.year && 
-                             date.month == selectedDate.month && 
-                             date.day == selectedDate.day;
+          ...List.generate(7, (index) {
+            final date = weekDays[index];
+            final isSelected = index == selectedDayIndex;
+            
             return Expanded(
               child: Tooltip(
                 message: _formatDate(date),
                 child: InkWell(
-                  onTap: () => onDateChanged(date),
-                  child: Container(
+                  onTap: () {
+                    onDaySelected(index);
+                    onDateChanged(date);
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     decoration: BoxDecoration(
-                      color: isSelected ? Colors.blue.withOpacity(0.2) : null,
+                      color: isSelected && isRegistrationMode 
+                        ? Colors.orange.withOpacity(0.2)
+                        : isSelected 
+                          ? Colors.blue.withOpacity(0.2) 
+                          : null,
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Center(
                       child: Text(
                         _getWeekdayName(date.weekday),
                         style: TextStyle(
-                          color: isSelected ? Colors.blue : Colors.grey.shade400,
+                          color: isSelected && isRegistrationMode
+                            ? Colors.orange
+                            : isSelected
+                              ? Colors.blue
+                              : Colors.grey.shade400,
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
                         ),
@@ -90,7 +108,7 @@ class TimetableHeader extends StatelessWidget {
                 ),
               ),
             );
-          }).toList(),
+          }),
         ],
       ),
     );

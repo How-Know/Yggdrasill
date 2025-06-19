@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import '../../models/class_info.dart';
 import '../../models/operating_hours.dart';
+import '../../models/student.dart';
 import '../../services/data_manager.dart';
+import '../../widgets/student_search_dialog.dart';
+import '../../widgets/class_schedule_dialog.dart';
+import '../../models/class_schedule.dart';
 import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
+import '../../models/student_time_block.dart';
+import 'package:uuid/uuid.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -32,6 +38,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
   TimetableViewType _viewType = TimetableViewType.classes;
   List<OperatingHours> _operatingHours = [];
   final MenuController _menuController = MenuController();
+  int? _selectedDayIndex = 0;
+  DateTime? _selectedStartTime;
+  bool _isStudentRegistrationMode = false;
+  bool _isClassRegistrationMode = false;
+  String _registrationButtonText = '등록';
+  ClassInfo? _selectedClass;
+  ClassSchedule? _currentClassSchedule;
 
   @override
   void initState() {
@@ -58,6 +71,56 @@ class _TimetableScreenState extends State<TimetableScreen> {
     setState(() {
       _selectedDate = date;
     });
+  }
+
+  void _handleStudentMenu() {
+    setState(() {
+      _registrationButtonText = '학생';
+    });
+  }
+
+  void _handleRegistrationButton() {
+    if (_registrationButtonText == '학생') {
+      setState(() {
+        _isStudentRegistrationMode = !_isStudentRegistrationMode;
+        _isClassRegistrationMode = false;
+        if (!_isStudentRegistrationMode) {
+          _registrationButtonText = '등록';
+        }
+      });
+    } else if (_selectedClass != null) {
+      // 클래스 등록 모드
+      _showClassScheduleDialog();
+    }
+  }
+
+  void _showClassScheduleDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => ClassScheduleDialog(
+        classInfo: _selectedClass!,
+        onScheduleSelected: (schedule) {
+          setState(() {
+            _currentClassSchedule = schedule;
+            _isClassRegistrationMode = true;
+            _isStudentRegistrationMode = false;
+          });
+        },
+      ),
+    );
+  }
+
+  // TimetableHeader 요일 클릭 콜백
+  void _onDayHeaderSelected(int dayIndex) {
+    if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+      setState(() {
+        _selectedDayIndex = dayIndex;
+        if (_currentClassSchedule != null) {
+          // 클래스 스케줄의 요일 업데이트
+          _currentClassSchedule = _currentClassSchedule!.copyWith(dayIndex: dayIndex);
+        }
+      });
+    }
   }
 
   @override
@@ -100,13 +163,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             ),
                           ),
                         ),
-                        onPressed: () {
-                          // TODO: Implement registration
-                        },
+                        onPressed: _handleRegistrationButton,
                         icon: const Icon(Icons.edit, size: 20),
-                        label: const Text(
-                          '등록',
-                          style: TextStyle(
+                        label: Text(
+                          _registrationButtonText,
+                          style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w500,
                           ),
@@ -127,7 +188,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             ),
                           ),
                           onPressed: () {
-                            // TODO: Implement student registration
+                            _handleStudentMenu();
                             _menuController.close();
                           },
                         ),
@@ -141,7 +202,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               ),
                             ),
                             onPressed: () {
-                              // TODO: Implement class selection
+                              setState(() {
+                                _selectedClass = classInfo;
+                                _registrationButtonText = '클래스';
+                                _isStudentRegistrationMode = false;
+                              });
                               _menuController.close();
                             },
                           ),
@@ -242,6 +307,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
           TimetableHeader(
             selectedDate: _selectedDate,
             onDateChanged: _handleDateChanged,
+            selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
+            onDaySelected: _onDayHeaderSelected,
+            isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
           ),
           const SizedBox(height: 24),
           Expanded(
@@ -260,9 +328,108 @@ class _TimetableScreenState extends State<TimetableScreen> {
         return ClassesView(
           operatingHours: _operatingHours,
           breakTimeColor: const Color(0xFF424242),
+          selectedDayIndex: _selectedDayIndex ?? 0,
+          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+          onTimeSelected: _handleTimeSelection,
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
+    }
+  }
+
+  Future<void> _onTimeCellSelected(DateTime startTime) async {
+    if (_isStudentRegistrationMode && _selectedDayIndex != null) {
+      setState(() {
+        _selectedStartTime = startTime;
+      });
+      final student = await showDialog<Student>(
+        context: context,
+        builder: (context) => const StudentSearchDialog(),
+      );
+      if (student != null) {
+        final block = StudentTimeBlock(
+          id: const Uuid().v4(),
+          studentId: student.id,
+          classId: student.classInfo?.id,
+          dayIndex: _selectedDayIndex!,
+          startTime: startTime,
+          duration: const Duration(hours: 1),
+          createdAt: DateTime.now(),
+        );
+        await DataManager.instance.addStudentTimeBlock(block);
+      }
+      setState(() {
+        _isStudentRegistrationMode = false;
+        _selectedDayIndex = null;
+        _selectedStartTime = null;
+        _registrationButtonText = '등록';
+      });
+    }
+  }
+
+  Future<void> _handleTimeSelection(DateTime startTime) async {
+    if (_isStudentRegistrationMode) {
+      // 기존 학생 등록 코드
+      final existingBlocks = DataManager.instance.studentTimeBlocksNotifier.value
+          .where((block) => 
+              block.dayIndex == (_selectedDayIndex ?? 0) &&
+              block.startTime.hour == startTime.hour &&
+              block.startTime.minute == startTime.minute)
+          .toList();
+      final excludedStudentIds = existingBlocks.map((block) => block.studentId).toSet();
+      
+      final student = await showDialog<Student>(
+        context: context,
+        builder: (context) => StudentSearchDialog(excludedStudentIds: excludedStudentIds),
+      );
+      if (student != null) {
+        final block = StudentTimeBlock(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          studentId: student.id,
+          classId: student.classInfo?.id,
+          dayIndex: _selectedDayIndex ?? 0,
+          startTime: startTime,
+          duration: const Duration(hours: 1),
+          createdAt: DateTime.now(),
+        );
+        await DataManager.instance.addStudentTimeBlock(block);
+      }
+      setState(() {
+        _isStudentRegistrationMode = false;
+        // 버튼 텍스트는 변경하지 않음 (학생으로 유지)
+      });
+    } else if (_isClassRegistrationMode && _currentClassSchedule != null) {
+      // 클래스 스케줄 등록/수정
+      final updatedSchedule = _currentClassSchedule!.copyWith(
+        startTime: startTime,
+        dayIndex: _selectedDayIndex ?? 0,
+      );
+      
+      if (_currentClassSchedule!.createdAt == _currentClassSchedule!.updatedAt) {
+        // 새로운 스케줄
+        await DataManager.instance.addClassSchedule(updatedSchedule);
+      } else {
+        // 기존 스케줄 수정
+        await DataManager.instance.updateClassSchedule(updatedSchedule);
+      }
+      
+      // 해당 클래스의 모든 학생들에게 적용
+      await DataManager.instance.applyClassScheduleToStudents(updatedSchedule);
+      
+      setState(() {
+        _isClassRegistrationMode = false;
+        _currentClassSchedule = null;
+      });
+      
+      // 성공 메시지 표시
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_selectedClass!.name} 클래스 시간이 등록되었습니다.'),
+            backgroundColor: const Color(0xFF1976D2),
+          ),
+        );
+      }
     }
   }
 }

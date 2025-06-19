@@ -3,6 +3,9 @@ import '../models/class_info.dart';
 import '../models/operating_hours.dart';
 import '../models/academy_settings.dart';
 import '../models/payment_type.dart';
+import '../models/education_level.dart';
+import '../models/student_time_block.dart';
+import '../models/class_schedule.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'storage_service.dart';
@@ -35,6 +38,15 @@ class DataManager {
   AcademySettings get academySettings => _academySettings;
   PaymentType get paymentType => _paymentType;
 
+  List<StudentTimeBlock> _studentTimeBlocks = [];
+  final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
+  
+  List<ClassSchedule> _classSchedules = [];
+  final ValueNotifier<List<ClassSchedule>> classSchedulesNotifier = ValueNotifier<List<ClassSchedule>>([]);
+
+  List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
+  List<ClassSchedule> get classSchedules => List.unmodifiable(_classSchedules);
+
   Future<void> initialize() async {
     if (_isInitialized) {
       return;
@@ -47,6 +59,8 @@ class DataManager {
       await loadAcademySettings();
       await loadPaymentType();
       await _loadOperatingHours();
+      await loadStudentTimeBlocks();
+      await loadClassSchedules();
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -59,6 +73,7 @@ class DataManager {
     _classesById = {};
     _students = [];
     _operatingHours = [];
+    _studentTimeBlocks = [];
     _academySettings = AcademySettings.defaults();
     _paymentType = PaymentType.monthly;
     _notifyListeners();
@@ -141,6 +156,8 @@ class DataManager {
   void _notifyListeners() {
     classesNotifier.value = List.unmodifiable(_classes);
     studentsNotifier.value = List.unmodifiable(_students);
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    classSchedulesNotifier.value = List.unmodifiable(_classSchedules);
   }
 
   void addClass(ClassInfo classInfo) {
@@ -312,5 +329,113 @@ class DataManager {
       print('Error loading operating hours: $e');
       _operatingHours = [];
     }
+  }
+
+  Future<void> loadStudentTimeBlocks() async {
+    try {
+      final jsonData = await _storage.load('student_time_blocks');
+      if (jsonData != null) {
+        final List<dynamic> blocksList = jsonDecode(jsonData);
+        _studentTimeBlocks = blocksList.map((json) => StudentTimeBlock.fromJson(json as Map<String, dynamic>)).toList();
+      }
+    } catch (e) {
+      print('Error loading student time blocks: $e');
+      _studentTimeBlocks = [];
+    }
+    _notifyListeners();
+  }
+
+  Future<void> saveStudentTimeBlocks() async {
+    try {
+      final jsonString = jsonEncode(_studentTimeBlocks.map((b) => b.toJson()).toList());
+      await _storage.save('student_time_blocks', jsonString);
+    } catch (e) {
+      print('Error saving student time blocks: $e');
+      throw Exception('Failed to save student time blocks');
+    }
+  }
+
+  Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
+    _studentTimeBlocks.add(block);
+    _notifyListeners();
+    await saveStudentTimeBlocks();
+  }
+
+  Future<void> removeStudentTimeBlock(String id) async {
+    _studentTimeBlocks.removeWhere((b) => b.id == id);
+    _notifyListeners();
+    await saveStudentTimeBlocks();
+  }
+
+  // ClassSchedule 관련 메서드들
+  Future<void> loadClassSchedules() async {
+    try {
+      final jsonData = await _storage.load('class_schedules');
+      if (jsonData != null) {
+        final List<dynamic> schedulesList = jsonDecode(jsonData);
+        _classSchedules = schedulesList.map((json) => ClassSchedule.fromJson(json as Map<String, dynamic>)).toList();
+      }
+    } catch (e) {
+      print('Error loading class schedules: $e');
+      _classSchedules = [];
+    }
+    _notifyListeners();
+  }
+
+  Future<void> saveClassSchedules() async {
+    try {
+      final jsonString = jsonEncode(_classSchedules.map((s) => s.toJson()).toList());
+      await _storage.save('class_schedules', jsonString);
+    } catch (e) {
+      print('Error saving class schedules: $e');
+      throw Exception('Failed to save class schedules');
+    }
+  }
+
+  Future<List<ClassSchedule>> getClassSchedules(String classId) async {
+    return _classSchedules.where((schedule) => schedule.classId == classId).toList();
+  }
+
+  Future<void> addClassSchedule(ClassSchedule schedule) async {
+    _classSchedules.add(schedule);
+    _notifyListeners();
+    await saveClassSchedules();
+  }
+
+  Future<void> updateClassSchedule(ClassSchedule schedule) async {
+    final index = _classSchedules.indexWhere((s) => s.id == schedule.id);
+    if (index != -1) {
+      _classSchedules[index] = schedule;
+      _notifyListeners();
+      await saveClassSchedules();
+    }
+  }
+
+  Future<void> deleteClassSchedule(String id) async {
+    _classSchedules.removeWhere((s) => s.id == id);
+    _notifyListeners();
+    await saveClassSchedules();
+  }
+
+  Future<void> applyClassScheduleToStudents(ClassSchedule schedule) async {
+    // 해당 클래스에 속한 모든 학생 가져오기
+    final classStudents = _students.where((s) => s.classInfo?.id == schedule.classId).toList();
+    
+    // 각 학생에 대한 시간 블록 생성
+    for (final student in classStudents) {
+      final block = StudentTimeBlock(
+        id: '${DateTime.now().millisecondsSinceEpoch}_${student.id}',
+        studentId: student.id,
+        classId: schedule.classId,
+        dayIndex: schedule.dayIndex,
+        startTime: schedule.startTime,
+        duration: schedule.duration,
+        createdAt: DateTime.now(),
+      );
+      _studentTimeBlocks.add(block);
+    }
+    
+    _notifyListeners();
+    await saveStudentTimeBlocks();
   }
 } 
