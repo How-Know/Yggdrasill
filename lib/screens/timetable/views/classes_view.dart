@@ -28,11 +28,11 @@ class ClassesView extends StatefulWidget {
 }
 
 class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin {
-  // (요일, 시간) => 펼침 여부
-  final Map<String, bool> _expandedCells = {};
-  // (요일, 시간) => AnimationController
+  String? _expandedCellKey;
+  final Map<String, GlobalKey> _cellKeys = {};
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void dispose() {
@@ -44,255 +44,209 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<StudentTimeBlock>>(
-      valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-      builder: (context, studentTimeBlocks, _) {
-        final timeBlocks = _generateTimeBlocks();
-        final double blockHeight = 90.0;
-        final students = DataManager.instance.students;
-        final classes = DataManager.instance.classes;
-        final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-
-        return Column(
-          children: [
-            for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
-              Container(
-                height: blockHeight,
-                decoration: BoxDecoration(
-                  color: timeBlocks[blockIdx].isBreakTime ? widget.breakTimeColor : Colors.transparent,
-                  border: Border(
-                    bottom: BorderSide(
-                      color: Colors.white.withOpacity(0.1),
-                    ),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    // Time indicator
-                    SizedBox(
-                      width: 60,
-                      child: Center(
-                        child: Text(
-                          timeBlocks[blockIdx].timeString,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
+    final timeBlocks = _generateTimeBlocks();
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          controller: _scrollController,
+          child: ValueListenableBuilder<List<StudentTimeBlock>>(
+            valueListenable: DataManager.instance.studentTimeBlocksNotifier,
+            builder: (context, studentTimeBlocks, _) {
+              final double blockHeight = 90.0;
+              final students = DataManager.instance.students;
+              final classes = DataManager.instance.classes;
+              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              return Column(
+                children: [
+                  for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
+                    Container(
+                      height: blockHeight,
+                      decoration: BoxDecoration(
+                        color: timeBlocks[blockIdx].isBreakTime ? widget.breakTimeColor : Colors.transparent,
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Colors.white.withOpacity(0.1),
                           ),
                         ),
                       ),
-                    ),
-                    // Day columns
-                    ...List.generate(7, (dayIdx) {
-                      final cellKey = '$dayIdx-$blockIdx';
-                      // 현재 시간에 수업 중인 모든 학생 블록 가져오기
-                      final activeBlocks = _getActiveStudentBlocks(
-                        studentTimeBlocks, 
-                        dayIdx, 
-                        timeBlocks[blockIdx].startTime,
-                        lessonDuration,
-                      );
-                      final cellBlocks = studentTimeBlocks.where((b) {
-                        return b.dayIndex == dayIdx &&
-                          b.startTime.hour == timeBlocks[blockIdx].startTime.hour &&
-                          b.startTime.minute == timeBlocks[blockIdx].startTime.minute;
-                      }).toList();
-                      final isExpanded = _expandedCells[cellKey] ?? false;
-                      final isHighlight = widget.isRegistrationMode && widget.selectedDayIndex == dayIdx;
-                      
-                      // 수업 정원 확인을 위한 클래스 정보 가져오기
-                      final activeStudentCount = activeBlocks.length;
-                      Color? countColor;
-                      int? totalCapacity;
-                      
-                      if (activeStudentCount > 0) {
-                        // 활성 블록들의 클래스 정원 합계 계산
-                        final classCapacities = activeBlocks
-                            .map((b) => b.classId)
-                            .where((id) => id != null)
-                            .toSet()
-                            .map((classId) => classes.firstWhere((c) => c.id == classId, 
-                                orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 30, duration: 60, color: Colors.grey)))
-                            .map((c) => c.capacity)
-                            .fold(0, (sum, capacity) => sum + capacity);
-                        
-                        totalCapacity = classCapacities > 0 ? classCapacities : DataManager.instance.academySettings.defaultCapacity;
-                        
-                        final occupancyRate = activeStudentCount / totalCapacity;
-                        if (occupancyRate >= 1.0) {
-                          countColor = Colors.red;
-                        } else if (occupancyRate <= 0.8) {
-                          countColor = Colors.green;
-                        } else {
-                          countColor = Colors.orange;
-                        }
-                      }
-                      
-                      return Expanded(
-                        child: GestureDetector(
-                          onTap: () {
-                            if (widget.isRegistrationMode && widget.selectedDayIndex == dayIdx && widget.onTimeSelected != null) {
-                              widget.onTimeSelected!(timeBlocks[blockIdx].startTime);
-                            } else if (cellBlocks.isNotEmpty) {
-                              setState(() {
-                                final wasExpanded = _expandedCells[cellKey] ?? false;
-                                _expandedCells[cellKey] = !wasExpanded;
-                                
-                                // 애니메이션 컨트롤러 생성 또는 재사용
-                                if (!_animationControllers.containsKey(cellKey)) {
-                                  final controller = AnimationController(
-                                    duration: const Duration(milliseconds: 300),
-                                    vsync: this,
-                                  );
-                                  _animationControllers[cellKey] = controller;
-                                  _animations[cellKey] = CurvedAnimation(
-                                    parent: controller,
-                                    curve: Curves.easeInOut,
-                                  );
-                                }
-                                
-                                if (!wasExpanded) {
-                                  _animationControllers[cellKey]!.forward();
-                                } else {
-                                  _animationControllers[cellKey]!.reverse();
-                                }
-                              });
-                            }
-                          },
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: isHighlight ? const Color(0xFF1976D2).withOpacity(0.10) : Colors.transparent,
-                                  border: Border(
-                                    left: BorderSide(
-                                      color: Colors.white.withOpacity(0.1),
-                                    ),
-                                  ),
+                      child: Row(
+                        children: [
+                          // Time indicator
+                          SizedBox(
+                            width: 60,
+                            child: Center(
+                              child: Text(
+                                timeBlocks[blockIdx].timeString,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
                                 ),
-                                child: cellBlocks.isEmpty
-                                    ? (activeStudentCount > 0 
-                                        ? Center(
-                                            child: Container(
-                                              margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                                              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                                              decoration: BoxDecoration(
-                                                color: countColor?.withOpacity(0.2) ?? Colors.grey.shade300,
-                                                borderRadius: BorderRadius.circular(8),
-                                                border: Border.all(
-                                                  color: countColor ?? Colors.grey.shade300,
-                                                  width: 2,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                '${activeStudentCount}명',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: countColor ?? Colors.black87,
-                                                ),
-                                                textAlign: TextAlign.center,
-                                              ),
-                                            ),
-                                          )
-                                        : null)
-                                    : !isExpanded
-                                        ? _CollapsedStudentBlock(
-                                            count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
-                                            color: countColor,
-                                          )
-                                        : null,
                               ),
-                              if (isExpanded && cellBlocks.isNotEmpty)
-                                Positioned(
-                                  top: 0,
-                                  left: 0,
-                                  right: 0,
-                                  child: AnimatedBuilder(
-                                    animation: _animations[cellKey] ?? const AlwaysStoppedAnimation(1.0),
-                                    builder: (context, child) {
-                                      final animation = _animations[cellKey] ?? const AlwaysStoppedAnimation(1.0);
-                                      return SlideTransition(
-                                        position: Tween<Offset>(
-                                          begin: const Offset(0, -0.5),
-                                          end: Offset.zero,
-                                        ).animate(animation),
-                                        child: FadeTransition(
-                                          opacity: animation,
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.black,
-                                              borderRadius: BorderRadius.circular(8),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.black.withOpacity(0.3),
-                                                  blurRadius: 8,
-                                                  offset: const Offset(0, 2),
-                                                ),
-                                              ],
-                                            ),
-                                            padding: const EdgeInsets.all(4),
-                                            child: Wrap(
-                                              spacing: 4,
-                                              runSpacing: 4,
-                                              children: cellBlocks.map((block) {
-                                                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
-                                                  id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
-                                                final classInfo = block.classId != null ?
-                                                  classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
-                                                final columnWidth = (MediaQuery.of(context).size.width - 60) / 7;
-                                                return SizedBox(
-                                                  width: (columnWidth - 20) / 3 - 5,
-                                                  child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                                                );
-                                              }).toList(),
+                            ),
+                          ),
+                          // Day columns
+                          ...List.generate(7, (dayIdx) {
+                            final cellKey = '$dayIdx-$blockIdx';
+                            _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
+                            // 현재 시간에 수업 중인 모든 학생 블록 가져오기
+                            final activeBlocks = _getActiveStudentBlocks(
+                              studentTimeBlocks, 
+                              dayIdx, 
+                              timeBlocks[blockIdx].startTime,
+                              lessonDuration,
+                            );
+                            final cellBlocks = studentTimeBlocks.where((b) {
+                              return b.dayIndex == dayIdx &&
+                                b.startTime.hour == timeBlocks[blockIdx].startTime.hour &&
+                                b.startTime.minute == timeBlocks[blockIdx].startTime.minute;
+                            }).toList();
+                            final isExpanded = _expandedCellKey == cellKey;
+                            final isHighlight = widget.isRegistrationMode && widget.selectedDayIndex == dayIdx;
+                            
+                            // 수업 정원 확인을 위한 클래스 정보 가져오기
+                            final activeStudentCount = activeBlocks.length;
+                            Color? countColor;
+                            int? totalCapacity;
+                            
+                            if (activeStudentCount > 0) {
+                              if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.8) {
+                                countColor = Colors.green;
+                              } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
+                                countColor = Colors.red;
+                              } else {
+                                countColor = Colors.grey;
+                              }
+                            } else {
+                              countColor = Colors.green;
+                            }
+                            
+                            return Expanded(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final cellWidth = constraints.maxWidth;
+                                  return GestureDetector(
+                                    onTap: () {
+                                      if (widget.isRegistrationMode && widget.selectedDayIndex == dayIdx && widget.onTimeSelected != null) {
+                                        widget.onTimeSelected!(timeBlocks[blockIdx].startTime);
+                                      } else if (cellBlocks.isNotEmpty) {
+                                        setState(() {
+                                          if (_expandedCellKey == null || _expandedCellKey != cellKey) {
+                                            _expandedCellKey = cellKey;
+                                          } else {
+                                            _expandedCellKey = null;
+                                          }
+                                        });
+                                      } else {
+                                        if (_expandedCellKey != null) {
+                                          setState(() {
+                                            _expandedCellKey = null;
+                                          });
+                                        }
+                                      }
+                                    },
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            color: isHighlight ? const Color(0xFF1976D2).withOpacity(0.10) : Colors.transparent,
+                                            border: Border(
+                                              left: BorderSide(
+                                                color: Colors.white.withOpacity(0.1),
+                                              ),
                                             ),
                                           ),
+                                          child: cellBlocks.isEmpty
+                                              ? (activeStudentCount > 0 
+                                                  ? CapacityCountWidget(count: activeStudentCount, color: countColor)
+                                                  : null)
+                                              : !isExpanded
+                                                  ? CapacityCardWidget(
+                                                      count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                      color: countColor,
+                                                      showArrow: true,
+                                                      isExpanded: false,
+                                                      expandedBlocks: cellBlocks,
+                                                      students: students,
+                                                      classes: classes,
+                                                    )
+                                                  : CapacityCardWidget(
+                                                      count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                      color: countColor,
+                                                      showArrow: true,
+                                                      isExpanded: true,
+                                                      expandedBlocks: cellBlocks,
+                                                      students: students,
+                                                      classes: classes,
+                                                    ),
                                         ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-          ],
-        );
-      },
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+        if (_expandedCellKey != null)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {
+                setState(() {
+                  _expandedCellKey = null;
+                });
+              },
+              child: Container(color: Colors.transparent),
+            ),
+          ),
+      ],
     );
   }
 
   List<TimeBlock> _generateTimeBlocks() {
     final List<TimeBlock> blocks = [];
-    
-    // 첫 번째 운영시간만 사용하여 시간 블록 생성 (중복 방지)
     if (widget.operatingHours.isNotEmpty) {
-      final hours = widget.operatingHours.first;
-      var currentTime = hours.startTime;
-      
-      while (currentTime.isBefore(hours.endTime)) {
-        // 30분 단위로 변경
-        final endTime = currentTime.add(const Duration(minutes: 30));
-        final isBreakTime = hours.breakTimes.any((breakTime) =>
-            (currentTime.isAfter(breakTime.startTime) || currentTime.isAtSameMomentAs(breakTime.startTime)) &&
-            currentTime.isBefore(breakTime.endTime));
-        
-        blocks.add(
-          TimeBlock(
-            startTime: currentTime,
-            endTime: endTime,
-            isBreakTime: isBreakTime,
-          ),
-        );
-        currentTime = endTime;
+      final now = DateTime.now();
+      // 모든 요일의 운영시간에서 가장 이른 startTime, 가장 늦은 endTime 찾기
+      int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
+      for (final hours in widget.operatingHours) {
+        if (hours.startTime.hour < minHour || (hours.startTime.hour == minHour && hours.startTime.minute < minMinute)) {
+          minHour = hours.startTime.hour;
+          minMinute = hours.startTime.minute;
+        }
+        if (hours.endTime.hour > maxHour || (hours.endTime.hour == maxHour && hours.endTime.minute > maxMinute)) {
+          maxHour = hours.endTime.hour;
+          maxMinute = hours.endTime.minute;
+        }
+      }
+      var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
+      final endTime = DateTime(now.year, now.month, now.day, maxHour, maxMinute);
+      while (currentTime.isBefore(endTime)) {
+        final blockEndTime = currentTime.add(const Duration(minutes: 30));
+        // 해당 시간대가 어떤 요일의 breakTime에 포함되는지 체크
+        final isBreakTime = widget.operatingHours.any((hours) {
+          return hours.breakTimes.any((breakTime) {
+            final breakStart = DateTime(now.year, now.month, now.day, breakTime.startTime.hour, breakTime.startTime.minute);
+            final breakEnd = DateTime(now.year, now.month, now.day, breakTime.endTime.hour, breakTime.endTime.minute);
+            return (currentTime.isAfter(breakStart) || currentTime.isAtSameMomentAs(breakStart)) && currentTime.isBefore(breakEnd);
+          });
+        });
+        blocks.add(TimeBlock(
+          startTime: currentTime,
+          endTime: blockEndTime,
+          isBreakTime: isBreakTime,
+        ));
+        currentTime = blockEndTime;
       }
     }
-    
     return blocks;
   }
 
@@ -313,6 +267,56 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       return block.startTime.isBefore(checkEndTime) && blockEndTime.isAfter(checkTime);
     }).toList();
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryScrollToCurrentTime());
+  }
+
+  void _tryScrollToCurrentTime() async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    _scrollToCurrentTime();
+  }
+
+  void _scrollToCurrentTime() {
+    final timeBlocks = _generateTimeBlocks();
+    final now = TimeOfDay.now();
+    int currentIdx = 0;
+    for (int i = 0; i < timeBlocks.length; i++) {
+      final block = timeBlocks[i];
+      if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+        currentIdx = i;
+      }
+    }
+    final blockHeight = 90.0;
+    final visibleRows = 5;
+    // 현재 시간이 운영시간 범위 내에 있는지 체크
+    final firstBlock = timeBlocks.isNotEmpty ? timeBlocks.first : null;
+    final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
+    int scrollIdx = currentIdx;
+    if (firstBlock != null && lastBlock != null) {
+      final nowMinutes = now.hour * 60 + now.minute;
+      final firstMinutes = firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
+      final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+      if (nowMinutes < firstMinutes) {
+        scrollIdx = 0;
+      } else if (nowMinutes > lastMinutes) {
+        scrollIdx = timeBlocks.length - 1;
+      }
+    }
+    final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
+    if (_scrollController.hasClients) {
+      final maxOffset = _scrollController.position.maxScrollExtent;
+      final minOffset = _scrollController.position.minScrollExtent;
+      final scrollTo = targetOffset.clamp(minOffset, maxOffset);
+      _scrollController.animateTo(
+        scrollTo,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
 }
 
 class _StudentTimeBlockCard extends StatelessWidget {
@@ -322,72 +326,218 @@ class _StudentTimeBlockCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey.shade300,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (classInfo != null)
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: classInfo!.color,
-                shape: BoxShape.circle,
+    return SizedBox(
+      width: 109,
+      height: 39,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.grey.shade300,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (classInfo != null)
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: classInfo!.color,
+                  shape: BoxShape.circle,
+                ),
+                margin: const EdgeInsets.only(right: 4),
               ),
-              margin: const EdgeInsets.only(right: 4),
-            ),
-          Flexible(
-            child: Text(
-              student.name,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
+            Flexible(
+              child: Text(
+                student.name,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
               ),
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class _CollapsedStudentBlock extends StatelessWidget {
+class CapacityCardWidget extends StatefulWidget {
   final int count;
   final Color? color;
-  const _CollapsedStudentBlock({required this.count, this.color});
+  final bool showArrow;
+  final bool isExpanded;
+  final List<StudentTimeBlock>? expandedBlocks;
+  final List<Student>? students;
+  final List<ClassInfo>? classes;
+  const CapacityCardWidget({
+    required this.count,
+    this.color,
+    this.showArrow = false,
+    this.isExpanded = false,
+    this.expandedBlocks,
+    this.students,
+    this.classes,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  State<CapacityCardWidget> createState() => _CapacityCardWidgetState();
+}
+
+class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _controller.value = widget.isExpanded ? 1.0 : 0.0;
+  }
+
+  @override
+  void didUpdateWidget(covariant CapacityCardWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isExpanded != oldWidget.isExpanded) {
+      if (widget.isExpanded) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.isExpanded && widget.expandedBlocks != null && widget.students != null && widget.classes != null) {
+      final cellBlocks = widget.expandedBlocks!;
+      final students = widget.students!;
+      final classes = widget.classes!;
+      return Container(
+        width: double.infinity,
+        child: AnimatedScale(
+          scale: widget.isExpanded ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 1000),
+          curve: Curves.easeOut,
+          child: AnimatedOpacity(
+            opacity: widget.isExpanded ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 1000),
+            child: Wrap(
+              spacing: 5,
+              runSpacing: 10,
+              children: List.generate(cellBlocks.length, (i) {
+                final block = cellBlocks[i];
+                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
+                  id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+                final classInfo = block.classId != null ?
+                  classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                return SizedBox(
+                  width: 109,
+                  height: 39,
+                  child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
+                );
+              }),
+            ),
+          ),
+        ),
+      );
+    }
+    return Center(
+      child: Container(
+        width: 110,
+        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+        padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+        constraints: const BoxConstraints(minHeight: 35, maxHeight: 35),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: widget.color ?? Colors.grey,
+            width: 2,
+          ),
+        ),
+        child: widget.count > 0
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${widget.count}명',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: widget.color ?? Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  if (widget.showArrow) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.arrow_downward,
+                      size: 16,
+                      color: widget.color ?? Colors.black87,
+                    ),
+                  ],
+                ],
+              )
+            : null,
+      ),
+    );
+  }
+}
+
+class CapacityCountWidget extends StatelessWidget {
+  final int count;
+  final Color? color;
+  const CapacityCountWidget({
+    required this.count,
+    this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        width: 110,
+        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+        padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+        constraints: const BoxConstraints(minHeight: 35, maxHeight: 35),
         decoration: BoxDecoration(
-          color: color?.withOpacity(0.2) ?? Colors.grey.shade300,
+          color: Colors.transparent,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: color ?? Colors.grey.shade300,
+            color: color ?? Colors.grey,
             width: 2,
           ),
         ),
-        child: Text(
-          '학생 $count명',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: color ?? Colors.black87,
-          ),
-          textAlign: TextAlign.center,
-        ),
+        child: count > 0
+            ? Center(
+                child: Text(
+                  '$count명',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: color ?? Colors.black87,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              )
+            : null,
       ),
     );
   }

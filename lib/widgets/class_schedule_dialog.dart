@@ -80,17 +80,12 @@ class _ClassScheduleDialogState extends State<ClassScheduleDialog> {
                           '${_getDayName(schedule.dayIndex)} ${_formatTime(schedule.startTime)}',
                           style: const TextStyle(color: Colors.white),
                         ),
-                        subtitle: Text(
-                          '${schedule.duration.inMinutes}분',
-                          style: TextStyle(color: Colors.white.withOpacity(0.7)),
-                        ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
                               icon: const Icon(Icons.edit, color: Colors.white70),
                               onPressed: () {
-                                Navigator.of(context).pop();
                                 widget.onScheduleSelected(schedule);
                               },
                             ),
@@ -98,7 +93,7 @@ class _ClassScheduleDialogState extends State<ClassScheduleDialog> {
                               icon: const Icon(Icons.delete, color: Colors.red),
                               onPressed: () async {
                                 await DataManager.instance.deleteClassSchedule(schedule.id);
-                                _loadSchedules();
+                                await _loadSchedules();
                               },
                             ),
                           ],
@@ -115,7 +110,7 @@ class _ClassScheduleDialogState extends State<ClassScheduleDialog> {
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               ),
-              onPressed: () {
+              onPressed: () async {
                 // 새 시간 추가
                 final newSchedule = ClassSchedule(
                   id: const Uuid().v4(),
@@ -125,8 +120,9 @@ class _ClassScheduleDialogState extends State<ClassScheduleDialog> {
                   duration: const Duration(hours: 1),
                   createdAt: DateTime.now(),
                 );
+                await DataManager.instance.addClassSchedule(newSchedule);
+                await _loadSchedules();
                 Navigator.of(context).pop();
-                widget.onScheduleSelected(newSchedule);
               },
               icon: const Icon(Icons.add),
               label: const Text('새 시간 추가'),

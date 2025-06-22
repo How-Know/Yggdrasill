@@ -10,6 +10,7 @@ import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
 import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
+import '../../models/education_level.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -45,6 +46,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   String _registrationButtonText = '등록';
   ClassInfo? _selectedClass;
   ClassSchedule? _currentClassSchedule;
+  bool _showOperatingHoursAlert = false;
 
   @override
   void initState() {
@@ -65,6 +67,48 @@ class _TimetableScreenState extends State<TimetableScreen> {
     setState(() {
       _operatingHours = hours;
     });
+    // 운영시간 외 학생 시간 삭제 및 안내
+    final allHours = hours;
+    final toRemove = <StudentTimeBlock>[];
+    for (final block in DataManager.instance.studentTimeBlocks) {
+      final dayIdx = block.dayIndex;
+      if (dayIdx >= allHours.length) continue;
+      final op = allHours[dayIdx];
+      final blockMinutes = block.startTime.hour * 60 + block.startTime.minute;
+      final startMinutes = op.startTime.hour * 60 + op.startTime.minute;
+      final endMinutes = op.endTime.hour * 60 + op.endTime.minute;
+      if (blockMinutes < startMinutes || blockMinutes >= endMinutes) {
+        toRemove.add(block);
+      }
+    }
+    if (toRemove.isNotEmpty) {
+      for (final block in toRemove) {
+        await DataManager.instance.removeStudentTimeBlock(block.id);
+      }
+      if (!_showOperatingHoursAlert) {
+        _showOperatingHoursAlert = true;
+        final studentNames = toRemove.map((b) {
+          final s = DataManager.instance.students.firstWhere((s) => s.id == b.studentId, orElse: () => Student(id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+          return s.name;
+        }).toSet().join(', ');
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: Colors.black,
+              title: const Text('운영시간 외 학생 시간 삭제', style: TextStyle(color: Colors.white)),
+              content: Text('운영시간이 변경되어 운영시간 외 학생 시간표가 삭제되었습니다.\n삭제된 학생: $studentNames', style: const TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('확인', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          );
+        });
+      }
+    }
   }
 
   void _handleDateChanged(DateTime date) {
@@ -100,6 +144,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       builder: (context) => ClassScheduleDialog(
         classInfo: _selectedClass!,
         onScheduleSelected: (schedule) {
+          Navigator.of(context).pop();
           setState(() {
             _currentClassSchedule = schedule;
             _isClassRegistrationMode = true;
@@ -369,6 +414,30 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Future<void> _handleTimeSelection(DateTime startTime) async {
     if (_isStudentRegistrationMode) {
+      // 요일별 운영시간 체크
+      final dayIdx = _selectedDayIndex ?? 0;
+      final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
+      if (operatingHours != null) {
+        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
+        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
+        if (startTime.isBefore(start) || !startTime.isBefore(end)) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: Colors.black,
+              title: const Text('운영시간 외 등록 불가', style: TextStyle(color: Colors.white)),
+              content: const Text('해당 요일의 운영시간 내에서만 학생을 등록할 수 있습니다.', style: TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('확인', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+      }
       // 기존 학생 등록 코드
       final existingBlocks = DataManager.instance.studentTimeBlocksNotifier.value
           .where((block) => 
@@ -399,6 +468,30 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 버튼 텍스트는 변경하지 않음 (학생으로 유지)
       });
     } else if (_isClassRegistrationMode && _currentClassSchedule != null) {
+      // 클래스 스케줄 등록/수정 전 운영시간 체크
+      final dayIdx = _currentClassSchedule!.dayIndex;
+      final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
+      if (operatingHours != null) {
+        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
+        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
+        if (startTime.isBefore(start) || !startTime.isBefore(end)) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: Colors.black,
+              title: const Text('운영시간 외 등록 불가', style: TextStyle(color: Colors.white)),
+              content: const Text('해당 요일의 운영시간 내에서만 클래스 시간을 등록할 수 있습니다.', style: TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('확인', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+      }
       // 클래스 스케줄 등록/수정
       final updatedSchedule = _currentClassSchedule!.copyWith(
         startTime: startTime,
