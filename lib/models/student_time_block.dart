@@ -42,4 +42,24 @@ class StudentTimeBlock {
       'createdAt': createdAt.toIso8601String(),
     };
   }
+
+  StudentTimeBlock copyWith({
+    String? id,
+    String? studentId,
+    String? classId,
+    int? dayIndex,
+    DateTime? startTime,
+    Duration? duration,
+    DateTime? createdAt,
+  }) {
+    return StudentTimeBlock(
+      id: id ?? this.id,
+      studentId: studentId ?? this.studentId,
+      classId: classId ?? this.classId,
+      dayIndex: dayIndex ?? this.dayIndex,
+      startTime: startTime ?? this.startTime,
+      duration: duration ?? this.duration,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 } 
