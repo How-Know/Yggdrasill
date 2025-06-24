@@ -186,7 +186,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                               ),
                                               // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
                                               if (isExpanded && cellBlocks.isNotEmpty)
-                                                _buildExpandedStudentCards(cellBlocks, students, classes, constraints.maxWidth),
+                                                _buildExpandedStudentCards(cellBlocks, students, classes, constraints.maxWidth, isExpanded),
                                             ],
                                           ),
                                         ),
@@ -316,71 +316,70 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
   }
 
-  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<Student> students, List<ClassInfo> classes, double cellWidth) {
-    return Positioned.fill(
-      child: Stack(
-        children: [
-          // 닫힘용 GestureDetector를 아래에만 둠
-          GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () {
-              setState(() {
-                _expandedCellKey = null;
-              });
-            },
-            child: Container(color: Colors.transparent),
-          ),
-          // 학생카드 그리드(펼침 컨테이너)는 GestureDetector 위에 위치
-          Center(
-            child: Container(
-              width: cellWidth,
-              child: AnimatedScale(
-                scale: true ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 1000),
-                curve: Curves.easeOut,
-                child: AnimatedOpacity(
-                  opacity: true ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 1000),
-                  child: Wrap(
-                    spacing: 5,
-                    runSpacing: 10,
-                    children: List.generate(cellBlocks.length, (i) {
-                      final block = cellBlocks[i];
-                      final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
-                        id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
-                      final classInfo = block.classId != null ?
-                        classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
-                      return Draggable<StudentTimeBlock>(
-                        data: block,
-                        feedback: Material(
-                          color: Colors.transparent,
-                          child: SizedBox(
-                            width: 109,
-                            height: 39,
-                            child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                          ),
+  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<Student> students, List<ClassInfo> classes, double cellWidth, bool isExpanded) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () {
+        setState(() {
+          _expandedCellKey = null;
+        });
+      },
+      child: Container(
+        width: cellWidth,
+        child: AnimatedScale(
+          scale: isExpanded ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 1000),
+          curve: Curves.easeOut,
+          child: AnimatedOpacity(
+            opacity: isExpanded ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 1000),
+            child: Wrap(
+              spacing: 5,
+              runSpacing: 10,
+              children: List.generate(cellBlocks.length, (i) {
+                final block = cellBlocks[i];
+                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
+                  id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+                final classInfo = block.classId != null ?
+                  classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                return GestureDetector(
+                  onTapDown: (details) async {
+                    final selected = await showMenu<String>(
+                      context: context,
+                      position: RelativeRect.fromLTRB(
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                        details.globalPosition.dx + 1,
+                        details.globalPosition.dy + 1,
+                      ),
+                      color: Colors.black,
+                      items: [
+                        const PopupMenuItem<String>(
+                          value: 'edit',
+                          child: Text('수정', style: TextStyle(color: Colors.white)),
                         ),
-                        childWhenDragging: Opacity(
-                          opacity: 0.3,
-                          child: SizedBox(
-                            width: 109,
-                            height: 39,
-                            child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                          ),
+                        const PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Text('삭제', style: TextStyle(color: Colors.white)),
                         ),
-                        child: SizedBox(
-                          width: 109,
-                          height: 39,
-                          child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                        ),
-                      );
-                    }),
+                      ],
+                    );
+                    if (selected == 'edit') {
+                      // TODO: 시간/요일 수정 다이얼로그 진입
+                    } else if (selected == 'delete') {
+                      // TODO: 삭제 확인 다이얼로그 진입
+                    }
+                  },
+                  child: SizedBox(
+                    width: 109,
+                    height: 39,
+                    child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -513,24 +512,34 @@ class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTick
                   id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
                 final classInfo = block.classId != null ?
                   classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
-                return Draggable<StudentTimeBlock>(
-                  data: block,
-                  feedback: Material(
-                    color: Colors.transparent,
-                    child: SizedBox(
-                      width: 109,
-                      height: 39,
-                      child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                    ),
-                  ),
-                  childWhenDragging: Opacity(
-                    opacity: 0.3,
-                    child: SizedBox(
-                      width: 109,
-                      height: 39,
-                      child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
-                    ),
-                  ),
+                return GestureDetector(
+                  onTapDown: (details) async {
+                    final selected = await showMenu<String>(
+                      context: context,
+                      position: RelativeRect.fromLTRB(
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                        details.globalPosition.dx + 1,
+                        details.globalPosition.dy + 1,
+                      ),
+                      color: Colors.black,
+                      items: [
+                        const PopupMenuItem<String>(
+                          value: 'edit',
+                          child: Text('수정', style: TextStyle(color: Colors.white)),
+                        ),
+                        const PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Text('삭제', style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    );
+                    if (selected == 'edit') {
+                      // TODO: 시간/요일 수정 다이얼로그 진입
+                    } else if (selected == 'delete') {
+                      // TODO: 삭제 확인 다이얼로그 진입
+                    }
+                  },
                   child: SizedBox(
                     width: 109,
                     height: 39,
