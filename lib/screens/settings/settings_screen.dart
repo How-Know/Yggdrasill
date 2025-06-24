@@ -3,6 +3,9 @@ import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
 import '../../models/payment_type.dart';
+import '../../services/academy_db.dart';
+import 'package:flutter/foundation.dart';
+import '../../services/academy_hive.dart';
 
 enum SettingType {
   academy,
@@ -119,6 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadSettings();
+    _initAndLoadAcademySettings();
   }
 
   @override
@@ -160,6 +164,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } catch (e) {
       print('Error loading settings: $e');
+    }
+  }
+
+  Future<void> _initAndLoadAcademySettings() async {
+    if (kIsWeb) {
+      await AcademyHiveService.init();
+      final dbData = AcademyHiveService.getAcademySettings();
+      if (dbData != null) {
+        setState(() {
+          _academyNameController.text = dbData['name'] ?? '';
+          _sloganController.text = dbData['slogan'] ?? '';
+          _capacityController.text = (dbData['default_capacity'] ?? 30).toString();
+          _lessonDurationController.text = (dbData['lesson_duration'] ?? 50).toString();
+          final pt = dbData['payment_type'] as String?;
+          if (pt == 'monthly') {
+            _paymentType = PaymentType.monthly;
+          } else if (pt == 'perClass') {
+            _paymentType = PaymentType.perClass;
+          }
+        });
+      }
+    } else {
+      await AcademyDbService.instance.getAcademySettings().then((dbData) {
+        if (dbData != null) {
+          setState(() {
+            _academyNameController.text = dbData['name'] ?? '';
+            _sloganController.text = dbData['slogan'] ?? '';
+            _capacityController.text = (dbData['default_capacity'] ?? 30).toString();
+            _lessonDurationController.text = (dbData['lesson_duration'] ?? 50).toString();
+            final pt = dbData['payment_type'] as String?;
+            if (pt == 'monthly') {
+              _paymentType = PaymentType.monthly;
+            } else if (pt == 'perClass') {
+              _paymentType = PaymentType.perClass;
+            }
+          });
+        }
+      });
     }
   }
 
@@ -1014,21 +1056,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: ElevatedButton(
             onPressed: () async {
               try {
-                // 1. 학원 기본 정보 저장
                 final academySettings = AcademySettings(
                   name: _academyNameController.text.trim(),
                   slogan: _sloganController.text.trim(),
                   defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
                   lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
                 );
+                final paymentTypeStr = _paymentType == PaymentType.monthly ? 'monthly' : 'perClass';
+                if (kIsWeb) {
+                  await AcademyHiveService.saveAcademySettings(academySettings, paymentTypeStr);
+                } else {
+                  await AcademyDbService.instance.saveAcademySettings(academySettings, paymentTypeStr);
+                }
+                // 기존 방식도 유지
                 await DataManager.instance.saveAcademySettings(academySettings);
-
-                // 2. 지불 방식 저장
                 await DataManager.instance.savePaymentType(_paymentType);
-
-                // 3. 운영 시간 및 Break Time 저장
                 await _saveOperatingHours();
-
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('설정이 저장되었습니다.')),
                 );
