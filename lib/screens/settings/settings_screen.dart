@@ -118,6 +118,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final GlobalKey _academyInfoKey = GlobalKey();
   double _academyInfoHeight = 0;
 
+  final Set<int> _hoveredTabs = {};
+
+  // 운영시간/휴식 카드의 showActions 상태를 외부에서 관리
+  final Map<String, bool> _cardActions = {};
+
   @override
   void initState() {
     super.initState();
@@ -333,160 +338,160 @@ class _SettingsScreenState extends State<SettingsScreen> {
             borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 48),
-              // 테마 설정
-              const Text(
-                '테마',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 48),
+        // 테마 설정
+        const Text(
+          '테마',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 24),
+        SegmentedButton<ThemeMode>(
+          segments: const [
+            ButtonSegment<ThemeMode>(
+              value: ThemeMode.system,
+              label: Text('시스템'),
+            ),
+            ButtonSegment<ThemeMode>(
+              value: ThemeMode.light,
+              label: Text('라이트'),
+            ),
+            ButtonSegment<ThemeMode>(
+              value: ThemeMode.dark,
+              label: Text('다크'),
+            ),
+          ],
+          selected: {ThemeMode.dark},
+          onSelectionChanged: (Set<ThemeMode> newSelection) {
+            // TODO: 테마 변경 기능 구현
+          },
+          style: ButtonStyle(
+            backgroundColor: MaterialStateProperty.resolveWith<Color>(
+              (Set<MaterialState> states) {
+                if (states.contains(MaterialState.selected)) {
+                  return const Color(0xFF78909C);
+                }
+                return Colors.transparent;
+              },
+            ),
+            foregroundColor: MaterialStateProperty.resolveWith<Color>(
+              (Set<MaterialState> states) {
+                if (states.contains(MaterialState.selected)) {
+                  return Colors.white;
+                }
+                return Colors.white70;
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 40),
+        // 언어 설정
+        const Text(
+          '언어',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 20),
+        SizedBox(
+          width: 300,
+          child: DropdownButtonFormField<String>(
+            value: 'ko',
+            decoration: InputDecoration(
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
               ),
-              const SizedBox(height: 24),
-              SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.system,
-                    label: Text('시스템'),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.light,
-                    label: Text('라이트'),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.dark,
-                    label: Text('다크'),
-                  ),
-                ],
-                selected: {ThemeMode.dark},
-                onSelectionChanged: (Set<ThemeMode> newSelection) {
-                  // TODO: 테마 변경 기능 구현
-                },
-                style: ButtonStyle(
-                  backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                    (Set<MaterialState> states) {
-                      if (states.contains(MaterialState.selected)) {
-                        return const Color(0xFF78909C);
-                      }
-                      return Colors.transparent;
-                    },
-                  ),
-                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                    (Set<MaterialState> states) {
-                      if (states.contains(MaterialState.selected)) {
-                        return Colors.white;
-                      }
-                      return Colors.white70;
-                    },
-                  ),
-                ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2)),
               ),
-              const SizedBox(height: 40),
-              // 언어 설정
-              const Text(
-                '언어',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: 300,
-                child: DropdownButtonFormField<String>(
-                  value: 'ko',
-                  decoration: InputDecoration(
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                  dropdownColor: const Color(0xFF1F1F1F),
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                  items: const [
-                    DropdownMenuItem(value: 'ko', child: Text('한국어')),
-                    DropdownMenuItem(value: 'en', child: Text('English')),
-                    DropdownMenuItem(value: 'ja', child: Text('日本語')),
-                  ],
-                  onChanged: (String? value) {
-                    // TODO: 언어 변경 기능 구현
-                  },
-                ),
-              ),
-              const SizedBox(height: 40),
-              // 알림 설정
-              const Text(
-                '알림',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SwitchListTile(
-                title: const Text(
-                  '수업 시작 알림',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                subtitle: const Text(
-                  '수업 시작 10분 전에 알림을 받습니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 알림 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
-              SwitchListTile(
-                title: const Text(
-                  '휴식 시간 알림',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                subtitle: const Text(
-                  '휴식 시간 시작과 종료 시 알림을 받습니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 알림 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
-              const SizedBox(height: 40),
-              // 자동 백업
-              const Text(
-                '자동 백업',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SwitchListTile(
-                title: const Text(
-                  '클라우드 백업',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                subtitle: const Text(
-                  '매일 자정에 데이터를 자동으로 백업합니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 백업 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
+            ),
+            dropdownColor: const Color(0xFF1F1F1F),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            items: const [
+              DropdownMenuItem(value: 'ko', child: Text('한국어')),
+              DropdownMenuItem(value: 'en', child: Text('English')),
+              DropdownMenuItem(value: 'ja', child: Text('日本語')),
             ],
+            onChanged: (String? value) {
+              // TODO: 언어 변경 기능 구현
+            },
+          ),
+        ),
+        const SizedBox(height: 40),
+        // 알림 설정
+        const Text(
+          '알림',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 20),
+        SwitchListTile(
+          title: const Text(
+            '수업 시작 알림',
+            style: TextStyle(color: Colors.white, fontSize: 18),
+          ),
+          subtitle: const Text(
+            '수업 시작 10분 전에 알림을 받습니다',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          value: true,
+          onChanged: (bool value) {
+            // TODO: 알림 설정 기능 구현
+          },
+          activeColor: const Color(0xFF1976D2),
+        ),
+        SwitchListTile(
+          title: const Text(
+            '휴식 시간 알림',
+            style: TextStyle(color: Colors.white, fontSize: 18),
+          ),
+          subtitle: const Text(
+            '휴식 시간 시작과 종료 시 알림을 받습니다',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          value: true,
+          onChanged: (bool value) {
+            // TODO: 알림 설정 기능 구현
+          },
+          activeColor: const Color(0xFF1976D2),
+        ),
+        const SizedBox(height: 40),
+        // 자동 백업
+        const Text(
+          '자동 백업',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 20),
+        SwitchListTile(
+          title: const Text(
+            '클라우드 백업',
+            style: TextStyle(color: Colors.white, fontSize: 18),
+          ),
+          subtitle: const Text(
+            '매일 자정에 데이터를 자동으로 백업합니다',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          value: true,
+          onChanged: (bool value) {
+            // TODO: 백업 설정 기능 구현
+          },
+          activeColor: const Color(0xFF1976D2),
+        ),
+      ],
           ),
         ),
       ),
@@ -514,11 +519,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               return Container(
                 width: blockWidth,
                 margin: const EdgeInsets.only(right: 8.0),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
                   color: const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                 child: Center(
                   child: Text(
                     day.koreanName,
@@ -538,137 +543,190 @@ class _SettingsScreenState extends State<SettingsScreen> {
           spacing: 8,
           runSpacing: 12,
           children: DayOfWeek.values.map((day) {
-            if (_operatingHours[day] == null) return const SizedBox.shrink();
             int dayIndex = day.index;
-            return MouseRegion(
-              cursor: SystemMouseCursors.click,
-              onEnter: (_) => setState(() => _hoveredOperatingHourCards.add(dayIndex)),
-              onExit: (_) => setState(() => _hoveredOperatingHourCards.remove(dayIndex)),
-              child: GestureDetector(
-                onTap: () => _selectOperatingHours(context, day),
-                child: AnimatedContainer(
-                  duration: Duration(milliseconds: 150),
-                  width: blockWidth,
-                  decoration: BoxDecoration(
-                    color: _hoveredOperatingHourCards.contains(dayIndex)
-                        ? const Color(0xFF35353A)
-                        : const Color(0xFF2A2A2A),
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.white.withOpacity(0.07),
-                        blurRadius: 0,
-                        spreadRadius: 0,
-                        offset: Offset(0, 0),
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${_formatTimeOfDay(_operatingHours[day]!.start)} - ${_formatTimeOfDay(_operatingHours[day]!.end)}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            TextButton.icon(
-                              icon: const Icon(
-                                Icons.add,
-                                color: Color(0xFF1976D2),
-                                size: 16,
+            final hasOperatingHours = _operatingHours[day] != null;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 운영시간 카드
+                hasOperatingHours
+                    ? MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        onEnter: (_) => setState(() => _hoveredOperatingHourCards.add(dayIndex)),
+                        onExit: (_) => setState(() => _hoveredOperatingHourCards.remove(dayIndex)),
+                        child: GestureDetector(
+                          onTapDown: (details) async {
+                            final selected = await showMenu<String>(
+                              context: context,
+                              position: RelativeRect.fromLTRB(
+                                details.globalPosition.dx,
+                                details.globalPosition.dy,
+                                details.globalPosition.dx,
+                                details.globalPosition.dy,
                               ),
-                              label: const Text(
-                                '휴식',
-                                style: TextStyle(
-                                  color: Color(0xFF1976D2),
-                                  fontSize: 12,
+                              items: [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: const Text('수정', style: TextStyle(color: Colors.white)),
+                                  height: 40,
                                 ),
-                              ),
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 4,
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: const Text('삭제', style: TextStyle(color: Colors.white)),
+                                  height: 40,
                                 ),
-                                minimumSize: Size.zero,
+                              ],
+                              color: const Color(0xFF1F1F1F),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              onPressed: () => _addBreakTime(day),
-                            ),
-                            const SizedBox(width: 4),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.delete,
-                                color: Colors.white70,
-                                size: 18,
-                              ),
-                              onPressed: () {
-                                setState(() {
-                                  _operatingHours[day] = null;
-                                  _breakTimes[day]?.clear();
-                                });
-                              },
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                              tooltip: '운영시간 삭제',
-                            ),
-                          ],
-                        ),
-                        if (_breakTimes[day]?.isNotEmpty ?? false) ...[
-                          const Divider(
-                            color: Color(0xFF404040),
-                            height: 16,
-                            thickness: 1,
-                            indent: 8,
-                            endIndent: 8,
-                          ),
-                          ..._breakTimes[day]!.map((breakTime) => Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${_formatTimeOfDay(breakTime.start)} - ${_formatTimeOfDay(breakTime.end)}',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.close,
-                                    color: Colors.white70,
-                                    size: 14,
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      _breakTimes[day]?.remove(breakTime);
-                                    });
-                                  },
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  tooltip: '휴식시간 삭제',
+                            );
+                            if (selected == 'edit') {
+                              _selectOperatingHours(context, day);
+                            } else if (selected == 'delete') {
+                              setState(() {
+                                _operatingHours[day] = null;
+                                _breakTimes[day]?.clear();
+                              });
+                            }
+                          },
+                          child: AnimatedContainer(
+                            duration: Duration(milliseconds: 150),
+                            width: blockWidth,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF18181A),
+                              borderRadius: BorderRadius.circular(8),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.white.withOpacity(0.07),
+                                  blurRadius: 0,
+                                  spreadRadius: 0,
+                                  offset: Offset(0, 0),
                                 ),
                               ],
                             ),
-                          )).toList(),
-                        ],
-                      ],
+                            child: Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                  child: Center(
+                                    child: Text(
+                                      '${_formatTimeOfDay(_operatingHours[day]!.start)} - ${_formatTimeOfDay(_operatingHours[day]!.end)}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    : Container(
+                        width: blockWidth,
+                        height: 40,
+                        padding: EdgeInsets.zero,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF18181A),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: IconButton(
+                            icon: const Icon(Icons.add, color: Color(0xFF1976D2), size: 28),
+                            tooltip: '운영시간 등록',
+                            onPressed: () => _selectOperatingHours(context, day),
+                          ),
+                        ),
+                      ),
+                // 운영시간 카드와 휴식시간 카드 사이 여백
+                if ((_breakTimes[day]?.isNotEmpty ?? false) && hasOperatingHours) const SizedBox(height: 10),
+                // 휴식시간 카드들
+                ...((_breakTimes[day]?.asMap().entries ?? []).map((entry) {
+                  final breakIndex = entry.key;
+                  final breakTime = entry.value;
+                  final breakKey = 'br${dayIndex}_$breakIndex';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: GestureDetector(
+                      onTapDown: (details) async {
+                        final selected = await showMenu<String>(
+                          context: context,
+                          position: RelativeRect.fromLTRB(
+                            details.globalPosition.dx,
+                            details.globalPosition.dy,
+                            details.globalPosition.dx,
+                            details.globalPosition.dy,
+                          ),
+                          items: [
+                            PopupMenuItem(
+                              value: 'edit',
+                              child: const Text('수정', style: TextStyle(color: Colors.white)),
+                              height: 40,
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: const Text('삭제', style: TextStyle(color: Colors.white)),
+                              height: 40,
+                            ),
+                          ],
+                          color: const Color(0xFF1F1F1F),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        );
+                        if (selected == 'edit') {
+                          // TODO: 휴식시간 수정 다이얼로그 연결
+                        } else if (selected == 'delete') {
+                          setState(() {
+                            _breakTimes[day]?.remove(breakTime);
+                          });
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: Duration(milliseconds: 150),
+                        width: blockWidth,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF18181A),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Color(0xFF1976D2)),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 5),
+                          child: Center(
+                            child: Text(
+                              '${_formatTimeOfDay(breakTime.start)} - ${_formatTimeOfDay(breakTime.end)}',
+                              style: const TextStyle(
+                                color: Color(0xFF1976D2),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
+                  );
+                }).toList()),
+                // +휴식 버튼 (TextButton)
+                if (hasOperatingHours)
+                  TextButton.icon(
+                    icon: const Icon(Icons.add, color: Color(0xFF1976D2), size: 18),
+                    label: const Text('휴식', style: TextStyle(color: Color(0xFF1976D2), fontSize: 13)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF1976D2),
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    ),
+                    onPressed: () => _addBreakTime(day),
                   ),
-                ),
-              ),
+              ],
             );
           }).toList(),
         ),
@@ -883,9 +941,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: 650,
               child: SingleChildScrollView(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 48),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 48),
                     Container(
                       width: 650,
                       margin: const EdgeInsets.only(right: 20, left: 20, bottom: 20),
@@ -897,139 +955,139 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            '학원 정보',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          // 학원명 입력
-                          SizedBox(
-                            width: 600,
-                            child: TextFormField(
-                              controller: _academyNameController,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: InputDecoration(
-                                labelText: '학원명',
-                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          // 슬로건 입력
-                          SizedBox(
-                            width: 600,
-                            child: TextFormField(
-                              controller: _sloganController,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: InputDecoration(
-                                labelText: '슬로건',
-                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          // 기본 정원과 수업 시간을 나란히 배치
-                          SizedBox(
+        const Text(
+          '학원 정보',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 24),
+        // 학원명 입력
+        SizedBox(
+          width: 600,
+          child: TextFormField(
+            controller: _academyNameController,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: '학원명',
+              labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        // 슬로건 입력
+        SizedBox(
+          width: 600,
+          child: TextFormField(
+            controller: _sloganController,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: '슬로건',
+              labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        // 기본 정원과 수업 시간을 나란히 배치
+            SizedBox(
                             width: 600,
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: TextFormField(
-                                    controller: _capacityController,
-                                    style: const TextStyle(color: Colors.white),
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: '기본 정원',
-                                      labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                      ),
-                                      focusedBorder: const OutlineInputBorder(
-                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 20),
+              child: TextFormField(
+                controller: _capacityController,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: '기본 정원',
+                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 20),
                                 Expanded(
-                                  child: TextFormField(
-                                    controller: _lessonDurationController,
-                                    style: const TextStyle(color: Colors.white),
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: '수업 시간 (분)',
-                                      labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                      ),
-                                      focusedBorder: const OutlineInputBorder(
-                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
+              child: TextFormField(
+                controller: _lessonDurationController,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: '수업 시간 (분)',
+                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                  ),
+                ),
+              ),
+            ),
+          ],
                             ),
-                          ),
-                          const SizedBox(height: 30),
-                          const Text(
-                            '지불 방식',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: 290,
-                            child: DropdownButtonFormField<PaymentType>(
-                              value: _paymentType,
-                              decoration: InputDecoration(
-                                enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                ),
-                              ),
-                              dropdownColor: const Color(0xFF1F1F1F),
-                              style: const TextStyle(color: Colors.white, fontSize: 16),
-                              items: [
-                                DropdownMenuItem(
-                                  value: PaymentType.monthly,
-                                  child: Text('월 결제'),
-                                ),
-                                DropdownMenuItem(
-                                  value: PaymentType.perClass,
-                                  child: Text('회당 결제'),
-                                ),
-                              ],
-                              onChanged: (PaymentType? value) {
-                                if (value != null) {
-                                  setState(() {
-                                    _paymentType = value;
-                                  });
-                                }
-                              },
-                            ),
-                          ),
+        ),
+        const SizedBox(height: 30),
+        const Text(
+          '지불 방식',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: 290,
+          child: DropdownButtonFormField<PaymentType>(
+            value: _paymentType,
+            decoration: InputDecoration(
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2)),
+              ),
+            ),
+            dropdownColor: const Color(0xFF1F1F1F),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            items: [
+              DropdownMenuItem(
+                value: PaymentType.monthly,
+                child: Text('월 결제'),
+              ),
+              DropdownMenuItem(
+                value: PaymentType.perClass,
+                child: Text('회당 결제'),
+              ),
+            ],
+            onChanged: (PaymentType? value) {
+              if (value != null) {
+                setState(() {
+                  _paymentType = value;
+                });
+              }
+            },
+          ),
+        ),
                         ],
                       ),
                     ),
@@ -1193,14 +1251,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+        backgroundColor: const Color(0xFF1F1F1F),
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(60),
         child: Column(
           children: [
             const SizedBox(height: 10),
             AppBar(
-              backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: const Color(0xFF1F1F1F),
               leadingWidth: 120,
               leading: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1223,12 +1281,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
               title: const Text(
-                '설정',
-                style: TextStyle(
+              '설정',
+              style: TextStyle(
                   color: Colors.white70,
                   fontSize: 28,
-                ),
-              ),
+            ),
+          ),
               centerTitle: true,
               toolbarHeight: 50,
               actions: [
@@ -1262,25 +1320,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             selectedIndex: _customTabIndex,
             tabs: const ['학원', '선생님', '일반'],
             onTabSelected: (idx) => setState(() => _customTabIndex = idx),
-          ),
-          Expanded(
+              ),
+              Expanded(
             child: IndexedStack(
               index: _customTabIndex,
-              children: [
-                _buildAcademySettings(),
+                  children: [
+                    _buildAcademySettings(),
                 _buildTeacherSettings(),
-                _buildGeneralSettings(),
-              ],
-            ),
+                    _buildGeneralSettings(),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 }
 
-// 커스텀 탭바 위젯 추가
-class CustomTabBar extends StatelessWidget {
+class CustomTabBar extends StatefulWidget {
   final int selectedIndex;
   final List<String> tabs;
   final ValueChanged<int> onTabSelected;
@@ -1292,38 +1349,58 @@ class CustomTabBar extends StatelessWidget {
   });
 
   @override
+  State<CustomTabBar> createState() => _CustomTabBarState();
+}
+
+class _CustomTabBarState extends State<CustomTabBar> {
+  final Set<int> _hoveredTabs = {};
+
+  @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(tabs.length, (i) {
-            final isSelected = i == selectedIndex;
-            return GestureDetector(
-              onTap: () => onTabSelected(i),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 23, vertical: 8),
-                child: Column(
-                  children: [
-                    Text(
-                      tabs[i],
-                      style: TextStyle(
-                        color: isSelected ? Color(0xFF1976D2) : Colors.white70,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+          children: List.generate(widget.tabs.length, (i) {
+            final isSelected = i == widget.selectedIndex;
+            final isHovered = _hoveredTabs.contains(i);
+            return MouseRegion(
+              cursor: SystemMouseCursors.click,
+              onEnter: (_) => setState(() => _hoveredTabs.add(i)),
+              onExit: (_) => setState(() => _hoveredTabs.remove(i)),
+              child: GestureDetector(
+                onTap: () => widget.onTabSelected(i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  padding: const EdgeInsets.symmetric(horizontal: 23, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isHovered && !isSelected
+                        ? Colors.white.withOpacity(0.07)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        widget.tabs[i],
+                        style: TextStyle(
+                          color: isSelected ? Color(0xFF1976D2) : Colors.white70,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 4),
-                    AnimatedContainer(
-                      duration: Duration(milliseconds: 200),
-                      height: 6,
-                      width: 60,
-                      decoration: BoxDecoration(
-                        color: isSelected ? Color(0xFF1976D2) : Colors.transparent,
-                        borderRadius: BorderRadius.circular(3),
+                      const SizedBox(height: 4),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        height: 6,
+                        width: 60,
+                        decoration: BoxDecoration(
+                          color: isSelected ? Color(0xFF1976D2) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
