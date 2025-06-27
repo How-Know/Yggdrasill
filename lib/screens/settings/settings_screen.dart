@@ -6,6 +6,8 @@ import '../../models/payment_type.dart';
 import '../../services/academy_db.dart';
 import 'package:flutter/foundation.dart';
 import '../../services/academy_hive.dart';
+import 'package:hive/hive.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 enum SettingType {
   academy,
@@ -123,11 +125,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 운영시간/휴식 카드의 showActions 상태를 외부에서 관리
   final Map<String, bool> _cardActions = {};
 
+  Box? _teacherBox;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
     _initAndLoadAcademySettings();
+    _initAndLoadTeachers();
   }
 
   @override
@@ -208,6 +213,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       });
     }
+  }
+
+  Future<void> _initAndLoadTeachers() async {
+    if (kIsWeb) {
+      await Hive.initFlutter();
+      _teacherBox = await Hive.openBox('teachers_box');
+    }
+    await _loadTeachers();
   }
 
   Future<void> _saveOperatingHours() async {
@@ -338,160 +351,164 @@ class _SettingsScreenState extends State<SettingsScreen> {
             borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 48),
-        // 테마 설정
-        const Text(
-          '테마',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 24),
-        SegmentedButton<ThemeMode>(
-          segments: const [
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.system,
-              label: Text('시스템'),
-            ),
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.light,
-              label: Text('라이트'),
-            ),
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.dark,
-              label: Text('다크'),
-            ),
-          ],
-          selected: {ThemeMode.dark},
-          onSelectionChanged: (Set<ThemeMode> newSelection) {
-            // TODO: 테마 변경 기능 구현
-          },
-          style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return const Color(0xFF78909C);
-                }
-                return Colors.transparent;
-              },
-            ),
-            foregroundColor: MaterialStateProperty.resolveWith<Color>(
-              (Set<MaterialState> states) {
-                if (states.contains(MaterialState.selected)) {
-                  return Colors.white;
-                }
-                return Colors.white70;
-              },
-            ),
-          ),
-        ),
-        const SizedBox(height: 40),
-        // 언어 설정
-        const Text(
-          '언어',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 20),
-        SizedBox(
-          width: 300,
-          child: DropdownButtonFormField<String>(
-            value: 'ko',
-            decoration: InputDecoration(
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 테마 설정
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Text(
+                  '테마',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
-              focusedBorder: const OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF1976D2)),
+              const SizedBox(height: 24),
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.system,
+                    label: Text('시스템'),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.light,
+                    label: Text('라이트'),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.dark,
+                    label: Text('다크'),
+                  ),
+                ],
+                selected: {ThemeMode.dark},
+                onSelectionChanged: (Set<ThemeMode> newSelection) {
+                  // TODO: 테마 변경 기능 구현
+                },
+                style: ButtonStyle(
+                  backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                    (Set<MaterialState> states) {
+                      if (states.contains(MaterialState.selected)) {
+                        return const Color(0xFF78909C);
+                      }
+                      return Colors.transparent;
+                    },
+                  ),
+                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                    (Set<MaterialState> states) {
+                      if (states.contains(MaterialState.selected)) {
+                        return Colors.white;
+                      }
+                      return Colors.white70;
+                    },
+                  ),
+                ),
               ),
-            ),
-            dropdownColor: const Color(0xFF1F1F1F),
-            style: const TextStyle(color: Colors.white, fontSize: 16),
-            items: const [
-              DropdownMenuItem(value: 'ko', child: Text('한국어')),
-              DropdownMenuItem(value: 'en', child: Text('English')),
-              DropdownMenuItem(value: 'ja', child: Text('日本語')),
+              const SizedBox(height: 40),
+              // 언어 설정
+              const Text(
+                '언어',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: 300,
+                child: DropdownButtonFormField<String>(
+                  value: 'ko',
+                  decoration: InputDecoration(
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                  dropdownColor: const Color(0xFF1F1F1F),
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  items: const [
+                    DropdownMenuItem(value: 'ko', child: Text('한국어')),
+                    DropdownMenuItem(value: 'en', child: Text('English')),
+                    DropdownMenuItem(value: 'ja', child: Text('日本語')),
+                  ],
+                  onChanged: (String? value) {
+                    // TODO: 언어 변경 기능 구현
+                  },
+                ),
+              ),
+              const SizedBox(height: 40),
+              // 알림 설정
+              const Text(
+                '알림',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SwitchListTile(
+                title: const Text(
+                  '수업 시작 알림',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+                subtitle: const Text(
+                  '수업 시작 10분 전에 알림을 받습니다',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+                value: true,
+                onChanged: (bool value) {
+                  // TODO: 알림 설정 기능 구현
+                },
+                activeColor: const Color(0xFF1976D2),
+              ),
+              SwitchListTile(
+                title: const Text(
+                  '휴식 시간 알림',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+                subtitle: const Text(
+                  '휴식 시간 시작과 종료 시 알림을 받습니다',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+                value: true,
+                onChanged: (bool value) {
+                  // TODO: 알림 설정 기능 구현
+                },
+                activeColor: const Color(0xFF1976D2),
+              ),
+              const SizedBox(height: 40),
+              // 자동 백업
+              const Text(
+                '자동 백업',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SwitchListTile(
+                title: const Text(
+                  '클라우드 백업',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+                subtitle: const Text(
+                  '매일 자정에 데이터를 자동으로 백업합니다',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+                value: true,
+                onChanged: (bool value) {
+                  // TODO: 백업 설정 기능 구현
+                },
+                activeColor: const Color(0xFF1976D2),
+              ),
+              const Padding(padding: EdgeInsets.only(bottom: 24)),
             ],
-            onChanged: (String? value) {
-              // TODO: 언어 변경 기능 구현
-            },
-          ),
-        ),
-        const SizedBox(height: 40),
-        // 알림 설정
-        const Text(
-          '알림',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 20),
-        SwitchListTile(
-          title: const Text(
-            '수업 시작 알림',
-            style: TextStyle(color: Colors.white, fontSize: 18),
-          ),
-          subtitle: const Text(
-            '수업 시작 10분 전에 알림을 받습니다',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-          value: true,
-          onChanged: (bool value) {
-            // TODO: 알림 설정 기능 구현
-          },
-          activeColor: const Color(0xFF1976D2),
-        ),
-        SwitchListTile(
-          title: const Text(
-            '휴식 시간 알림',
-            style: TextStyle(color: Colors.white, fontSize: 18),
-          ),
-          subtitle: const Text(
-            '휴식 시간 시작과 종료 시 알림을 받습니다',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-          value: true,
-          onChanged: (bool value) {
-            // TODO: 알림 설정 기능 구현
-          },
-          activeColor: const Color(0xFF1976D2),
-        ),
-        const SizedBox(height: 40),
-        // 자동 백업
-        const Text(
-          '자동 백업',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 20),
-        SwitchListTile(
-          title: const Text(
-            '클라우드 백업',
-            style: TextStyle(color: Colors.white, fontSize: 18),
-          ),
-          subtitle: const Text(
-            '매일 자정에 데이터를 자동으로 백업합니다',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-          value: true,
-          onChanged: (bool value) {
-            // TODO: 백업 설정 기능 구현
-          },
-          activeColor: const Color(0xFF1976D2),
-        ),
-      ],
           ),
         ),
       ),
@@ -898,7 +915,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-              onPressed: () {
+              onPressed: () async {
                 setState(() {
                   _teachers.add(Teacher(
                     name: nameController.text.trim(),
@@ -908,6 +925,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     description: descController.text.trim(),
                   ));
                 });
+                await _saveTeachers();
+                await _loadTeachers();
+                await Future.delayed(const Duration(milliseconds: 100));
                 Navigator.pop(context);
               },
               child: const Text('등록', style: TextStyle(color: Colors.white)),
@@ -1126,8 +1146,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 } else {
                   await AcademyDbService.instance.saveAcademySettings(academySettings, paymentTypeStr);
                 }
-                // 기존 방식도 유지
-                await DataManager.instance.saveAcademySettings(academySettings);
                 await DataManager.instance.savePaymentType(_paymentType);
                 await _saveOperatingHours();
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1191,55 +1209,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 20),
                 if (_teachers.isEmpty)
                   const Text('등록된 선생님이 없습니다.', style: TextStyle(color: Colors.white70)),
-                ..._teachers.map((t) => Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF232326),
-                      borderRadius: BorderRadius.circular(12),
+                if (_teachers.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
+                    child: Container(
+                      width: 944,
+                      child: Row(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 24),
+                            child: SizedBox(
+                              width: 80,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text('이름', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14)),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 40),
+                          SizedBox(width: 60, child: Text('관리', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 130, child: Text('연락처', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 40),
+                          SizedBox(width: 210, child: Text('이메일', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 90, child: Text('상세 정보', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [],
+                          ),
+                        ],
+                      ),
                     ),
-                    constraints: const BoxConstraints(maxWidth: 944),
-                    child: Row(
+                  ),
+                if (_teachers.isNotEmpty)
+                  SizedBox(
+                    height: 320,
+                    child: ReorderableListView(
+                      buildDefaultDragHandles: false,
+                      proxyDecorator: _teacherCardProxyDecorator,
+                      onReorder: (oldIndex, newIndex) {
+                        setState(() {
+                          if (newIndex > oldIndex) newIndex--;
+                          final item = _teachers.removeAt(oldIndex);
+                          _teachers.insert(newIndex, item);
+                        });
+                        _saveTeachers();
+                      },
                       children: [
-                        Expanded(
-                          flex: 2,
-                          child: Text(t.name, style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis),
-                        ),
-                        Expanded(
-                          flex: 2,
-                          child: Text(getTeacherRoleLabel(t.role), style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis),
-                        ),
-                        Expanded(
-                          flex: 3,
-                          child: Text(t.contact, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis),
-                        ),
-                        Expanded(
-                          flex: 3,
-                          child: Text(t.email, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis),
-                        ),
-                        Expanded(
-                          flex: 4,
-                          child: Text(t.description, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis, maxLines: 1),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.edit, color: Colors.white70),
-                          onPressed: () {
-                            // TODO: 수정 기능 구현
-                          },
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.white70),
-                          onPressed: () {
-                            setState(() {
-                              _teachers.remove(t);
-                            });
-                          },
-                        ),
+                        for (int i = 0; i < _teachers.length; i++)
+                          Padding(
+                            key: ValueKey('teacher_card_$i'),
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF232326),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              width: 944,
+                              child: Row(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 24),
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(_teachers[i].name, style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis),
+                                    ),
+                                  ),
+                                  SizedBox(width: 40),
+                                  Expanded(flex: 10, child: Text(getTeacherRoleLabel(_teachers[i].role), style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                  Expanded(flex: 10, child: Text(_teachers[i].contact, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                  SizedBox(width: 40),
+                                  Expanded(flex: 25, child: Text(_teachers[i].email, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                  Expanded(flex: 25, child: Text(_teachers[i].description, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis, maxLines: 1)),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      ReorderableDragStartListener(
+                                        index: i,
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: 4),
+                                          child: Icon(Icons.drag_handle, color: Colors.white38),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.edit, color: Colors.white70),
+                                        onPressed: () {
+                                          _showEditTeacherDialog(i);
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete, color: Colors.white70),
+                                        onPressed: () async {
+                                          final confirm = await showDialog<bool>(
+                                            context: context,
+                                            builder: (context) => AlertDialog(
+                                              backgroundColor: const Color(0xFF18181A),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                              title: const Text('삭제 확인', style: TextStyle(color: Colors.white)),
+                                              content: const Text('정말로 이 선생님 정보를 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () => Navigator.pop(context, false),
+                                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                                ),
+                                                ElevatedButton(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                                  onPressed: () => Navigator.pop(context, true),
+                                                  child: const Text('삭제', style: TextStyle(color: Colors.white)),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (confirm == true) {
+                                            setState(() {
+                                              _teachers.removeAt(i);
+                                            });
+                                            _saveTeachers();
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
-                )),
               ],
             ),
           ),
@@ -1335,6 +1432,267 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
     );
   }
+
+  // 드래그 피드백 카드 스타일 함수
+  Widget _teacherCardProxyDecorator(Widget child, int index, Animation<double> animation) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF232326),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        constraints: const BoxConstraints(maxWidth: 944),
+        child: child,
+      ),
+    );
+  }
+
+  // 선생님 정보 수정 다이얼로그
+  void _showEditTeacherDialog(int index) {
+    final teacher = _teachers[index];
+    final nameController = TextEditingController(text: teacher.name);
+    final contactController = TextEditingController(text: teacher.contact);
+    final emailController = TextEditingController(text: teacher.email);
+    final descController = TextEditingController(text: teacher.description);
+    TeacherRole selectedRole = teacher.role;
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF18181A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('선생님 정보 수정', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: '이름',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<TeacherRole>(
+                  value: selectedRole,
+                  dropdownColor: const Color(0xFF18181A),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: '관리 범위',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                  items: TeacherRole.values.map((role) => DropdownMenuItem(
+                    value: role,
+                    child: Text(getTeacherRoleLabel(role), style: const TextStyle(color: Colors.white)),
+                  )).toList(),
+                  onChanged: (role) {
+                    if (role != null) selectedRole = role;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: contactController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: '연락처',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: emailController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: '이메일',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: descController,
+                  style: const TextStyle(color: Colors.white),
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: '설명',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              onPressed: () async {
+                setState(() {
+                  _teachers[index] = Teacher(
+                    name: nameController.text.trim(),
+                    role: selectedRole,
+                    contact: contactController.text.trim(),
+                    email: emailController.text.trim(),
+                    description: descController.text.trim(),
+                  );
+                });
+                await _saveTeachers();
+                await _loadTeachers();
+                await Future.delayed(const Duration(milliseconds: 100));
+                Navigator.pop(context);
+              },
+              child: const Text('저장', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _saveTeachers() async {
+    if (kIsWeb && _teacherBox != null) {
+      final data = _teachers.map((t) => {
+        'name': t.name,
+        'role': t.role.index,
+        'contact': t.contact,
+        'email': t.email,
+        'description': t.description,
+      }).toList();
+      await _teacherBox!.put('teachers', data);
+      print('Hive save teachers: $data');
+      // 저장 후 setState로 반영 (불러오기와 동일하게)
+      final saved = _teacherBox!.get('teachers') as List?;
+      print('Hive saved teachers after put: $saved');
+      if (saved != null) {
+        setState(() {
+          _teachers = saved.map((row) => Teacher(
+            name: row['name'] as String? ?? '',
+            role: TeacherRole.values[row['role'] as int? ?? 0],
+            contact: row['contact'] as String? ?? '',
+            email: row['email'] as String? ?? '',
+            description: row['description'] as String? ?? '',
+          )).toList();
+        });
+      }
+    } else {
+      await AcademyDbService.instance.saveTeachers(_teachers);
+    }
+  }
+
+  Future<void> _loadTeachers() async {
+    if (kIsWeb) {
+      try {
+        if (_teacherBox == null || !_teacherBox!.isOpen) {
+          await Hive.initFlutter();
+          _teacherBox = await Hive.openBox('teachers_box');
+        }
+        final data = _teacherBox!.get('teachers') as List?;
+        print('Hive load teachers: $data');
+        if (data != null) {
+          setState(() {
+            _teachers = data.map((row) => Teacher(
+              name: row['name'] as String? ?? '',
+              role: TeacherRole.values[row['role'] as int? ?? 0],
+              contact: row['contact'] as String? ?? '',
+              email: row['email'] as String? ?? '',
+              description: row['description'] as String? ?? '',
+            )).toList();
+          });
+        }
+      } catch (e) {
+        print('Error loading teachers from Hive: $e');
+      }
+    } else {
+      final dbList = await AcademyDbService.instance.getTeachers();
+      setState(() {
+        _teachers = dbList.map((row) => Teacher(
+          name: row['name'] as String? ?? '',
+          role: TeacherRole.values[row['role'] as int? ?? 0],
+          contact: row['contact'] as String? ?? '',
+          email: row['email'] as String? ?? '',
+          description: row['description'] as String? ?? '',
+        )).toList();
+      });
+    }
+  }
+
+  Widget teacherRow({
+    required String name,
+    required String role,
+    required String contact,
+    required String email,
+    required String desc,
+    Widget? dragHandle,
+    Widget? editBtn,
+    Widget? deleteBtn,
+    bool isHeader = false,
+  }) {
+    final textStyle = isHeader
+        ? const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 16)
+        : const TextStyle(color: Colors.white, fontSize: 16);
+    final descStyle = isHeader
+        ? textStyle
+        : const TextStyle(color: Colors.white70, fontSize: 14);
+    return Padding(
+      padding: const EdgeInsets.only(left: 24, right: 8, bottom: 8),
+      child: Row(
+        children: [
+          Expanded(flex: 2, child: Text(name, style: textStyle, overflow: TextOverflow.ellipsis)),
+          Expanded(flex: 2, child: Text(role, style: textStyle, overflow: TextOverflow.ellipsis)),
+          Expanded(flex: 3, child: Text(contact, style: textStyle, overflow: TextOverflow.ellipsis)),
+          Expanded(flex: 3, child: Text(email, style: textStyle, overflow: TextOverflow.ellipsis)),
+          Expanded(flex: 4, child: Text(desc, style: descStyle, overflow: TextOverflow.ellipsis, maxLines: 1)),
+          if (dragHandle != null) dragHandle,
+          if (editBtn != null) editBtn,
+          if (deleteBtn != null) deleteBtn,
+          if (dragHandle == null && editBtn == null && deleteBtn == null) SizedBox(width: 60),
+        ],
+      ),
+    );
+  }
 }
 
 class CustomTabBar extends StatefulWidget {
@@ -1369,7 +1727,13 @@ class _CustomTabBarState extends State<CustomTabBar> {
               onEnter: (_) => setState(() => _hoveredTabs.add(i)),
               onExit: (_) => setState(() => _hoveredTabs.remove(i)),
               child: GestureDetector(
-                onTap: () => widget.onTabSelected(i),
+                onTap: () {
+                  widget.onTabSelected(i);
+                  if (widget.tabs[i] == '선생님') {
+                    final state = context.findAncestorStateOfType<_SettingsScreenState>();
+                    state?._loadTeachers();
+                  }
+                },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 120),
                   padding: const EdgeInsets.symmetric(horizontal: 23, vertical: 8),

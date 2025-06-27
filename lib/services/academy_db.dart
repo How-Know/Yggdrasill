@@ -61,4 +61,23 @@ class AcademyDbService {
     }
     return null;
   }
+
+  Future<void> saveTeachers(List teachers) async {
+    final dbClient = await db;
+    await dbClient.delete('teachers');
+    for (final t in teachers) {
+      await dbClient.insert('teachers', {
+        'name': t.name,
+        'role': t.role.index,
+        'contact': t.contact,
+        'email': t.email,
+        'description': t.description,
+      });
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getTeachers() async {
+    final dbClient = await db;
+    return await dbClient.query('teachers');
+  }
 } 
