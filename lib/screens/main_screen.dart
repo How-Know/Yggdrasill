@@ -104,6 +104,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return TimetableScreen();
       case 3:
         return const Center(child: Text('학습', style: TextStyle(color: Colors.white)));
+      case 4:
+        return const SettingsScreen();
       default:
         return const SizedBox();
     }

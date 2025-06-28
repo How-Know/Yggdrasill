@@ -40,26 +40,28 @@ class SchoolView extends StatelessWidget {
       }
     }
 
-    return SingleChildScrollView(
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(30.0, 24.0, 30.0, 24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedStudents),
-              if (groupedStudents[EducationLevel.elementary]!.isNotEmpty &&
-                  (groupedStudents[EducationLevel.middle]!.isNotEmpty ||
-                   groupedStudents[EducationLevel.high]!.isNotEmpty))
-                const Divider(color: Colors.white24, height: 48),
-              _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedStudents),
-              if (groupedStudents[EducationLevel.middle]!.isNotEmpty &&
-                  groupedStudents[EducationLevel.high]!.isNotEmpty)
-                const Divider(color: Colors.white24, height: 48),
-              _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedStudents),
-            ],
-          ),
+    return Center(
+      child: Container(
+        width: 1000,
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+        decoration: BoxDecoration(
+          color: Color(0xFF18181A),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedStudents),
+            if (groupedStudents[EducationLevel.elementary]!.isNotEmpty &&
+                (groupedStudents[EducationLevel.middle]!.isNotEmpty ||
+                 groupedStudents[EducationLevel.high]!.isNotEmpty))
+              const Divider(color: Colors.white24, height: 48),
+            _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedStudents),
+            if (groupedStudents[EducationLevel.middle]!.isNotEmpty &&
+                groupedStudents[EducationLevel.high]!.isNotEmpty)
+              const Divider(color: Colors.white24, height: 48),
+            _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedStudents),
+          ],
         ),
       ),
     );

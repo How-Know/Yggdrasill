@@ -12,6 +12,7 @@ import 'dart:typed_data';
 import 'dart:html' as html;
 import '../../widgets/app_bar_title.dart';
 import 'dart:convert';
+import '../../widgets/custom_tab_bar.dart';
 
 enum SettingType {
   academy,
@@ -1401,23 +1402,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: '설정',
         onBack: () {
           try {
-            if (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS) {
+            if (identical(0, 0.0)) {
+              html.window.history.back();
+            } else {
               if (Navigator.of(context).canPop()) {
                 Navigator.of(context).pop();
               }
-            } else {
-              Navigator.of(context).maybePop();
             }
           } catch (_) {}
         },
         onForward: () {
-          // 앞으로가기(웹만 지원)
-          // dart:html import 없이 window.history.forward() 사용 불가하므로, 라우트로 대체
-          // 필요시 구현
+          try {
+            if (identical(0, 0.0)) {
+              html.window.history.forward();
+            }
+          } catch (_) {}
         },
         onRefresh: () => setState(() {}),
         onSettings: () {
-          Navigator.of(context).pushNamed('/settings');
+          // MainScreen의 네비게이션 레일에서 처리하므로 별도 동작 없음
         },
       ),
       body: Column(
@@ -1743,86 +1746,5 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       // 데스크탑/모바일: FilePicker 등 사용 (여기서는 생략, 필요시 추가)
     }
-  }
-}
-
-class CustomTabBar extends StatefulWidget {
-  final int selectedIndex;
-  final List<String> tabs;
-  final ValueChanged<int> onTabSelected;
-  const CustomTabBar({
-    required this.selectedIndex,
-    required this.tabs,
-    required this.onTabSelected,
-    super.key,
-  });
-
-  @override
-  State<CustomTabBar> createState() => _CustomTabBarState();
-}
-
-class _CustomTabBarState extends State<CustomTabBar> {
-  final Set<int> _hoveredTabs = {};
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(widget.tabs.length, (i) {
-            final isSelected = i == widget.selectedIndex;
-            final isHovered = _hoveredTabs.contains(i);
-            return MouseRegion(
-              cursor: SystemMouseCursors.click,
-              onEnter: (_) => setState(() => _hoveredTabs.add(i)),
-              onExit: (_) => setState(() => _hoveredTabs.remove(i)),
-              child: GestureDetector(
-                onTap: () {
-                  widget.onTabSelected(i);
-                  if (widget.tabs[i] == '선생님') {
-                    final state = context.findAncestorStateOfType<_SettingsScreenState>();
-                    state?._loadTeachers();
-                  }
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  padding: const EdgeInsets.symmetric(horizontal: 23, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isHovered && !isSelected
-                        ? Colors.white.withOpacity(0.07)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        widget.tabs[i],
-                        style: TextStyle(
-                          color: isSelected ? Color(0xFF1976D2) : Colors.white70,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        height: 6,
-                        width: 60,
-                        decoration: BoxDecoration(
-                          color: isSelected ? Color(0xFF1976D2) : Colors.transparent,
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }),
-        ),
-        const SizedBox(height: 8),
-      ],
-    );
   }
 } 

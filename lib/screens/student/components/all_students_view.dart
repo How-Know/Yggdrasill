@@ -33,17 +33,24 @@ class AllStudentsView extends StatelessWidget {
       }
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
-          _buildEducationLevelGroup('중등', EducationLevel.middle, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
-          _buildEducationLevelGroup('고등', EducationLevel.high, groupedStudents),
-        ],
+    return Center(
+      child: Container(
+        width: 1000,
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+        decoration: BoxDecoration(
+          color: Color(0xFF18181A),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedStudents),
+            const Divider(color: Colors.white24, height: 48),
+            _buildEducationLevelGroup('중등', EducationLevel.middle, groupedStudents),
+            const Divider(color: Colors.white24, height: 48),
+            _buildEducationLevelGroup('고등', EducationLevel.high, groupedStudents),
+          ],
+        ),
       ),
     );
   }
