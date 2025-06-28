@@ -92,18 +92,6 @@ class CustomNavigationRail extends StatelessWidget {
           ),
           label: Text(''),
         ),
-        NavigationRailDestination(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          icon: Tooltip(
-            message: '설정',
-            child: Icon(Symbols.settings_rounded),
-          ),
-          selectedIcon: Tooltip(
-            message: '설정',
-            child: Icon(Symbols.settings_rounded, weight: 700),
-          ),
-          label: Text(''),
-        ),
       ],
     );
   }

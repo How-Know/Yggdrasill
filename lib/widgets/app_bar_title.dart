@@ -1,0 +1,82 @@
+import 'package:flutter/material.dart';
+
+class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
+  final String title;
+  final VoidCallback? onBack;
+  final VoidCallback? onForward;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onSettings;
+  final List<Widget>? actions;
+
+  const AppBarTitle({
+    Key? key,
+    required this.title,
+    this.onBack,
+    this.onForward,
+    this.onRefresh,
+    this.onSettings,
+    this.actions,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return AppBar(
+      backgroundColor: const Color(0xFF1F1F1F),
+      leadingWidth: 120,
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white70),
+            onPressed: onBack ?? () {
+              if (Navigator.of(context).canPop()) {
+                Navigator.of(context).pop();
+              }
+            },
+            tooltip: '뒤로가기',
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_forward_ios, color: Colors.white70),
+            onPressed: onForward, // 앞으로가기(커스텀 필요)
+            tooltip: '앞으로가기',
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white70),
+            onPressed: onRefresh,
+            tooltip: '새로고침',
+          ),
+        ],
+      ),
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 28,
+        ),
+      ),
+      centerTitle: true,
+      toolbarHeight: 50,
+      actions: [
+        if (actions != null) ...actions!,
+        IconButton(
+          icon: const Icon(Icons.settings, color: Colors.white70),
+          onPressed: onSettings ?? () {
+            Navigator.of(context).pushNamed('/settings');
+          },
+          tooltip: '설정',
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: CircleAvatar(
+            radius: 16,
+            backgroundColor: Colors.grey.shade700,
+            child: const Icon(Icons.person, color: Colors.white70, size: 20),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Size get preferredSize => const Size.fromHeight(60);
+}

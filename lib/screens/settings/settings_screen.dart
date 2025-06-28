@@ -8,6 +8,10 @@ import 'package:flutter/foundation.dart';
 import '../../services/academy_hive.dart';
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'dart:typed_data';
+import 'dart:html' as html;
+import '../../widgets/app_bar_title.dart';
+import 'dart:convert';
 
 enum SettingType {
   academy,
@@ -112,6 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   };
 
   int _customTabIndex = 0;
+  int _prevTabIndex = 0;
   List<Teacher> _teachers = [];
 
   // 운영시간 카드 hover 상태 관리
@@ -126,6 +131,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final Map<String, bool> _cardActions = {};
 
   Box? _teacherBox;
+
+  Uint8List? _academyLogo;
 
   @override
   void initState() {
@@ -155,6 +162,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _capacityController.text = DataManager.instance.academySettings.defaultCapacity.toString();
         _lessonDurationController.text = DataManager.instance.academySettings.lessonDuration.toString();
         _paymentType = DataManager.instance.paymentType;
+        final logo = DataManager.instance.academySettings.logo;
+        _academyLogo = (logo is Uint8List) ? logo : null;
       });
 
       // 운영 시간 로드
@@ -227,37 +236,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final now = DateTime.now();
       final hours = <OperatingHours>[];
-      
       for (var day in DayOfWeek.values) {
         final operatingHour = _operatingHours[day];
         if (operatingHour != null) {
+          final baseDay = now.weekday + day.index;
           final startTime = DateTime(
             now.year,
             now.month,
-            now.day + day.index + 1,
+            baseDay,
             operatingHour.start.hour,
             operatingHour.start.minute,
           );
           final endTime = DateTime(
             now.year,
             now.month,
-            now.day + day.index + 1,
+            baseDay,
             operatingHour.end.hour,
             operatingHour.end.minute,
           );
-          
           final breakTimes = _breakTimes[day]?.map((block) {
             final breakStartTime = DateTime(
               now.year,
               now.month,
-              now.day + day.index + 1,
+              baseDay,
               block.start.hour,
               block.start.minute,
             );
             final breakEndTime = DateTime(
               now.year,
               now.month,
-              now.day + day.index + 1,
+              baseDay,
               block.end.hour,
               block.end.minute,
             );
@@ -266,7 +274,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               endTime: breakEndTime,
             );
           }).toList() ?? [];
-
           hours.add(OperatingHours(
             startTime: startTime,
             endTime: endTime,
@@ -274,11 +281,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ));
         }
       }
-
       await DataManager.instance.saveOperatingHours(hours);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('운영 시간이 저장되었습니다.')),
-      );
     } catch (e) {
       print('Error saving operating hours: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -957,15 +960,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 650,
-              child: SingleChildScrollView(
-                child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 48),
+            // 왼쪽: 학원 정보 카드 + 로고 Stack
+            Padding(
+              padding: const EdgeInsets.only(top: 48),
+              child: SizedBox(
+                width: 650,
+                height: 600,
+                child: Stack(
+                  children: [
                     Container(
-                      width: 650,
+                      height: 600,
                       margin: const EdgeInsets.only(right: 20, left: 20, bottom: 20),
                       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
                       decoration: BoxDecoration(
@@ -975,147 +979,185 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-        const Text(
-          '학원 정보',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 24),
-        // 학원명 입력
-        SizedBox(
-          width: 600,
-          child: TextFormField(
-            controller: _academyNameController,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              labelText: '학원명',
-              labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-              ),
-              focusedBorder: const OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF1976D2)),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 20),
-        // 슬로건 입력
-        SizedBox(
-          width: 600,
-          child: TextFormField(
-            controller: _sloganController,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              labelText: '슬로건',
-              labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-              ),
-              focusedBorder: const OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF1976D2)),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 20),
-        // 기본 정원과 수업 시간을 나란히 배치
-            SizedBox(
+                          const Text(
+                            '학원 정보',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          // 학원명 입력
+                          SizedBox(
+                            width: 600,
+                            child: TextFormField(
+                              controller: _academyNameController,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: '학원명',
+                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // 슬로건 입력
+                          SizedBox(
+                            width: 600,
+                            child: TextFormField(
+                              controller: _sloganController,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: '슬로건',
+                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // 기본 정원과 수업 시간을 나란히 배치
+                          SizedBox(
                             width: 600,
                             child: Row(
                               children: [
                                 Expanded(
-              child: TextFormField(
-                controller: _capacityController,
-                style: const TextStyle(color: Colors.white),
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: '기본 정원',
-                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                  ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderSide: BorderSide(color: Color(0xFF1976D2)),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 20),
+                                  child: TextFormField(
+                                    controller: _capacityController,
+                                    style: const TextStyle(color: Colors.white),
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                      labelText: '기본 정원',
+                                      labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: const OutlineInputBorder(
+                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 20),
                                 Expanded(
-              child: TextFormField(
-                controller: _lessonDurationController,
-                style: const TextStyle(color: Colors.white),
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: '수업 시간 (분)',
-                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                  ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderSide: BorderSide(color: Color(0xFF1976D2)),
-                  ),
-                ),
-              ),
-            ),
-          ],
+                                  child: TextFormField(
+                                    controller: _lessonDurationController,
+                                    style: const TextStyle(color: Colors.white),
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                      labelText: '수업 시간 (분)',
+                                      labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: const OutlineInputBorder(
+                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-        ),
-        const SizedBox(height: 30),
-        const Text(
-          '지불 방식',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: 290,
-          child: DropdownButtonFormField<PaymentType>(
-            value: _paymentType,
-            decoration: InputDecoration(
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-              ),
-              focusedBorder: const OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF1976D2)),
-              ),
-            ),
-            dropdownColor: const Color(0xFF1F1F1F),
-            style: const TextStyle(color: Colors.white, fontSize: 16),
-            items: [
-              DropdownMenuItem(
-                value: PaymentType.monthly,
-                child: Text('월 결제'),
-              ),
-              DropdownMenuItem(
-                value: PaymentType.perClass,
-                child: Text('회당 결제'),
-              ),
-            ],
-            onChanged: (PaymentType? value) {
-              if (value != null) {
-                setState(() {
-                  _paymentType = value;
-                });
-              }
-            },
-          ),
-        ),
+                          ),
+                          const SizedBox(height: 30),
+                          const Text(
+                            '지불 방식',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: 290,
+                            child: DropdownButtonFormField<PaymentType>(
+                              value: _paymentType,
+                              decoration: InputDecoration(
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                ),
+                              ),
+                              dropdownColor: const Color(0xFF1F1F1F),
+                              style: const TextStyle(color: Colors.white, fontSize: 16),
+                              items: [
+                                DropdownMenuItem(
+                                  value: PaymentType.monthly,
+                                  child: Text('월 결제'),
+                                ),
+                                DropdownMenuItem(
+                                  value: PaymentType.perClass,
+                                  child: Text('회당 결제'),
+                                ),
+                              ],
+                              onChanged: (PaymentType? value) {
+                                if (value != null) {
+                                  setState(() {
+                                    _paymentType = value;
+                                  });
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 30),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Text(
+                                '학원 로고',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              const Text(
+                                '권장 크기: 80x80px',
+                                style: TextStyle(color: Colors.white70, fontSize: 14),
+                              ),
+                              const SizedBox(width: 16),
+                              IconButton(
+                                icon: Icon(Icons.image, color: Colors.white70),
+                                tooltip: '학원 로고 등록',
+                                onPressed: _pickLogoImage,
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
+                    if (_academyLogo != null)
+                      Positioned(
+                        right: 50,
+                        bottom: 50,
+                        child: GestureDetector(
+                          onTap: _pickLogoImage,
+                          child: CircleAvatar(
+                            backgroundImage: MemoryImage(_academyLogo!),
+                            radius: 50, // 100x100px
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
             ),
-            SizedBox(width: 24),
+            const SizedBox(width: 24),
+            // 오른쪽: 운영시간 컨테이너
             Container(
               width: 900,
               margin: const EdgeInsets.only(top: 48, right: 20, left: 0, bottom: 20),
@@ -1130,47 +1172,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 40),
         // 저장 버튼
-        Center(
-          child: ElevatedButton(
-            onPressed: () async {
-              try {
-                final academySettings = AcademySettings(
-                  name: _academyNameController.text.trim(),
-                  slogan: _sloganController.text.trim(),
-                  defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
-                  lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
-                );
-                final paymentTypeStr = _paymentType == PaymentType.monthly ? 'monthly' : 'perClass';
-                if (kIsWeb) {
-                  await AcademyHiveService.saveAcademySettings(academySettings, paymentTypeStr);
-                } else {
-                  await AcademyDbService.instance.saveAcademySettings(academySettings, paymentTypeStr);
-                }
-                await DataManager.instance.savePaymentType(_paymentType);
-                await _saveOperatingHours();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('설정이 저장되었습니다.')),
-                );
-              } catch (e) {
-                print('Error saving settings: $e');
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('설정 저장에 실패했습니다.')),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1976D2),
-              padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
-            ),
-            child: const Text(
-              '저장',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+        Stack(
+          children: [
+            Center(
+              child: ElevatedButton(
+                onPressed: () async {
+                  try {
+                    final academySettings = AcademySettings(
+                      name: _academyNameController.text.trim(),
+                      slogan: _sloganController.text.trim(),
+                      defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
+                      lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
+                      logo: _academyLogo,
+                    );
+                    await DataManager.instance.saveAcademySettings(academySettings);
+                    await DataManager.instance.savePaymentType(_paymentType);
+                    await _saveOperatingHours();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('설정이 저장되었습니다.')),
+                    );
+                  } catch (e) {
+                    print('Error saving settings: $e');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('설정 저장에 실패했습니다.')),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1976D2),
+                  padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
+                ),
+                child: const Text(
+                  '저장',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ],
     );
@@ -1211,7 +1253,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Text('등록된 선생님이 없습니다.', style: TextStyle(color: Colors.white70)),
                 if (_teachers.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
+                    padding: const EdgeInsets.only(bottom: 8, right: 8),
                     child: Container(
                       width: 944,
                       child: Row(
@@ -1226,16 +1268,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ),
                           ),
-                          SizedBox(width: 40),
                           SizedBox(width: 60, child: Text('관리', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 24),
                           SizedBox(width: 130, child: Text('연락처', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
                           SizedBox(width: 40),
                           SizedBox(width: 210, child: Text('이메일', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 24),
                           SizedBox(width: 90, child: Text('상세 정보', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [],
-                          ),
+                          Expanded(child: Container()),
                         ],
                       ),
                     ),
@@ -1258,7 +1298,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         for (int i = 0; i < _teachers.length; i++)
                           Padding(
                             key: ValueKey('teacher_card_$i'),
-                            padding: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.only(bottom: 16, right: 8),
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               decoration: BoxDecoration(
@@ -1270,17 +1310,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 children: [
                                   Padding(
                                     padding: const EdgeInsets.only(left: 24),
-                                    child: Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Text(_teachers[i].name, style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis),
+                                    child: SizedBox(
+                                      width: 80,
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(_teachers[i].name, style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis),
+                                      ),
                                     ),
                                   ),
+                                  SizedBox(width: 60, child: Text(getTeacherRoleLabel(_teachers[i].role), style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                  SizedBox(width: 24),
+                                  SizedBox(width: 130, child: Text(_teachers[i].contact, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
                                   SizedBox(width: 40),
-                                  Expanded(flex: 10, child: Text(getTeacherRoleLabel(_teachers[i].role), style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  Expanded(flex: 10, child: Text(_teachers[i].contact, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 40),
-                                  Expanded(flex: 25, child: Text(_teachers[i].email, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  Expanded(flex: 25, child: Text(_teachers[i].description, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis, maxLines: 1)),
+                                  SizedBox(width: 210, child: Text(_teachers[i].email, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
+                                  SizedBox(width: 24),
+                                  SizedBox(width: 90, child: Text(_teachers[i].description, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis, maxLines: 1)),
+                                  Expanded(child: Container()),
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -1328,6 +1373,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           }
                                         },
                                       ),
+                                      Padding(
+                                        padding: const EdgeInsets.only(right: 24),
+                                      ),
                                     ],
                                   ),
                                 ],
@@ -1348,67 +1396,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        backgroundColor: const Color(0xFF1F1F1F),
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(60),
-        child: Column(
-          children: [
-            const SizedBox(height: 10),
-            AppBar(
-          backgroundColor: const Color(0xFF1F1F1F),
-              leadingWidth: 120,
-              leading: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.arrow_back_ios_new, color: Colors.white70),
-                    onPressed: null, // 기능 미구현
-                    tooltip: '뒤로가기',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.arrow_forward_ios, color: Colors.white70),
-                    onPressed: null, // 기능 미구현
-                    tooltip: '앞으로가기',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.refresh, color: Colors.white70),
-                    onPressed: null, // 기능 미구현
-                    tooltip: '새로고침',
-                  ),
-                ],
-              ),
-              title: const Text(
-              '설정',
-              style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 28,
-            ),
-          ),
-              centerTitle: true,
-              toolbarHeight: 50,
-              actions: [
-                IconButton(
-                  icon: Icon(Icons.apps, color: Colors.white70),
-                  onPressed: null, // 기능 미구현
-                  tooltip: '더보기',
-                ),
-                IconButton(
-                  icon: Icon(Icons.settings, color: Colors.white70),
-                  onPressed: null, // 기능 미구현
-                  tooltip: '설정',
-                ),
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8),
-                  child: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: Colors.grey.shade700,
-                    child: Icon(Icons.person, color: Colors.white70, size: 20),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+      backgroundColor: const Color(0xFF1F1F1F),
+      appBar: AppBarTitle(
+        title: '설정',
+        onBack: () {
+          try {
+            if (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS) {
+              if (Navigator.of(context).canPop()) {
+                Navigator.of(context).pop();
+              }
+            } else {
+              Navigator.of(context).maybePop();
+            }
+          } catch (_) {}
+        },
+        onForward: () {
+          // 앞으로가기(웹만 지원)
+          // dart:html import 없이 window.history.forward() 사용 불가하므로, 라우트로 대체
+          // 필요시 구현
+        },
+        onRefresh: () => setState(() {}),
+        onSettings: () {
+          Navigator.of(context).pushNamed('/settings');
+        },
       ),
       body: Column(
         children: [
@@ -1416,20 +1426,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
           CustomTabBar(
             selectedIndex: _customTabIndex,
             tabs: const ['학원', '선생님', '일반'],
-            onTabSelected: (idx) => setState(() => _customTabIndex = idx),
-              ),
-              Expanded(
-            child: IndexedStack(
-              index: _customTabIndex,
-                  children: [
-                    _buildAcademySettings(),
-                _buildTeacherSettings(),
-                    _buildGeneralSettings(),
-                  ],
-                ),
-              ),
-            ],
+            onTabSelected: (idx) => setState(() {
+              _prevTabIndex = _customTabIndex;
+              _customTabIndex = idx;
+            }),
           ),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 400),
+              transitionBuilder: (child, animation) {
+                final isForward = _customTabIndex > _prevTabIndex;
+                // 들어오는 child와 나가는 child를 모두 SlideTransition으로 감싸서 방향을 반대로 처리
+                return SlideTransition(
+                  position: Tween<Offset>(
+                    begin: Offset(isForward ? 1 : -1, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                );
+              },
+              layoutBuilder: (currentChild, previousChildren) {
+                return Stack(
+                  children: <Widget>[...
+                    previousChildren,
+                    if (currentChild != null) currentChild,
+                  ],
+                );
+              },
+              child: Builder(
+                key: ValueKey(_customTabIndex),
+                builder: (context) {
+                  if (_customTabIndex == 0) return _buildAcademySettings();
+                  if (_customTabIndex == 1) return _buildTeacherSettings();
+                  return _buildGeneralSettings();
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1438,19 +1473,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Material(
       color: Colors.transparent,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+        width: 944,
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
           color: const Color(0xFF232326),
           borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
         ),
-        constraints: const BoxConstraints(maxWidth: 944),
         child: child,
       ),
     );
@@ -1692,6 +1720,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  void _pickLogoImage() async {
+    // 웹 환경
+    if (kIsWeb) {
+      final uploadInput = html.FileUploadInputElement();
+      uploadInput.accept = 'image/*';
+      uploadInput.click();
+      uploadInput.onChange.listen((event) {
+        final file = uploadInput.files?.first;
+        if (file != null) {
+          final reader = html.FileReader();
+          reader.readAsArrayBuffer(file);
+          reader.onLoadEnd.listen((event) {
+            setState(() {
+              _academyLogo = reader.result as Uint8List;
+            });
+          });
+        }
+      });
+    } else {
+      // 데스크탑/모바일: FilePicker 등 사용 (여기서는 생략, 필요시 추가)
+    }
   }
 }
 

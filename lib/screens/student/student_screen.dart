@@ -10,6 +10,8 @@ import 'components/all_students_view.dart';
 import 'components/class_view.dart';
 import 'components/school_view.dart';
 import 'components/date_view.dart';
+import '../../widgets/app_bar_title.dart';
+import 'dart:html' as html;
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -185,153 +187,169 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        children: [
-          const Center(
-            child: Text(
-              '학생',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
+    return Scaffold(
+      backgroundColor: const Color(0xFF1F1F1F),
+      appBar: AppBarTitle(
+        title: '학생',
+        onBack: () {
+          try {
+            if (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS) {
+              if (Navigator.of(context).canPop()) {
+                Navigator.of(context).pop();
+              }
+            } else {
+              Navigator.of(context).maybePop();
+            }
+          } catch (_) {}
+        },
+        onForward: () {
+          // 앞으로가기(웹만 지원)
+          // dart:html import 없이 window.history.forward() 사용 불가하므로, 라우트로 대체
+          // 필요시 구현
+        },
+        onRefresh: () => setState(() {}),
+        onSettings: () {
+          Navigator.of(context).pushNamed('/settings');
+        },
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          children: [
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                // Left Section
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: SizedBox(
+                      width: 120,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          if (_viewType == StudentViewType.byClass) {
+                            showClassRegistrationDialog();
+                          } else {
+                            showStudentRegistrationDialog();
+                          }
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF1976D2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        ),
+                        icon: const Icon(Icons.add, size: 24),
+                        label: const Text(
+                          '등록',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // Center Section - Segmented Button
+                Expanded(
+                  flex: 2,
+                  child: Center(
+                    child: SizedBox(
+                      width: 500,
+                      child: SegmentedButton<StudentViewType>(
+                        segments: const [
+                          ButtonSegment<StudentViewType>(
+                            value: StudentViewType.all,
+                            label: Text('모든 학생'),
+                          ),
+                          ButtonSegment<StudentViewType>(
+                            value: StudentViewType.byClass,
+                            label: Text('클래스'),
+                          ),
+                          ButtonSegment<StudentViewType>(
+                            value: StudentViewType.bySchool,
+                            label: Text('학교별'),
+                          ),
+                          ButtonSegment<StudentViewType>(
+                            value: StudentViewType.byDate,
+                            label: Text('수강 일자'),
+                          ),
+                        ],
+                        selected: {_viewType},
+                        onSelectionChanged: (Set<StudentViewType> newSelection) {
+                          setState(() {
+                            _viewType = newSelection.first;
+                          });
+                        },
+                        style: ButtonStyle(
+                          backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                            (Set<MaterialState> states) {
+                              if (states.contains(MaterialState.selected)) {
+                                return const Color(0xFF78909C);
+                              }
+                              return Colors.transparent;
+                            },
+                          ),
+                          foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                            (Set<MaterialState> states) {
+                              if (states.contains(MaterialState.selected)) {
+                                return Colors.white;
+                              }
+                              return Colors.white70;
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // Right Section
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: SizedBox(
+                      width: 240,
+                      child: SearchBar(
+                        controller: _searchController,
+                        onChanged: (value) {
+                          setState(() {
+                            _searchQuery = value;
+                          });
+                        },
+                        hintText: '학생 검색',
+                        leading: const Icon(
+                          Icons.search,
+                          color: Colors.white70,
+                        ),
+                        backgroundColor: MaterialStateColor.resolveWith(
+                          (states) => const Color(0xFF2A2A2A),
+                        ),
+                        elevation: MaterialStateProperty.all(0),
+                        padding: const MaterialStatePropertyAll<EdgeInsets>(
+                          EdgeInsets.symmetric(horizontal: 16.0),
+                        ),
+                        textStyle: const MaterialStatePropertyAll<TextStyle>(
+                          TextStyle(color: Colors.white),
+                        ),
+                        hintStyle: MaterialStatePropertyAll<TextStyle>(
+                          TextStyle(color: Colors.white.withOpacity(0.5)),
+                        ),
+                        side: MaterialStatePropertyAll<BorderSide>(
+                          BorderSide(color: Colors.white.withOpacity(0.2)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                child: _buildContent(),
               ),
             ),
-          ),
-          const SizedBox(height: 30),
-          Row(
-            children: [
-              // Left Section
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 120,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        if (_viewType == StudentViewType.byClass) {
-                          showClassRegistrationDialog();
-                        } else {
-                          showStudentRegistrationDialog();
-                        }
-                      },
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1976D2),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      ),
-                      icon: const Icon(Icons.add, size: 24),
-                      label: const Text(
-                        '등록',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Center Section - Segmented Button
-              Expanded(
-                flex: 2,
-                child: Center(
-                  child: SizedBox(
-                    width: 500,
-                    child: SegmentedButton<StudentViewType>(
-                      segments: const [
-                        ButtonSegment<StudentViewType>(
-                          value: StudentViewType.all,
-                          label: Text('모든 학생'),
-                        ),
-                        ButtonSegment<StudentViewType>(
-                          value: StudentViewType.byClass,
-                          label: Text('클래스'),
-                        ),
-                        ButtonSegment<StudentViewType>(
-                          value: StudentViewType.bySchool,
-                          label: Text('학교별'),
-                        ),
-                        ButtonSegment<StudentViewType>(
-                          value: StudentViewType.byDate,
-                          label: Text('수강 일자'),
-                        ),
-                      ],
-                      selected: {_viewType},
-                      onSelectionChanged: (Set<StudentViewType> newSelection) {
-                        setState(() {
-                          _viewType = newSelection.first;
-                        });
-                      },
-                      style: ButtonStyle(
-                        backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                          (Set<MaterialState> states) {
-                            if (states.contains(MaterialState.selected)) {
-                              return const Color(0xFF78909C);
-                            }
-                            return Colors.transparent;
-                          },
-                        ),
-                        foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                          (Set<MaterialState> states) {
-                            if (states.contains(MaterialState.selected)) {
-                              return Colors.white;
-                            }
-                            return Colors.white70;
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Right Section
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: SizedBox(
-                    width: 240,
-                    child: SearchBar(
-                      controller: _searchController,
-                      onChanged: (value) {
-                        setState(() {
-                          _searchQuery = value;
-                        });
-                      },
-                      hintText: '학생 검색',
-                      leading: const Icon(
-                        Icons.search,
-                        color: Colors.white70,
-                      ),
-                      backgroundColor: MaterialStateColor.resolveWith(
-                        (states) => const Color(0xFF2A2A2A),
-                      ),
-                      elevation: MaterialStateProperty.all(0),
-                      padding: const MaterialStatePropertyAll<EdgeInsets>(
-                        EdgeInsets.symmetric(horizontal: 16.0),
-                      ),
-                      textStyle: const MaterialStatePropertyAll<TextStyle>(
-                        TextStyle(color: Colors.white),
-                      ),
-                      hintStyle: MaterialStatePropertyAll<TextStyle>(
-                        TextStyle(color: Colors.white.withOpacity(0.5)),
-                      ),
-                      side: MaterialStatePropertyAll<BorderSide>(
-                        BorderSide(color: Colors.white.withOpacity(0.2)),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              child: _buildContent(),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

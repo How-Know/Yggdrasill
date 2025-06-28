@@ -9,6 +9,7 @@ import '../models/class_schedule.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'storage_service.dart';
+import 'academy_db.dart';
 
 // Platform-specific imports
 import 'storage_service.dart'
@@ -131,10 +132,27 @@ class DataManager {
 
   Future<void> loadAcademySettings() async {
     try {
-      final jsonData = await _storage.load('settings');
-      if (jsonData != null) {
-        final Map<String, dynamic> settingsMap = jsonDecode(jsonData);
-        _academySettings = AcademySettings.fromJson(settingsMap);
+      if (!kIsWeb) {
+        // sqlite에서 불러오기
+        final dbData = await AcademyDbService.instance.getAcademySettings();
+        if (dbData != null) {
+          _academySettings = AcademySettings(
+            name: dbData['name'] as String? ?? '',
+            slogan: dbData['slogan'] as String? ?? '',
+            defaultCapacity: dbData['default_capacity'] as int? ?? 30,
+            lessonDuration: dbData['lesson_duration'] as int? ?? 50,
+            logo: dbData['logo'] is Uint8List ? dbData['logo'] as Uint8List : null,
+          );
+        } else {
+          _academySettings = AcademySettings.defaults();
+        }
+      } else {
+        // 기존 웹 방식
+        final jsonData = await _storage.load('settings');
+        if (jsonData != null) {
+          final Map<String, dynamic> settingsMap = jsonDecode(jsonData);
+          _academySettings = AcademySettings.fromJson(settingsMap);
+        }
       }
     } catch (e) {
       print('Error loading settings: $e');
@@ -145,8 +163,14 @@ class DataManager {
   Future<void> saveAcademySettings(AcademySettings settings) async {
     try {
       _academySettings = settings;
-      final jsonString = jsonEncode(settings.toJson());
-      await _storage.save('settings', jsonString);
+      if (!kIsWeb) {
+        // sqlite에 저장
+        await AcademyDbService.instance.saveAcademySettings(settings, _paymentType == PaymentType.monthly ? 'monthly' : 'perClass');
+      } else {
+        // 기존 웹 방식
+        final jsonString = jsonEncode(settings.toJson());
+        await _storage.save('settings', jsonString);
+      }
     } catch (e) {
       print('Error saving settings: $e');
       throw Exception('Failed to save academy settings');

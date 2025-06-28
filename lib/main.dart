@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/main_screen.dart';
+import 'screens/settings/settings_screen.dart';
+import 'screens/student/student_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -50,6 +52,10 @@ class MyApp extends StatelessWidget {
         ),
       ),
       home: const MainScreen(),
+      routes: {
+        '/settings': (context) => const SettingsScreen(),
+        '/students': (context) => const StudentScreen(),
+      },
     );
   }
 }

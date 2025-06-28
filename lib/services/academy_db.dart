@@ -30,7 +30,8 @@ class AcademyDbService {
             slogan TEXT,
             default_capacity INTEGER,
             lesson_duration INTEGER,
-            payment_type TEXT
+            payment_type TEXT,
+            logo BLOB
           )
         ''');
       },
@@ -48,6 +49,7 @@ class AcademyDbService {
         'default_capacity': settings.defaultCapacity,
         'lesson_duration': settings.lessonDuration,
         'payment_type': paymentType,
+        'logo': settings.logo,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

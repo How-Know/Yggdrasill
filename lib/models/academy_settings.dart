@@ -1,14 +1,19 @@
+import 'dart:typed_data';
+import 'dart:convert';
+
 class AcademySettings {
   final String name;
   final String slogan;
   final int defaultCapacity;
   final int lessonDuration;
+  final Uint8List? logo;
 
   AcademySettings({
     required this.name,
     required this.slogan,
     required this.defaultCapacity,
     required this.lessonDuration,
+    this.logo,
   });
 
   Map<String, dynamic> toJson() {
@@ -17,6 +22,7 @@ class AcademySettings {
       'slogan': slogan,
       'defaultCapacity': defaultCapacity,
       'lessonDuration': lessonDuration,
+      'logo': logo != null ? base64Encode(logo!) : null,
     };
   }
 
@@ -26,6 +32,9 @@ class AcademySettings {
       slogan: json['slogan'] as String? ?? '',
       defaultCapacity: json['defaultCapacity'] as int? ?? 30,
       lessonDuration: json['lessonDuration'] as int? ?? 50,
+      logo: json['logo'] != null && json['logo'] is String && (json['logo'] as String).isNotEmpty
+          ? base64Decode(json['logo'] as String)
+          : null,
     );
   }
 
@@ -35,6 +44,7 @@ class AcademySettings {
       slogan: '',
       defaultCapacity: 30,
       lessonDuration: 50,
+      logo: null,
     );
   }
 } 

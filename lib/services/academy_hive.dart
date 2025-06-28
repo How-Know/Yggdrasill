@@ -19,6 +19,7 @@ class AcademyHiveService {
       'default_capacity': settings.defaultCapacity,
       'lesson_duration': settings.lessonDuration,
       'payment_type': paymentType,
+      'logo': settings.logo,
     });
   }
 
