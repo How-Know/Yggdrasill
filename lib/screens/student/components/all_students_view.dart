@@ -7,7 +7,7 @@ import '../../../widgets/student_registration_dialog.dart';
 import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 
-class AllStudentsView extends StatelessWidget {
+class AllStudentsView extends StatefulWidget {
   final List<Student> students;
   final List<GroupInfo> groups;
   final Set<GroupInfo> expandedGroups;
@@ -17,10 +17,10 @@ class AllStudentsView extends StatelessWidget {
   final Function(GroupInfo) onGroupDeleted;
   final Function(Student, GroupInfo?) onStudentMoved;
   final Function(GroupInfo) onGroupExpanded;
-  final void Function(int oldIndex, int newIndex) onGroupReorder;
+  final void Function(int oldIndex, int newIndex) onReorder;
 
   const AllStudentsView({
-    super.key,
+    Key? key,
     required this.students,
     required this.groups,
     required this.expandedGroups,
@@ -30,27 +30,74 @@ class AllStudentsView extends StatelessWidget {
     required this.onGroupDeleted,
     required this.onStudentMoved,
     required this.onGroupExpanded,
-    required this.onGroupReorder,
-  });
+    required this.onReorder,
+  }) : super(key: key);
+
+  @override
+  State<AllStudentsView> createState() => _AllStudentsViewState();
+}
+
+class _AllStudentsViewState extends State<AllStudentsView> {
+  int _selectedSegment = 0; // 0: 학년, 1: 학교
 
   @override
   Widget build(BuildContext context) {
-    final Map<EducationLevel, Map<int, List<Student>>> groupedStudents = {
+    // 정렬 데이터 준비
+    final students = widget.students;
+    final Map<EducationLevel, Map<int, List<Student>>> groupedByGrade = {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
       EducationLevel.high: {},
     };
-
+    final Map<EducationLevel, Map<String, List<Student>>> groupedBySchool = {
+      EducationLevel.elementary: {},
+      EducationLevel.middle: {},
+      EducationLevel.high: {},
+    };
     for (final student in students) {
-      groupedStudents[student.educationLevel]![student.grade] ??= [];
-      groupedStudents[student.educationLevel]![student.grade]!.add(student);
+      // 학년별
+      groupedByGrade[student.educationLevel]![student.grade] ??= [];
+      groupedByGrade[student.educationLevel]![student.grade]!.add(student);
+      // 학교별
+      groupedBySchool[student.educationLevel]![student.school] ??= [];
+      groupedBySchool[student.educationLevel]![student.school]!.add(student);
     }
-
-    // 각 교육과정 내에서 학년별로 학생들을 정렬
-    for (final level in groupedStudents.keys) {
-      for (final gradeStudents in groupedStudents[level]!.values) {
+    for (final level in groupedByGrade.keys) {
+      for (final gradeStudents in groupedByGrade[level]!.values) {
         gradeStudents.sort((a, b) => a.name.compareTo(b.name));
       }
+    }
+    for (final level in groupedBySchool.keys) {
+      for (final schoolStudents in groupedBySchool[level]!.values) {
+        schoolStudents.sort((a, b) => a.name.compareTo(b.name));
+      }
+    }
+
+    Widget studentListWidget;
+    if (_selectedSegment == 1) {
+      // 학교별
+      studentListWidget = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedBySchool),
+          const Divider(color: Colors.white24, height: 48),
+          _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedBySchool),
+          const Divider(color: Colors.white24, height: 48),
+          _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedBySchool),
+        ],
+      );
+    } else {
+      // 학년별
+      studentListWidget = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedByGrade),
+          const Divider(color: Colors.white24, height: 48),
+          _buildEducationLevelGroup('중등', EducationLevel.middle, groupedByGrade),
+          const Divider(color: Colors.white24, height: 48),
+          _buildEducationLevelGroup('고등', EducationLevel.high, groupedByGrade),
+        ],
+      );
     }
 
     return Center(
@@ -70,11 +117,50 @@ class AllStudentsView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedStudents),
-                  const Divider(color: Colors.white24, height: 48),
-                  _buildEducationLevelGroup('중등', EducationLevel.middle, groupedStudents),
-                  const Divider(color: Colors.white24, height: 48),
-                  _buildEducationLevelGroup('고등', EducationLevel.high, groupedStudents),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 250,
+                        child: SegmentedButton<int>(
+                          segments: const [
+                            ButtonSegment(value: 0, label: Text('학년')),
+                            ButtonSegment(value: 1, label: Text('학교')),
+                          ],
+                          selected: {_selectedSegment},
+                          onSelectionChanged: (Set<int> newSelection) {
+                            setState(() {
+                              _selectedSegment = newSelection.first;
+                            });
+                          },
+                          style: ButtonStyle(
+                            backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                              (Set<MaterialState> states) {
+                                if (states.contains(MaterialState.selected)) {
+                                  return const Color(0xFF78909C);
+                                }
+                                return Colors.transparent;
+                              },
+                            ),
+                            foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                              (Set<MaterialState> states) {
+                                if (states.contains(MaterialState.selected)) {
+                                  return Colors.white;
+                                }
+                                return Colors.white70;
+                              },
+                            ),
+                            textStyle: MaterialStateProperty.all(
+                              const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  studentListWidget,
                 ],
               ),
             ),
@@ -95,35 +181,38 @@ class AllStudentsView extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('클래스 목록', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                      FilledButton.icon(
-                        onPressed: () async {
-                          final result = await showDialog<GroupInfo>(
-                            context: context,
-                            builder: (context) => GroupRegistrationDialog(
-                              editMode: false,
-                              onSave: (groupInfo) {
-                                Navigator.of(context).pop(groupInfo);
-                              },
+                      const Text('그룹 목록', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                      SizedBox(
+                        width: 130,
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            final result = await showDialog<GroupInfo>(
+                              context: context,
+                              builder: (context) => GroupRegistrationDialog(
+                                editMode: false,
+                                onSave: (groupInfo) {
+                                  Navigator.of(context).pop(groupInfo);
+                                },
+                              ),
+                            );
+                            if (result != null) {
+                              widget.onGroupAdded(result);
+                            }
+                          },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1976D2),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                            minimumSize: const Size(0, 44),
+                            maximumSize: const Size(double.infinity, 44),
+                          ),
+                          icon: const Icon(Icons.add, size: 24),
+                          label: const Text(
+                            '그룹 등록',
+                            style: TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w500,
                             ),
-                          );
-                          if (result != null) {
-                            onGroupAdded(result);
-                          }
-                        },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1976D2),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                          minimumSize: const Size(0, 44),
-                          maximumSize: const Size(double.infinity, 44),
-                        ),
-                        icon: const Icon(Icons.add, size: 26),
-                        label: const Text(
-                          '클래스 등록',
-                          style: TextStyle(
-                            fontSize: 16.5,
-                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
@@ -147,11 +236,11 @@ class AllStudentsView extends StatelessWidget {
                         child: child,
                       );
                     },
-                    itemCount: groups.length,
+                    itemCount: widget.groups.length,
                     itemBuilder: (context, index) {
-                      final groupInfo = groups[index];
+                      final groupInfo = widget.groups[index];
                       final studentsInGroup = students.where((s) => s.groupInfo == groupInfo).toList();
-                      final isExpanded = expandedGroups.contains(groupInfo);
+                      final isExpanded = widget.expandedGroups.contains(groupInfo);
                       return Padding(
                         key: ValueKey(groupInfo.id),
                         padding: const EdgeInsets.only(bottom: 16),
@@ -159,7 +248,7 @@ class AllStudentsView extends StatelessWidget {
                           onWillAccept: (student) => student != null,
                           onAccept: (student) {
                             final oldGroupInfo = student.groupInfo;
-                            onStudentMoved(student, groupInfo);
+                            widget.onStudentMoved(student, groupInfo);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -170,7 +259,7 @@ class AllStudentsView extends StatelessWidget {
                                 action: SnackBarAction(
                                   label: '실행 취소',
                                   onPressed: () {
-                                    onStudentMoved(student, oldGroupInfo);
+                                    widget.onStudentMoved(student, oldGroupInfo);
                                   },
                                 ),
                               ),
@@ -207,7 +296,7 @@ class AllStudentsView extends StatelessWidget {
                                             bottom: Radius.zero,
                                           )
                                         : BorderRadius.circular(12),
-                                      onTap: () => onGroupExpanded(groupInfo),
+                                      onTap: () => widget.onGroupExpanded(groupInfo),
                                       child: Container(
                                         height: 88,
                                         decoration: BoxDecoration(
@@ -293,7 +382,7 @@ class AllStudentsView extends StatelessWidget {
                                                       ),
                                                     );
                                                     if (result != null) {
-                                                      onGroupUpdated(result, index);
+                                                      widget.onGroupUpdated(result, index);
                                                     }
                                                   },
                                                   icon: const Icon(Icons.edit_rounded),
@@ -303,7 +392,7 @@ class AllStudentsView extends StatelessWidget {
                                                 ),
                                                 IconButton(
                                                   onPressed: () {
-                                                    onGroupDeleted(groupInfo);
+                                                    widget.onGroupDeleted(groupInfo);
                                                   },
                                                   icon: const Icon(Icons.delete_rounded),
                                                   style: IconButton.styleFrom(
@@ -351,7 +440,7 @@ class AllStudentsView extends StatelessWidget {
                                               runSpacing: 8,
                                               children: studentsInGroup.map((student) => GroupStudentCard(
                                                 student: student,
-                                                onShowDetails: onShowDetails,
+                                                onShowDetails: widget.onShowDetails,
                                               )).toList(),
                                             ),
                                           ),
@@ -367,7 +456,7 @@ class AllStudentsView extends StatelessWidget {
                         ),
                       );
                     },
-                    onReorder: onGroupReorder,
+                    onReorder: widget.onReorder,
                   ),
                 ],
               ),
@@ -410,7 +499,7 @@ class AllStudentsView extends StatelessWidget {
                 runSpacing: 8,
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
-                  onShowDetails: onShowDetails,
+                  onShowDetails: widget.onShowDetails,
                 )).toList(),
               ),
             ],
@@ -443,6 +532,61 @@ class AllStudentsView extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         ...gradeWidgets,
+      ],
+    );
+  }
+
+  Widget _buildEducationLevelSchoolGroup(
+    String levelTitle,
+    EducationLevel level,
+    Map<EducationLevel, Map<String, List<Student>>> groupedStudents,
+  ) {
+    final schoolMap = groupedStudents[level]!;
+    if (schoolMap.isEmpty) return const SizedBox.shrink();
+
+    final sortedSchools = schoolMap.keys.toList()..sort();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
+          child: Text(
+            levelTitle,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        ...sortedSchools.map((school) {
+          final students = schoolMap[school]!;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 4),
+                child: Text(
+                  school,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              Wrap(
+                spacing: 4,
+                runSpacing: 8,
+                children: students.map((student) => StudentCard(
+                  student: student,
+                  onShowDetails: widget.onShowDetails,
+                )).toList(),
+              ),
+            ],
+          );
+        }),
       ],
     );
   }

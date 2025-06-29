@@ -145,7 +145,7 @@ class StudentScreenState extends State<StudentScreen> {
             }
           });
         },
-        onGroupReorder: (oldIndex, newIndex) {
+        onReorder: (oldIndex, newIndex) {
           setState(() {
             if (newIndex > oldIndex) newIndex--;
             final item = _groups.removeAt(oldIndex);
