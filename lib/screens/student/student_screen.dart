@@ -108,6 +108,51 @@ class StudentScreenState extends State<StudentScreen> {
       return AllStudentsView(
         students: filteredStudents,
         onShowDetails: _showStudentDetails,
+        classes: _classes,
+        expandedClasses: _expandedClasses,
+        onClassAdded: (classInfo) {
+          setState(() {
+            _classes.add(classInfo);
+            DataManager.instance.addClass(classInfo);
+          });
+        },
+        onClassUpdated: (classInfo, index) {
+          setState(() {
+            _classes[index] = classInfo;
+            DataManager.instance.updateClass(classInfo);
+          });
+        },
+        onClassDeleted: (classInfo) {
+          setState(() {
+            _classes.remove(classInfo);
+            DataManager.instance.deleteClass(classInfo);
+          });
+        },
+        onStudentMoved: (student, newClass) {
+          setState(() {
+            final index = _students.indexOf(student);
+            if (index != -1) {
+              _students[index] = student.copyWith(classInfo: newClass);
+            }
+          });
+        },
+        onClassExpanded: (classInfo) {
+          setState(() {
+            if (_expandedClasses.contains(classInfo)) {
+              _expandedClasses.remove(classInfo);
+            } else {
+              _expandedClasses.add(classInfo);
+            }
+          });
+        },
+        onClassReorder: (oldIndex, newIndex) {
+          setState(() {
+            if (newIndex > oldIndex) newIndex--;
+            final item = _classes.removeAt(oldIndex);
+            _classes.insert(newIndex, item);
+            DataManager.instance.saveClasses();
+          });
+        },
       );
     }
   }
@@ -213,105 +258,95 @@ class StudentScreenState extends State<StudentScreen> {
           } catch (_) {}
         },
         onRefresh: () => setState(() {}),
-        onSettings: () {
-          if (identical(0, 0.0)) {
-            html.window.location.assign('/settings');
-          } else {
-            Navigator.of(context).pushNamed('/settings');
-          }
-        },
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          children: [
-            const SizedBox(height: 24),
-            CustomTabBar(
-              selectedIndex: _customTabIndex,
-              tabs: const ['모든 학생', '클래스', '학교별', '수강 일자'],
-              onTabSelected: (idx) => setState(() {
-                _prevTabIndex = _customTabIndex;
-                _customTabIndex = idx;
-                _viewType = StudentViewType.values[idx];
-              }),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
+      body: Column(
+        children: [
+          const SizedBox(height: 0),
+          CustomTabBar(
+            selectedIndex: _customTabIndex,
+            tabs: const ['모든 학생', '클래스', '학교별', '수강 일자'],
+            onTabSelected: (idx) => setState(() {
+              _prevTabIndex = _customTabIndex;
+              _customTabIndex = idx;
+              _viewType = StudentViewType.values[idx];
+            }),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              const SizedBox(width: 24),
+              if (_viewType != StudentViewType.byClass)
                 SizedBox(
-                  width: 97, // 기존 108의 90%
+                  width: 131,
                   child: FilledButton.icon(
                     onPressed: () {
-                      if (_viewType == StudentViewType.byClass) {
-                        showClassRegistrationDialog();
-                      } else {
-                        showStudentRegistrationDialog();
-                      }
+                      showStudentRegistrationDialog();
                     },
                     style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFF1976D2),
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      minimumSize: const Size(0, 44),
+                      maximumSize: const Size(double.infinity, 44),
                     ),
-                    icon: const Icon(Icons.add, size: 20),
+                    icon: const Icon(Icons.add, size: 26),
                     label: const Text(
                       '등록',
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 16.5,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 194, // 기존 216의 90%
-                  child: SearchBar(
-                    controller: _searchController,
-                    onChanged: (value) {
-                      setState(() {
-                        _searchQuery = value;
-                      });
-                    },
-                    hintText: '학생 검색',
-                    leading: const Icon(
-                      Icons.search,
-                      color: Colors.white70,
-                      size: 18,
-                    ),
-                    backgroundColor: MaterialStateColor.resolveWith(
-                      (states) => const Color(0xFF2A2A2A),
-                    ),
-                    elevation: MaterialStateProperty.all(0),
-                    padding: const MaterialStatePropertyAll<EdgeInsets>(
-                      EdgeInsets.symmetric(horizontal: 12.0),
-                    ),
-                    textStyle: const MaterialStatePropertyAll<TextStyle>(
-                      TextStyle(color: Colors.white, fontSize: 13),
-                    ),
-                    hintStyle: MaterialStatePropertyAll<TextStyle>(
-                      TextStyle(color: Colors.white54, fontSize: 13),
-                    ),
-                    side: MaterialStatePropertyAll<BorderSide>(
-                      BorderSide(color: Colors.white.withOpacity(0.2)),
-                    ),
-                    constraints: const BoxConstraints(
-                      minHeight: 32,
-                      maxHeight: 32,
-                    ),
+              const SizedBox(width: 26),
+              SizedBox(
+                width: 220,
+                child: SearchBar(
+                  controller: _searchController,
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                  hintText: '학생 검색',
+                  leading: const Icon(
+                    Icons.search,
+                    color: Colors.white70,
+                    size: 24,
+                  ),
+                  backgroundColor: MaterialStateColor.resolveWith(
+                    (states) => const Color(0xFF2A2A2A),
+                  ),
+                  elevation: MaterialStateProperty.all(0),
+                  padding: const MaterialStatePropertyAll<EdgeInsets>(
+                    EdgeInsets.symmetric(horizontal: 18.0),
+                  ),
+                  textStyle: const MaterialStatePropertyAll<TextStyle>(
+                    TextStyle(color: Colors.white, fontSize: 16.5),
+                  ),
+                  hintStyle: MaterialStatePropertyAll<TextStyle>(
+                    TextStyle(color: Colors.white54, fontSize: 16.5),
+                  ),
+                  side: MaterialStatePropertyAll<BorderSide>(
+                    BorderSide(color: Colors.white.withOpacity(0.2)),
+                  ),
+                  constraints: const BoxConstraints(
+                    minHeight: 44,
+                    maxHeight: 44,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            Expanded(
-              child: SingleChildScrollView(
-                child: _buildContent(),
               ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Expanded(
+            child: SingleChildScrollView(
+              child: _buildContent(),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

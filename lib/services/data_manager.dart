@@ -141,7 +141,13 @@ class DataManager {
             slogan: dbData['slogan'] as String? ?? '',
             defaultCapacity: dbData['default_capacity'] as int? ?? 30,
             lessonDuration: dbData['lesson_duration'] as int? ?? 50,
-            logo: dbData['logo'] is Uint8List ? dbData['logo'] as Uint8List : null,
+            logo: dbData['logo'] is Uint8List
+                ? dbData['logo'] as Uint8List
+                : dbData['logo'] is List<int>
+                    ? Uint8List.fromList(List<int>.from(dbData['logo']))
+                    : dbData['logo'] is String && (dbData['logo'] as String).isNotEmpty
+                        ? base64Decode(dbData['logo'] as String)
+                        : null,
           );
         } else {
           _academySettings = AcademySettings.defaults();

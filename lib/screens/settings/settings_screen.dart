@@ -164,13 +164,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _lessonDurationController.text = DataManager.instance.academySettings.lessonDuration.toString();
         _paymentType = DataManager.instance.paymentType;
         final logo = DataManager.instance.academySettings.logo;
-        _academyLogo = (logo is Uint8List) ? logo : null;
+        _academyLogo = (logo is Uint8List && logo.isNotEmpty) ? logo : null;
       });
 
       // 운영 시간 로드
       final hours = await DataManager.instance.getOperatingHours();
       setState(() {
         for (var hour in hours) {
+          // Dart의 DateTime.weekday는 월=1, 일=7이므로, DayOfWeek.values[weekday-1]이 정확히 매핑됨
           final day = DayOfWeek.values[hour.startTime.weekday - 1];
           _operatingHours[day] = TimeRange(
             start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
@@ -240,36 +241,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       for (var day in DayOfWeek.values) {
         final operatingHour = _operatingHours[day];
         if (operatingHour != null) {
-          final baseDay = now.weekday + day.index;
-          final startTime = DateTime(
-            now.year,
-            now.month,
-            baseDay,
-            operatingHour.start.hour,
-            operatingHour.start.minute,
-          );
-          final endTime = DateTime(
-            now.year,
-            now.month,
-            baseDay,
-            operatingHour.end.hour,
-            operatingHour.end.minute,
-          );
+          final baseDay = day.index + 1;
+          final startTime = DateTime(2020, 1, baseDay, operatingHour.start.hour, operatingHour.start.minute);
+          final endTime = DateTime(2020, 1, baseDay, operatingHour.end.hour, operatingHour.end.minute);
           final breakTimes = _breakTimes[day]?.map((block) {
-            final breakStartTime = DateTime(
-              now.year,
-              now.month,
-              baseDay,
-              block.start.hour,
-              block.start.minute,
-            );
-            final breakEndTime = DateTime(
-              now.year,
-              now.month,
-              baseDay,
-              block.end.hour,
-              block.end.minute,
-            );
+            final breakStartTime = DateTime(2020, 1, baseDay, block.start.hour, block.start.minute);
+            final breakEndTime = DateTime(2020, 1, baseDay, block.end.hour, block.end.minute);
             return BreakTime(
               startTime: breakStartTime,
               endTime: breakEndTime,
