@@ -147,7 +147,10 @@ class StudentCard extends StatelessWidget {
         child: Container(
           width: 110,
           height: 50,
-          padding: const EdgeInsets.symmetric(horizontal: 4.0),
+          padding: EdgeInsets.only(
+            left: student.classInfo == null ? 15.0 : 4.0,
+            right: 4.0,
+          ),
           child: SizedBox(
             width: 120,
             child: Row(

@@ -264,77 +264,95 @@ class StudentScreenState extends State<StudentScreen> {
           const SizedBox(height: 0),
           CustomTabBar(
             selectedIndex: _customTabIndex,
-            tabs: const ['모든 학생', '클래스', '학교별', '수강 일자'],
+            tabs: const ['모든 학생', '학교별', '수강 일자'],
             onTabSelected: (idx) => setState(() {
               _prevTabIndex = _customTabIndex;
               _customTabIndex = idx;
-              _viewType = StudentViewType.values[idx];
+              if (idx == 0) {
+                _viewType = StudentViewType.all;
+              } else if (idx == 1) {
+                _viewType = StudentViewType.bySchool;
+              } else if (idx == 2) {
+                _viewType = StudentViewType.byDate;
+              }
             }),
           ),
           const SizedBox(height: 8),
           Row(
-            mainAxisAlignment: MainAxisAlignment.start,
             children: [
               const SizedBox(width: 24),
               if (_viewType != StudentViewType.byClass)
-                SizedBox(
-                  width: 131,
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      showStudentRegistrationDialog();
-                    },
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF1976D2),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                      minimumSize: const Size(0, 44),
-                      maximumSize: const Size(double.infinity, 44),
-                    ),
-                    icon: const Icon(Icons.add, size: 26),
-                    label: const Text(
-                      '등록',
-                      style: TextStyle(
-                        fontSize: 16.5,
-                        fontWeight: FontWeight.w500,
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 131,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        showStudentRegistrationDialog();
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1976D2),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                        minimumSize: const Size(0, 44),
+                        maximumSize: const Size(double.infinity, 44),
+                      ),
+                      icon: const Icon(Icons.add, size: 26),
+                      label: const Text(
+                        '등록',
+                        style: TextStyle(
+                          fontSize: 16.5,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              const SizedBox(width: 26),
-              SizedBox(
-                width: 220,
-                child: SearchBar(
-                  controller: _searchController,
-                  onChanged: (value) {
-                    setState(() {
-                      _searchQuery = value;
-                    });
-                  },
-                  hintText: '학생 검색',
-                  leading: const Icon(
-                    Icons.search,
-                    color: Colors.white70,
-                    size: 24,
-                  ),
-                  backgroundColor: MaterialStateColor.resolveWith(
-                    (states) => const Color(0xFF2A2A2A),
-                  ),
-                  elevation: MaterialStateProperty.all(0),
-                  padding: const MaterialStatePropertyAll<EdgeInsets>(
-                    EdgeInsets.symmetric(horizontal: 18.0),
-                  ),
-                  textStyle: const MaterialStatePropertyAll<TextStyle>(
-                    TextStyle(color: Colors.white, fontSize: 16.5),
-                  ),
-                  hintStyle: MaterialStatePropertyAll<TextStyle>(
-                    TextStyle(color: Colors.white54, fontSize: 16.5),
-                  ),
-                  side: MaterialStatePropertyAll<BorderSide>(
-                    BorderSide(color: Colors.white.withOpacity(0.2)),
-                  ),
-                  constraints: const BoxConstraints(
-                    minHeight: 44,
-                    maxHeight: 44,
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 220,
+                        child: SearchBar(
+                          controller: _searchController,
+                          onChanged: (value) {
+                            setState(() {
+                              _searchQuery = value;
+                            });
+                          },
+                          hintText: '학생 검색',
+                          leading: const Icon(
+                            Icons.search,
+                            color: Colors.white70,
+                            size: 24,
+                          ),
+                          backgroundColor: MaterialStateColor.resolveWith(
+                            (states) => const Color(0xFF2A2A2A),
+                          ),
+                          elevation: MaterialStateProperty.all(0),
+                          padding: const MaterialStatePropertyAll<EdgeInsets>(
+                            EdgeInsets.symmetric(horizontal: 18.0),
+                          ),
+                          textStyle: const MaterialStatePropertyAll<TextStyle>(
+                            TextStyle(color: Colors.white, fontSize: 16.5),
+                          ),
+                          hintStyle: MaterialStatePropertyAll<TextStyle>(
+                            TextStyle(color: Colors.white54, fontSize: 16.5),
+                          ),
+                          side: MaterialStatePropertyAll<BorderSide>(
+                            BorderSide(color: Colors.white.withOpacity(0.2)),
+                          ),
+                          constraints: const BoxConstraints(
+                            minHeight: 44,
+                            maxHeight: 44,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 24),
+                    ],
                   ),
                 ),
               ),

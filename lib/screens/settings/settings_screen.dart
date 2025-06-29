@@ -236,17 +236,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveOperatingHours() async {
     try {
-      final now = DateTime.now();
+      final baseMonday = DateTime(2020, 1, 6); // 2020-01-06은 월요일
       final hours = <OperatingHours>[];
       for (var day in DayOfWeek.values) {
         final operatingHour = _operatingHours[day];
         if (operatingHour != null) {
-          final baseDay = day.index + 1;
-          final startTime = DateTime(2020, 1, baseDay, operatingHour.start.hour, operatingHour.start.minute);
-          final endTime = DateTime(2020, 1, baseDay, operatingHour.end.hour, operatingHour.end.minute);
+          final baseDay = baseMonday.add(Duration(days: day.index));
+          final startTime = DateTime(baseDay.year, baseDay.month, baseDay.day, operatingHour.start.hour, operatingHour.start.minute);
+          final endTime = DateTime(baseDay.year, baseDay.month, baseDay.day, operatingHour.end.hour, operatingHour.end.minute);
           final breakTimes = _breakTimes[day]?.map((block) {
-            final breakStartTime = DateTime(2020, 1, baseDay, block.start.hour, block.start.minute);
-            final breakEndTime = DateTime(2020, 1, baseDay, block.end.hour, block.end.minute);
+            final breakStartTime = DateTime(baseDay.year, baseDay.month, baseDay.day, block.start.hour, block.start.minute);
+            final breakEndTime = DateTime(baseDay.year, baseDay.month, baseDay.day, block.end.hour, block.end.minute);
             return BreakTime(
               startTime: breakStartTime,
               endTime: breakEndTime,
