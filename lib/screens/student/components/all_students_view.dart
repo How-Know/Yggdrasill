@@ -555,7 +555,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             levelTitle,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 16,
+              fontSize: 24,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -566,12 +566,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 4),
+                padding: const EdgeInsets.only(top: 16, bottom: 8),
                 child: Text(
                   school,
                   style: const TextStyle(
                     color: Colors.white70,
-                    fontSize: 17,
+                    fontSize: 18,
                     fontWeight: FontWeight.w500,
                   ),
                 ),

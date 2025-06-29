@@ -22,6 +22,7 @@ class _CustomTabBarState extends State<CustomTabBar> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        const SizedBox(height: 5),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(widget.tabs.length, (i) {
