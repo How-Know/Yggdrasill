@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/student.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 import 'data_manager_base.dart';
 
 class DataManager extends DataManagerBase {
@@ -15,13 +15,13 @@ class DataManager extends DataManagerBase {
     initInstance();
   }
 
-  final Map<String, ClassInfo> classesById = {};
+  final Map<String, GroupInfo> groupsById = {};
   final List<Student> studentsList = [];
 
-  final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
+  final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<Student>> studentsNotifier = ValueNotifier<List<Student>>([]);
 
-  List<ClassInfo> get classes => classesNotifier.value;
+  List<GroupInfo> get groups => groupsNotifier.value;
   List<Student> get students => studentsNotifier.value;
 
   Future<String> get _localPath async {
@@ -51,7 +51,7 @@ class DataManager extends DataManagerBase {
       // 클래스 정보 저장
       final classesFile = File(path.join(dataPath, 'classes.json'));
       final classesData = {
-        'classes': classesById.values.map((c) => c.toJson()).toList(),
+        'classes': groupsById.values.map((c) => c.toJson()).toList(),
       };
       await classesFile.writeAsString(jsonEncode(classesData));
 
@@ -68,7 +68,7 @@ class DataManager extends DataManagerBase {
       // 클래스 정보 저장
       final classesFile = File('${directory.path}/classes.json');
       final classesData = {
-        'classes': classesById.values.map((c) => c.toJson()).toList(),
+        'classes': groupsById.values.map((c) => c.toJson()).toList(),
       };
       await classesFile.writeAsString(jsonEncode(classesData));
 
@@ -104,22 +104,22 @@ class DataManager extends DataManagerBase {
         final jsonString = await classesFile.readAsString();
         final data = jsonDecode(jsonString) as Map<String, dynamic>;
         
-        classesById.clear();
-        final classesList = (data['classes'] as List).cast<Map<String, dynamic>>();
-        for (final classData in classesList) {
-          final classInfo = ClassInfo.fromJson(classData);
-          classesById[classInfo.id] = classInfo;
+        groupsById.clear();
+        final groupsList = (data['classes'] as List).cast<Map<String, dynamic>>();
+        for (final groupData in groupsList) {
+          final groupInfo = GroupInfo.fromJson(groupData);
+          groupsById[groupInfo.id] = groupInfo;
         }
       } else {
         // 기본 클래스 생성
-        final defaultClass = ClassInfo(
+        final defaultGroup = GroupInfo(
           id: '1',
           name: '기본반',
           description: '기본 학습반',
           color: const Color(0xFF1976D2),
           capacity: 10,
         );
-        classesById[defaultClass.id] = defaultClass;
+        groupsById[defaultGroup.id] = defaultGroup;
         await saveData();
       }
 
@@ -132,7 +132,7 @@ class DataManager extends DataManagerBase {
         studentsList.clear();
         final students = (data['students'] as List).cast<Map<String, dynamic>>();
         for (final studentData in students) {
-          final student = Student.fromJson(studentData, classesById);
+          final student = Student.fromJson(studentData, groupsById);
           studentsList.add(student);
         }
       }
@@ -143,23 +143,23 @@ class DataManager extends DataManagerBase {
     }
   }
 
-  void addClass(ClassInfo classInfo) {
-    classesById[classInfo.id] = classInfo;
+  void addGroup(GroupInfo groupInfo) {
+    groupsById[groupInfo.id] = groupInfo;
     notifyListeners();
     saveData();
   }
 
-  void updateClass(ClassInfo classInfo) {
-    classesById[classInfo.id] = classInfo;
+  void updateGroup(GroupInfo groupInfo) {
+    groupsById[groupInfo.id] = groupInfo;
     notifyListeners();
     saveData();
   }
 
-  void deleteClass(String classId) {
-    classesById.remove(classId);
+  void deleteGroup(String groupId) {
+    groupsById.remove(groupId);
     for (final student in studentsList) {
-      if (student.classInfo?.id == classId) {
-        student.classInfo = null;
+      if (student.groupInfo?.id == groupId) {
+        student.groupInfo = null;
       }
     }
     notifyListeners();
@@ -187,17 +187,17 @@ class DataManager extends DataManagerBase {
     saveData();
   }
 
-  void moveStudent(Student student, ClassInfo? newClass) {
+  void moveStudent(Student student, GroupInfo? newGroup) {
     final index = studentsList.indexOf(student);
     if (index != -1) {
-      studentsList[index] = student.copyWith(classInfo: newClass);
+      studentsList[index] = student.copyWith(groupInfo: newGroup);
       notifyListeners();
       saveData();
     }
   }
 
   void _notifyListeners() {
-    classesNotifier.value = _classesById.values.toList();
+    groupsNotifier.value = _groupsById.values.toList();
     studentsNotifier.value = List.unmodifiable(_studentsList);
   }
 } 

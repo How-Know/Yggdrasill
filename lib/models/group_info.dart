@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
-class ClassInfo {
+class GroupInfo {
   final String id;
   final String name;
   final String description;
   final int capacity;
-  final int duration; // 수업 시간 (분)
+  final int duration; // 그룹의 기본 수업 시간(분)
   final Color color;
 
-  ClassInfo({
+  GroupInfo({
     required this.id,
     required this.name,
     required this.description,
@@ -18,8 +18,8 @@ class ClassInfo {
     required this.color,
   });
 
-  factory ClassInfo.fromJson(Map<String, dynamic> json) {
-    return ClassInfo(
+  factory GroupInfo.fromJson(Map<String, dynamic> json) {
+    return GroupInfo(
       id: json['id'] as String,
       name: json['name'] as String,
       description: json['description'] as String,
@@ -40,7 +40,7 @@ class ClassInfo {
     };
   }
 
-  ClassInfo copyWith({
+  GroupInfo copyWith({
     String? id,
     String? name,
     String? description,
@@ -48,7 +48,7 @@ class ClassInfo {
     int? duration,
     Color? color,
   }) {
-    return ClassInfo(
+    return GroupInfo(
       id: id ?? this.id,
       name: name ?? this.name,
       description: description ?? this.description,

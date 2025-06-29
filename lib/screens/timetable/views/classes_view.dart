@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../models/operating_hours.dart';
 import '../../../models/student_time_block.dart';
 import '../../../models/student.dart';
-import '../../../models/class_info.dart';
+import '../../../models/group_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/education_level.dart';
 
@@ -54,7 +54,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             builder: (context, studentTimeBlocks, _) {
               final double blockHeight = 90.0;
               final students = DataManager.instance.students;
-              final classes = DataManager.instance.classes;
+              final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               return Column(
                 children: [
@@ -172,7 +172,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                             isExpanded: false,
                                                             expandedBlocks: cellBlocks,
                                                             students: students,
-                                                            classes: classes,
+                                                            groups: groups,
                                                           )
                                                         : CapacityCardWidget(
                                                             count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
@@ -181,12 +181,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                             isExpanded: true,
                                                             expandedBlocks: cellBlocks,
                                                             students: students,
-                                                            classes: classes,
+                                                            groups: groups,
                                                           ),
                                               ),
                                               // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
                                               if (isExpanded && cellBlocks.isNotEmpty)
-                                                _buildExpandedStudentCards(cellBlocks, students, classes, constraints.maxWidth, isExpanded),
+                                                _buildExpandedStudentCards(cellBlocks, students, groups, constraints.maxWidth, isExpanded),
                                             ],
                                           ),
                                         ),
@@ -316,7 +316,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
   }
 
-  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<Student> students, List<ClassInfo> classes, double cellWidth, bool isExpanded) {
+  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<Student> students, List<GroupInfo> groups, double cellWidth, bool isExpanded) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: () {
@@ -340,8 +340,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                 final block = cellBlocks[i];
                 final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
                   id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
-                final classInfo = block.classId != null ?
-                  classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                final groupInfo = block.groupId != null ?
+                  groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 return GestureDetector(
                   onTapDown: (details) async {
                     final selected = await showMenu<String>(
@@ -373,7 +373,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   child: SizedBox(
                     width: 109,
                     height: 39,
-                    child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
+                    child: _StudentTimeBlockCard(student: student, groupInfo: groupInfo),
                   ),
                 );
               }),
@@ -387,8 +387,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
 class _StudentTimeBlockCard extends StatelessWidget {
   final Student student;
-  final ClassInfo? classInfo;
-  const _StudentTimeBlockCard({required this.student, this.classInfo});
+  final GroupInfo? groupInfo;
+  const _StudentTimeBlockCard({required this.student, this.groupInfo});
 
   @override
   Widget build(BuildContext context) {
@@ -405,12 +405,12 @@ class _StudentTimeBlockCard extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (classInfo != null)
+            if (groupInfo != null)
               Container(
                 width: 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: classInfo!.color,
+                  color: groupInfo!.color,
                   shape: BoxShape.circle,
                 ),
                 margin: const EdgeInsets.only(right: 4),
@@ -441,7 +441,7 @@ class CapacityCardWidget extends StatefulWidget {
   final bool isExpanded;
   final List<StudentTimeBlock>? expandedBlocks;
   final List<Student>? students;
-  final List<ClassInfo>? classes;
+  final List<GroupInfo>? groups;
   const CapacityCardWidget({
     required this.count,
     this.color,
@@ -449,7 +449,7 @@ class CapacityCardWidget extends StatefulWidget {
     this.isExpanded = false,
     this.expandedBlocks,
     this.students,
-    this.classes,
+    this.groups,
     Key? key,
   }) : super(key: key);
 
@@ -490,10 +490,10 @@ class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    if (widget.isExpanded && widget.expandedBlocks != null && widget.students != null && widget.classes != null) {
+    if (widget.isExpanded && widget.expandedBlocks != null && widget.students != null && widget.groups != null) {
       final cellBlocks = widget.expandedBlocks!;
       final students = widget.students!;
-      final classes = widget.classes!;
+      final groups = widget.groups!;
       return Container(
         width: double.infinity,
         child: AnimatedScale(
@@ -510,8 +510,8 @@ class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTick
                 final block = cellBlocks[i];
                 final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
                   id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
-                final classInfo = block.classId != null ?
-                  classes.firstWhere((c) => c.id == block.classId, orElse: () => ClassInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                final groupInfo = block.groupId != null ?
+                  groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 return GestureDetector(
                   onTapDown: (details) async {
                     final selected = await showMenu<String>(
@@ -543,7 +543,7 @@ class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTick
                   child: SizedBox(
                     width: 109,
                     height: 39,
-                    child: _StudentTimeBlockCard(student: student, classInfo: classInfo),
+                    child: _StudentTimeBlockCard(student: student, groupInfo: groupInfo),
                   ),
                 );
               }),

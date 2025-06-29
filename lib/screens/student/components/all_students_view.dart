@@ -2,34 +2,35 @@ import 'package:flutter/material.dart';
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import '../../../widgets/student_card.dart';
-import '../../../models/class_info.dart';
-import '../../../widgets/class_registration_dialog.dart';
-import '../../../widgets/class_student_card.dart';
+import '../../../models/group_info.dart';
+import '../../../widgets/student_registration_dialog.dart';
+import '../../../widgets/group_student_card.dart';
+import '../../../widgets/group_registration_dialog.dart';
 
 class AllStudentsView extends StatelessWidget {
   final List<Student> students;
-  final List<ClassInfo> classes;
-  final Set<ClassInfo> expandedClasses;
+  final List<GroupInfo> groups;
+  final Set<GroupInfo> expandedGroups;
   final Function(Student) onShowDetails;
-  final Function(ClassInfo) onClassAdded;
-  final Function(ClassInfo, int) onClassUpdated;
-  final Function(ClassInfo) onClassDeleted;
-  final Function(Student, ClassInfo?) onStudentMoved;
-  final Function(ClassInfo) onClassExpanded;
-  final void Function(int oldIndex, int newIndex) onClassReorder;
+  final Function(GroupInfo) onGroupAdded;
+  final Function(GroupInfo, int) onGroupUpdated;
+  final Function(GroupInfo) onGroupDeleted;
+  final Function(Student, GroupInfo?) onStudentMoved;
+  final Function(GroupInfo) onGroupExpanded;
+  final void Function(int oldIndex, int newIndex) onGroupReorder;
 
   const AllStudentsView({
     super.key,
     required this.students,
-    required this.classes,
-    required this.expandedClasses,
+    required this.groups,
+    required this.expandedGroups,
     required this.onShowDetails,
-    required this.onClassAdded,
-    required this.onClassUpdated,
-    required this.onClassDeleted,
+    required this.onGroupAdded,
+    required this.onGroupUpdated,
+    required this.onGroupDeleted,
     required this.onStudentMoved,
-    required this.onClassExpanded,
-    required this.onClassReorder,
+    required this.onGroupExpanded,
+    required this.onGroupReorder,
   });
 
   @override
@@ -97,17 +98,17 @@ class AllStudentsView extends StatelessWidget {
                       const Text('클래스 목록', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                       FilledButton.icon(
                         onPressed: () async {
-                          final result = await showDialog<ClassInfo>(
+                          final result = await showDialog<GroupInfo>(
                             context: context,
-                            builder: (context) => ClassRegistrationDialog(
+                            builder: (context) => GroupRegistrationDialog(
                               editMode: false,
-                              onSave: (classInfo) {
-                                Navigator.of(context).pop(classInfo);
+                              onSave: (groupInfo) {
+                                Navigator.of(context).pop(groupInfo);
                               },
                             ),
                           );
                           if (result != null) {
-                            onClassAdded(result);
+                            onGroupAdded(result);
                           }
                         },
                         style: FilledButton.styleFrom(
@@ -146,30 +147,30 @@ class AllStudentsView extends StatelessWidget {
                         child: child,
                       );
                     },
-                    itemCount: classes.length,
+                    itemCount: groups.length,
                     itemBuilder: (context, index) {
-                      final classInfo = classes[index];
-                      final studentsInClass = students.where((s) => s.classInfo == classInfo).toList();
-                      final isExpanded = expandedClasses.contains(classInfo);
+                      final groupInfo = groups[index];
+                      final studentsInGroup = students.where((s) => s.groupInfo == groupInfo).toList();
+                      final isExpanded = expandedGroups.contains(groupInfo);
                       return Padding(
-                        key: ValueKey(classInfo.id),
+                        key: ValueKey(groupInfo.id),
                         padding: const EdgeInsets.only(bottom: 16),
                         child: DragTarget<Student>(
                           onWillAccept: (student) => student != null,
                           onAccept: (student) {
-                            final oldClassInfo = student.classInfo;
-                            onStudentMoved(student, classInfo);
+                            final oldGroupInfo = student.groupInfo;
+                            onStudentMoved(student, groupInfo);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  '${student.name}님이 ${oldClassInfo?.name ?? '미배정'} → ${classInfo.name}으로 이동되었습니다.',
+                                  '${student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
                                 ),
                                 backgroundColor: const Color(0xFF2A2A2A),
                                 behavior: SnackBarBehavior.floating,
                                 action: SnackBarAction(
                                   label: '실행 취소',
                                   onPressed: () {
-                                    onStudentMoved(student, oldClassInfo);
+                                    onStudentMoved(student, oldGroupInfo);
                                   },
                                 ),
                               ),
@@ -182,7 +183,7 @@ class AllStudentsView extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(12),
                                 border: candidateData.isNotEmpty
                                   ? Border.all(
-                                      color: classInfo.color,
+                                      color: groupInfo.color,
                                       width: 2,
                                     )
                                   : null,
@@ -206,7 +207,7 @@ class AllStudentsView extends StatelessWidget {
                                             bottom: Radius.zero,
                                           )
                                         : BorderRadius.circular(12),
-                                      onTap: () => onClassExpanded(classInfo),
+                                      onTap: () => onGroupExpanded(groupInfo),
                                       child: Container(
                                         height: 88,
                                         decoration: BoxDecoration(
@@ -225,7 +226,7 @@ class AllStudentsView extends StatelessWidget {
                                               width: 12,
                                               height: 40,
                                               decoration: BoxDecoration(
-                                                color: classInfo.color,
+                                                color: groupInfo.color,
                                                 borderRadius: BorderRadius.circular(2),
                                               ),
                                             ),
@@ -234,18 +235,18 @@ class AllStudentsView extends StatelessWidget {
                                               child: Row(
                                                 children: [
                                                   Text(
-                                                    classInfo.name,
+                                                    groupInfo.name,
                                                     style: const TextStyle(
                                                       color: Colors.white,
                                                       fontSize: 22,
                                                       fontWeight: FontWeight.w500,
                                                     ),
                                                   ),
-                                                  if (classInfo.description.isNotEmpty) ...[
+                                                  if (groupInfo.description.isNotEmpty) ...[
                                                     const SizedBox(width: 16),
                                                     Expanded(
                                                       child: Text(
-                                                        classInfo.description,
+                                                        groupInfo.description,
                                                         style: const TextStyle(
                                                           color: Colors.white70,
                                                           fontSize: 18,
@@ -259,7 +260,7 @@ class AllStudentsView extends StatelessWidget {
                                             ),
                                             const SizedBox(width: 20),
                                             Text(
-                                              '${studentsInClass.length}/${classInfo.capacity}명',
+                                              '${studentsInGroup.length}/${groupInfo.capacity}명',
                                               style: const TextStyle(
                                                 color: Colors.white,
                                                 fontSize: 18,
@@ -282,18 +283,17 @@ class AllStudentsView extends StatelessWidget {
                                               children: [
                                                 IconButton(
                                                   onPressed: () async {
-                                                    final result = await showDialog<ClassInfo>(
+                                                    final result = await showDialog<GroupInfo>(
                                                       context: context,
-                                                      builder: (context) => ClassRegistrationDialog(
+                                                      builder: (context) => GroupRegistrationDialog(
                                                         editMode: true,
-                                                        classInfo: classInfo,
-                                                        onSave: (updatedClass) {
-                                                          Navigator.of(context).pop(updatedClass);
+                                                        onSave: (updatedGroup) {
+                                                          Navigator.of(context).pop(updatedGroup);
                                                         },
                                                       ),
                                                     );
                                                     if (result != null) {
-                                                      onClassUpdated(result, index);
+                                                      onGroupUpdated(result, index);
                                                     }
                                                   },
                                                   icon: const Icon(Icons.edit_rounded),
@@ -303,7 +303,7 @@ class AllStudentsView extends StatelessWidget {
                                                 ),
                                                 IconButton(
                                                   onPressed: () {
-                                                    onClassDeleted(classInfo);
+                                                    onGroupDeleted(groupInfo);
                                                   },
                                                   icon: const Icon(Icons.delete_rounded),
                                                   style: IconButton.styleFrom(
@@ -333,7 +333,7 @@ class AllStudentsView extends StatelessWidget {
                                   ),
                                   AnimatedCrossFade(
                                     firstChild: const SizedBox.shrink(),
-                                    secondChild: studentsInClass.isNotEmpty
+                                    secondChild: studentsInGroup.isNotEmpty
                                       ? Container(
                                           decoration: BoxDecoration(
                                             color: const Color(0xFF121212),
@@ -349,7 +349,7 @@ class AllStudentsView extends StatelessWidget {
                                             child: Wrap(
                                               spacing: 4,
                                               runSpacing: 8,
-                                              children: studentsInClass.map((student) => ClassStudentCard(
+                                              children: studentsInGroup.map((student) => GroupStudentCard(
                                                 student: student,
                                                 onShowDetails: onShowDetails,
                                               )).toList(),
@@ -367,7 +367,7 @@ class AllStudentsView extends StatelessWidget {
                         ),
                       );
                     },
-                    onReorder: onClassReorder,
+                    onReorder: onGroupReorder,
                   ),
                 ],
               ),

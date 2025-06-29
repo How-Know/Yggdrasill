@@ -3,7 +3,7 @@ import '../../../models/student.dart';
 import '../../../models/class_info.dart';
 import '../../../widgets/class_student_card.dart';
 
-class StudentClassView extends StatefulWidget {
+class StudentGroupView extends StatefulWidget {
   final List<ClassInfo> classes;
   final List<Student> students;
   final void Function(Student) onStudentTap;
@@ -14,7 +14,7 @@ class StudentClassView extends StatefulWidget {
   }) onClassEdit;
   final void Function(ClassInfo) onClassDelete;
 
-  const StudentClassView({
+  const StudentGroupView({
     super.key,
     required this.classes,
     required this.students,
@@ -24,10 +24,10 @@ class StudentClassView extends StatefulWidget {
   });
 
   @override
-  State<StudentClassView> createState() => _StudentClassViewState();
+  State<StudentGroupView> createState() => _StudentGroupViewState();
 }
 
-class _StudentClassViewState extends State<StudentClassView> {
+class _StudentGroupViewState extends State<StudentGroupView> {
   final Set<ClassInfo> _expandedClasses = {};
 
   @override

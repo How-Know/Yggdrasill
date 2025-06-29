@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class StudentTimeBlock {
   final String id;
   final String studentId;
-  final String? classId;
+  final String? groupId;
   final int dayIndex; // 0: 월요일 ~ 6: 일요일
   final DateTime startTime;
   final Duration duration;
@@ -12,7 +12,7 @@ class StudentTimeBlock {
   StudentTimeBlock({
     required this.id,
     required this.studentId,
-    this.classId,
+    this.groupId,
     required this.dayIndex,
     required this.startTime,
     required this.duration,
@@ -23,7 +23,7 @@ class StudentTimeBlock {
     return StudentTimeBlock(
       id: json['id'] as String,
       studentId: json['studentId'] as String,
-      classId: json['classId'] as String?,
+      groupId: json['groupId'] as String?,
       dayIndex: json['dayIndex'] as int,
       startTime: DateTime.parse(json['startTime'] as String),
       duration: Duration(minutes: json['duration'] as int),
@@ -35,7 +35,7 @@ class StudentTimeBlock {
     return {
       'id': id,
       'studentId': studentId,
-      'classId': classId,
+      'groupId': groupId,
       'dayIndex': dayIndex,
       'startTime': startTime.toIso8601String(),
       'duration': duration.inMinutes,
@@ -46,7 +46,7 @@ class StudentTimeBlock {
   StudentTimeBlock copyWith({
     String? id,
     String? studentId,
-    String? classId,
+    String? groupId,
     int? dayIndex,
     DateTime? startTime,
     Duration? duration,
@@ -55,7 +55,7 @@ class StudentTimeBlock {
     return StudentTimeBlock(
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
-      classId: classId ?? this.classId,
+      groupId: groupId ?? this.groupId,
       dayIndex: dayIndex ?? this.dayIndex,
       startTime: startTime ?? this.startTime,
       duration: duration ?? this.duration,

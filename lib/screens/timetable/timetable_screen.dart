@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import '../../models/class_info.dart';
+import '../../models/group_info.dart';
 import '../../models/operating_hours.dart';
 import '../../models/student.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/student_search_dialog.dart';
-import '../../widgets/class_schedule_dialog.dart';
-import '../../models/class_schedule.dart';
+import '../../widgets/group_schedule_dialog.dart';
+import '../../models/group_schedule.dart';
 import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
 import '../../models/student_time_block.dart';
@@ -35,7 +35,7 @@ class TimetableScreen extends StatefulWidget {
 
 class _TimetableScreenState extends State<TimetableScreen> {
   DateTime _selectedDate = DateTime.now();
-  List<ClassInfo> _classes = [];
+  List<GroupInfo> _groups = [];
   TimetableViewType _viewType = TimetableViewType.classes;
   List<OperatingHours> _operatingHours = [];
   final MenuController _menuController = MenuController();
@@ -44,8 +44,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   bool _isStudentRegistrationMode = false;
   bool _isClassRegistrationMode = false;
   String _registrationButtonText = '등록';
-  ClassInfo? _selectedClass;
-  ClassSchedule? _currentClassSchedule;
+  GroupInfo? _selectedGroup;
+  GroupSchedule? _currentGroupSchedule;
   bool _showOperatingHoursAlert = false;
 
   @override
@@ -56,9 +56,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Future<void> _loadData() async {
-    await DataManager.instance.loadClasses();
+    await DataManager.instance.loadGroups();
     setState(() {
-      _classes = List.from(DataManager.instance.classes);
+      _groups = List.from(DataManager.instance.groups);
     });
   }
 
@@ -132,21 +132,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
           _registrationButtonText = '등록';
         }
       });
-    } else if (_selectedClass != null) {
+    } else if (_selectedGroup != null) {
       // 클래스 등록 모드
-      _showClassScheduleDialog();
+      _showGroupScheduleDialog();
     }
   }
 
-  void _showClassScheduleDialog() {
+  void _showGroupScheduleDialog() {
     showDialog(
       context: context,
-      builder: (context) => ClassScheduleDialog(
-        classInfo: _selectedClass!,
+      builder: (context) => GroupScheduleDialog(
+        groupInfo: _selectedGroup!,
         onScheduleSelected: (schedule) {
           Navigator.of(context).pop();
           setState(() {
-            _currentClassSchedule = schedule;
+            _currentGroupSchedule = schedule;
             _isClassRegistrationMode = true;
             _isStudentRegistrationMode = false;
           });
@@ -160,9 +160,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
     if (_isStudentRegistrationMode || _isClassRegistrationMode) {
       setState(() {
         _selectedDayIndex = dayIndex;
-        if (_currentClassSchedule != null) {
+        if (_currentGroupSchedule != null) {
           // 클래스 스케줄의 요일 업데이트
-          _currentClassSchedule = _currentClassSchedule!.copyWith(dayIndex: dayIndex);
+          _currentGroupSchedule = _currentGroupSchedule!.copyWith(dayIndex: dayIndex);
         }
       });
     }
@@ -237,10 +237,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             _menuController.close();
                           },
                         ),
-                        ..._classes.map((classInfo) => 
+                        ..._groups.map((groupInfo) => 
                           MenuItemButton(
                             child: Text(
-                              classInfo.name,
+                              groupInfo.name,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 14,
@@ -248,7 +248,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             ),
                             onPressed: () {
                               setState(() {
-                                _selectedClass = classInfo;
+                                _selectedGroup = groupInfo;
                                 _registrationButtonText = '클래스';
                                 _isStudentRegistrationMode = false;
                               });
@@ -395,7 +395,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final block = StudentTimeBlock(
           id: const Uuid().v4(),
           studentId: student.id,
-          classId: student.classInfo?.id,
+          groupId: student.groupInfo?.id,
           dayIndex: _selectedDayIndex!,
           startTime: startTime,
           duration: const Duration(hours: 1),
@@ -455,7 +455,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final block = StudentTimeBlock(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           studentId: student.id,
-          classId: student.classInfo?.id,
+          groupId: student.groupInfo?.id,
           dayIndex: _selectedDayIndex ?? 0,
           startTime: startTime,
           duration: const Duration(hours: 1),
@@ -467,9 +467,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
         _isStudentRegistrationMode = false;
         // 버튼 텍스트는 변경하지 않음 (학생으로 유지)
       });
-    } else if (_isClassRegistrationMode && _currentClassSchedule != null) {
+    } else if (_isClassRegistrationMode && _currentGroupSchedule != null) {
       // 클래스 스케줄 등록/수정 전 운영시간 체크
-      final dayIdx = _currentClassSchedule!.dayIndex;
+      final dayIdx = _currentGroupSchedule!.dayIndex;
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
         final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
@@ -493,32 +493,32 @@ class _TimetableScreenState extends State<TimetableScreen> {
         }
       }
       // 클래스 스케줄 등록/수정
-      final updatedSchedule = _currentClassSchedule!.copyWith(
+      final updatedSchedule = _currentGroupSchedule!.copyWith(
         startTime: startTime,
         dayIndex: _selectedDayIndex ?? 0,
       );
       
-      if (_currentClassSchedule!.createdAt == _currentClassSchedule!.updatedAt) {
+      if (_currentGroupSchedule!.createdAt == _currentGroupSchedule!.updatedAt) {
         // 새로운 스케줄
-        await DataManager.instance.addClassSchedule(updatedSchedule);
+        await DataManager.instance.addGroupSchedule(updatedSchedule);
       } else {
         // 기존 스케줄 수정
-        await DataManager.instance.updateClassSchedule(updatedSchedule);
+        await DataManager.instance.updateGroupSchedule(updatedSchedule);
       }
       
       // 해당 클래스의 모든 학생들에게 적용
-      await DataManager.instance.applyClassScheduleToStudents(updatedSchedule);
+      await DataManager.instance.applyGroupScheduleToStudents(updatedSchedule);
       
       setState(() {
         _isClassRegistrationMode = false;
-        _currentClassSchedule = null;
+        _currentGroupSchedule = null;
       });
       
       // 성공 메시지 표시
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${_selectedClass!.name} 클래스 시간이 등록되었습니다.'),
+            content: Text('${_selectedGroup!.name} 클래스 시간이 등록되었습니다.'),
             backgroundColor: const Color(0xFF1976D2),
           ),
         );

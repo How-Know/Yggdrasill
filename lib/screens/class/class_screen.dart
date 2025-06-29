@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../models/class_info.dart';
+import '../../models/group_info.dart';
 import '../../models/student.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/class_registration_dialog.dart';
@@ -12,9 +12,9 @@ class ClassScreen extends StatefulWidget {
 }
 
 class _ClassScreenState extends State<ClassScreen> {
-  final List<ClassInfo> _classes = [];
+  final List<GroupInfo> _classes = [];
   final List<Student> _students = [];
-  final Set<ClassInfo> _expandedClasses = {};
+  final Set<GroupInfo> _expandedClasses = {};
 
   @override
   void initState() {
@@ -34,7 +34,7 @@ class _ClassScreenState extends State<ClassScreen> {
 
   void _showClassRegistrationDialog({
     bool editMode = false,
-    ClassInfo? classInfo,
+    GroupInfo? classInfo,
     int? index,
   }) {
     showDialog(
@@ -62,7 +62,7 @@ class _ClassScreenState extends State<ClassScreen> {
     );
   }
 
-  Widget _buildClassView() {
+  Widget _buildGroupView() {
     return Padding(
       padding: const EdgeInsets.only(top: 24.0),
       child: ReorderableListView.builder(
@@ -423,7 +423,7 @@ class _ClassScreenState extends State<ClassScreen> {
             if (oldIndex < newIndex) {
               newIndex -= 1;
             }
-            final ClassInfo item = _classes.removeAt(oldIndex);
+            final GroupInfo item = _classes.removeAt(oldIndex);
             _classes.insert(newIndex, item);
           });
         },
@@ -468,7 +468,7 @@ class _ClassScreenState extends State<ClassScreen> {
                   ),
                 ],
               ),
-              _buildClassView(),
+              _buildGroupView(),
             ],
           ),
         ),

@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import '../../../models/student.dart';
-import '../../../models/class_info.dart';
+import '../../../models/group_info.dart';
 import '../../../widgets/student_card.dart';
 
 class EducationLevelGroup extends StatelessWidget {
   final String title;
   final EducationLevel level;
   final Map<EducationLevel, Map<int, List<Student>>> groupedStudents;
-  final List<ClassInfo> classes;
+  final List<GroupInfo> classes;
   final Function(Student) onEdit;
   final Function(Student) onDelete;
   final Function(Student) onShowDetails;

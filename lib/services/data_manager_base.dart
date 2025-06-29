@@ -1,19 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show protected;
 import '../models/student.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 
 abstract class DataManagerBase {
   static DataManagerBase? instance;
   static bool _initialized = false;
 
-  final Map<String, ClassInfo> classesById = {};
+  final Map<String, GroupInfo> groupsById = {};
   final List<Student> studentsList = [];
 
-  final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
+  final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<Student>> studentsNotifier = ValueNotifier<List<Student>>([]);
 
-  List<ClassInfo> get classes => classesNotifier.value;
+  List<GroupInfo> get groups => groupsNotifier.value;
   List<Student> get students => studentsNotifier.value;
 
   @protected
@@ -33,23 +33,23 @@ abstract class DataManagerBase {
   Future<void> saveData();
   Future<void> loadData();
 
-  void addClass(ClassInfo classInfo) {
-    classesById[classInfo.id] = classInfo;
+  void addGroup(GroupInfo groupInfo) {
+    groupsById[groupInfo.id] = groupInfo;
     notifyListeners();
     saveData();
   }
 
-  void updateClass(ClassInfo classInfo) {
-    classesById[classInfo.id] = classInfo;
+  void updateGroup(GroupInfo groupInfo) {
+    groupsById[groupInfo.id] = groupInfo;
     notifyListeners();
     saveData();
   }
 
-  void deleteClass(String classId) {
-    classesById.remove(classId);
+  void deleteGroup(String groupId) {
+    groupsById.remove(groupId);
     for (final student in studentsList) {
-      if (student.classInfo?.id == classId) {
-        student.classInfo = null;
+      if (student.groupInfo?.id == groupId) {
+        student.groupInfo = null;
       }
     }
     notifyListeners();
@@ -77,17 +77,17 @@ abstract class DataManagerBase {
     saveData();
   }
 
-  void moveStudent(Student student, ClassInfo? newClass) {
+  void moveStudent(Student student, GroupInfo? newGroup) {
     final index = studentsList.indexOf(student);
     if (index != -1) {
-      studentsList[index] = student.copyWith(classInfo: newClass);
+      studentsList[index] = student.copyWith(groupInfo: newGroup);
       notifyListeners();
       saveData();
     }
   }
 
   void notifyListeners() {
-    classesNotifier.value = classesById.values.toList();
+    groupsNotifier.value = groupsById.values.toList();
     studentsNotifier.value = List.unmodifiable(studentsList);
   }
 } 

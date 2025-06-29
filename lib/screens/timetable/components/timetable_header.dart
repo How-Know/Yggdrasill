@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../../models/class_info.dart';
+import '../../../models/group_info.dart';
 import '../../../models/student.dart';
 import '../../../widgets/student_registration_dialog.dart';
 import '../timetable_screen.dart';  // TimetableViewType enum을 가져오기 위한 import

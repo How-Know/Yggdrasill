@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/student.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 import 'student_details_dialog.dart';
 import 'student_registration_dialog.dart';
 import '../services/data_manager.dart';
@@ -25,7 +25,7 @@ class StudentCard extends StatelessWidget {
         onSave: (updatedStudent) async {
           await DataManager.instance.updateStudent(updatedStudent);
         },
-        classes: DataManager.instance.classes,
+        groups: DataManager.instance.groups,
       ),
     );
     if (result != null) {
@@ -148,7 +148,7 @@ class StudentCard extends StatelessWidget {
           width: 110,
           height: 50,
           padding: EdgeInsets.only(
-            left: student.classInfo == null ? 15.0 : 4.0,
+            left: student.groupInfo == null ? 15.0 : 4.0,
             right: 4.0,
           ),
           child: SizedBox(
@@ -157,12 +157,12 @@ class StudentCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.start,
               children: [
-                if (student.classInfo != null) ...[
+                if (student.groupInfo != null) ...[
                   Container(
                     width: 5,
                     height: 20,
                     decoration: BoxDecoration(
-                      color: student.classInfo!.color,
+                      color: student.groupInfo!.color,
                       borderRadius: BorderRadius.circular(2.5),
                     ),
                   ),

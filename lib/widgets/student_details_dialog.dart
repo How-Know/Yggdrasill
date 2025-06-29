@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mneme_flutter/models/student.dart';
-import 'package:mneme_flutter/models/class_info.dart';
+import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
@@ -42,7 +42,7 @@ class StudentDetailsDialog extends StatelessWidget {
         onSave: (updatedStudent) async {
           await DataManager.instance.updateStudent(updatedStudent);
         },
-        classes: DataManager.instance.classes,
+        groups: DataManager.instance.groups,
       ),
     );
 
@@ -98,8 +98,8 @@ class StudentDetailsDialog extends StatelessWidget {
             '등록일: ${DateFormat('yyyy년 MM월 dd일').format(student.registrationDate)}',
           ),
           const SizedBox(height: 8),
-          if (student.classInfo != null)
-            Text('소속 반: ${student.classInfo!.name}'),
+          if (student.groupInfo != null)
+            Text('소속 그룹: ${student.groupInfo!.name}'),
         ],
       ),
       actions: [

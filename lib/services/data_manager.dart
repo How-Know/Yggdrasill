@@ -1,11 +1,11 @@
 import '../models/student.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 import '../models/operating_hours.dart';
 import '../models/academy_settings.dart';
 import '../models/payment_type.dart';
 import '../models/education_level.dart';
 import '../models/student_time_block.dart';
-import '../models/class_schedule.dart';
+import '../models/group_schedule.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'storage_service.dart';
@@ -21,16 +21,16 @@ class DataManager {
   DataManager._internal();
 
   List<Student> _students = [];
-  List<ClassInfo> _classes = [];
+  List<GroupInfo> _groups = [];
   List<OperatingHours> _operatingHours = [];
-  Map<String, ClassInfo> _classesById = {};
+  Map<String, GroupInfo> _groupsById = {};
   late final StorageService _storage;
   bool _isInitialized = false;
 
-  final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
+  final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<Student>> studentsNotifier = ValueNotifier<List<Student>>([]);
 
-  List<ClassInfo> get classes => List.unmodifiable(_classes);
+  List<GroupInfo> get groups => List.unmodifiable(_groups);
   List<Student> get students => List.unmodifiable(_students);
 
   AcademySettings _academySettings = AcademySettings.defaults();
@@ -42,11 +42,11 @@ class DataManager {
   List<StudentTimeBlock> _studentTimeBlocks = [];
   final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
   
-  List<ClassSchedule> _classSchedules = [];
-  final ValueNotifier<List<ClassSchedule>> classSchedulesNotifier = ValueNotifier<List<ClassSchedule>>([]);
+  List<GroupSchedule> _groupSchedules = [];
+  final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
 
   List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
-  List<ClassSchedule> get classSchedules => List.unmodifiable(_classSchedules);
+  List<GroupSchedule> get groupSchedules => List.unmodifiable(_groupSchedules);
 
   Future<void> initialize() async {
     if (_isInitialized) {
@@ -55,13 +55,13 @@ class DataManager {
 
     try {
       _storage = await createStorageService();
-      await loadClasses();
+      await loadGroups();
       await loadStudents();
       await loadAcademySettings();
       await loadPaymentType();
       await _loadOperatingHours();
       await loadStudentTimeBlocks();
-      await loadClassSchedules();
+      await loadGroupSchedules();
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -70,8 +70,8 @@ class DataManager {
   }
 
   void _initializeDefaults() {
-    _classes = [];
-    _classesById = {};
+    _groups = [];
+    _groupsById = {};
     _students = [];
     _operatingHours = [];
     _studentTimeBlocks = [];
@@ -80,18 +80,18 @@ class DataManager {
     _notifyListeners();
   }
 
-  Future<void> loadClasses() async {
+  Future<void> loadGroups() async {
     try {
-      final jsonData = await _storage.load('classes');
+      final jsonData = await _storage.load('groups');
       if (jsonData != null) {
-        final List<dynamic> classesList = jsonDecode(jsonData);
-        _classes = classesList.map((json) => ClassInfo.fromJson(json as Map<String, dynamic>)).toList();
-        _classesById = {for (var c in _classes) c.id: c};
+        final List<dynamic> groupsList = jsonDecode(jsonData);
+        _groups = groupsList.map((json) => GroupInfo.fromJson(json as Map<String, dynamic>)).toList();
+        _groupsById = {for (var g in _groups) g.id: g};
       }
     } catch (e) {
-      print('Error loading classes: $e');
-      _classes = [];
-      _classesById = {};
+      print('Error loading groups: $e');
+      _groups = [];
+      _groupsById = {};
     }
     _notifyListeners();
   }
@@ -101,7 +101,7 @@ class DataManager {
       final jsonData = await _storage.load('students');
       if (jsonData != null) {
         final List<dynamic> studentsList = jsonDecode(jsonData);
-        _students = studentsList.map((json) => Student.fromJson(json as Map<String, dynamic>, _classesById)).toList();
+        _students = studentsList.map((json) => Student.fromJson(json as Map<String, dynamic>, _groupsById)).toList();
       }
     } catch (e) {
       print('Error loading students: $e');
@@ -120,13 +120,13 @@ class DataManager {
     }
   }
 
-  Future<void> saveClasses() async {
+  Future<void> saveGroups() async {
     try {
-      final jsonString = jsonEncode(_classes.map((c) => c.toJson()).toList());
-      await _storage.save('classes', jsonString);
+      final jsonString = jsonEncode(_groups.map((g) => g.toJson()).toList());
+      await _storage.save('groups', jsonString);
     } catch (e) {
-      print('Error saving classes: $e');
-      throw Exception('Failed to save classes data');
+      print('Error saving groups: $e');
+      throw Exception('Failed to save groups data');
     }
   }
 
@@ -184,41 +184,41 @@ class DataManager {
   }
 
   void _notifyListeners() {
-    classesNotifier.value = List.unmodifiable(_classes);
+    groupsNotifier.value = List.unmodifiable(_groups);
     studentsNotifier.value = List.unmodifiable(_students);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-    classSchedulesNotifier.value = List.unmodifiable(_classSchedules);
+    groupSchedulesNotifier.value = List.unmodifiable(_groupSchedules);
   }
 
-  void addClass(ClassInfo classInfo) {
-    _classes.add(classInfo);
-    _classesById[classInfo.id] = classInfo;
+  void addGroup(GroupInfo groupInfo) {
+    _groups.add(groupInfo);
+    _groupsById[groupInfo.id] = groupInfo;
     _notifyListeners();
-    saveClasses();
+    saveGroups();
   }
 
-  void updateClass(ClassInfo classInfo) {
-    _classesById[classInfo.id] = classInfo;
-    _classes = _classesById.values.toList();
+  void updateGroup(GroupInfo groupInfo) {
+    _groupsById[groupInfo.id] = groupInfo;
+    _groups = _groupsById.values.toList();
     _notifyListeners();
-    saveClasses();
+    saveGroups();
   }
 
-  void deleteClass(ClassInfo classInfo) {
-    if (_classesById.containsKey(classInfo.id)) {
-      _classesById.remove(classInfo.id);
-      _classes = _classesById.values.toList();
+  void deleteGroup(GroupInfo groupInfo) {
+    if (_groupsById.containsKey(groupInfo.id)) {
+      _groupsById.remove(groupInfo.id);
+      _groups = _groupsById.values.toList();
       
-      // Remove class from students
+      // Remove group from students
       for (var i = 0; i < _students.length; i++) {
-        if (_students[i].classInfo?.id == classInfo.id) {
-          _students[i] = _students[i].copyWith(classInfo: null);
+        if (_students[i].groupInfo?.id == groupInfo.id) {
+          _students[i] = _students[i].copyWith(groupInfo: null);
         }
       }
       
       _notifyListeners();
       Future.wait([
-        saveClasses(),
+        saveGroups(),
         saveStudents(),
       ]);
     }
@@ -245,10 +245,10 @@ class DataManager {
     await saveStudents();
   }
 
-  void updateStudentClass(Student student, ClassInfo? newClass) {
+  void updateStudentGroup(Student student, GroupInfo? newGroup) {
     final index = _students.indexOf(student);
     if (index != -1) {
-      _students[index] = student.copyWith(classInfo: newClass);
+      _students[index] = student.copyWith(groupInfo: newGroup);
       _notifyListeners();
       saveStudents();
     }
@@ -397,66 +397,66 @@ class DataManager {
     await saveStudentTimeBlocks();
   }
 
-  // ClassSchedule 관련 메서드들
-  Future<void> loadClassSchedules() async {
+  // GroupSchedule 관련 메서드들
+  Future<void> loadGroupSchedules() async {
     try {
-      final jsonData = await _storage.load('class_schedules');
+      final jsonData = await _storage.load('group_schedules');
       if (jsonData != null) {
         final List<dynamic> schedulesList = jsonDecode(jsonData);
-        _classSchedules = schedulesList.map((json) => ClassSchedule.fromJson(json as Map<String, dynamic>)).toList();
+        _groupSchedules = schedulesList.map((json) => GroupSchedule.fromJson(json as Map<String, dynamic>)).toList();
       }
     } catch (e) {
-      print('Error loading class schedules: $e');
-      _classSchedules = [];
+      print('Error loading group schedules: $e');
+      _groupSchedules = [];
     }
     _notifyListeners();
   }
 
-  Future<void> saveClassSchedules() async {
+  Future<void> saveGroupSchedules() async {
     try {
-      final jsonString = jsonEncode(_classSchedules.map((s) => s.toJson()).toList());
-      await _storage.save('class_schedules', jsonString);
+      final jsonString = jsonEncode(_groupSchedules.map((s) => s.toJson()).toList());
+      await _storage.save('group_schedules', jsonString);
     } catch (e) {
-      print('Error saving class schedules: $e');
-      throw Exception('Failed to save class schedules');
+      print('Error saving group schedules: $e');
+      throw Exception('Failed to save group schedules');
     }
   }
 
-  Future<List<ClassSchedule>> getClassSchedules(String classId) async {
-    return _classSchedules.where((schedule) => schedule.classId == classId).toList();
+  Future<List<GroupSchedule>> getGroupSchedules(String groupId) async {
+    return _groupSchedules.where((schedule) => schedule.groupId == groupId).toList();
   }
 
-  Future<void> addClassSchedule(ClassSchedule schedule) async {
-    _classSchedules.add(schedule);
+  Future<void> addGroupSchedule(GroupSchedule schedule) async {
+    _groupSchedules.add(schedule);
     _notifyListeners();
-    await saveClassSchedules();
+    await saveGroupSchedules();
   }
 
-  Future<void> updateClassSchedule(ClassSchedule schedule) async {
-    final index = _classSchedules.indexWhere((s) => s.id == schedule.id);
+  Future<void> updateGroupSchedule(GroupSchedule schedule) async {
+    final index = _groupSchedules.indexWhere((s) => s.id == schedule.id);
     if (index != -1) {
-      _classSchedules[index] = schedule;
+      _groupSchedules[index] = schedule;
       _notifyListeners();
-      await saveClassSchedules();
+      await saveGroupSchedules();
     }
   }
 
-  Future<void> deleteClassSchedule(String id) async {
-    _classSchedules.removeWhere((s) => s.id == id);
+  Future<void> deleteGroupSchedule(String id) async {
+    _groupSchedules.removeWhere((s) => s.id == id);
     _notifyListeners();
-    await saveClassSchedules();
+    await saveGroupSchedules();
   }
 
-  Future<void> applyClassScheduleToStudents(ClassSchedule schedule) async {
-    // 해당 클래스에 속한 모든 학생 가져오기
-    final classStudents = _students.where((s) => s.classInfo?.id == schedule.classId).toList();
+  Future<void> applyGroupScheduleToStudents(GroupSchedule schedule) async {
+    // 해당 그룹에 속한 모든 학생 가져오기
+    final groupStudents = _students.where((s) => s.groupInfo?.id == schedule.groupId).toList();
     
     // 각 학생에 대한 시간 블록 생성
-    for (final student in classStudents) {
+    for (final student in groupStudents) {
       final block = StudentTimeBlock(
         id: '${DateTime.now().millisecondsSinceEpoch}_${student.id}',
         studentId: student.id,
-        classId: schedule.classId,
+        groupId: schedule.groupId,
         dayIndex: schedule.dayIndex,
         startTime: schedule.startTime,
         duration: schedule.duration,

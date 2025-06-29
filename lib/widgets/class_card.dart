@@ -1,24 +1,24 @@
 import 'package:flutter/material.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 import '../models/student.dart';
 import 'class_registration_dialog.dart';
 import 'student_card.dart';
 
-class ClassCard extends StatelessWidget {
-  final ClassInfo classInfo;
+class GroupCard extends StatelessWidget {
+  final GroupInfo groupInfo;
   final List<Student> students;
-  final List<ClassInfo> classes;
-  final Function(ClassInfo, int) onEdit;
+  final List<GroupInfo> groups;
+  final Function(GroupInfo, int) onEdit;
   final Function(String) onDelete;
-  final Function(Student, ClassInfo?) onStudentMove;
+  final Function(Student, GroupInfo?) onStudentMove;
   final Function(Student) onStudentEdit;
   final Function(Student) onStudentDelete;
 
-  const ClassCard({
+  const GroupCard({
     super.key,
-    required this.classInfo,
+    required this.groupInfo,
     required this.students,
-    required this.classes,
+    required this.groups,
     required this.onEdit,
     required this.onDelete,
     required this.onStudentMove,
@@ -28,24 +28,24 @@ class ClassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final classStudents = students.where((s) => s.classInfo?.id == classInfo.id).toList();
+    final groupStudents = students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
     return DragTarget<Student>(
-      onWillAccept: (student) => student != null && student.classInfo?.id != classInfo.id,
+      onWillAccept: (student) => student != null && student.groupInfo?.id != groupInfo.id,
       onAccept: (student) {
-        final oldClassInfo = student.classInfo;
-        onStudentMove(student, classInfo);
+        final oldGroupInfo = student.groupInfo;
+        onStudentMove(student, groupInfo);
         // 변경 알림 표시
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${student.name}님이 ${oldClassInfo?.name ?? '미배정'} → ${classInfo.name}으로 이동되었습니다.',
+              '${student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
             ),
             backgroundColor: const Color(0xFF2A2A2A),
             behavior: SnackBarBehavior.floating,
             action: SnackBarAction(
               label: '실행 취소',
               onPressed: () {
-                onStudentMove(student, oldClassInfo);
+                onStudentMove(student, oldGroupInfo);
               },
             ),
           ),
@@ -69,13 +69,13 @@ class ClassCard extends StatelessWidget {
                     width: 12,
                     height: 12,
                     decoration: BoxDecoration(
-                      color: classInfo.color,
+                      color: groupInfo.color,
                       shape: BoxShape.circle,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    classInfo.name,
+                    groupInfo.name,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -84,7 +84,7 @@ class ClassCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '${classStudents.length}/${classInfo.capacity}명',
+                    '${groupStudents.length}/${groupInfo.capacity}명',
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
@@ -102,15 +102,15 @@ class ClassCard extends StatelessWidget {
                       size: 20,
                     ),
                     onPressed: () async {
-                      final result = await showDialog<ClassInfo>(
+                      final result = await showDialog<GroupInfo>(
                         context: context,
-                        builder: (context) => ClassRegistrationDialog(
+                        builder: (context) => GroupRegistrationDialog(
                           editMode: true,
-                          classInfo: classInfo,
+                          groupInfo: groupInfo,
                         ),
                       );
                       if (result != null) {
-                        onEdit(result, classes.indexWhere((c) => c.id == classInfo.id));
+                        onEdit(result, groups.indexWhere((g) => g.id == groupInfo.id));
                       }
                     },
                   ),
@@ -126,11 +126,11 @@ class ClassCard extends StatelessWidget {
                         builder: (context) => AlertDialog(
                           backgroundColor: const Color(0xFF1F1F1F),
                           title: const Text(
-                            '클래스 삭제',
+                            '그룹 삭제',
                             style: TextStyle(color: Colors.white),
                           ),
                           content: Text(
-                            '${classInfo.name} 클래스를 삭제하시겠습니까?\n소속된 학생들의 클래스 정보도 삭제됩니다.',
+                            '${groupInfo.name} 그룹을 삭제하시겠습니까?\n소속된 학생들의 그룹 정보도 삭제됩니다.',
                             style: const TextStyle(color: Colors.white),
                           ),
                           actions: [
@@ -153,7 +153,7 @@ class ClassCard extends StatelessWidget {
                       );
 
                       if (confirmed == true) {
-                        onDelete(classInfo.id);
+                        onDelete(groupInfo.id);
                       }
                     },
                   ),
@@ -168,10 +168,10 @@ class ClassCard extends StatelessWidget {
                     spacing: 16,
                     runSpacing: 16,
                     alignment: WrapAlignment.start,
-                    children: classStudents
+                    children: groupStudents
                         .map((student) => StudentCard(
                               student: student,
-                              classes: classes,
+                              groups: groups,
                               onEdit: onStudentEdit,
                               onDelete: onStudentDelete,
                             ))

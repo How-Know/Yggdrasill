@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mneme_flutter/models/student.dart';
-import 'package:mneme_flutter/models/class_info.dart';
+import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:intl/intl.dart';
@@ -9,13 +9,13 @@ import 'package:uuid/uuid.dart';
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
   final Function(Student) onSave;
-  final List<ClassInfo> classes;
+  final List<GroupInfo> groups;
 
   const StudentRegistrationDialog({
     Key? key,
     this.student,
     required this.onSave,
-    required this.classes,
+    required this.groups,
   }) : super(key: key);
 
   @override
@@ -30,7 +30,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
   late Grade? _grade;
-  ClassInfo? _selectedClass;
+  GroupInfo? _selectedGroup;
 
   @override
   void initState() {
@@ -53,7 +53,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       _grade = grades.isNotEmpty ? grades.first : null;
     }
     
-    _selectedClass = widget.student?.classInfo;
+    _selectedGroup = widget.student?.groupInfo;
   }
 
   @override
@@ -128,11 +128,11 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
       registrationDate: _registrationDate,
-      classInfo: _selectedClass,
+      groupInfo: _selectedGroup,
     );
 
     widget.onSave(student);
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(student);
   }
 
   @override
@@ -184,12 +184,12 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                  child: DropdownButtonFormField<ClassInfo?>(
-                    value: _selectedClass,
+                  child: DropdownButtonFormField<GroupInfo?>(
+                    value: _selectedGroup,
                     style: const TextStyle(color: Colors.white),
                     dropdownColor: const Color(0xFF2A2A2A),
                     decoration: InputDecoration(
-                      labelText: '클래스',
+                      labelText: '그룹',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
@@ -203,16 +203,16 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                         value: null,
                         child: Text('없음', style: TextStyle(color: Colors.white)),
                       ),
-                      ...widget.classes.map((classInfo) {
+                      ...widget.groups.map((groupInfo) {
                         return DropdownMenuItem(
-                          value: classInfo,
-                          child: Text(classInfo.name, style: const TextStyle(color: Colors.white)),
+                          value: groupInfo,
+                          child: Text(groupInfo.name, style: const TextStyle(color: Colors.white)),
                         );
                       }),
                     ],
                     onChanged: (value) {
                       setState(() {
-                        _selectedClass = value;
+                        _selectedGroup = value;
                       });
                     },
                   ),

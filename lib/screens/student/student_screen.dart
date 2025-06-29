@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import '../../models/student.dart';
-import '../../models/class_info.dart';
+import '../../models/group_info.dart';
 import '../../models/student_view_type.dart';
 import '../../models/education_level.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/student_registration_dialog.dart';
 import '../../widgets/class_registration_dialog.dart';
 import 'components/all_students_view.dart';
-import 'components/class_view.dart';
+import 'components/group_view.dart';
 import 'components/school_view.dart';
 import 'components/date_view.dart';
 import '../../widgets/app_bar_title.dart';
@@ -24,11 +24,11 @@ class StudentScreen extends StatefulWidget {
 class StudentScreenState extends State<StudentScreen> {
   StudentViewType get viewType => _viewType;
   StudentViewType _viewType = StudentViewType.all;
-  final List<ClassInfo> _classes = [];
+  final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  final Set<ClassInfo> _expandedClasses = {};
+  final Set<GroupInfo> _expandedGroups = {};
   int _customTabIndex = 0;
   int _prevTabIndex = 0;
 
@@ -41,8 +41,8 @@ class StudentScreenState extends State<StudentScreen> {
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
     setState(() {
-      _classes.clear();
-      _classes.addAll(DataManager.instance.classes);
+      _groups.clear();
+      _groups.addAll(DataManager.instance.groups);
       _students.clear();
       _students.addAll(DataManager.instance.students);
     });
@@ -63,36 +63,36 @@ class StudentScreenState extends State<StudentScreen> {
 
   Widget _buildContent() {
     if (_viewType == StudentViewType.byClass) {
-      return ClassView(
-        classes: _classes,
+      return GroupView(
+        groups: _groups,
         students: _students,
-        expandedClasses: _expandedClasses,
-        onClassExpanded: (classInfo) {
+        expandedGroups: _expandedGroups,
+        onGroupExpanded: (groupInfo) {
           setState(() {
-            if (_expandedClasses.contains(classInfo)) {
-              _expandedClasses.remove(classInfo);
+            if (_expandedGroups.contains(groupInfo)) {
+              _expandedGroups.remove(groupInfo);
             } else {
-              _expandedClasses.add(classInfo);
+              _expandedGroups.add(groupInfo);
             }
           });
         },
-        onClassUpdated: (classInfo, index) {
+        onGroupUpdated: (groupInfo, index) {
           setState(() {
-            _classes[index] = classInfo;
-            DataManager.instance.updateClass(classInfo);
+            _groups[index] = groupInfo;
+            DataManager.instance.updateGroup(groupInfo);
           });
         },
-        onClassDeleted: (classInfo) {
+        onGroupDeleted: (groupInfo) {
           setState(() {
-            _classes.remove(classInfo);
-            DataManager.instance.deleteClass(classInfo);
+            _groups.remove(groupInfo);
+            DataManager.instance.deleteGroup(groupInfo);
           });
         },
-        onStudentMoved: (student, newClass) {
+        onStudentMoved: (student, newGroup) {
           setState(() {
             final index = _students.indexOf(student);
             if (index != -1) {
-              _students[index] = student.copyWith(classInfo: newClass);
+              _students[index] = student.copyWith(groupInfo: newGroup);
             }
           });
         },
@@ -108,49 +108,49 @@ class StudentScreenState extends State<StudentScreen> {
       return AllStudentsView(
         students: filteredStudents,
         onShowDetails: _showStudentDetails,
-        classes: _classes,
-        expandedClasses: _expandedClasses,
-        onClassAdded: (classInfo) {
+        groups: _groups,
+        expandedGroups: _expandedGroups,
+        onGroupAdded: (groupInfo) {
           setState(() {
-            _classes.add(classInfo);
-            DataManager.instance.addClass(classInfo);
+            _groups.add(groupInfo);
+            DataManager.instance.addGroup(groupInfo);
           });
         },
-        onClassUpdated: (classInfo, index) {
+        onGroupUpdated: (groupInfo, index) {
           setState(() {
-            _classes[index] = classInfo;
-            DataManager.instance.updateClass(classInfo);
+            _groups[index] = groupInfo;
+            DataManager.instance.updateGroup(groupInfo);
           });
         },
-        onClassDeleted: (classInfo) {
+        onGroupDeleted: (groupInfo) {
           setState(() {
-            _classes.remove(classInfo);
-            DataManager.instance.deleteClass(classInfo);
+            _groups.remove(groupInfo);
+            DataManager.instance.deleteGroup(groupInfo);
           });
         },
-        onStudentMoved: (student, newClass) {
+        onStudentMoved: (student, newGroup) {
           setState(() {
             final index = _students.indexOf(student);
             if (index != -1) {
-              _students[index] = student.copyWith(classInfo: newClass);
+              _students[index] = student.copyWith(groupInfo: newGroup);
             }
           });
         },
-        onClassExpanded: (classInfo) {
+        onGroupExpanded: (groupInfo) {
           setState(() {
-            if (_expandedClasses.contains(classInfo)) {
-              _expandedClasses.remove(classInfo);
+            if (_expandedGroups.contains(groupInfo)) {
+              _expandedGroups.remove(groupInfo);
             } else {
-              _expandedClasses.add(classInfo);
+              _expandedGroups.add(groupInfo);
             }
           });
         },
-        onClassReorder: (oldIndex, newIndex) {
+        onGroupReorder: (oldIndex, newIndex) {
           setState(() {
             if (newIndex > oldIndex) newIndex--;
-            final item = _classes.removeAt(oldIndex);
-            _classes.insert(newIndex, item);
-            DataManager.instance.saveClasses();
+            final item = _groups.removeAt(oldIndex);
+            _groups.insert(newIndex, item);
+            DataManager.instance.saveGroups();
           });
         },
       );
@@ -184,11 +184,11 @@ class StudentScreenState extends State<StudentScreen> {
               '학년: ${student.grade}학년',
               style: const TextStyle(color: Colors.white70),
             ),
-            if (student.classInfo != null) ...[
+            if (student.groupInfo != null) ...[
               const SizedBox(height: 8),
               Text(
-                '클래스: ${student.classInfo!.name}',
-                style: TextStyle(color: student.classInfo!.color),
+                '그룹: ${student.groupInfo!.name}',
+                style: TextStyle(color: student.groupInfo!.color),
               ),
             ],
           ],
@@ -206,12 +206,12 @@ class StudentScreenState extends State<StudentScreen> {
   void showClassRegistrationDialog() {
     showDialog(
       context: context,
-      builder: (context) => ClassRegistrationDialog(
+      builder: (context) => GroupRegistrationDialog(
         editMode: false,
-        onSave: (classInfo) {
+        onSave: (groupInfo) {
           setState(() {
-            _classes.add(classInfo);
-            DataManager.instance.addClass(classInfo);
+            _groups.add(groupInfo);
+            DataManager.instance.addGroup(groupInfo);
           });
         },
       ),
@@ -228,7 +228,7 @@ class StudentScreenState extends State<StudentScreen> {
             _initializeData();
           });
         },
-        classes: DataManager.instance.classes,
+        groups: DataManager.instance.groups,
       ),
     );
   }

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'class_info.dart';
+import 'group_info.dart';
 import 'education_level.dart';
 
 class Student {
@@ -11,7 +11,7 @@ class Student {
   final String? phoneNumber;
   final String? parentPhoneNumber;
   final DateTime registrationDate;
-  final ClassInfo? classInfo;
+  final GroupInfo? groupInfo;
 
   Student({
     required this.id,
@@ -22,15 +22,15 @@ class Student {
     this.phoneNumber,
     this.parentPhoneNumber,
     required this.registrationDate,
-    this.classInfo,
+    this.groupInfo,
   });
 
-  factory Student.fromJson(Map<String, dynamic> json, [Map<String, ClassInfo>? classesById]) {
-    final classInfoJson = json['classInfo'] as Map<String, dynamic>?;
-    final classInfo = classInfoJson != null
-        ? (classesById != null && classesById.containsKey(classInfoJson['id'])
-            ? classesById[classInfoJson['id']]
-            : ClassInfo.fromJson(classInfoJson))
+  factory Student.fromJson(Map<String, dynamic> json, [Map<String, GroupInfo>? groupsById]) {
+    final groupInfoJson = json['groupInfo'] as Map<String, dynamic>?;
+    final groupInfo = groupInfoJson != null
+        ? (groupsById != null && groupsById.containsKey(groupInfoJson['id'])
+            ? groupsById[groupInfoJson['id']]
+            : GroupInfo.fromJson(groupInfoJson))
         : null;
 
     return Student(
@@ -42,7 +42,7 @@ class Student {
       phoneNumber: json['phoneNumber'] as String?,
       parentPhoneNumber: json['parentPhoneNumber'] as String?,
       registrationDate: DateTime.parse(json['registrationDate'] as String),
-      classInfo: classInfo,
+      groupInfo: groupInfo,
     );
   }
 
@@ -56,7 +56,7 @@ class Student {
       'phoneNumber': phoneNumber,
       'parentPhoneNumber': parentPhoneNumber,
       'registrationDate': registrationDate.toIso8601String(),
-      'classInfo': classInfo?.toJson(),
+      'groupInfo': groupInfo?.toJson(),
     };
   }
 
@@ -69,7 +69,7 @@ class Student {
     String? phoneNumber,
     String? parentPhoneNumber,
     DateTime? registrationDate,
-    ClassInfo? classInfo,
+    GroupInfo? groupInfo,
   }) {
     return Student(
       id: id ?? this.id,
@@ -80,7 +80,7 @@ class Student {
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       registrationDate: registrationDate ?? this.registrationDate,
-      classInfo: classInfo ?? this.classInfo,
+      groupInfo: groupInfo ?? this.groupInfo,
     );
   }
 }

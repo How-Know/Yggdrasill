@@ -1,12 +1,13 @@
+// TODO: 이 파일은 group_view.dart로 파일명을 변경해야 합니다.
 import 'package:flutter/material.dart';
 import 'package:mneme_flutter/models/student.dart';
 import 'package:mneme_flutter/widgets/student_card.dart';
 
-class ClassView extends StatelessWidget {
+class GroupView extends StatelessWidget {
   final List<Student> students;
   final Function(Student) onShowDetails;
 
-  const ClassView({
+  const GroupView({
     Key? key,
     required this.students,
     required this.onShowDetails,
@@ -14,24 +15,24 @@ class ClassView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final classGroups = <String, List<Student>>{};
+    final groupGroups = <String, List<Student>>{};
     
     for (final student in students) {
-      if (student.classInfo != null) {
-        final className = student.classInfo!.name;
-        classGroups[className] ??= [];
-        classGroups[className]!.add(student);
+      if (student.groupInfo != null) {
+        final groupName = student.groupInfo!.name;
+        groupGroups[groupName] ??= [];
+        groupGroups[groupName]!.add(student);
       }
     }
 
-    final sortedClasses = classGroups.keys.toList()..sort();
+    final sortedGroups = groupGroups.keys.toList()..sort();
 
     return ListView.builder(
       padding: const EdgeInsets.all(16.0),
-      itemCount: sortedClasses.length,
+      itemCount: sortedGroups.length,
       itemBuilder: (context, index) {
-        final className = sortedClasses[index];
-        final classStudents = classGroups[className]!;
+        final groupName = sortedGroups[index];
+        final groupStudents = groupGroups[groupName]!;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -39,16 +40,16 @@ class ClassView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Text(
-                className,
+                groupName,
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: classStudents.length,
+              itemCount: groupStudents.length,
               itemBuilder: (context, index) {
-                final student = classStudents[index];
+                final student = groupStudents[index];
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: StudentCard(

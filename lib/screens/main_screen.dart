@@ -7,7 +7,7 @@ import 'student/student_screen.dart';
 import 'timetable/timetable_screen.dart';
 import 'settings/settings_screen.dart';
 import '../models/student.dart';
-import '../models/class_info.dart';
+import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 
 class MainScreen extends StatefulWidget {
@@ -30,11 +30,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // StudentScreen 관련 상태
   final GlobalKey<StudentScreenState> _studentScreenKey = GlobalKey<StudentScreenState>();
   StudentViewType _viewType = StudentViewType.all;
-  final List<ClassInfo> _classes = [];
+  final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  final Set<ClassInfo> _expandedClasses = {};
+  final Set<GroupInfo> _expandedGroups = {};
 
   @override
   void initState() {
@@ -71,8 +71,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
     setState(() {
-      _classes.clear();
-      _classes.addAll(DataManager.instance.classes);
+      _groups.clear();
+      _groups.addAll(DataManager.instance.groups);
       _students.clear();
       _students.addAll(DataManager.instance.students);
     });
