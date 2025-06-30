@@ -338,8 +338,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               runSpacing: 10,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
-                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
-                  id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
                 final groupInfo = block.groupId != null ?
                   groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 return GestureDetector(
@@ -508,8 +507,7 @@ class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTick
               runSpacing: 10,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
-                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(
-                  id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
                 final groupInfo = block.groupId != null ?
                   groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 return GestureDetector(

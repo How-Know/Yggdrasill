@@ -6,6 +6,7 @@ import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
 import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
+import '../../../services/data_manager.dart';
 
 class AllStudentsView extends StatefulWidget {
   final List<Student> students;
@@ -18,6 +19,8 @@ class AllStudentsView extends StatefulWidget {
   final Function(Student, GroupInfo?) onStudentMoved;
   final Function(GroupInfo) onGroupExpanded;
   final void Function(int oldIndex, int newIndex) onReorder;
+  final Function(Student) onDeleteStudent;
+  final Function(Student) onStudentUpdated;
 
   const AllStudentsView({
     Key? key,
@@ -31,6 +34,8 @@ class AllStudentsView extends StatefulWidget {
     required this.onStudentMoved,
     required this.onGroupExpanded,
     required this.onReorder,
+    required this.onDeleteStudent,
+    required this.onStudentUpdated,
   }) : super(key: key);
 
   @override
@@ -39,6 +44,7 @@ class AllStudentsView extends StatefulWidget {
 
 class _AllStudentsViewState extends State<AllStudentsView> {
   int _selectedSegment = 0; // 0: 학년, 1: 학교
+  bool _showDeleteZone = false;
 
   @override
   Widget build(BuildContext context) {
@@ -180,8 +186,19 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text('그룹 목록', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                      const Padding(
+                        padding: EdgeInsets.only(left: 4.0),
+                        child: Text(
+                          '그룹 목록',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                       SizedBox(
                         width: 130,
                         child: FilledButton.icon(
@@ -218,6 +235,39 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ),
                     ],
                   ),
+                  if (_showDeleteZone)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16.0, top: 12.0),
+                      child: DragTarget<Student>(
+                        onWillAccept: (student) => true,
+                        onAccept: (student) {
+                          _onDeleteZoneAccepted(student);
+                        },
+                        builder: (context, candidateData, rejectedData) {
+                          final isHover = candidateData.isNotEmpty;
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: double.infinity,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[900],
+                              border: Border.all(
+                                color: isHover ? Colors.red : Colors.grey[700]!,
+                                width: isHover ? 3 : 2,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.delete_outline,
+                                color: isHover ? Colors.red : Colors.white70,
+                                size: 36,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   const SizedBox(height: 24),
                   ReorderableListView.builder(
                     shrinkWrap: true,
@@ -239,7 +289,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     itemCount: widget.groups.length,
                     itemBuilder: (context, index) {
                       final groupInfo = widget.groups[index];
-                      final studentsInGroup = students.where((s) => s.groupInfo == groupInfo).toList();
+                      final studentsInGroup = widget.students.where((s) => s.groupInfo == groupInfo).toList();
                       final isExpanded = widget.expandedGroups.contains(groupInfo);
                       return Padding(
                         key: ValueKey(groupInfo.id),
@@ -441,6 +491,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                               children: studentsInGroup.map((student) => GroupStudentCard(
                                                 student: student,
                                                 onShowDetails: widget.onShowDetails,
+                                                onDragStarted: (s) => setState(() => _showDeleteZone = true),
+                                                onDragEnd: () => setState(() => _showDeleteZone = false),
                                               )).toList(),
                                             ),
                                           ),
@@ -500,6 +552,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
                   onShowDetails: widget.onShowDetails,
+                  onUpdate: widget.onStudentUpdated,
                 )).toList(),
               ),
             ],
@@ -582,12 +635,44 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 children: students.map((student) => StudentCard(
                   student: student,
                   onShowDetails: widget.onShowDetails,
+                  onUpdate: widget.onStudentUpdated,
                 )).toList(),
               ),
             ],
           );
         }),
       ],
+    );
+  }
+
+  void _onDeleteZoneAccepted(Student student) async {
+    widget.onStudentMoved(student, null);
+    await DataManager.instance.updateStudent(student.copyWith(groupInfo: null));
+    setState(() {
+      // _students 리스트 동기화 (혹시 모를 UI 반영 누락 방지)
+      // widget.students는 부모에서 관리하므로, 필요시 콜백에서 동기화
+    });
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF232326),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
+        content: Text('${student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
     );
   }
 } 

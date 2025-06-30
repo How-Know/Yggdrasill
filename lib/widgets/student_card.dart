@@ -9,12 +9,16 @@ class StudentCard extends StatelessWidget {
   final Student student;
   final VoidCallback? onTap;
   final Function(Student) onShowDetails;
+  final Function(Student)? onDelete;
+  final Function(Student)? onUpdate;
 
   const StudentCard({
     Key? key,
     required this.student,
     this.onTap,
     required this.onShowDetails,
+    this.onDelete,
+    this.onUpdate,
   }) : super(key: key);
 
   Future<void> _handleEdit(BuildContext context) async {
@@ -30,6 +34,9 @@ class StudentCard extends StatelessWidget {
     );
     if (result != null) {
       await DataManager.instance.updateStudent(result);
+      if (onUpdate != null) {
+        onUpdate!(result);
+      }
     }
   }
 
@@ -63,8 +70,9 @@ class StudentCard extends StatelessWidget {
     );
 
     if (confirmed == true) {
-      await DataManager.instance.deleteStudent(student.id);
-      Navigator.of(context).pop();
+      if (onDelete != null) {
+        onDelete!(student);
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'storage_service.dart';
 import 'academy_db.dart';
+import 'academy_hive.dart';
 
 // Platform-specific imports
 import 'storage_service.dart'
@@ -98,10 +99,10 @@ class DataManager {
 
   Future<void> loadStudents() async {
     try {
-      final jsonData = await _storage.load('students');
-      if (jsonData != null) {
-        final List<dynamic> studentsList = jsonDecode(jsonData);
-        _students = studentsList.map((json) => Student.fromJson(json as Map<String, dynamic>, _groupsById)).toList();
+      if (kIsWeb) {
+        _students = await AcademyHiveService.getStudents();
+      } else {
+        _students = await AcademyDbService.instance.getStudents();
       }
     } catch (e) {
       print('Error loading students: $e');
@@ -111,13 +112,8 @@ class DataManager {
   }
 
   Future<void> saveStudents() async {
-    try {
-      final jsonString = jsonEncode(_students.map((s) => s.toJson()).toList());
-      await _storage.save('students', jsonString);
-    } catch (e) {
-      print('Error saving students: $e');
-      throw Exception('Failed to save students data');
-    }
+    // 더 이상 사용하지 않음 (sqlite 직접 사용)
+    return;
   }
 
   Future<void> saveGroups() async {
@@ -225,24 +221,39 @@ class DataManager {
   }
 
   Future<void> addStudent(Student student) async {
-    _students.add(student);
-    _notifyListeners();
-    await saveStudents();
+    if (kIsWeb) {
+      _students.add(student);
+      await AcademyHiveService.saveStudents(_students);
+      await loadStudents();
+    } else {
+      await AcademyDbService.instance.addStudent(student);
+      await loadStudents();
+    }
   }
 
   Future<void> updateStudent(Student student) async {
-    final index = _students.indexWhere((s) => s.id == student.id);
-    if (index != -1) {
-      _students[index] = student;
-      _notifyListeners();
-      await saveStudents();
+    if (kIsWeb) {
+      final idx = _students.indexWhere((s) => s.id == student.id);
+      if (idx != -1) {
+        _students[idx] = student;
+        await AcademyHiveService.saveStudents(_students);
+      }
+      await loadStudents();
+    } else {
+      await AcademyDbService.instance.updateStudent(student);
+      await loadStudents();
     }
   }
 
   Future<void> deleteStudent(String id) async {
-    _students.removeWhere((s) => s.id == id);
-    _notifyListeners();
-    await saveStudents();
+    if (kIsWeb) {
+      _students.removeWhere((s) => s.id == id);
+      await AcademyHiveService.saveStudents(_students);
+      await loadStudents();
+    } else {
+      await AcademyDbService.instance.deleteStudent(id);
+      await loadStudents();
+    }
   }
 
   void updateStudentGroup(Student student, GroupInfo? newGroup) {
@@ -257,8 +268,13 @@ class DataManager {
   Future<void> saveOperatingHours(List<OperatingHours> hours) async {
     try {
       _operatingHours = hours;
-      final jsonString = jsonEncode(hours.map((h) => h.toJson()).toList());
-      await _storage.save('operating_hours', jsonString);
+      if (kIsWeb) {
+        // Hive
+        await AcademyHiveService.saveOperatingHours(hours);
+      } else {
+        // sqlite
+        await AcademyDbService.instance.saveOperatingHours(hours);
+      }
     } catch (e) {
       print('Error saving operating hours: $e');
       throw Exception('Failed to save operating hours');
@@ -271,30 +287,12 @@ class DataManager {
     }
 
     try {
-      final jsonData = await _storage.load('operating_hours');
-      if (jsonData != null) {
-        final List<dynamic> hoursList = jsonDecode(jsonData);
-        _operatingHours = hoursList.map((json) => OperatingHours.fromJson(json as Map<String, dynamic>)).toList();
+      if (kIsWeb) {
+        // Hive
+        _operatingHours = AcademyHiveService.getOperatingHours();
       } else {
-        // 기본 운영 시간 설정 (오전 9시 ~ 오후 6시)
-        final now = DateTime.now();
-        final startTime = DateTime(now.year, now.month, now.day, 9, 0);
-        final endTime = DateTime(now.year, now.month, now.day, 18, 0);
-        
-        _operatingHours = [
-          OperatingHours(
-            startTime: startTime,
-            endTime: endTime,
-            breakTimes: [
-              BreakTime(
-                startTime: DateTime(now.year, now.month, now.day, 12, 0),
-                endTime: DateTime(now.year, now.month, now.day, 13, 0),
-              ),
-            ],
-          ),
-        ];
-        
-        await saveOperatingHours(_operatingHours);
+        // sqlite
+        _operatingHours = await AcademyDbService.instance.getOperatingHours();
       }
     } catch (e) {
       print('Error loading operating hours: $e');

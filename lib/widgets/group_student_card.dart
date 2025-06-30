@@ -7,14 +7,18 @@ class GroupStudentCard extends StatelessWidget {
   final Student student;
   final double? width;
   final Function(Student)? onDragStarted;
+  final VoidCallback? onDragEnd;
   final Function(Student) onShowDetails;
+  final Function(Student)? onDelete;
 
   const GroupStudentCard({
     Key? key,
     required this.student,
     this.width,
     this.onDragStarted,
+    this.onDragEnd,
     required this.onShowDetails,
+    this.onDelete,
   }) : super(key: key);
 
   String _getEducationLevelName(EducationLevel level) {
@@ -132,6 +136,11 @@ class GroupStudentCard extends StatelessWidget {
       onDragStarted: () {
         if (onDragStarted != null) {
           onDragStarted!(student);
+        }
+      },
+      onDragEnd: (_) {
+        if (onDragEnd != null) {
+          onDragEnd!();
         }
       },
       child: Material(

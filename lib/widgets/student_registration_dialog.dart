@@ -27,6 +27,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _schoolController;
   late final TextEditingController _phoneController;
   late final TextEditingController _parentPhoneController;
+  late final TextEditingController _weeklyClassCountController;
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
   late Grade? _grade;
@@ -41,6 +42,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _parentPhoneController = TextEditingController(text: widget.student?.parentPhoneNumber);
     _registrationDate = widget.student?.registrationDate ?? DateTime.now();
     _educationLevel = widget.student?.educationLevel ?? EducationLevel.elementary;
+    _weeklyClassCountController = TextEditingController(text: (widget.student?.weeklyClassCount ?? 1).toString());
     
     if (widget.student != null) {
       final grades = gradesByLevel[widget.student!.educationLevel] ?? [];
@@ -62,6 +64,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _schoolController.dispose();
     _phoneController.dispose();
     _parentPhoneController.dispose();
+    _weeklyClassCountController.dispose();
     super.dispose();
   }
 
@@ -118,7 +121,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
       return;
     }
-
+    final weeklyClassCount = int.tryParse(_weeklyClassCountController.text) ?? 1;
     final student = Student(
       id: widget.student?.id ?? const Uuid().v4(),
       name: _nameController.text,
@@ -128,9 +131,9 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
       registrationDate: _registrationDate,
-      groupInfo: _selectedGroup,
+      groupInfo: null,
+      weeklyClassCount: weeklyClassCount,
     );
-
     widget.onSave(student);
     Navigator.of(context).pop(student);
   }
@@ -184,12 +187,12 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                  child: DropdownButtonFormField<GroupInfo?>(
-                    value: _selectedGroup,
+                  child: TextField(
+                    controller: _weeklyClassCountController,
+                    keyboardType: TextInputType.number,
                     style: const TextStyle(color: Colors.white),
-                    dropdownColor: const Color(0xFF2A2A2A),
                     decoration: InputDecoration(
-                      labelText: '그룹',
+                      labelText: '수업 횟수',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
@@ -198,23 +201,6 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                         borderSide: BorderSide(color: Color(0xFF1976D2)),
                       ),
                     ),
-                    items: [
-                      const DropdownMenuItem(
-                        value: null,
-                        child: Text('없음', style: TextStyle(color: Colors.white)),
-                      ),
-                      ...widget.groups.map((groupInfo) {
-                        return DropdownMenuItem(
-                          value: groupInfo,
-                          child: Text(groupInfo.name, style: const TextStyle(color: Colors.white)),
-                        );
-                      }),
-                    ],
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedGroup = value;
-                      });
-                    },
                   ),
                 ),
               ],

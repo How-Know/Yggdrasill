@@ -12,6 +12,7 @@ class Student {
   final String? parentPhoneNumber;
   final DateTime registrationDate;
   final GroupInfo? groupInfo;
+  final int weeklyClassCount;
 
   Student({
     required this.id,
@@ -23,6 +24,7 @@ class Student {
     this.parentPhoneNumber,
     required this.registrationDate,
     this.groupInfo,
+    required this.weeklyClassCount,
   });
 
   factory Student.fromJson(Map<String, dynamic> json, [Map<String, GroupInfo>? groupsById]) {
@@ -43,6 +45,7 @@ class Student {
       parentPhoneNumber: json['parentPhoneNumber'] as String?,
       registrationDate: DateTime.parse(json['registrationDate'] as String),
       groupInfo: groupInfo,
+      weeklyClassCount: json['weeklyClassCount'] as int? ?? 1,
     );
   }
 
@@ -57,6 +60,7 @@ class Student {
       'parentPhoneNumber': parentPhoneNumber,
       'registrationDate': registrationDate.toIso8601String(),
       'groupInfo': groupInfo?.toJson(),
+      'weeklyClassCount': weeklyClassCount,
     };
   }
 
@@ -70,6 +74,7 @@ class Student {
     String? parentPhoneNumber,
     DateTime? registrationDate,
     GroupInfo? groupInfo,
+    int? weeklyClassCount,
   }) {
     return Student(
       id: id ?? this.id,
@@ -81,7 +86,37 @@ class Student {
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       registrationDate: registrationDate ?? this.registrationDate,
       groupInfo: groupInfo ?? this.groupInfo,
+      weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
     );
+  }
+
+  factory Student.fromDb(Map<String, dynamic> row) {
+    return Student(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      school: row['school'] as String,
+      grade: row['grade'] as int,
+      educationLevel: EducationLevel.values[row['education_level'] as int],
+      phoneNumber: row['phone_number'] as String?,
+      parentPhoneNumber: row['parent_phone_number'] as String?,
+      registrationDate: DateTime.parse(row['registration_date'] as String),
+      groupInfo: null,
+      weeklyClassCount: row['weekly_class_count'] as int? ?? 1,
+    );
+  }
+
+  Map<String, dynamic> toDb() {
+    return {
+      'id': id,
+      'name': name,
+      'school': school,
+      'grade': grade,
+      'education_level': educationLevel.index,
+      'phone_number': phoneNumber,
+      'parent_phone_number': parentPhoneNumber,
+      'registration_date': registrationDate.toIso8601String(),
+      'weekly_class_count': weeklyClassCount,
+    };
   }
 }
 

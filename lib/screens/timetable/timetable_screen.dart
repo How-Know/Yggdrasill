@@ -88,7 +88,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       if (!_showOperatingHoursAlert) {
         _showOperatingHoursAlert = true;
         final studentNames = toRemove.map((b) {
-          final s = DataManager.instance.students.firstWhere((s) => s.id == b.studentId, orElse: () => Student(id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now()));
+          final s = DataManager.instance.students.firstWhere((s) => s.id == b.studentId, orElse: () => Student(id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
           return s.name;
         }).toSet().join(', ');
         WidgetsBinding.instance.addPostFrameCallback((_) async {

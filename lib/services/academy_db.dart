@@ -3,8 +3,11 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/academy_settings.dart';
 import '../models/group_info.dart';
+import '../models/operating_hours.dart';
+import '../models/student.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'dart:convert';
 
 class AcademyDbService {
   static final AcademyDbService instance = AcademyDbService._internal();
@@ -44,6 +47,28 @@ class AcademyDbService {
             capacity INTEGER,
             duration INTEGER,
             color INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE students (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            school TEXT,
+            education_level INTEGER,
+            grade INTEGER,
+            phone_number TEXT,
+            parent_phone_number TEXT,
+            registration_date TEXT,
+            weekly_class_count INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE operating_hours (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_of_week INTEGER,
+            start_time TEXT,
+            end_time TEXT,
+            break_times TEXT
           )
         ''');
       },
@@ -163,5 +188,50 @@ class AcademyDbService {
   Future<void> deleteGroup(String groupId) async {
     final dbClient = await db;
     await dbClient.delete('groups', where: 'id = ?', whereArgs: [groupId]);
+  }
+
+  Future<void> saveOperatingHours(List<OperatingHours> hours) async {
+    final dbClient = await db;
+    await dbClient.delete('operating_hours');
+    for (final h in hours) {
+      await dbClient.insert('operating_hours', {
+        'day_of_week': h.startTime.weekday - 1,
+        'start_time': h.startTime.toIso8601String(),
+        'end_time': h.endTime.toIso8601String(),
+        'break_times': h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]',
+      });
+    }
+  }
+
+  Future<List<OperatingHours>> getOperatingHours() async {
+    final dbClient = await db;
+    final result = await dbClient.query('operating_hours');
+    return result.map((row) => OperatingHours(
+      startTime: DateTime.parse(row['start_time'] as String),
+      endTime: DateTime.parse(row['end_time'] as String),
+      breakTimes: (jsonDecode(row['break_times'] as String) as List)
+        .map((b) => BreakTime.fromJson(b)).toList(),
+    )).toList();
+  }
+
+  Future<void> addStudent(Student student) async {
+    final dbClient = await db;
+    await dbClient.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> updateStudent(Student student) async {
+    final dbClient = await db;
+    await dbClient.update('students', student.toDb(), where: 'id = ?', whereArgs: [student.id]);
+  }
+
+  Future<void> deleteStudent(String id) async {
+    final dbClient = await db;
+    await dbClient.delete('students', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<Student>> getStudents() async {
+    final dbClient = await db;
+    final result = await dbClient.query('students');
+    return result.map((row) => Student.fromDb(row)).toList();
   }
 } 

@@ -95,6 +95,12 @@ class StudentScreenState extends State<StudentScreen> {
               _students[index] = student.copyWith(groupInfo: newGroup);
             }
           });
+          DataManager.instance.updateStudent(student.copyWith(groupInfo: newGroup)).then((_) {
+            setState(() {
+              _students.clear();
+              _students.addAll(DataManager.instance.students);
+            });
+          });
         },
       );
     } else if (_viewType == StudentViewType.bySchool) {
@@ -135,6 +141,12 @@ class StudentScreenState extends State<StudentScreen> {
               _students[index] = student.copyWith(groupInfo: newGroup);
             }
           });
+          DataManager.instance.updateStudent(student.copyWith(groupInfo: newGroup)).then((_) {
+            setState(() {
+              _students.clear();
+              _students.addAll(DataManager.instance.students);
+            });
+          });
         },
         onGroupExpanded: (groupInfo) {
           setState(() {
@@ -151,6 +163,24 @@ class StudentScreenState extends State<StudentScreen> {
             final item = _groups.removeAt(oldIndex);
             _groups.insert(newIndex, item);
             DataManager.instance.saveGroups();
+          });
+        },
+        onDeleteStudent: (student) async {
+          setState(() {
+            _students.removeWhere((s) => s.id == student.id);
+          });
+          await DataManager.instance.deleteStudent(student.id);
+          setState(() {
+            _students.clear();
+            _students.addAll(DataManager.instance.students);
+          });
+        },
+        onStudentUpdated: (updatedStudent) {
+          setState(() {
+            final idx = _students.indexWhere((s) => s.id == updatedStudent.id);
+            if (idx != -1) {
+              _students[idx] = updatedStudent;
+            }
           });
         },
       );
@@ -224,9 +254,7 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => StudentRegistrationDialog(
         onSave: (student) async {
           await DataManager.instance.addStudent(student);
-          setState(() {
-            _initializeData();
-          });
+          await _initializeData();
         },
         groups: DataManager.instance.groups,
       ),
