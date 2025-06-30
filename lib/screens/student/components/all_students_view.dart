@@ -590,38 +590,24 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   }
 
   Widget _buildEducationLevelSchoolGroup(
-    String levelTitle,
+    String title,
     EducationLevel level,
     Map<EducationLevel, Map<String, List<Student>>> groupedStudents,
   ) {
-    final schoolMap = groupedStudents[level]!;
-    if (schoolMap.isEmpty) return const SizedBox.shrink();
+    final students = groupedStudents[level]!;
+    final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
 
-    final sortedSchools = schoolMap.keys.toList()..sort();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 16, bottom: 8),
-          child: Text(
-            levelTitle,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        ...sortedSchools.map((school) {
-          final students = schoolMap[school]!;
+    final List<Widget> schoolWidgets = students.entries
+        .where((entry) => entry.value.isNotEmpty)
+        .map<Widget>((entry) {
+          final schoolStudents = entry.value;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 16, bottom: 8),
                 child: Text(
-                  school,
+                  entry.key, // 학교명
                   style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 18,
@@ -632,7 +618,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               Wrap(
                 spacing: 4,
                 runSpacing: 8,
-                children: students.map((student) => StudentCard(
+                children: schoolStudents.map((student) => StudentCard(
                   student: student,
                   onShowDetails: widget.onShowDetails,
                   onUpdate: widget.onStudentUpdated,
@@ -640,7 +626,34 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               ),
             ],
           );
-        }),
+        })
+        .toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              '$totalCount명',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 20,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        ...schoolWidgets,
       ],
     );
   }

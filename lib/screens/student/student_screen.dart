@@ -292,15 +292,13 @@ class StudentScreenState extends State<StudentScreen> {
           const SizedBox(height: 0),
           CustomTabBar(
             selectedIndex: _customTabIndex,
-            tabs: const ['모든 학생', '학교별', '수강 일자'],
+            tabs: const ['학생 정보', '수강 일자'],
             onTabSelected: (idx) => setState(() {
               _prevTabIndex = _customTabIndex;
               _customTabIndex = idx;
               if (idx == 0) {
                 _viewType = StudentViewType.all;
               } else if (idx == 1) {
-                _viewType = StudentViewType.bySchool;
-              } else if (idx == 2) {
                 _viewType = StudentViewType.byDate;
               }
             }),
