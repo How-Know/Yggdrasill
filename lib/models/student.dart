@@ -12,6 +12,7 @@ class Student {
   final String? parentPhoneNumber;
   final DateTime registrationDate;
   final GroupInfo? groupInfo;
+  final String? groupId;
   final int weeklyClassCount;
 
   Student({
@@ -24,7 +25,8 @@ class Student {
     this.parentPhoneNumber,
     required this.registrationDate,
     this.groupInfo,
-    required this.weeklyClassCount,
+    this.groupId,
+    this.weeklyClassCount = 1,
   });
 
   factory Student.fromJson(Map<String, dynamic> json, [Map<String, GroupInfo>? groupsById]) {
@@ -45,6 +47,7 @@ class Student {
       parentPhoneNumber: json['parentPhoneNumber'] as String?,
       registrationDate: DateTime.parse(json['registrationDate'] as String),
       groupInfo: groupInfo,
+      groupId: json['groupId'] as String?,
       weeklyClassCount: json['weeklyClassCount'] as int? ?? 1,
     );
   }
@@ -59,7 +62,7 @@ class Student {
       'phoneNumber': phoneNumber,
       'parentPhoneNumber': parentPhoneNumber,
       'registrationDate': registrationDate.toIso8601String(),
-      'groupInfo': groupInfo?.toJson(),
+      'groupId': groupInfo?.id,
       'weeklyClassCount': weeklyClassCount,
     };
   }
@@ -74,6 +77,7 @@ class Student {
     String? parentPhoneNumber,
     DateTime? registrationDate,
     GroupInfo? groupInfo,
+    String? groupId,
     int? weeklyClassCount,
   }) {
     return Student(
@@ -86,6 +90,7 @@ class Student {
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       registrationDate: registrationDate ?? this.registrationDate,
       groupInfo: groupInfo ?? this.groupInfo,
+      groupId: groupId ?? this.groupId,
       weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
     );
   }
@@ -101,6 +106,7 @@ class Student {
       parentPhoneNumber: row['parent_phone_number'] as String?,
       registrationDate: DateTime.parse(row['registration_date'] as String),
       groupInfo: null,
+      groupId: row['group_id'] as String?,
       weeklyClassCount: row['weekly_class_count'] as int? ?? 1,
     );
   }
@@ -115,6 +121,7 @@ class Student {
       'phone_number': phoneNumber,
       'parent_phone_number': parentPhoneNumber,
       'registration_date': registrationDate.toIso8601String(),
+      'group_id': groupInfo?.id,
       'weekly_class_count': weeklyClassCount,
     };
   }

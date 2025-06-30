@@ -110,21 +110,6 @@ class StudentCard extends StatelessWidget {
         ),
         PopupMenuItem(
           child: ListTile(
-            leading: const Icon(Icons.info_outline, color: Colors.white70),
-            title: const Text(
-              '상세정보',
-              style: TextStyle(color: Colors.white),
-            ),
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            onTap: () {
-              Navigator.of(context).pop();
-              onShowDetails(student);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.red),
             title: const Text(
               '삭제',
@@ -144,39 +129,22 @@ class StudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF2A2A2A),
-      margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8.0),
-      ),
-      child: InkWell(
-        onTap: () => onShowDetails(student),
-        child: Container(
-          width: 110,
-          height: 50,
-          padding: EdgeInsets.only(
-            left: student.groupInfo == null ? 15.0 : 4.0,
-            right: 4.0,
-          ),
+    return Draggable<Student>(
+      data: student,
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(
+          opacity: 0.85,
           child: SizedBox(
             width: 120,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                if (student.groupInfo != null) ...[
-                  Container(
-                    width: 5,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: student.groupInfo!.color,
-                      borderRadius: BorderRadius.circular(2.5),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                ],
-                Text(
+            child: Card(
+              color: const Color(0xFF2A2A2A),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8.0),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Text(
                   student.name,
                   style: const TextStyle(
                     color: Colors.white,
@@ -184,20 +152,71 @@ class StudentCard extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(
-                    Icons.more_vert,
-                    color: Colors.white70,
-                    size: 20,
-                  ),
-                  onPressed: () => _showMenu(context),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 20,
-                ),
-              ],
+              ),
             ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: _buildCardContent(context),
+      ),
+      child: _buildCardContent(context),
+    );
+  }
+
+  Widget _buildCardContent(BuildContext context) {
+    return Card(
+      color: const Color(0xFF2A2A2A),
+      margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8.0),
+      ),
+      child: Container(
+        width: 110,
+        height: 50,
+        padding: EdgeInsets.only(
+          left: student.groupInfo == null ? 15.0 : 4.0,
+          right: 4.0,
+        ),
+        child: SizedBox(
+          width: 120,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              if (student.groupInfo != null) ...[
+                Container(
+                  width: 5,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: student.groupInfo!.color,
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Text(
+                student.name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: Colors.white70,
+                  size: 20,
+                ),
+                onPressed: () => _showMenu(context),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                splashRadius: 20,
+              ),
+            ],
           ),
         ),
       ),

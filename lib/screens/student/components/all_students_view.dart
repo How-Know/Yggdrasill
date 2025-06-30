@@ -490,7 +490,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                               runSpacing: 8,
                                               children: studentsInGroup.map((student) => GroupStudentCard(
                                                 student: student,
-                                                onShowDetails: widget.onShowDetails,
+                                                onShowDetails: (_) {},
                                                 onDragStarted: (s) => setState(() => _showDeleteZone = true),
                                                 onDragEnd: () => setState(() => _showDeleteZone = false),
                                               )).toList(),
@@ -551,7 +551,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 runSpacing: 8,
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
-                  onShowDetails: widget.onShowDetails,
+                  onShowDetails: (_) {},
                   onUpdate: widget.onStudentUpdated,
                 )).toList(),
               ),
@@ -620,7 +620,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 runSpacing: 8,
                 children: schoolStudents.map((student) => StudentCard(
                   student: student,
-                  onShowDetails: widget.onShowDetails,
+                  onShowDetails: (_) {},
                   onUpdate: widget.onStudentUpdated,
                 )).toList(),
               ),

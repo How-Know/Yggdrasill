@@ -104,6 +104,14 @@ class DataManager {
       } else {
         _students = await AcademyDbService.instance.getStudents();
       }
+      // groupInfo 복원
+      for (var i = 0; i < _students.length; i++) {
+        final s = _students[i];
+        final groupId = s.groupId;
+        if (groupId != null && _groupsById.containsKey(groupId)) {
+          _students[i] = s.copyWith(groupInfo: _groupsById[groupId]);
+        }
+      }
     } catch (e) {
       print('Error loading students: $e');
       _students = [];

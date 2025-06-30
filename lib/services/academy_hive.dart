@@ -15,6 +15,8 @@ class AcademyHiveService {
   static Future<void> init() async {
     await Hive.initFlutter();
     await Hive.openBox(boxName);
+    await Hive.openBox(studentsBox);
+    await Hive.openBox(operatingHoursBox);
   }
 
   static Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {

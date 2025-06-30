@@ -59,7 +59,8 @@ class AcademyDbService {
             phone_number TEXT,
             parent_phone_number TEXT,
             registration_date TEXT,
-            weekly_class_count INTEGER
+            weekly_class_count INTEGER,
+            group_id TEXT
           )
         ''');
         await db.execute('''
@@ -84,6 +85,11 @@ class AcademyDbService {
               color INTEGER
             )
           ''');
+        }
+        final columns = await db.rawQuery("PRAGMA table_info(students)");
+        final hasGroupId = columns.any((col) => col['name'] == 'group_id');
+        if (!hasGroupId) {
+          await db.execute("ALTER TABLE students ADD COLUMN group_id TEXT");
         }
       },
     );
