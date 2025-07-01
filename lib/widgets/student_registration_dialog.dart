@@ -349,7 +349,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Navigator.of(context).pop(),
           child: const Text('취소', style: TextStyle(color: Colors.white70)),
         ),
         FilledButton(

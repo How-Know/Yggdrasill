@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import '../../../widgets/student_card.dart';
+import 'package:mneme_flutter/services/data_manager.dart';
 
 class SchoolView extends StatelessWidget {
-  final List<Student> students;
-  final Function(Student) onShowDetails;
+  final List<StudentWithInfo> students;
+  final Function(StudentWithInfo) onShowDetails;
 
   const SchoolView({
     super.key,
@@ -16,19 +17,19 @@ class SchoolView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 교육과정별, 학교별로 학생들을 그룹화
-    final Map<EducationLevel, Map<String, List<Student>>> groupedStudents = {
-      EducationLevel.elementary: <String, List<Student>>{},
-      EducationLevel.middle: <String, List<Student>>{},
-      EducationLevel.high: <String, List<Student>>{},
+    final Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedStudents = {
+      EducationLevel.elementary: <String, List<StudentWithInfo>>{},
+      EducationLevel.middle: <String, List<StudentWithInfo>>{},
+      EducationLevel.high: <String, List<StudentWithInfo>>{},
     };
 
-    for (final student in students) {
-      final level = student.educationLevel;
-      final school = student.school;
+    for (final studentWithInfo in students) {
+      final level = studentWithInfo.student.educationLevel;
+      final school = studentWithInfo.student.school;
       if (groupedStudents[level]![school] == null) {
         groupedStudents[level]![school] = [];
       }
-      groupedStudents[level]![school]!.add(student);
+      groupedStudents[level]![school]!.add(studentWithInfo);
     }
 
     // 각 교육과정 내에서 학교를 가나다순으로 정렬하고,
@@ -36,7 +37,7 @@ class SchoolView extends StatelessWidget {
     for (final level in groupedStudents.keys) {
       final schoolMap = groupedStudents[level]!;
       for (final students in schoolMap.values) {
-        students.sort((a, b) => a.name.compareTo(b.name));
+        students.sort((a, b) => a.student.name.compareTo(b.student.name));
       }
     }
 
@@ -70,7 +71,7 @@ class SchoolView extends StatelessWidget {
   Widget _buildEducationLevelSchoolGroup(
     String levelTitle,
     EducationLevel level,
-    Map<EducationLevel, Map<String, List<Student>>> groupedStudents,
+    Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedStudents,
   ) {
     final schoolMap = groupedStudents[level]!;
     if (schoolMap.isEmpty) return const SizedBox.shrink();
@@ -111,9 +112,9 @@ class SchoolView extends StatelessWidget {
               spacing: 16.0,
               runSpacing: 16.0,
               children: [
-                for (final student in schoolMap[school]!)
+                for (final studentWithInfo in schoolMap[school]!)
                   StudentCard(
-                    student: student,
+                    studentWithInfo: studentWithInfo,
                     onShowDetails: onShowDetails,
                   ),
               ],

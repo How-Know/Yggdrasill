@@ -5,6 +5,8 @@ import 'screens/student/student_screen.dart';
 import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 void main() {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
@@ -18,7 +20,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] MyApp build');
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'Yggdrasill',
       theme: ThemeData(
         useMaterial3: true,

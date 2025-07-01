@@ -171,7 +171,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                             showArrow: true,
                                                             isExpanded: false,
                                                             expandedBlocks: cellBlocks,
-                                                            students: students,
+                                                            students: students.map((s) => s.student).toList(),
                                                             groups: groups,
                                                           )
                                                         : CapacityCardWidget(
@@ -180,13 +180,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                             showArrow: true,
                                                             isExpanded: true,
                                                             expandedBlocks: cellBlocks,
-                                                            students: students,
+                                                            students: students.map((s) => s.student).toList(),
                                                             groups: groups,
                                                           ),
                                               ),
                                               // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
                                               if (isExpanded && cellBlocks.isNotEmpty)
-                                                _buildExpandedStudentCards(cellBlocks, students, groups, constraints.maxWidth, isExpanded),
+                                                _buildExpandedStudentCards(cellBlocks, students.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
                                             ],
                                           ),
                                         ),

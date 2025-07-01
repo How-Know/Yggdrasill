@@ -26,7 +26,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -55,12 +55,18 @@ class AcademyDbService {
             name TEXT,
             school TEXT,
             education_level INTEGER,
-            grade INTEGER,
+            grade INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE students_basic_info (
+            student_id TEXT PRIMARY KEY,
             phone_number TEXT,
             parent_phone_number TEXT,
             registration_date TEXT,
             weekly_class_count INTEGER,
-            group_id TEXT
+            group_id TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
         await db.execute('''
@@ -70,6 +76,16 @@ class AcademyDbService {
             start_time TEXT,
             end_time TEXT,
             break_times TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE teachers (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            role INTEGER,
+            contact TEXT,
+            email TEXT,
+            description TEXT
           )
         ''');
       },
@@ -85,6 +101,27 @@ class AcademyDbService {
               color INTEGER
             )
           ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS students_basic_info (
+              student_id TEXT PRIMARY KEY,
+              phone_number TEXT,
+              parent_phone_number TEXT,
+              registration_date TEXT,
+              weekly_class_count INTEGER,
+              group_id TEXT,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+            )
+          ''');
+          final columns = await db.rawQuery("PRAGMA table_info(students)");
+          final hasPhone = columns.any((col) => col['name'] == 'phone_number');
+          if (hasPhone) {
+            await db.execute('''
+              INSERT OR IGNORE INTO students_basic_info (student_id, phone_number, parent_phone_number, registration_date, weekly_class_count, group_id)
+              SELECT id, phone_number, parent_phone_number, registration_date, weekly_class_count, group_id FROM students
+            ''');
+          }
         }
         final columns = await db.rawQuery("PRAGMA table_info(students)");
         final hasGroupId = columns.any((col) => col['name'] == 'group_id');
@@ -256,6 +293,7 @@ class AcademyDbService {
   }
 
   Future<void> updateStudent(Student student) async {
+    print('[DB] updateStudent: [33m${student.name}[0m, id=[36m${student.id}[0m');
     final dbClient = await db;
     await dbClient.update('students', student.toDb(), where: 'id = ?', whereArgs: [student.id]);
   }
@@ -278,5 +316,28 @@ class AcademyDbService {
     for (final s in students) {
       await dbClient.insert('students', s.toDb());
     }
+  }
+
+  Future<void> insertStudentBasicInfo(Map<String, dynamic> info) async {
+    final dbClient = await db;
+    await dbClient.insert('students_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Map<String, dynamic>?> getStudentBasicInfo(String studentId) async {
+    final dbClient = await db;
+    final result = await dbClient.query('students_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+    if (result.isNotEmpty) return result.first;
+    return null;
+  }
+
+  Future<void> updateStudentBasicInfo(String studentId, Map<String, dynamic> info) async {
+    print('[DB] updateStudentBasicInfo: [33mstudentId=$studentId[0m, groupId=[36m${info['group_id']}[0m');
+    final dbClient = await db;
+    await dbClient.update('students_basic_info', info, where: 'student_id = ?', whereArgs: [studentId]);
+  }
+
+  Future<void> deleteStudentBasicInfo(String studentId) async {
+    final dbClient = await db;
+    await dbClient.delete('students_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
   }
 } 

@@ -11,21 +11,33 @@ import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
 
+class StudentWithInfo {
+  final Student student;
+  final StudentBasicInfo basicInfo;
+  StudentWithInfo({required this.student, required this.basicInfo});
+  // UI 호환용 getter (임시)
+  GroupInfo? get groupInfo => student.groupInfo;
+  String? get phoneNumber => student.phoneNumber;
+  String? get parentPhoneNumber => student.parentPhoneNumber;
+  DateTime? get registrationDate => student.registrationDate;
+  int? get weeklyClassCount => student.weeklyClassCount;
+}
+
 class DataManager {
   static final DataManager instance = DataManager._internal();
   DataManager._internal();
 
-  List<Student> _students = [];
+  List<StudentWithInfo> _studentsWithInfo = [];
   List<GroupInfo> _groups = [];
   List<OperatingHours> _operatingHours = [];
   Map<String, GroupInfo> _groupsById = {};
   bool _isInitialized = false;
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
-  final ValueNotifier<List<Student>> studentsNotifier = ValueNotifier<List<Student>>([]);
+  final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
 
   List<GroupInfo> get groups => List.unmodifiable(_groups);
-  List<Student> get students => List.unmodifiable(_students);
+  List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
 
   AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
   PaymentType _paymentType = PaymentType.monthly;
@@ -70,7 +82,7 @@ class DataManager {
   void _initializeDefaults() {
     _groups = [];
     _groupsById = {};
-    _students = [];
+    _studentsWithInfo = [];
     _operatingHours = [];
     _studentTimeBlocks = [];
     _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
@@ -91,21 +103,49 @@ class DataManager {
   }
 
   Future<void> loadStudents() async {
-    _students = await AcademyDbService.instance.getStudents();
-    print('loadStudents 결과: ' + _students.toString());
-    // groupInfo 복원
-    for (var i = 0; i < _students.length; i++) {
-      final s = _students[i];
-      final groupId = s.groupId;
-      if (groupId != null && _groupsById.containsKey(groupId)) {
-        _students[i] = s.copyWith(groupInfo: _groupsById[groupId]);
+    // 1. students 테이블에서 기본 정보 불러오기
+    final studentsRaw = await AcademyDbService.instance.getStudents();
+    // 2. students_basic_info 테이블에서 부가 정보 불러오기
+    List<StudentBasicInfo> basicInfos = [];
+    for (final s in studentsRaw) {
+      final info = await AcademyDbService.instance.getStudentBasicInfo(s.id);
+      if (info != null) {
+        basicInfos.add(StudentBasicInfo.fromDb(info));
+      } else {
+        // 부가 정보가 없으면 기본값으로 생성
+        basicInfos.add(StudentBasicInfo(
+          studentId: s.id,
+          registrationDate: DateTime.now(),
+        ));
       }
     }
-    _notifyListeners();
+    // 3. groupId로 groupInfo를 찾아서 Student에 할당 (students_basic_info 기준)
+    final students = [
+      for (int i = 0; i < studentsRaw.length; i++)
+        Student(
+          id: studentsRaw[i].id,
+          name: studentsRaw[i].name,
+          school: studentsRaw[i].school,
+          grade: studentsRaw[i].grade,
+          educationLevel: studentsRaw[i].educationLevel,
+          phoneNumber: studentsRaw[i].phoneNumber,
+          parentPhoneNumber: studentsRaw[i].parentPhoneNumber,
+          registrationDate: studentsRaw[i].registrationDate,
+          weeklyClassCount: studentsRaw[i].weeklyClassCount,
+          groupId: basicInfos[i].groupId,
+          groupInfo: basicInfos[i].groupId != null ? _groupsById[basicInfos[i].groupId] : null,
+        )
+    ];
+    // 4. 매칭해서 StudentWithInfo 리스트 생성
+    _studentsWithInfo = [
+      for (int i = 0; i < students.length; i++)
+        StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
+    ];
+    studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
   }
 
   Future<void> saveStudents() async {
-    await AcademyDbService.instance.saveStudents(_students);
+    await AcademyDbService.instance.saveStudents(_studentsWithInfo.map((si) => si.student).toList());
   }
 
   Future<void> saveGroups() async {
@@ -155,7 +195,7 @@ class DataManager {
 
   void _notifyListeners() {
     groupsNotifier.value = List.unmodifiable(_groups);
-    studentsNotifier.value = List.unmodifiable(_students);
+    studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     groupSchedulesNotifier.value = List.unmodifiable(_groupSchedules);
     teachersNotifier.value = List.unmodifiable(_teachers);
@@ -181,9 +221,10 @@ class DataManager {
       _groups = _groupsById.values.toList();
       
       // Remove group from students
-      for (var i = 0; i < _students.length; i++) {
-        if (_students[i].groupInfo?.id == groupInfo.id) {
-          _students[i] = _students[i].copyWith(groupInfo: null);
+      for (var i = 0; i < _studentsWithInfo.length; i++) {
+        if (_studentsWithInfo[i].student.groupInfo?.id == groupInfo.id) {
+          _studentsWithInfo.removeAt(i);
+          i--;
         }
       }
       
@@ -195,29 +236,31 @@ class DataManager {
     }
   }
 
-  Future<void> addStudent(Student student) async {
-    print('addStudent 호출: ' + student.toString());
+  Future<void> addStudent(Student student, StudentBasicInfo basicInfo) async {
     await AcademyDbService.instance.addStudent(student);
+    await AcademyDbService.instance.insertStudentBasicInfo(basicInfo.toDb());
     await loadStudents();
   }
 
-  Future<void> updateStudent(Student student) async {
-    await loadStudents();
+  Future<void> updateStudent(Student student, StudentBasicInfo basicInfo) async {
+    print('[DEBUG] updateStudent: \x1B[33m${student.name}\x1B[0m, group=\x1B[36m${student.groupInfo?.name}\x1B[0m, groupId=\x1B[36m${basicInfo.groupId}\x1B[0m');
+    print('[DEBUG] student.toDb(): ' + student.toDb().toString());
+    print('[DEBUG] basicInfo.toDb(): ' + basicInfo.toDb().toString());
     await AcademyDbService.instance.updateStudent(student);
+    await AcademyDbService.instance.updateStudentBasicInfo(student.id, basicInfo.toDb());
     await loadStudents();
   }
 
   Future<void> deleteStudent(String id) async {
-    await loadStudents();
-    _students.removeWhere((s) => s.id == id);
     await AcademyDbService.instance.deleteStudent(id);
+    await AcademyDbService.instance.deleteStudentBasicInfo(id);
     await loadStudents();
   }
 
   void updateStudentGroup(Student student, GroupInfo? newGroup) {
-    final index = _students.indexOf(student);
+    final index = _studentsWithInfo.indexWhere((si) => si.student.id == student.id);
     if (index != -1) {
-      _students[index] = student.copyWith(groupInfo: newGroup);
+      _studentsWithInfo[index] = StudentWithInfo(student: student.copyWith(groupInfo: newGroup), basicInfo: _studentsWithInfo[index].basicInfo);
       _notifyListeners();
       saveStudents();
     }
@@ -316,13 +359,13 @@ class DataManager {
 
   Future<void> applyGroupScheduleToStudents(GroupSchedule schedule) async {
     // 해당 그룹에 속한 모든 학생 가져오기
-    final groupStudents = _students.where((s) => s.groupInfo?.id == schedule.groupId).toList();
+    final groupStudents = _studentsWithInfo.where((si) => si.student.groupInfo?.id == schedule.groupId).toList();
     
     // 각 학생에 대한 시간 블록 생성
-    for (final student in groupStudents) {
+    for (final si in groupStudents) {
       final block = StudentTimeBlock(
-        id: '${DateTime.now().millisecondsSinceEpoch}_${student.id}',
-        studentId: student.id,
+        id: '${DateTime.now().millisecondsSinceEpoch}_${si.student.id}',
+        studentId: si.student.id,
         groupId: schedule.groupId,
         dayIndex: schedule.dayIndex,
         startTime: schedule.startTime,
@@ -363,5 +406,12 @@ class DataManager {
       _teachers.removeAt(idx);
       saveTeachers();
     }
+  }
+
+  void setGroupsOrder(List<GroupInfo> newOrder) {
+    _groups = List<GroupInfo>.from(newOrder);
+    _groupsById = {for (var g in _groups) g.id: g};
+    _notifyListeners();
+    saveGroups();
   }
 } 

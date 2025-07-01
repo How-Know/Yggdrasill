@@ -70,7 +70,7 @@ class _StudentGroupViewState extends State<StudentGroupView> {
                     widget.students[index] = student.copyWith(classInfo: classInfo);
                   }
                 });
-                
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(

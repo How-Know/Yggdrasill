@@ -50,10 +50,10 @@ class StudentScreenState extends State<StudentScreen> {
     super.dispose();
   }
 
-  List<Student> filterStudents(List<Student> students) {
+  List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
     if (_searchQuery.isEmpty) return students;
-    return students.where((student) =>
-      student.name.toLowerCase().contains(_searchQuery.toLowerCase())
+    return students.where((studentWithInfo) =>
+      studentWithInfo.student.name.toLowerCase().contains(_searchQuery.toLowerCase())
     ).toList();
   }
 
@@ -61,7 +61,7 @@ class StudentScreenState extends State<StudentScreen> {
     return ValueListenableBuilder<List<GroupInfo>>(
       valueListenable: DataManager.instance.groupsNotifier,
       builder: (context, groups, _) {
-        return ValueListenableBuilder<List<Student>>(
+        return ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (context, students, __) {
             final filteredStudents = filterStudents(students);
@@ -85,8 +85,14 @@ class StudentScreenState extends State<StudentScreen> {
                 onGroupDeleted: (groupInfo) {
                   DataManager.instance.deleteGroup(groupInfo);
                 },
-                onStudentMoved: (student, newGroup) {
-                  DataManager.instance.updateStudent(student.copyWith(groupInfo: newGroup));
+                onStudentMoved: (studentWithInfo, newGroup) {
+                  print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
+                  if (newGroup != null) {
+                    DataManager.instance.updateStudent(
+                      studentWithInfo.student.copyWith(groupInfo: newGroup),
+                      studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
+                    );
+                  }
                 },
               );
             } else if (_viewType == StudentViewType.bySchool) {
@@ -111,8 +117,14 @@ class StudentScreenState extends State<StudentScreen> {
                 onGroupDeleted: (groupInfo) {
                   DataManager.instance.deleteGroup(groupInfo);
                 },
-                onStudentMoved: (student, newGroup) {
-                  DataManager.instance.updateStudent(student.copyWith(groupInfo: newGroup));
+                onStudentMoved: (studentWithInfo, newGroup) {
+                  print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
+                  if (newGroup != null) {
+                    DataManager.instance.updateStudent(
+                      studentWithInfo.student.copyWith(groupInfo: newGroup),
+                      studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
+                    );
+                  }
                 },
                 onGroupExpanded: (groupInfo) {
                   setState(() {
@@ -128,13 +140,16 @@ class StudentScreenState extends State<StudentScreen> {
                   if (newIndex > oldIndex) newIndex--;
                   final item = newGroups.removeAt(oldIndex);
                   newGroups.insert(newIndex, item);
-                  DataManager.instance.saveGroups();
+                  DataManager.instance.setGroupsOrder(newGroups);
                 },
-                onDeleteStudent: (student) async {
-                  await DataManager.instance.deleteStudent(student.id);
+                onDeleteStudent: (studentWithInfo) async {
+                  await DataManager.instance.deleteStudent(studentWithInfo.student.id);
                 },
-                onStudentUpdated: (updatedStudent) async {
-                  await DataManager.instance.updateStudent(updatedStudent);
+                onStudentUpdated: (updatedStudentWithInfo) async {
+                  await DataManager.instance.updateStudent(
+                    updatedStudentWithInfo.student,
+                    updatedStudentWithInfo.basicInfo
+                  );
                 },
               );
             }
@@ -144,7 +159,8 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
-  void _showStudentDetails(Student student) {
+  void _showStudentDetails(StudentWithInfo studentWithInfo) {
+    final student = studentWithInfo.student;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -158,23 +174,23 @@ class StudentScreenState extends State<StudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '학교: ${student.school}',
+              '학교: [33m${student.school}[0m',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 8),
             Text(
-              '과정: ${getEducationLevelName(student.educationLevel)}',
+              '과정: [33m${getEducationLevelName(student.educationLevel)}[0m',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 8),
             Text(
-              '학년: ${student.grade}학년',
+              '학년: [33m${student.grade}학년[0m',
               style: const TextStyle(color: Colors.white70),
             ),
             if (student.groupInfo != null) ...[
               const SizedBox(height: 8),
               Text(
-                '그룹: ${student.groupInfo!.name}',
+                '그룹: [33m${student.groupInfo!.name}[0m',
                 style: TextStyle(color: student.groupInfo!.color),
               ),
             ],
@@ -207,7 +223,7 @@ class StudentScreenState extends State<StudentScreen> {
       context: context,
       builder: (context) => StudentRegistrationDialog(
         onSave: (student) async {
-          await DataManager.instance.addStudent(student);
+          await DataManager.instance.addStudent(student, StudentBasicInfo(studentId: student.id, registrationDate: DateTime.now()));
         },
         groups: DataManager.instance.groups,
       ),
@@ -216,6 +232,7 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] StudentScreen build');
     return FutureBuilder<void>(
       future: _loadFuture,
       builder: (context, snapshot) {
@@ -241,7 +258,7 @@ class StudentScreenState extends State<StudentScreen> {
               const SizedBox(height: 0),
               CustomTabBar(
                 selectedIndex: _customTabIndex,
-                tabs: const ['학생 정보', '수강 일자'],
+                tabs: const ['학생 목록', '성향 조사'],
                 onTabSelected: (idx) => setState(() {
                   _prevTabIndex = _customTabIndex;
                   _customTabIndex = idx;

@@ -6,15 +6,15 @@ import 'student_registration_dialog.dart';
 import '../services/data_manager.dart';
 
 class StudentCard extends StatelessWidget {
-  final Student student;
+  final StudentWithInfo studentWithInfo;
   final VoidCallback? onTap;
-  final Function(Student) onShowDetails;
-  final Function(Student)? onDelete;
-  final Function(Student)? onUpdate;
+  final Function(StudentWithInfo) onShowDetails;
+  final Function(StudentWithInfo)? onDelete;
+  final Function(StudentWithInfo)? onUpdate;
 
   const StudentCard({
     Key? key,
-    required this.student,
+    required this.studentWithInfo,
     this.onTap,
     required this.onShowDetails,
     this.onDelete,
@@ -25,17 +25,17 @@ class StudentCard extends StatelessWidget {
     final result = await showDialog<Student>(
       context: context,
       builder: (context) => StudentRegistrationDialog(
-        student: student,
+        student: studentWithInfo.student,
         onSave: (updatedStudent) async {
-          await DataManager.instance.updateStudent(updatedStudent);
+          await DataManager.instance.updateStudent(updatedStudent, studentWithInfo.basicInfo);
         },
         groups: DataManager.instance.groups,
       ),
     );
     if (result != null) {
-      await DataManager.instance.updateStudent(result);
+      await DataManager.instance.updateStudent(result, studentWithInfo.basicInfo);
       if (onUpdate != null) {
-        onUpdate!(result);
+        onUpdate!(StudentWithInfo(student: result, basicInfo: studentWithInfo.basicInfo));
       }
     }
   }
@@ -71,7 +71,7 @@ class StudentCard extends StatelessWidget {
 
     if (confirmed == true) {
       if (onDelete != null) {
-        onDelete!(student);
+        onDelete!(studentWithInfo);
       }
     }
   }
@@ -129,8 +129,9 @@ class StudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Draggable<Student>(
-      data: student,
+    final student = studentWithInfo.student;
+    return Draggable<StudentWithInfo>(
+      data: studentWithInfo,
       feedback: Material(
         color: Colors.transparent,
         child: Opacity(
@@ -166,6 +167,7 @@ class StudentCard extends StatelessWidget {
   }
 
   Widget _buildCardContent(BuildContext context) {
+    final student = studentWithInfo.student;
     return Card(
       color: const Color(0xFF2A2A2A),
       margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
@@ -206,15 +208,10 @@ class StudentCard extends StatelessWidget {
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(
-                  Icons.more_vert,
-                  color: Colors.white70,
-                  size: 20,
-                ),
+                icon: const Icon(Icons.more_vert, color: Colors.white54, size: 18),
                 onPressed: () => _showMenu(context),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
-                splashRadius: 20,
               ),
             ],
           ),

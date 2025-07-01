@@ -59,7 +59,7 @@ class _CustomTabBarState extends State<CustomTabBar> {
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         height: 6,
-                        width: 60,
+                        width: (widget.tabs[i].length * 16 * 1.2),
                         decoration: BoxDecoration(
                           color: isSelected ? Color(0xFF1976D2) : Colors.transparent,
                           borderRadius: BorderRadius.circular(3),

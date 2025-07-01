@@ -4,15 +4,16 @@ import '../../../models/group_info.dart';
 import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
+import '../../../main.dart';
 
 class GroupView extends StatefulWidget {
   final List<GroupInfo> groups;
-  final List<Student> students;
+  final List<StudentWithInfo> students;
   final Set<GroupInfo> expandedGroups;
   final Function(GroupInfo) onGroupExpanded;
   final Function(GroupInfo, int) onGroupUpdated;
   final Function(GroupInfo) onGroupDeleted;
-  final Function(Student, GroupInfo?) onStudentMoved;
+  final Function(StudentWithInfo, GroupInfo?) onStudentMoved;
 
   const GroupView({
     super.key,
@@ -31,10 +32,14 @@ class GroupView extends StatefulWidget {
 
 class _GroupViewState extends State<GroupView> {
   bool _showDeleteZone = false;
+  StudentWithInfo? _pendingDeleteStudent;
+  late BuildContext _rootContext;
 
-  void _onDeleteZoneAccepted(Student student) async {
+  void _handleDeleteDialog(StudentWithInfo studentWithInfo) async {
+    print('[DEBUG] _handleDeleteDialog: ${studentWithInfo.student.name}');
+    final student = studentWithInfo.student;
     final result = await showDialog<bool>(
-      context: context,
+      context: rootNavigatorKey.currentContext!,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF232326),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -42,28 +47,119 @@ class _GroupViewState extends State<GroupView> {
         content: Text('${student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () {
+              print('[DEBUG] 다이얼로그 취소 클릭');
+              Navigator.of(context).pop(false);
+            },
             child: const Text('취소', style: TextStyle(color: Colors.white70)),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: Colors.red,
             ),
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () {
+              print('[DEBUG] 다이얼로그 확인 클릭');
+              Navigator.of(context).pop(true);
+            },
             child: const Text('확인'),
           ),
         ],
       ),
     );
+    print('[DEBUG] _handleDeleteDialog: dialog result = $result');
     if (result == true) {
-      widget.onStudentMoved(student, null);
-      await DataManager.instance.updateStudent(student.copyWith(groupInfo: null));
+      print('[DEBUG] _handleDeleteDialog: updateStudent 호출');
+      await DataManager.instance.updateStudent(
+        student.copyWith(groupInfo: null),
+        studentWithInfo.basicInfo.copyWith(groupId: null),
+      );
+      print('[DEBUG] _handleDeleteDialog: setState 호출');
       setState(() {});
     }
+    setState(() {
+      _pendingDeleteStudent = null;
+    });
+  }
+
+  void _onDeleteZoneAccepted(StudentWithInfo studentWithInfo) async {
+    print('[DEBUG] _onDeleteZoneAccepted 진입: ${studentWithInfo.student.name}');
+    final student = studentWithInfo.student;
+    final prevGroupInfo = student.groupInfo;
+    final prevBasicInfo = studentWithInfo.basicInfo;
+    // 1. 바로 삭제
+    await DataManager.instance.updateStudent(
+      student.copyWith(groupInfo: null),
+      studentWithInfo.basicInfo.copyWith(groupId: null),
+    );
+    print('[DEBUG] _onDeleteZoneAccepted: 삭제 후 setState 호출');
+    setState(() {});
+    // 2. 스낵바로 삭제 알림 및 실행 취소 제공
+    ScaffoldMessenger.of(rootNavigatorKey.currentContext!).hideCurrentSnackBar();
+    ScaffoldMessenger.of(rootNavigatorKey.currentContext!).showSnackBar(
+      SnackBar(
+        content: Text('${student.name} 학생이 삭제되었습니다.'),
+        backgroundColor: const Color(0xFF2A2A2A),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: '실행 취소',
+          onPressed: () async {
+            print('[DEBUG] _onDeleteZoneAccepted: 실행 취소');
+            await DataManager.instance.updateStudent(
+              student.copyWith(groupInfo: prevGroupInfo),
+              prevBasicInfo.copyWith(groupId: prevGroupInfo?.id),
+            );
+            setState(() {});
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] GroupView build 호출, _pendingDeleteStudent=${_pendingDeleteStudent?.student.name}');
+    _rootContext = context;
+    if (_pendingDeleteStudent != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          final student = _pendingDeleteStudent!.student;
+          final prevGroupInfo = student.groupInfo;
+          final prevBasicInfo = _pendingDeleteStudent!.basicInfo;
+          // 1. 삭제
+          await DataManager.instance.updateStudent(
+            student.copyWith(groupInfo: null),
+            prevBasicInfo.copyWith(groupId: null),
+          );
+          await DataManager.instance.loadStudents(); // 명시적 갱신
+          setState(() {});
+          // 2. 스낵바
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${student.name} 학생이 삭제되었습니다.'),
+              backgroundColor: const Color(0xFF2A2A2A),
+              behavior: SnackBarBehavior.floating,
+              action: SnackBarAction(
+                label: '실행 취소',
+                onPressed: () async {
+                  await DataManager.instance.updateStudent(
+                    student.copyWith(groupInfo: prevGroupInfo),
+                    prevBasicInfo.copyWith(groupId: prevGroupInfo?.id),
+                  );
+                  await DataManager.instance.loadStudents();
+                  setState(() {});
+                },
+              ),
+            ),
+          );
+          setState(() {
+            _pendingDeleteStudent = null;
+          });
+        } catch (e, st) {
+          print('[ERROR] 삭제/스낵바 처리 중 예외: $e\n$st');
+        }
+      });
+    }
     return Center(
       child: Container(
         width: 1000,
@@ -113,9 +209,12 @@ class _GroupViewState extends State<GroupView> {
             if (_showDeleteZone)
               Padding(
                 padding: const EdgeInsets.only(bottom: 16.0, top: 12.0),
-                child: DragTarget<Student>(
+                child: DragTarget<StudentWithInfo>(
                   onWillAccept: (student) => true,
                   onAccept: (student) {
+                    setState(() {
+                      _showDeleteZone = false;
+                    });
                     _onDeleteZoneAccepted(student);
                   },
                   builder: (context, candidateData, rejectedData) {
@@ -168,26 +267,17 @@ class _GroupViewState extends State<GroupView> {
                 return Padding(
                   key: ValueKey(groupInfo),
                   padding: const EdgeInsets.only(bottom: 16),
-                  child: DragTarget<Student>(
+                  child: DragTarget<StudentWithInfo>(
                     onWillAccept: (student) => student != null,
-                    onAccept: (student) {
-                      final oldGroupInfo = student.groupInfo;
-                      widget.onStudentMoved(student, groupInfo);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            '${student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
-                          ),
-                          backgroundColor: const Color(0xFF2A2A2A),
-                          behavior: SnackBarBehavior.floating,
-                          action: SnackBarAction(
-                            label: '실행 취소',
-                            onPressed: () {
-                              widget.onStudentMoved(student, oldGroupInfo);
-                            },
-                          ),
-                        ),
+                    onAccept: (student) async {
+                      // 이미 해당 그룹에 소속된 학생은 무시
+                      if (student.student.groupInfo?.id == groupInfo.id) return;
+                      // 그룹 소속 변경 및 저장
+                      await DataManager.instance.updateStudent(
+                        student.student.copyWith(groupInfo: groupInfo, groupId: groupInfo.id),
+                        student.basicInfo.copyWith(groupId: groupInfo.id),
                       );
+                      setState(() {});
                     },
                     builder: (context, candidateData, rejectedData) {
                       return Container(
@@ -390,9 +480,9 @@ class _GroupViewState extends State<GroupView> {
                                         child: Wrap(
                                           spacing: 16,
                                           runSpacing: 16,
-                                          children: studentsInGroup.map((student) => GroupStudentCard(
-                                            student: student,
-                                            onShowDetails: (student) {
+                                          children: studentsInGroup.map((studentWithInfo) => GroupStudentCard(
+                                            studentWithInfo: studentWithInfo,
+                                            onShowDetails: (s) {
                                               // TODO: 학생 상세 정보 다이얼로그 표시
                                             },
                                             onDragStarted: (s) => setState(() => _showDeleteZone = true),

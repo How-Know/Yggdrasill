@@ -35,6 +35,7 @@ class GroupCard extends StatelessWidget {
         final oldGroupInfo = student.groupInfo;
         onStudentMove(student, groupInfo);
         // 변경 알림 표시
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(

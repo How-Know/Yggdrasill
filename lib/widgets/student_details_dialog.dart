@@ -5,6 +5,7 @@ import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
+import '../main.dart';
 
 class StudentDetailsDialog extends StatelessWidget {
   final Student student;
@@ -35,19 +36,22 @@ class StudentDetailsDialog extends StatelessWidget {
   }
 
   Future<void> _handleEdit(BuildContext context) async {
-    final result = await showDialog<bool>(
-      context: context,
+    final result = await showDialog(
+      context: rootNavigatorKey.currentContext!,
       builder: (context) => StudentRegistrationDialog(
         student: student,
         onSave: (updatedStudent) async {
-          await DataManager.instance.updateStudent(updatedStudent);
+          await DataManager.instance.updateStudent(
+            updatedStudent,
+            StudentBasicInfo(studentId: updatedStudent.id, registrationDate: DateTime.now())
+          );
         },
         groups: DataManager.instance.groups,
       ),
     );
 
-    if (result == true) {
-      Navigator.of(context).pop(true);
+    if (result is Student) {
+      Future.microtask(() => Navigator.of(context).pop(true));
     }
   }
 
@@ -95,7 +99,8 @@ class StudentDetailsDialog extends StatelessWidget {
             const SizedBox(height: 8),
           ],
           Text(
-            '등록일: ${DateFormat('yyyy년 MM월 dd일').format(student.registrationDate)}',
+            '등록일: '
+            + (student.registrationDate != null ? DateFormat('yyyy년 MM월 dd일').format(student.registrationDate!) : '정보 없음'),
           ),
           const SizedBox(height: 8),
           if (student.groupInfo != null)
@@ -104,7 +109,7 @@ class StudentDetailsDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Future.microtask(() => Navigator.of(context).pop(false)),
           child: const Text('닫기'),
         ),
         TextButton(

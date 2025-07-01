@@ -9,18 +9,18 @@ import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
 
 class AllStudentsView extends StatefulWidget {
-  final List<Student> students;
+  final List<StudentWithInfo> students;
   final List<GroupInfo> groups;
   final Set<GroupInfo> expandedGroups;
-  final Function(Student) onShowDetails;
+  final Function(StudentWithInfo) onShowDetails;
   final Function(GroupInfo) onGroupAdded;
   final Function(GroupInfo, int) onGroupUpdated;
   final Function(GroupInfo) onGroupDeleted;
-  final Function(Student, GroupInfo?) onStudentMoved;
+  final Function(StudentWithInfo, GroupInfo?) onStudentMoved;
   final Function(GroupInfo) onGroupExpanded;
   final void Function(int oldIndex, int newIndex) onReorder;
-  final Function(Student) onDeleteStudent;
-  final Function(Student) onStudentUpdated;
+  final Function(StudentWithInfo) onDeleteStudent;
+  final Function(StudentWithInfo) onStudentUpdated;
 
   const AllStudentsView({
     Key? key,
@@ -50,32 +50,33 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   Widget build(BuildContext context) {
     // 정렬 데이터 준비
     final students = widget.students;
-    final Map<EducationLevel, Map<int, List<Student>>> groupedByGrade = {
+    final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedByGrade = {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
       EducationLevel.high: {},
     };
-    final Map<EducationLevel, Map<String, List<Student>>> groupedBySchool = {
+    final Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedBySchool = {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
       EducationLevel.high: {},
     };
-    for (final student in students) {
+    for (final studentWithInfo in students) {
+      final student = studentWithInfo.student;
       // 학년별
       groupedByGrade[student.educationLevel]![student.grade] ??= [];
-      groupedByGrade[student.educationLevel]![student.grade]!.add(student);
+      groupedByGrade[student.educationLevel]![student.grade]!.add(studentWithInfo);
       // 학교별
       groupedBySchool[student.educationLevel]![student.school] ??= [];
-      groupedBySchool[student.educationLevel]![student.school]!.add(student);
+      groupedBySchool[student.educationLevel]![student.school]!.add(studentWithInfo);
     }
     for (final level in groupedByGrade.keys) {
       for (final gradeStudents in groupedByGrade[level]!.values) {
-        gradeStudents.sort((a, b) => a.name.compareTo(b.name));
+        gradeStudents.sort((a, b) => a.student.name.compareTo(b.student.name));
       }
     }
     for (final level in groupedBySchool.keys) {
       for (final schoolStudents in groupedBySchool[level]!.values) {
-        schoolStudents.sort((a, b) => a.name.compareTo(b.name));
+        schoolStudents.sort((a, b) => a.student.name.compareTo(b.student.name));
       }
     }
 
@@ -141,14 +142,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             });
                           },
                           style: ButtonStyle(
-                            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                              (Set<MaterialState> states) {
-                                if (states.contains(MaterialState.selected)) {
-                                  return const Color(0xFF78909C);
-                                }
-                                return Colors.transparent;
-                              },
-                            ),
+                            backgroundColor: MaterialStateProperty.all(Colors.transparent),
                             foregroundColor: MaterialStateProperty.resolveWith<Color>(
                               (Set<MaterialState> states) {
                                 if (states.contains(MaterialState.selected)) {
@@ -235,63 +229,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ),
                     ],
                   ),
-                  if (_showDeleteZone)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0, top: 12.0),
-                      child: DragTarget<Student>(
-                        onWillAccept: (student) => true,
-                        onAccept: (student) async {
-                          widget.onStudentMoved(student, null);
-                          await DataManager.instance.updateStudent(student.copyWith(groupInfo: null));
-                          setState(() {});
-                          final result = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              backgroundColor: const Color(0xFF232326),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
-                              content: Text('${student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(context).pop(false),
-                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                ),
-                                FilledButton(
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: Colors.red,
-                                  ),
-                                  onPressed: () => Navigator.of(context).pop(true),
-                                  child: const Text('확인'),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                        builder: (context, candidateData, rejectedData) {
-                          final isHover = candidateData.isNotEmpty;
-                          return AnimatedContainer(
-                            duration: const Duration(milliseconds: 150),
-                            width: double.infinity,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: Colors.grey[900],
-                              border: Border.all(
-                                color: isHover ? Colors.red : Colors.grey[700]!,
-                                width: isHover ? 3 : 2,
-                              ),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Icon(
-                                Icons.delete_outline,
-                                color: isHover ? Colors.red : Colors.white70,
-                                size: 36,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
                   const SizedBox(height: 24),
                   ReorderableListView.builder(
                     shrinkWrap: true,
@@ -318,25 +255,35 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       return Padding(
                         key: ValueKey(groupInfo.id),
                         padding: const EdgeInsets.only(bottom: 16),
-                        child: DragTarget<Student>(
+                        child: DragTarget<StudentWithInfo>(
                           onWillAccept: (student) => student != null,
                           onAccept: (student) {
                             final oldGroupInfo = student.groupInfo;
                             widget.onStudentMoved(student, groupInfo);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  '${student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
-                                ),
-                                backgroundColor: const Color(0xFF2A2A2A),
-                                behavior: SnackBarBehavior.floating,
-                                action: SnackBarAction(
-                                  label: '실행 취소',
-                                  onPressed: () {
-                                    widget.onStudentMoved(student, oldGroupInfo);
-                                  },
-                                ),
-                              ),
+                            Builder(
+                              builder: (context) {
+                                print('[DEBUG] hideCurrentSnackBar 호출');
+                                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                Future.delayed(const Duration(milliseconds: 50), () {
+                                  print('[DEBUG] showSnackBar 호출');
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        '${student.student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
+                                      ),
+                                      backgroundColor: const Color(0xFF2A2A2A),
+                                      behavior: SnackBarBehavior.floating,
+                                      action: SnackBarAction(
+                                        label: '실행 취소',
+                                        onPressed: () {
+                                          widget.onStudentMoved(student, oldGroupInfo);
+                                        },
+                                      ),
+                                    ),
+                                  );
+                                });
+                                return const SizedBox.shrink();
+                              },
                             );
                           },
                           builder: (context, candidateData, rejectedData) {
@@ -512,8 +459,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                             child: Wrap(
                                               spacing: 4,
                                               runSpacing: 8,
-                                              children: studentsInGroup.map((student) => GroupStudentCard(
-                                                student: student,
+                                              children: studentsInGroup.map((studentWithInfo) => GroupStudentCard(
+                                                studentWithInfo: studentWithInfo,
                                                 onShowDetails: (_) {},
                                                 onDragStarted: (s) => setState(() => _showDeleteZone = true),
                                                 onDragEnd: () => setState(() => _showDeleteZone = false),
@@ -534,6 +481,78 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     },
                     onReorder: widget.onReorder,
                   ),
+                  if (_showDeleteZone)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 24.0),
+                      child: DragTarget<StudentWithInfo>(
+                        onWillAccept: (student) => true,
+                        onAccept: (student) async {
+                          print('[DEBUG] 삭제 드롭존 onAccept 진입');
+                          print('[DEBUG] 삭제 드롭존 - student.student: ' + student.student.toString());
+                          print('[DEBUG] 삭제 드롭존 - student.basicInfo: ' + student.basicInfo.toString());
+                          final studentCopy = student.student.copyWith(groupInfo: null, groupId: null);
+                          final basicInfoCopy = student.basicInfo.copyWith(groupId: null);
+                          print('[DEBUG] 삭제 드롭존 - studentCopy: ' + studentCopy.toString());
+                          print('[DEBUG] 삭제 드롭존 - basicInfoCopy: ' + basicInfoCopy.toString());
+                          print('[DEBUG] 삭제 드롭존 - studentCopy.toDb(): ' + studentCopy.toDb().toString());
+                          print('[DEBUG] 삭제 드롭존 - basicInfoCopy.toDb(): ' + basicInfoCopy.toDb().toString());
+                          final result = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              backgroundColor: const Color(0xFF232326),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
+                              content: Text('${student.student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                ),
+                                FilledButton(
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                  ),
+                                  onPressed: () => Navigator.of(context).pop(true),
+                                  child: const Text('확인'),
+                                ),
+                              ],
+                            ),
+                          );
+                          print('[DEBUG] 삭제 드롭존 - 다이얼로그 result: ' + result.toString());
+                          if (result == true) {
+                            print('[DEBUG] 삭제 드롭존 - updateStudent 호출 직전');
+                            await DataManager.instance.updateStudent(
+                              studentCopy,
+                              basicInfoCopy,
+                            );
+                            setState(() {});
+                          }
+                        },
+                        builder: (context, candidateData, rejectedData) {
+                          final isHover = candidateData.isNotEmpty;
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: double.infinity,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[900],
+                              border: Border.all(
+                                color: isHover ? Colors.red : Colors.grey[700]!,
+                                width: isHover ? 3 : 2,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.delete_outline,
+                                color: isHover ? Colors.red : Colors.white70,
+                                size: 36,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -547,7 +566,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   Widget _buildEducationLevelGroup(
     String title,
     EducationLevel level,
-    Map<EducationLevel, Map<int, List<Student>>> groupedStudents,
+    Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedStudents,
   ) {
     final students = groupedStudents[level]!;
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
@@ -574,9 +593,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 spacing: 4,
                 runSpacing: 8,
                 children: gradeStudents.map((student) => StudentCard(
-                  student: student,
+                  studentWithInfo: student,
                   onShowDetails: (_) {},
                   onUpdate: widget.onStudentUpdated,
+                  onDelete: widget.onDeleteStudent,
                 )).toList(),
               ),
             ],
@@ -616,7 +636,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   Widget _buildEducationLevelSchoolGroup(
     String title,
     EducationLevel level,
-    Map<EducationLevel, Map<String, List<Student>>> groupedStudents,
+    Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedStudents,
   ) {
     final students = groupedStudents[level]!;
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
@@ -642,10 +662,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               Wrap(
                 spacing: 4,
                 runSpacing: 8,
-                children: schoolStudents.map((student) => StudentCard(
-                  student: student,
+                children: schoolStudents.map((studentWithInfo) => StudentCard(
+                  studentWithInfo: studentWithInfo,
                   onShowDetails: (_) {},
                   onUpdate: widget.onStudentUpdated,
+                  onDelete: widget.onDeleteStudent,
                 )).toList(),
               ),
             ],

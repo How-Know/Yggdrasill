@@ -101,7 +101,7 @@ class _ClassScreenState extends State<ClassScreen> {
                     _students[index] = student.copyWith(classInfo: classInfo);
                   }
                 });
-                
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(

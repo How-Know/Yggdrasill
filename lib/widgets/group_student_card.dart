@@ -2,18 +2,19 @@ import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/education_level.dart';
+import '../services/data_manager.dart';
 
 class GroupStudentCard extends StatelessWidget {
-  final Student student;
+  final StudentWithInfo studentWithInfo;
   final double? width;
-  final Function(Student)? onDragStarted;
+  final Function(StudentWithInfo)? onDragStarted;
   final VoidCallback? onDragEnd;
-  final Function(Student) onShowDetails;
-  final Function(Student)? onDelete;
+  final Function(StudentWithInfo) onShowDetails;
+  final Function(StudentWithInfo)? onDelete;
 
   const GroupStudentCard({
     Key? key,
-    required this.student,
+    required this.studentWithInfo,
     this.width,
     this.onDragStarted,
     this.onDragEnd,
@@ -69,7 +70,7 @@ class GroupStudentCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    student.name,
+                    studentWithInfo.student.name,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -78,7 +79,7 @@ class GroupStudentCard extends StatelessWidget {
                   ),
                   Expanded(
                     child: Text(
-                      student.school,
+                      studentWithInfo.student.school,
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 14,
@@ -98,7 +99,7 @@ class GroupStudentCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _getEducationLevelName(student.educationLevel),
+                    _getEducationLevelName(studentWithInfo.student.educationLevel),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
@@ -106,7 +107,7 @@ class GroupStudentCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    _getGradeName(student),
+                    _getGradeName(studentWithInfo.student),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
@@ -123,8 +124,8 @@ class GroupStudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Draggable<Student>(
-      data: student,
+    return Draggable<StudentWithInfo>(
+      data: studentWithInfo,
       feedback: Material(
         color: Colors.transparent,
         child: _buildCardContent(isOriginal: false),
@@ -135,7 +136,7 @@ class GroupStudentCard extends StatelessWidget {
       ),
       onDragStarted: () {
         if (onDragStarted != null) {
-          onDragStarted!(student);
+          onDragStarted!(studentWithInfo);
         }
       },
       onDragEnd: (_) {

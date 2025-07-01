@@ -23,7 +23,8 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   void initState() {
     super.initState();
     _students = DataManager.instance.students
-        .where((student) => !widget.excludedStudentIds.contains(student.id))
+        .where((student) => !widget.excludedStudentIds.contains(student.student.id))
+        .map((s) => s.student)
         .toList();
     _filteredStudents = _students;
   }

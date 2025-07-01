@@ -35,6 +35,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   final Set<GroupInfo> _expandedGroups = {};
+  double _fabBottomPadding = 16.0;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
 
   @override
   void initState() {
@@ -74,7 +76,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _groups.clear();
       _groups.addAll(DataManager.instance.groups);
       _students.clear();
-      _students.addAll(DataManager.instance.students);
+      _students.addAll(DataManager.instance.students.map((s) => s.student));
     });
   }
 
@@ -125,6 +127,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] MainScreen build');
     return Scaffold(
       body: Row(
         children: [
@@ -155,120 +158,150 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
         ],
       ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 16.0, right: 16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (_isFabExpanded) ...[
-              Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                child: ScaleTransition(
-                  scale: _fabScaleAnimation,
-                  child: FadeTransition(
-                    opacity: _fabOpacityAnimation,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.add_rounded, color: Colors.white, size: 28),
-                              const SizedBox(width: 14),
-                              Text(
-                                '수강 등록',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                ),
+      floatingActionButton: AnimatedPadding(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
+        child: Builder(
+          builder: (context) => Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (_isFabExpanded) ...[
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  child: ScaleTransition(
+                    scale: _fabScaleAnimation,
+                    child: FadeTransition(
+                      opacity: _fabOpacityAnimation,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              _showFloatingSnackBar(context, '수강 등록 기능');
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1976D2),
+                                borderRadius: BorderRadius.circular(16),
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.chat_outlined, color: Colors.white, size: 28),
-                              const SizedBox(width: 14),
-                              Text(
-                                '상담',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+                                  const SizedBox(width: 14),
+                                  Text(
+                                    '수강 등록',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.event_repeat_rounded, color: Colors.white, size: 28),
-                              const SizedBox(width: 14),
-                              Text(
-                                '보강',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
+                          const SizedBox(height: 12),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1976D2),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.chat_outlined, color: Colors.white, size: 28),
+                                const SizedBox(width: 14),
+                                Text(
+                                  '상담',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 12),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1976D2),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.event_repeat_rounded, color: Colors.white, size: 28),
+                                const SizedBox(width: 14),
+                                Text(
+                                  '보강',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
+              ],
+              FloatingActionButton(
+                heroTag: 'main',
+                onPressed: () {
+                  setState(() {
+                    _isFabExpanded = !_isFabExpanded;
+                    if (_isFabExpanded) {
+                      _fabController.forward();
+                    } else {
+                      _fabController.reverse();
+                    }
+                  });
+                },
+                shape: _isFabExpanded 
+                  ? const CircleBorder()
+                  : RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                child: AnimatedRotation(
+                  duration: const Duration(milliseconds: 200),
+                  turns: _isFabExpanded ? 0.125 : 0,
+                  child: Icon(_isFabExpanded ? Icons.close : Icons.add, size: 24),
+                ),
               ),
             ],
-            FloatingActionButton(
-              heroTag: 'main',
-              onPressed: () {
-                setState(() {
-                  _isFabExpanded = !_isFabExpanded;
-                  if (_isFabExpanded) {
-                    _fabController.forward();
-                  } else {
-                    _fabController.reverse();
-                  }
-                });
-              },
-              shape: _isFabExpanded 
-                ? const CircleBorder()
-                : RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: AnimatedRotation(
-                duration: const Duration(milliseconds: 200),
-                turns: _isFabExpanded ? 0.125 : 0,
-                child: Icon(_isFabExpanded ? Icons.close : Icons.add, size: 24),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
+  }
+
+  void _showFloatingSnackBar(BuildContext context, String message) {
+    setState(() {
+      _fabBottomPadding = 80.0 + 16.0;
+    });
+    _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFF2A2A2A),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(bottom: 16.0, right: 16.0, left: 16.0),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    _snackBarController?.closed.then((_) {
+      if (mounted) {
+        setState(() {
+          _fabBottomPadding = 16.0;
+        });
+      }
+    });
   }
 } 
