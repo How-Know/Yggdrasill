@@ -96,20 +96,26 @@ class AcademyDbService {
   }
 
   Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {
-    final dbClient = await db;
-    await dbClient.insert(
-      'academy_settings',
-      {
-        'id': 1,
-        'name': settings.name,
-        'slogan': settings.slogan,
-        'default_capacity': settings.defaultCapacity,
-        'lesson_duration': settings.lessonDuration,
-        'payment_type': paymentType,
-        'logo': settings.logo,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    try {
+      final dbClient = await db;
+      print('[DB] saveAcademySettings: $settings, paymentType: $paymentType');
+      await dbClient.insert(
+        'academy_settings',
+        {
+          'id': 1,
+          'name': settings.name,
+          'slogan': settings.slogan,
+          'default_capacity': settings.defaultCapacity,
+          'lesson_duration': settings.lessonDuration,
+          'payment_type': paymentType,
+          'logo': settings.logo,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (e, st) {
+      print('[DB][ERROR] saveAcademySettings: $e\n$st');
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> getAcademySettings() async {
@@ -122,16 +128,23 @@ class AcademyDbService {
   }
 
   Future<void> saveTeachers(List teachers) async {
-    final dbClient = await db;
-    await dbClient.delete('teachers');
-    for (final t in teachers) {
-      await dbClient.insert('teachers', {
-        'name': t.name,
-        'role': t.role.index,
-        'contact': t.contact,
-        'email': t.email,
-        'description': t.description,
-      });
+    try {
+      final dbClient = await db;
+      print('[DB] saveTeachers: ${teachers.length}명');
+      await dbClient.delete('teachers');
+      for (final t in teachers) {
+        print('[DB] insert teacher: $t');
+        await dbClient.insert('teachers', {
+          'name': t.name,
+          'role': t.role.index,
+          'contact': t.contact,
+          'email': t.email,
+          'description': t.description,
+        });
+      }
+    } catch (e, st) {
+      print('[DB][ERROR] saveTeachers: $e\n$st');
+      rethrow;
     }
   }
 
@@ -197,21 +210,32 @@ class AcademyDbService {
   }
 
   Future<void> saveOperatingHours(List<OperatingHours> hours) async {
-    final dbClient = await db;
-    await dbClient.delete('operating_hours');
-    for (final h in hours) {
-      await dbClient.insert('operating_hours', {
-        'day_of_week': h.startTime.weekday - 1,
-        'start_time': h.startTime.toIso8601String(),
-        'end_time': h.endTime.toIso8601String(),
-        'break_times': h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]',
-      });
+    try {
+      final dbClient = await db;
+      print('[DB] saveOperatingHours: ${hours.length}개');
+      await dbClient.delete('operating_hours');
+      for (final h in hours) {
+        print('[DB] insert operating hour: day=${h.startTime.weekday - 1}, start=${h.startTime}, end=${h.endTime}');
+        await dbClient.insert('operating_hours', {
+          'day_of_week': h.startTime.weekday - 1,
+          'start_time': h.startTime.toIso8601String(),
+          'end_time': h.endTime.toIso8601String(),
+          'break_times': h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]',
+        });
+      }
+    } catch (e, st) {
+      print('[DB][ERROR] saveOperatingHours: $e\n$st');
+      rethrow;
     }
   }
 
   Future<List<OperatingHours>> getOperatingHours() async {
     final dbClient = await db;
     final result = await dbClient.query('operating_hours');
+    print('[DB] getOperatingHours: ${result.length}개');
+    for (final row in result) {
+      print('[DB] row: $row');
+    }
     return result.map((row) => OperatingHours(
       startTime: DateTime.parse(row['start_time'] as String),
       endTime: DateTime.parse(row['end_time'] as String),
@@ -221,8 +245,14 @@ class AcademyDbService {
   }
 
   Future<void> addStudent(Student student) async {
-    final dbClient = await db;
-    await dbClient.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+    try {
+      final dbClient = await db;
+      print('[DB] addStudent: ' + student.toDb().toString());
+      await dbClient.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e, st) {
+      print('[DB][ERROR] addStudent: $e\n$st');
+      rethrow;
+    }
   }
 
   Future<void> updateStudent(Student student) async {
@@ -238,6 +268,15 @@ class AcademyDbService {
   Future<List<Student>> getStudents() async {
     final dbClient = await db;
     final result = await dbClient.query('students');
+    print('DB에서 학생 불러오기: ' + result.toString());
     return result.map((row) => Student.fromDb(row)).toList();
+  }
+
+  Future<void> saveStudents(List<Student> students) async {
+    final dbClient = await db;
+    await dbClient.delete('students');
+    for (final s in students) {
+      await dbClient.insert('students', s.toDb());
+    }
   }
 } 

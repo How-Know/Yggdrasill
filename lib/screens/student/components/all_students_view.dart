@@ -240,8 +240,32 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       padding: const EdgeInsets.only(bottom: 16.0, top: 12.0),
                       child: DragTarget<Student>(
                         onWillAccept: (student) => true,
-                        onAccept: (student) {
-                          _onDeleteZoneAccepted(student);
+                        onAccept: (student) async {
+                          widget.onStudentMoved(student, null);
+                          await DataManager.instance.updateStudent(student.copyWith(groupInfo: null));
+                          setState(() {});
+                          final result = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              backgroundColor: const Color(0xFF232326),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
+                              content: Text('${student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                ),
+                                FilledButton(
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                  ),
+                                  onPressed: () => Navigator.of(context).pop(true),
+                                  child: const Text('확인'),
+                                ),
+                              ],
+                            ),
+                          );
                         },
                         builder: (context, candidateData, rejectedData) {
                           final isHover = candidateData.isNotEmpty;
@@ -655,37 +679,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         const SizedBox(height: 16),
         ...schoolWidgets,
       ],
-    );
-  }
-
-  void _onDeleteZoneAccepted(Student student) async {
-    widget.onStudentMoved(student, null);
-    await DataManager.instance.updateStudent(student.copyWith(groupInfo: null));
-    setState(() {
-      // _students 리스트 동기화 (혹시 모를 UI 반영 누락 방지)
-      // widget.students는 부모에서 관리하므로, 필요시 콜백에서 동기화
-    });
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF232326),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
-        content: Text('${student.name} 학생을 그룹에서 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소', style: TextStyle(color: Colors.white70)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('확인'),
-          ),
-        ],
-      ),
     );
   }
 } 

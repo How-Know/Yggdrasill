@@ -4,15 +4,13 @@ import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
 import '../../models/payment_type.dart';
 import '../../services/academy_db.dart';
-import 'package:flutter/foundation.dart';
-import '../../services/academy_hive.dart';
-import 'package:hive/hive.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import 'dart:typed_data';
-import 'dart:html' as html;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/app_bar_title.dart';
 import 'dart:convert';
 import '../../widgets/custom_tab_bar.dart';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
+import '../../models/teacher.dart';
 
 enum SettingType {
   academy,
@@ -53,28 +51,6 @@ class TimeRange {
   final TimeOfDay end;
 
   const TimeRange({required this.start, required this.end});
-}
-
-enum TeacherRole { all, part, assistant }
-
-String getTeacherRoleLabel(TeacherRole role) {
-  switch (role) {
-    case TeacherRole.all:
-      return '전체';
-    case TeacherRole.part:
-      return '일부';
-    case TeacherRole.assistant:
-      return '보조';
-  }
-}
-
-class Teacher {
-  final String name;
-  final TeacherRole role;
-  final String contact;
-  final String email;
-  final String description;
-  Teacher({required this.name, required this.role, required this.contact, required this.email, required this.description});
 }
 
 class SettingsScreen extends StatefulWidget {
@@ -118,7 +94,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   int _customTabIndex = 0;
   int _prevTabIndex = 0;
-  List<Teacher> _teachers = [];
 
   // 운영시간 카드 hover 상태 관리
   final Set<int> _hoveredOperatingHourCards = {};
@@ -131,16 +106,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 운영시간/휴식 카드의 showActions 상태를 외부에서 관리
   final Map<String, bool> _cardActions = {};
 
-  Box? _teacherBox;
-
   Uint8List? _academyLogo;
+
+  // FAB 위치 조정용 상태 변수 추가
+  double _fabBottomPadding = 16.0;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
-    _initAndLoadAcademySettings();
-    _initAndLoadTeachers();
   }
 
   @override
@@ -165,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _paymentType = DataManager.instance.paymentType;
         final logo = DataManager.instance.academySettings.logo;
         _academyLogo = (logo is Uint8List && logo.isNotEmpty) ? logo : null;
+        print('[DEBUG] _loadSettings: 불러온 logo type=${logo?.runtimeType}, length=${logo?.length}, isNull=${logo == null}');
       });
 
       // 운영 시간 로드
@@ -185,137 +161,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } catch (e) {
       print('Error loading settings: $e');
-    }
-  }
-
-  Future<void> _initAndLoadAcademySettings() async {
-    if (kIsWeb) {
-      await AcademyHiveService.init();
-      final dbData = AcademyHiveService.getAcademySettings();
-      if (dbData != null) {
-        setState(() {
-          _academyNameController.text = dbData['name'] ?? '';
-          _sloganController.text = dbData['slogan'] ?? '';
-          _capacityController.text = (dbData['default_capacity'] ?? 30).toString();
-          _lessonDurationController.text = (dbData['lesson_duration'] ?? 50).toString();
-          final pt = dbData['payment_type'] as String?;
-          if (pt == 'monthly') {
-            _paymentType = PaymentType.monthly;
-          } else if (pt == 'perClass') {
-            _paymentType = PaymentType.perClass;
-          }
-        });
-      }
-    } else {
-      await AcademyDbService.instance.getAcademySettings().then((dbData) {
-        if (dbData != null) {
-          setState(() {
-            _academyNameController.text = dbData['name'] ?? '';
-            _sloganController.text = dbData['slogan'] ?? '';
-            _capacityController.text = (dbData['default_capacity'] ?? 30).toString();
-            _lessonDurationController.text = (dbData['lesson_duration'] ?? 50).toString();
-            final pt = dbData['payment_type'] as String?;
-            if (pt == 'monthly') {
-              _paymentType = PaymentType.monthly;
-            } else if (pt == 'perClass') {
-              _paymentType = PaymentType.perClass;
-            }
-          });
-        }
-      });
-    }
-  }
-
-  Future<void> _initAndLoadTeachers() async {
-    if (kIsWeb) {
-      await Hive.initFlutter();
-      _teacherBox = await Hive.openBox('teachers_box');
-    }
-    await _loadTeachers();
-  }
-
-  Future<void> _saveOperatingHours() async {
-    try {
-      final baseMonday = DateTime(2020, 1, 6); // 2020-01-06은 월요일
-      final hours = <OperatingHours>[];
-      for (var day in DayOfWeek.values) {
-        final operatingHour = _operatingHours[day];
-        if (operatingHour != null) {
-          final baseDay = baseMonday.add(Duration(days: day.index));
-          final startTime = DateTime(baseDay.year, baseDay.month, baseDay.day, operatingHour.start.hour, operatingHour.start.minute);
-          final endTime = DateTime(baseDay.year, baseDay.month, baseDay.day, operatingHour.end.hour, operatingHour.end.minute);
-          final breakTimes = _breakTimes[day]?.map((block) {
-            final breakStartTime = DateTime(baseDay.year, baseDay.month, baseDay.day, block.start.hour, block.start.minute);
-            final breakEndTime = DateTime(baseDay.year, baseDay.month, baseDay.day, block.end.hour, block.end.minute);
-            return BreakTime(
-              startTime: breakStartTime,
-              endTime: breakEndTime,
-            );
-          }).toList() ?? [];
-          hours.add(OperatingHours(
-            startTime: startTime,
-            endTime: endTime,
-            breakTimes: breakTimes,
-          ));
-        }
-      }
-      await DataManager.instance.saveOperatingHours(hours);
-    } catch (e) {
-      print('Error saving operating hours: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('운영 시간 저장에 실패했습니다.')),
-      );
-    }
-  }
-
-  Future<void> _selectOperatingHours(BuildContext context, DayOfWeek day) async {
-    final TimeOfDay? startTime = await showTimePicker(
-      context: context,
-      initialTime: _operatingHours[day]?.start ?? TimeOfDay.now(),
-      builder: (BuildContext context, Widget? child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF1976D2),
-              onPrimary: Colors.white,
-              surface: Color(0xFF1F1F1F),
-              onSurface: Colors.white,
-            ),
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(
-                foregroundColor: Color(0xFF1976D2),
-              ),
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-
-    if (startTime != null) {
-      final TimeOfDay? endTime = await showTimePicker(
-        context: context,
-        initialTime: startTime,
-        builder: (BuildContext context, Widget? child) {
-          return Theme(
-            data: Theme.of(context).copyWith(
-              colorScheme: const ColorScheme.dark(
-                primary: Color(0xFF1976D2),
-                onPrimary: Colors.white,
-                surface: Color(0xFF1F1F1F),
-                onSurface: Colors.white,
-              ),
-            ),
-            child: child!,
-          );
-        },
-      );
-
-      if (endTime != null) {
-        setState(() {
-          _operatingHours[day] = TimeRange(start: startTime, end: endTime);
-        });
-      }
     }
   }
 
@@ -580,7 +425,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             );
                             if (selected == 'edit') {
-                              _selectOperatingHours(context, day);
+                              // TODO: 운영시간 수정 다이얼로그 연결
                             } else if (selected == 'delete') {
                               setState(() {
                                 _operatingHours[day] = null;
@@ -785,140 +630,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _showAddTeacherDialog() {
-    final nameController = TextEditingController();
-    final contactController = TextEditingController();
-    final emailController = TextEditingController();
-    final descController = TextEditingController();
-    TeacherRole selectedRole = TeacherRole.all;
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF18181A),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('선생님 등록', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '이름',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<TeacherRole>(
-                  value: selectedRole,
-                  dropdownColor: const Color(0xFF18181A),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '관리 범위',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                  items: TeacherRole.values.map((role) => DropdownMenuItem(
-                    value: role,
-                    child: Text(getTeacherRoleLabel(role), style: const TextStyle(color: Colors.white)),
-                  )).toList(),
-                  onChanged: (role) {
-                    if (role != null) selectedRole = role;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: contactController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '연락처',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: emailController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '이메일',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: descController,
-                  style: const TextStyle(color: Colors.white),
-                  maxLines: 2,
-                  decoration: InputDecoration(
-                    labelText: '설명',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-              onPressed: () async {
-                setState(() {
-                  _teachers.add(Teacher(
-                    name: nameController.text.trim(),
-                    role: selectedRole,
-                    contact: contactController.text.trim(),
-                    email: emailController.text.trim(),
-                    description: descController.text.trim(),
-                  ));
-                });
-                await _saveTeachers();
-                await _loadTeachers();
-                await Future.delayed(const Duration(milliseconds: 100));
-                Navigator.pop(context);
-              },
-              child: const Text('등록', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Widget _buildAcademySettings() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _academyInfoKey.currentContext;
@@ -1118,7 +829,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
-                    if (_academyLogo != null)
+                    if (_academyLogo != null && _academyLogo!.isNotEmpty)
                       Positioned(
                         right: 50,
                         bottom: 50,
@@ -1126,7 +837,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: _pickLogoImage,
                           child: CircleAvatar(
                             backgroundImage: MemoryImage(_academyLogo!),
-                            radius: 50, // 100x100px
+                            radius: 50,
+                          ),
+                        ),
+                      )
+                    else
+                      Positioned(
+                        right: 50,
+                        bottom: 50,
+                        child: GestureDetector(
+                          onTap: _pickLogoImage,
+                          child: CircleAvatar(
+                            radius: 50,
+                            backgroundColor: Colors.grey[800],
+                            child: Icon(Icons.image, color: Colors.white54, size: 40),
                           ),
                         ),
                       ),
@@ -1156,6 +880,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ElevatedButton(
                 onPressed: () async {
                   try {
+                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                    print('[DEBUG] 저장 버튼 클릭: _academyLogo type=${_academyLogo.runtimeType}, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
                     final academySettings = AcademySettings(
                       name: _academyNameController.text.trim(),
                       slogan: _sloganController.text.trim(),
@@ -1165,15 +891,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                     await DataManager.instance.saveAcademySettings(academySettings);
                     await DataManager.instance.savePaymentType(_paymentType);
-                    await _saveOperatingHours();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('설정이 저장되었습니다.')),
+                    await DataManager.instance.loadAcademySettings();
+                    print('[DEBUG] 저장 후 불러온 logo: type=${DataManager.instance.academySettings.logo?.runtimeType}, length=${DataManager.instance.academySettings.logo?.length}, isNull=${DataManager.instance.academySettings.logo == null}');
+                    setState(() {
+                      final logo = DataManager.instance.academySettings.logo;
+                      _academyLogo = (logo is Uint8List && logo.isNotEmpty) ? logo : null;
+                    });
+                    _onShowSnackBar();
+                    _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('저장되었습니다!'),
+                        behavior: SnackBarBehavior.floating,
+                        margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
+                      ),
                     );
+                    _snackBarController?.closed.then((_) => _onHideSnackBar());
                   } catch (e) {
+                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
                     print('Error saving settings: $e');
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('설정 저장에 실패했습니다.')),
+                    _onShowSnackBar();
+                    _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('오류가 발생했습니다.'),
+                        behavior: SnackBarBehavior.floating,
+                        margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
+                      ),
                     );
+                    _snackBarController?.closed.then((_) => _onHideSnackBar());
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -1196,183 +940,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildTeacherSettings() {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 48),
-        child: Container(
-          width: 1000,
-          height: 450,
-          margin: const EdgeInsets.only(right: 0, left: 0, bottom: 20),
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          decoration: BoxDecoration(
-            color: Color(0xFF18181A),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const SizedBox(height: 28),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('선생님 관리', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w500)),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                      onPressed: _showAddTeacherDialog,
-                      child: const Text('선생님 등록', style: TextStyle(color: Colors.white)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                if (_teachers.isEmpty)
-                  const Text('등록된 선생님이 없습니다.', style: TextStyle(color: Colors.white70)),
-                if (_teachers.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8, right: 8),
-                    child: Container(
-                      width: 944,
-                      child: Row(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(left: 24),
-                            child: SizedBox(
-                              width: 80,
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text('이름', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14)),
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 60, child: Text('관리', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                          SizedBox(width: 24),
-                          SizedBox(width: 130, child: Text('연락처', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                          SizedBox(width: 40),
-                          SizedBox(width: 210, child: Text('이메일', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                          SizedBox(width: 24),
-                          SizedBox(width: 90, child: Text('상세 정보', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                          Expanded(child: Container()),
-                        ],
-                      ),
-                    ),
-                  ),
-                if (_teachers.isNotEmpty)
-                  SizedBox(
-                    height: 320,
-                    child: ReorderableListView(
-                      buildDefaultDragHandles: false,
-                      proxyDecorator: _teacherCardProxyDecorator,
-                      onReorder: (oldIndex, newIndex) {
-                        setState(() {
-                          if (newIndex > oldIndex) newIndex--;
-                          final item = _teachers.removeAt(oldIndex);
-                          _teachers.insert(newIndex, item);
-                        });
-                        _saveTeachers();
-                      },
-                      children: [
-                        for (int i = 0; i < _teachers.length; i++)
-                          Padding(
-                            key: ValueKey('teacher_card_$i'),
-                            padding: const EdgeInsets.only(bottom: 16, right: 8),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF232326),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              width: 944,
-                              child: Row(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 24),
-                                    child: SizedBox(
-                                      width: 80,
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(_teachers[i].name, style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis),
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(width: 60, child: Text(getTeacherRoleLabel(_teachers[i].role), style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 24),
-                                  SizedBox(width: 130, child: Text(_teachers[i].contact, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 40),
-                                  SizedBox(width: 210, child: Text(_teachers[i].email, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 24),
-                                  SizedBox(width: 90, child: Text(_teachers[i].description, style: const TextStyle(color: Colors.white70, fontSize: 14), overflow: TextOverflow.ellipsis, maxLines: 1)),
-                                  Expanded(child: Container()),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      ReorderableDragStartListener(
-                                        index: i,
-                                        child: const Padding(
-                                          padding: EdgeInsets.symmetric(horizontal: 4),
-                                          child: Icon(Icons.drag_handle, color: Colors.white38),
-                                        ),
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.edit, color: Colors.white70),
-                                        onPressed: () {
-                                          _showEditTeacherDialog(i);
-                                        },
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.delete, color: Colors.white70),
-                                        onPressed: () async {
-                                          final confirm = await showDialog<bool>(
-                                            context: context,
-                                            builder: (context) => AlertDialog(
-                                              backgroundColor: const Color(0xFF18181A),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                              title: const Text('삭제 확인', style: TextStyle(color: Colors.white)),
-                                              content: const Text('정말로 이 선생님 정보를 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () => Navigator.pop(context, false),
-                                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                                ),
-                                                ElevatedButton(
-                                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                                                  onPressed: () => Navigator.pop(context, true),
-                                                  child: const Text('삭제', style: TextStyle(color: Colors.white)),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                          if (confirm == true) {
-                                            setState(() {
-                                              _teachers.removeAt(i);
-                                            });
-                                            _saveTeachers();
-                                          }
-                                        },
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.only(right: 24),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    // 로고 미리보기 print (Widget 트리 밖에서)
+    if (_academyLogo != null && _academyLogo!.isNotEmpty) {
+      print('[UI] _academyLogo type=\x1b[36m${_academyLogo.runtimeType}\x1b[0m, length=\x1b[36m${_academyLogo?.length}\x1b[0m, isNull=\x1b[36m${_academyLogo == null}\x1b[0m');
+    }
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       appBar: AppBarTitle(
@@ -1380,7 +953,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         onBack: () {
           try {
             if (identical(0, 0.0)) {
-              html.window.history.back();
+              // ignore: avoid_web_libraries_in_flutter
+              // html.window.history.back();
             } else {
               if (Navigator.of(context).canPop()) {
                 Navigator.of(context).pop();
@@ -1391,7 +965,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         onForward: () {
           try {
             if (identical(0, 0.0)) {
-              html.window.history.forward();
+              // ignore: avoid_web_libraries_in_flutter
+              // html.window.history.forward();
             }
           } catch (_) {}
         },
@@ -1445,154 +1020,170 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  // 드래그 피드백 카드 스타일 함수
-  Widget _teacherCardProxyDecorator(Widget child, int index, Animation<double> animation) {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: 944,
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF232326),
-          borderRadius: BorderRadius.circular(12),
+      floatingActionButton: AnimatedPadding(
+        duration: Duration(milliseconds: 200),
+        padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
+        child: FloatingActionButton(
+          onPressed: () {}, // 필요시 기능 추가
+          child: Icon(Icons.settings),
         ),
-        child: child,
       ),
     );
   }
 
-  // 선생님 정보 수정 다이얼로그
-  void _showEditTeacherDialog(int index) {
-    final teacher = _teachers[index];
-    final nameController = TextEditingController(text: teacher.name);
-    final contactController = TextEditingController(text: teacher.contact);
-    final emailController = TextEditingController(text: teacher.email);
-    final descController = TextEditingController(text: teacher.description);
-    TeacherRole selectedRole = teacher.role;
-    showDialog(
+  void _pickLogoImage() async {
+    if (kIsWeb) {
+      // 웹: FileUploadInputElement 사용 (주석 참고)
+    } else {
+      final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+      if (result != null && result.files.single.bytes != null) {
+        setState(() {
+          _academyLogo = result.files.single.bytes;
+          print('[DEBUG] _pickLogoImage: _academyLogo type=${_academyLogo.runtimeType}, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
+        });
+      } else {
+        print('[DEBUG] _pickLogoImage: result is null or bytes is null');
+      }
+    }
+  }
+
+  Future<void> _selectOperatingHours(BuildContext context, DayOfWeek day) async {
+    final TimeOfDay? startTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: 9, minute: 0),
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1976D2),
+              onPrimary: Colors.white,
+              surface: Color(0xFF1F1F1F),
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (startTime == null) return;
+    final TimeOfDay? endTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: startTime.hour + 1, minute: startTime.minute),
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1976D2),
+              onPrimary: Colors.white,
+              surface: Color(0xFF1F1F1F),
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (endTime == null) return;
+    setState(() {
+      _operatingHours[day] = TimeRange(start: startTime, end: endTime);
+      print('[UI] _operatingHours after set:');
+      _operatingHours.forEach((k, v) => print('  $k: $v'));
+    });
+    // DB 저장을 위해 전체 운영시간을 OperatingHours 리스트로 변환
+    final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
+      final range = e.value!;
+      final breaks = _breakTimes[e.key] ?? [];
+      print('[UI] hoursList entry: day=${e.key}, range=$range');
+      return OperatingHours(
+        startTime: DateTime(2020, 1, e.key.index + 1, range.start.hour, range.start.minute),
+        endTime: DateTime(2020, 1, e.key.index + 1, range.end.hour, range.end.minute),
+        breakTimes: breaks.map((b) => BreakTime(
+          startTime: DateTime(2020, 1, e.key.index + 1, b.start.hour, b.start.minute),
+          endTime: DateTime(2020, 1, e.key.index + 1, b.end.hour, b.end.minute),
+        )).toList(),
+      );
+    }).toList();
+    print('[UI] hoursList to save: ${hoursList.length}개');
+    await DataManager.instance.saveOperatingHours(hoursList);
+    final hours = await DataManager.instance.getOperatingHours();
+    print('[UI] hours loaded from DB: ${hours.length}개');
+    for (var h in hours) {
+      print('  start=${h.startTime}, end=${h.endTime}');
+    }
+    setState(() {
+      for (var hour in hours) {
+        final d = DayOfWeek.values[hour.startTime.weekday - 1];
+        _operatingHours[d] = TimeRange(
+          start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
+          end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+        );
+        _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
+          start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
+          end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+        )).toList();
+      }
+      print('[UI] _operatingHours after DB load:');
+      _operatingHours.forEach((k, v) => print('  $k: $v'));
+    });
+  }
+
+  void _showAddTeacherDialog() async {
+    String name = '';
+    TeacherRole role = TeacherRole.all;
+    String contact = '';
+    String email = '';
+    String description = '';
+    await showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF18181A),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('선생님 정보 수정', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '이름',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<TeacherRole>(
-                  value: selectedRole,
-                  dropdownColor: const Color(0xFF18181A),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '관리 범위',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                  items: TeacherRole.values.map((role) => DropdownMenuItem(
-                    value: role,
-                    child: Text(getTeacherRoleLabel(role), style: const TextStyle(color: Colors.white)),
-                  )).toList(),
-                  onChanged: (role) {
-                    if (role != null) selectedRole = role;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: contactController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '연락처',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: emailController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: '이메일',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: descController,
-                  style: const TextStyle(color: Colors.white),
-                  maxLines: 2,
-                  decoration: InputDecoration(
-                    labelText: '설명',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          title: Text('선생님 등록'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                decoration: InputDecoration(labelText: '이름'),
+                onChanged: (v) => name = v,
+              ),
+              DropdownButton<TeacherRole>(
+                value: role,
+                items: TeacherRole.values.map((r) => DropdownMenuItem(
+                  value: r,
+                  child: Text(getTeacherRoleLabel(r)),
+                )).toList(),
+                onChanged: (v) { if (v != null) role = v; },
+              ),
+              TextField(
+                decoration: InputDecoration(labelText: '연락처'),
+                onChanged: (v) => contact = v,
+              ),
+              TextField(
+                decoration: InputDecoration(labelText: '이메일'),
+                onChanged: (v) => email = v,
+              ),
+              TextField(
+                decoration: InputDecoration(labelText: '설명'),
+                onChanged: (v) => description = v,
+              ),
+            ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              child: Text('취소'),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-              onPressed: () async {
-                setState(() {
-                  _teachers[index] = Teacher(
-                    name: nameController.text.trim(),
-                    role: selectedRole,
-                    contact: contactController.text.trim(),
-                    email: emailController.text.trim(),
-                    description: descController.text.trim(),
-                  );
-                });
-                await _saveTeachers();
-                await _loadTeachers();
-                await Future.delayed(const Duration(milliseconds: 100));
+              onPressed: () {
+                DataManager.instance.addTeacher(Teacher(
+                  name: name,
+                  role: role,
+                  contact: contact,
+                  email: email,
+                  description: description,
+                ));
                 Navigator.pop(context);
               },
-              child: const Text('저장', style: TextStyle(color: Colors.white)),
+              child: Text('등록'),
             ),
           ],
         );
@@ -1600,128 +1191,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _saveTeachers() async {
-    if (kIsWeb && _teacherBox != null) {
-      final data = _teachers.map((t) => {
-        'name': t.name,
-        'role': t.role.index,
-        'contact': t.contact,
-        'email': t.email,
-        'description': t.description,
-      }).toList();
-      await _teacherBox!.put('teachers', data);
-      print('Hive save teachers: $data');
-      // 저장 후 setState로 반영 (불러오기와 동일하게)
-      final saved = _teacherBox!.get('teachers') as List?;
-      print('Hive saved teachers after put: $saved');
-      if (saved != null) {
-        setState(() {
-          _teachers = saved.map((row) => Teacher(
-            name: row['name'] as String? ?? '',
-            role: TeacherRole.values[row['role'] as int? ?? 0],
-            contact: row['contact'] as String? ?? '',
-            email: row['email'] as String? ?? '',
-            description: row['description'] as String? ?? '',
-          )).toList();
-        });
-      }
-    } else {
-      await AcademyDbService.instance.saveTeachers(_teachers);
-    }
-  }
-
-  Future<void> _loadTeachers() async {
-    if (kIsWeb) {
-      try {
-        if (_teacherBox == null || !_teacherBox!.isOpen) {
-          await Hive.initFlutter();
-          _teacherBox = await Hive.openBox('teachers_box');
-        }
-        final data = _teacherBox!.get('teachers') as List?;
-        print('Hive load teachers: $data');
-        if (data != null) {
-          setState(() {
-            _teachers = data.map((row) => Teacher(
-              name: row['name'] as String? ?? '',
-              role: TeacherRole.values[row['role'] as int? ?? 0],
-              contact: row['contact'] as String? ?? '',
-              email: row['email'] as String? ?? '',
-              description: row['description'] as String? ?? '',
-            )).toList();
-          });
-        }
-      } catch (e) {
-        print('Error loading teachers from Hive: $e');
-      }
-    } else {
-      final dbList = await AcademyDbService.instance.getTeachers();
-      setState(() {
-        _teachers = dbList.map((row) => Teacher(
-          name: row['name'] as String? ?? '',
-          role: TeacherRole.values[row['role'] as int? ?? 0],
-          contact: row['contact'] as String? ?? '',
-          email: row['email'] as String? ?? '',
-          description: row['description'] as String? ?? '',
-        )).toList();
-      });
-    }
-  }
-
-  Widget teacherRow({
-    required String name,
-    required String role,
-    required String contact,
-    required String email,
-    required String desc,
-    Widget? dragHandle,
-    Widget? editBtn,
-    Widget? deleteBtn,
-    bool isHeader = false,
-  }) {
-    final textStyle = isHeader
-        ? const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 16)
-        : const TextStyle(color: Colors.white, fontSize: 16);
-    final descStyle = isHeader
-        ? textStyle
-        : const TextStyle(color: Colors.white70, fontSize: 14);
-    return Padding(
-      padding: const EdgeInsets.only(left: 24, right: 8, bottom: 8),
-      child: Row(
-        children: [
-          Expanded(flex: 2, child: Text(name, style: textStyle, overflow: TextOverflow.ellipsis)),
-          Expanded(flex: 2, child: Text(role, style: textStyle, overflow: TextOverflow.ellipsis)),
-          Expanded(flex: 3, child: Text(contact, style: textStyle, overflow: TextOverflow.ellipsis)),
-          Expanded(flex: 3, child: Text(email, style: textStyle, overflow: TextOverflow.ellipsis)),
-          Expanded(flex: 4, child: Text(desc, style: descStyle, overflow: TextOverflow.ellipsis, maxLines: 1)),
-          if (dragHandle != null) dragHandle,
-          if (editBtn != null) editBtn,
-          if (deleteBtn != null) deleteBtn,
-          if (dragHandle == null && editBtn == null && deleteBtn == null) SizedBox(width: 60),
-        ],
-      ),
+  Widget _buildTeacherSettings() {
+    return ValueListenableBuilder<List<Teacher>>(
+      valueListenable: DataManager.instance.teachersNotifier,
+      builder: (context, teachers, _) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('선생님 목록', style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold)),
+                ElevatedButton.icon(
+                  onPressed: _showAddTeacherDialog,
+                  icon: Icon(Icons.add),
+                  label: Text('선생님 등록'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: ListView.builder(
+                itemCount: teachers.length,
+                itemBuilder: (context, idx) {
+                  final t = teachers[idx];
+                  return Card(
+                    color: Color(0xFF23232A),
+                    child: ListTile(
+                      title: Text(t.name, style: TextStyle(color: Colors.white)),
+                      subtitle: Text('${getTeacherRoleLabel(t.role)} | ${t.contact} | ${t.email}\n${t.description}', style: TextStyle(color: Colors.white70)),
+                      trailing: IconButton(
+                        icon: Icon(Icons.delete, color: Colors.red),
+                        onPressed: () {
+                          DataManager.instance.deleteTeacher(idx);
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  void _pickLogoImage() async {
-    // 웹 환경
-    if (kIsWeb) {
-      final uploadInput = html.FileUploadInputElement();
-      uploadInput.accept = 'image/*';
-      uploadInput.click();
-      uploadInput.onChange.listen((event) {
-        final file = uploadInput.files?.first;
-        if (file != null) {
-          final reader = html.FileReader();
-          reader.readAsArrayBuffer(file);
-          reader.onLoadEnd.listen((event) {
-            setState(() {
-              _academyLogo = reader.result as Uint8List;
-            });
-          });
-        }
-      });
-    } else {
-      // 데스크탑/모바일: FilePicker 등 사용 (여기서는 생략, 필요시 추가)
-    }
+  // FAB 위치 조정 함수
+  void _onShowSnackBar() {
+    setState(() {
+      _fabBottomPadding = 80.0 + 16.0; // 스낵바 높이 + 기본 패딩
+    });
+  }
+  void _onHideSnackBar() {
+    setState(() {
+      _fabBottomPadding = 16.0;
+    });
   }
 } 

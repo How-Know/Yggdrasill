@@ -79,7 +79,11 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
 
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('그룹명을 입력해주세요')),
+        SnackBar(
+          content: Text('그룹명을 입력해주세요'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
+        ),
       );
       return;
     }

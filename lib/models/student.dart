@@ -80,6 +80,7 @@ class Student {
     String? groupId,
     int? weeklyClassCount,
   }) {
+    final newGroupInfo = groupInfo ?? this.groupInfo;
     return Student(
       id: id ?? this.id,
       name: name ?? this.name,
@@ -89,8 +90,8 @@ class Student {
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       registrationDate: registrationDate ?? this.registrationDate,
-      groupInfo: groupInfo ?? this.groupInfo,
-      groupId: groupId ?? this.groupId,
+      groupInfo: groupInfo,
+      groupId: groupInfo == null ? null : groupInfo.id,
       weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
     );
   }

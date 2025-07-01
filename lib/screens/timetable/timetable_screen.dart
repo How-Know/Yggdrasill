@@ -520,6 +520,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           SnackBar(
             content: Text('${_selectedGroup!.name} 클래스 시간이 등록되었습니다.'),
             backgroundColor: const Color(0xFF1976D2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
           ),
         );
       }

@@ -32,25 +32,18 @@ class FileStorageService implements StorageService {
 
   @override
   Future<void> save(String key, String value) async {
-    final file = File(path.join(_dataPath, '$key.json'));
-    await file.writeAsString(value);
+    // json 파일 저장/불러오기 관련 코드가 있다면 모두 삭제. SQLite 단일화에 맞게 정리.
   }
 
   @override
   Future<String?> load(String key) async {
-    final file = File(path.join(_dataPath, '$key.json'));
-    if (await file.exists()) {
-      return await file.readAsString();
-    }
+    // json 파일 저장/불러오기 관련 코드가 있다면 모두 삭제. SQLite 단일화에 맞게 정리.
     return null;
   }
 
   @override
   Future<void> delete(String key) async {
-    final file = File(path.join(_dataPath, '$key.json'));
-    if (await file.exists()) {
-      await file.delete();
-    }
+    // json 파일 저장/불러오기 관련 코드가 있다면 모두 삭제. SQLite 단일화에 맞게 정리.
   }
 }
 
