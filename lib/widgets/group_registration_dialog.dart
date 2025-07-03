@@ -7,6 +7,7 @@ class GroupRegistrationDialog extends StatefulWidget {
   final GroupInfo? groupInfo;
   final int? index;
   final Function(GroupInfo) onSave;
+  final int currentMemberCount;
 
   const GroupRegistrationDialog({
     super.key,
@@ -14,6 +15,7 @@ class GroupRegistrationDialog extends StatefulWidget {
     this.groupInfo,
     this.index,
     required this.onSave,
+    this.currentMemberCount = 0,
   });
 
   @override
@@ -21,11 +23,11 @@ class GroupRegistrationDialog extends StatefulWidget {
 }
 
 class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _descriptionController;
-  late final TextEditingController _capacityController;
+  late TextEditingController _nameController;
+  late TextEditingController _descriptionController;
+  late TextEditingController _capacityController;
   late int _duration;
-  Color _selectedColor = Colors.blue;
+  late Color _selectedColor;
 
   final List<Color> _colors = [
     Colors.red,
@@ -50,15 +52,32 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     const Color(0xFF2196F3),
   ];
 
+  void _initControllers() {
+    print('[DEBUG] _initControllers: groupInfo=${widget.groupInfo}');
+    _nameController = TextEditingController(text: widget.groupInfo?.name ?? '');
+    _descriptionController = TextEditingController(text: widget.groupInfo?.description ?? '');
+    _capacityController = TextEditingController(text: widget.groupInfo?.capacity?.toString() ?? '');
+    _duration = widget.groupInfo?.duration ?? 60;
+    _selectedColor = widget.groupInfo?.color ?? Colors.blue;
+  }
+
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.groupInfo?.name ?? '');
-    _descriptionController = TextEditingController(text: widget.groupInfo?.description ?? '');
-    _capacityController = TextEditingController(text: widget.groupInfo?.capacity.toString() ?? '');
-    _duration = widget.groupInfo?.duration ?? 60;
-    if (widget.groupInfo != null) {
-      _selectedColor = widget.groupInfo!.color;
+    print('[DEBUG] initState: groupInfo=${widget.groupInfo}');
+    _initControllers();
+  }
+
+  @override
+  void didUpdateWidget(covariant GroupRegistrationDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.groupInfo != oldWidget.groupInfo) {
+      print('[DEBUG] didUpdateWidget: groupInfo=${widget.groupInfo}');
+      _nameController.dispose();
+      _descriptionController.dispose();
+      _capacityController.dispose();
+      _initControllers();
+      setState(() {});
     }
   }
 
@@ -70,12 +89,19 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     super.dispose();
   }
 
-  void _handleSave() {
+  void _handleSave() async {
     final name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
     final capacity = int.tryParse(_capacityController.text.trim()) ?? 30;
     final duration = _duration;
     final color = _selectedColor;
+
+    print('[DEBUG] _handleSave: name=$name, description=$description, capacity=$capacity, duration=$duration, color=$color');
+    if (widget.editMode && widget.groupInfo != null) {
+      final old = widget.groupInfo!;
+      print('[DEBUG] _handleSave: old.name=${old.name}, old.description=${old.description}, old.capacity=${old.capacity}, old.duration=${old.duration}, old.color=${old.color}');
+      print('[DEBUG] _handleSave: 비교 결과 name=${name == old.name}, description=${description == old.description}, capacity=${capacity == old.capacity}, duration=${duration == old.duration}, color=${color == old.color}');
+    }
 
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -88,8 +114,69 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
       return;
     }
 
+    if (capacity < widget.currentMemberCount) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF232326),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('정원 오류', style: TextStyle(color: Colors.white)),
+          content: Text('현재 그룹 인원(${widget.currentMemberCount}명)보다 적은 정원은 설정할 수 없습니다.', style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('확인', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    if (widget.editMode && widget.groupInfo == null) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF232326),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('오류', style: TextStyle(color: Colors.white)),
+          content: const Text('수정할 그룹 정보가 없습니다.', style: TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('확인', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     if (widget.editMode) {
-      final updatedGroup = widget.groupInfo!.copyWith(
+      final old = widget.groupInfo!;
+      if (name == old.name &&
+          description == old.description &&
+          capacity == old.capacity &&
+          duration == old.duration &&
+          color == old.color) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF232326),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('수정할 내용이 없습니다.', style: TextStyle(color: Colors.white)),
+            content: const Text('변경된 내용이 없습니다.', style: TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('확인', style: TextStyle(color: Colors.white70)),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+      final updatedGroup = old.copyWith(
         name: name,
         description: description,
         capacity: capacity,

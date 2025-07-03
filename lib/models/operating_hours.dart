@@ -2,11 +2,13 @@ class OperatingHours {
   final DateTime startTime;
   final DateTime endTime;
   final List<BreakTime> breakTimes;
+  final int dayOfWeek;
 
   OperatingHours({
     required this.startTime,
     required this.endTime,
     this.breakTimes = const [],
+    required this.dayOfWeek,
   });
 
   Map<String, dynamic> toJson() {
@@ -14,6 +16,7 @@ class OperatingHours {
       'startTime': startTime.toIso8601String(),
       'endTime': endTime.toIso8601String(),
       'breakTimes': breakTimes.map((breakTime) => breakTime.toJson()).toList(),
+      'dayOfWeek': dayOfWeek,
     };
   }
 
@@ -24,6 +27,7 @@ class OperatingHours {
       breakTimes: (json['breakTimes'] as List)
           .map((breakTime) => BreakTime.fromJson(breakTime))
           .toList(),
+      dayOfWeek: json['dayOfWeek'] as int,
     );
   }
 }

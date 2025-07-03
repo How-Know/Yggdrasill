@@ -146,18 +146,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // 운영 시간 로드
       final hours = await DataManager.instance.getOperatingHours();
       setState(() {
+        for (var d in DayOfWeek.values) {
+          _operatingHours[d] = null;
+          _breakTimes[d] = [];
+        }
         for (var hour in hours) {
-          // Dart의 DateTime.weekday는 월=1, 일=7이므로, DayOfWeek.values[weekday-1]이 정확히 매핑됨
-          final day = DayOfWeek.values[hour.startTime.weekday - 1];
-          _operatingHours[day] = TimeRange(
+          final d = DayOfWeek.values[hour.dayOfWeek];
+          _operatingHours[d] = TimeRange(
             start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
             end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
           );
-          _breakTimes[day] = hour.breakTimes.map((breakTime) => TimeRange(
+          _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
             start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
             end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
           )).toList();
         }
+        print('[UI] _operatingHours after DB load:');
+        _operatingHours.forEach((k, v) => print('  $k: $v'));
       });
     } catch (e) {
       print('Error loading settings: $e');
@@ -901,8 +906,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('저장되었습니다!'),
-                        behavior: SnackBarBehavior.floating,
-                        margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
                       ),
                     );
                     _snackBarController?.closed.then((_) => _onHideSnackBar());
@@ -913,8 +916,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('오류가 발생했습니다.'),
-                        behavior: SnackBarBehavior.floating,
-                        margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
                       ),
                     );
                     _snackBarController?.closed.then((_) => _onHideSnackBar());
@@ -942,9 +943,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // 로고 미리보기 print (Widget 트리 밖에서)
     if (_academyLogo != null && _academyLogo!.isNotEmpty) {
-      print('[UI] _academyLogo type=\x1b[36m${_academyLogo.runtimeType}\x1b[0m, length=\x1b[36m${_academyLogo?.length}\x1b[0m, isNull=\x1b[36m${_academyLogo == null}\x1b[0m');
+      print('[UI] _academyLogo type=\x1b[36m${_academyLogo.runtimeType}\x1b[0m, length=\x1b[36m${_academyLogo?.length}\x1b[0m, isNull=${_academyLogo == null}');
     }
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
@@ -991,7 +991,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               duration: const Duration(milliseconds: 400),
               transitionBuilder: (child, animation) {
                 final isForward = _customTabIndex > _prevTabIndex;
-                // 들어오는 child와 나가는 child를 모두 SlideTransition으로 감싸서 방향을 반대로 처리
                 return SlideTransition(
                   position: Tween<Offset>(
                     begin: Offset(isForward ? 1 : -1, 0),
@@ -1020,14 +1019,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      floatingActionButton: AnimatedPadding(
-        duration: Duration(milliseconds: 200),
-        padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
-        child: FloatingActionButton(
-          onPressed: () {}, // 필요시 기능 추가
-          child: Icon(Icons.settings),
-        ),
-      ),
+      // floatingActionButton은 정의하지 않음 (MainScreen의 FAB가 노출됨)
     );
   }
 
@@ -1095,12 +1087,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final breaks = _breakTimes[e.key] ?? [];
       print('[UI] hoursList entry: day=${e.key}, range=$range');
       return OperatingHours(
-        startTime: DateTime(2020, 1, e.key.index + 1, range.start.hour, range.start.minute),
-        endTime: DateTime(2020, 1, e.key.index + 1, range.end.hour, range.end.minute),
+        startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
+        endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
         breakTimes: breaks.map((b) => BreakTime(
-          startTime: DateTime(2020, 1, e.key.index + 1, b.start.hour, b.start.minute),
-          endTime: DateTime(2020, 1, e.key.index + 1, b.end.hour, b.end.minute),
+          startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
+          endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
         )).toList(),
+        dayOfWeek: e.key.index,
       );
     }).toList();
     print('[UI] hoursList to save: ${hoursList.length}개');
@@ -1111,8 +1104,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       print('  start=${h.startTime}, end=${h.endTime}');
     }
     setState(() {
+      for (var d in DayOfWeek.values) {
+        _operatingHours[d] = null;
+        _breakTimes[d] = [];
+      }
       for (var hour in hours) {
-        final d = DayOfWeek.values[hour.startTime.weekday - 1];
+        final d = DayOfWeek.values[hour.dayOfWeek];
         _operatingHours[d] = TimeRange(
           start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
           end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),

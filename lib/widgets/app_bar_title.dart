@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../screens/settings/settings_screen.dart';
 
 class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
   final String title;
@@ -66,7 +67,21 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
               IconButton(
                 icon: const Icon(Icons.settings, color: Colors.white70),
                 onPressed: onSettings ?? () {
-                  Navigator.of(context).pushNamed('/settings');
+                  Navigator.of(context).push(
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) => const SettingsScreen(),
+                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                        const begin = Offset(1.0, 0.0);
+                        const end = Offset.zero;
+                        const curve = Curves.ease;
+                        final tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                        return SlideTransition(
+                          position: animation.drive(tween),
+                          child: child,
+                        );
+                      },
+                    ),
+                  );
                 },
                 tooltip: '설정',
               ),

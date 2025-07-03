@@ -37,6 +37,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final Set<GroupInfo> _expandedGroups = {};
   double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
+  int? _prevIndex;
 
   @override
   void initState() {
@@ -97,6 +98,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildContent() {
+    print('[DEBUG] _buildContent 진입, _selectedIndex=$_selectedIndex');
     switch (_selectedIndex) {
       case 0:
         return const Center(child: Text('홈', style: TextStyle(color: Colors.white)));
@@ -107,7 +109,34 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 3:
         return const Center(child: Text('학습', style: TextStyle(color: Colors.white)));
       case 4:
-        return const SettingsScreen();
+        // 설정 진입 시 Material 3 스타일 전환 애니메이션 적용
+        Future.microtask(() {
+          print('[DEBUG] 설정 진입: Navigator.push 호출, _selectedIndex=$_selectedIndex, _prevIndex=$_prevIndex');
+          Navigator.of(context).push(
+            PageRouteBuilder(
+              pageBuilder: (context, animation, secondaryAnimation) {
+                print('[DEBUG] PageRouteBuilder.pageBuilder 실행');
+                return const SettingsScreen();
+              },
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                print('[DEBUG] PageRouteBuilder.transitionsBuilder 실행, animation.value=${animation.value}');
+                const begin = Offset(1.0, 0.0); // 오른쪽에서 진입
+                const end = Offset.zero;
+                const curve = Curves.ease;
+                final tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                return SlideTransition(
+                  position: animation.drive(tween),
+                  child: child,
+                );
+              },
+            ),
+          );
+          setState(() {
+            print('[DEBUG] 설정 진입 후 _selectedIndex를 _prevIndex로 복구: $_prevIndex');
+            _selectedIndex = _prevIndex ?? 0;
+          });
+        });
+        return const SizedBox();
       default:
         return const SizedBox();
     }

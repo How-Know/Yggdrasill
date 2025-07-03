@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/group_info.dart';
 import '../../models/student.dart';
 import '../../services/data_manager.dart';
-import '../../widgets/class_registration_dialog.dart';
+import '../../widgets/group_registration_dialog.dart';
 
 class ClassScreen extends StatefulWidget {
   const ClassScreen({Key? key}) : super(key: key);
@@ -39,7 +39,7 @@ class _ClassScreenState extends State<ClassScreen> {
   }) {
     showDialog(
       context: context,
-      builder: (context) => ClassRegistrationDialog(
+      builder: (context) => GroupRegistrationDialog(
         editMode: editMode,
         classInfo: classInfo,
         onSave: (result) {

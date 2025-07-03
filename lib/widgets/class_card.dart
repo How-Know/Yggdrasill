@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/group_info.dart';
 import '../models/student.dart';
-import 'class_registration_dialog.dart';
+import 'group_registration_dialog.dart';
 import 'student_card.dart';
 
 class GroupCard extends StatelessWidget {

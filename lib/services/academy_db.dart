@@ -252,9 +252,9 @@ class AcademyDbService {
       print('[DB] saveOperatingHours: ${hours.length}개');
       await dbClient.delete('operating_hours');
       for (final h in hours) {
-        print('[DB] insert operating hour: day=${h.startTime.weekday - 1}, start=${h.startTime}, end=${h.endTime}');
+        print('[DB] insert operating hour: day=[36m${h.dayOfWeek}[0m, start=${h.startTime}, end=${h.endTime}');
         await dbClient.insert('operating_hours', {
-          'day_of_week': h.startTime.weekday - 1,
+          'day_of_week': h.dayOfWeek,
           'start_time': h.startTime.toIso8601String(),
           'end_time': h.endTime.toIso8601String(),
           'break_times': h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]',
@@ -278,6 +278,7 @@ class AcademyDbService {
       endTime: DateTime.parse(row['end_time'] as String),
       breakTimes: (jsonDecode(row['break_times'] as String) as List)
         .map((b) => BreakTime.fromJson(b)).toList(),
+      dayOfWeek: row['day_of_week'] as int,
     )).toList();
   }
 

@@ -5,7 +5,7 @@ import '../../models/student_view_type.dart';
 import '../../models/education_level.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/student_registration_dialog.dart';
-import '../../widgets/class_registration_dialog.dart';
+import '../../widgets/group_registration_dialog.dart';
 import 'components/all_students_view.dart';
 import 'components/group_view.dart';
 import 'components/school_view.dart';
@@ -78,6 +78,9 @@ class StudentScreenState extends State<StudentScreen> {
                       _expandedGroups.add(groupInfo);
                     }
                   });
+                },
+                onGroupEdited: (groupInfo, index) {
+                  DataManager.instance.updateGroup(groupInfo);
                 },
                 onGroupUpdated: (groupInfo, index) {
                   DataManager.instance.updateGroup(groupInfo);

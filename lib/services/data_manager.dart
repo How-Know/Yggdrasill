@@ -36,7 +36,10 @@ class DataManager {
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
 
-  List<GroupInfo> get groups => List.unmodifiable(_groups);
+  List<GroupInfo> get groups {
+    print('[DEBUG] DataManager.groups: $_groups');
+    return List.unmodifiable(_groups);
+  }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
 
   AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
@@ -92,7 +95,7 @@ class DataManager {
 
   Future<void> loadGroups() async {
     try {
-      _groups = await AcademyDbService.instance.getGroups();
+      _groups = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
       _groupsById = {for (var g in _groups) g.id: g};
     } catch (e) {
       print('Error loading groups: $e');
@@ -203,6 +206,7 @@ class DataManager {
 
   void addGroup(GroupInfo groupInfo) {
     _groups.add(groupInfo);
+    _groups = _groups.where((g) => g != null).toList();
     _groupsById[groupInfo.id] = groupInfo;
     _notifyListeners();
     saveGroups();
@@ -210,7 +214,7 @@ class DataManager {
 
   void updateGroup(GroupInfo groupInfo) {
     _groupsById[groupInfo.id] = groupInfo;
-    _groups = _groupsById.values.toList();
+    _groups = _groupsById.values.where((g) => g != null).toList();
     _notifyListeners();
     saveGroups();
   }
@@ -218,7 +222,7 @@ class DataManager {
   void deleteGroup(GroupInfo groupInfo) {
     if (_groupsById.containsKey(groupInfo.id)) {
       _groupsById.remove(groupInfo.id);
-      _groups = _groupsById.values.toList();
+      _groups = _groupsById.values.where((g) => g != null).toList();
       
       // Remove group from students
       for (var i = 0; i < _studentsWithInfo.length; i++) {
@@ -409,7 +413,7 @@ class DataManager {
   }
 
   void setGroupsOrder(List<GroupInfo> newOrder) {
-    _groups = List<GroupInfo>.from(newOrder);
+    _groups = newOrder.where((g) => g != null).toList();
     _groupsById = {for (var g in _groups) g.id: g};
     _notifyListeners();
     saveGroups();

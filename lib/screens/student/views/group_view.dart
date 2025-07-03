@@ -15,6 +15,8 @@ class GroupView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] views/group_view.dart build 시작');
+    print('[DEBUG] students: $students');
     final groupGroups = <String, List<Student>>{};
     
     for (final student in students) {
@@ -24,6 +26,7 @@ class GroupView extends StatelessWidget {
         groupGroups[groupName]!.add(student);
       }
     }
+    print('[DEBUG] groupGroups: $groupGroups');
 
     final sortedGroups = groupGroups.keys.toList()..sort();
 
@@ -33,6 +36,7 @@ class GroupView extends StatelessWidget {
       itemBuilder: (context, index) {
         final groupName = sortedGroups[index];
         final groupStudents = groupGroups[groupName]!;
+        print('[DEBUG] 그룹: $groupName, groupStudents: $groupStudents');
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -50,6 +54,7 @@ class GroupView extends StatelessWidget {
               itemCount: groupStudents.length,
               itemBuilder: (context, index) {
                 final student = groupStudents[index];
+                print('[DEBUG] StudentCard 생성: $student');
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: StudentCard(

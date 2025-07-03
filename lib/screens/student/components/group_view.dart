@@ -14,6 +14,7 @@ class GroupView extends StatefulWidget {
   final Function(GroupInfo, int) onGroupUpdated;
   final Function(GroupInfo) onGroupDeleted;
   final Function(StudentWithInfo, GroupInfo?) onStudentMoved;
+  final Function(GroupInfo, int)? onGroupEdited;
 
   const GroupView({
     super.key,
@@ -24,6 +25,7 @@ class GroupView extends StatefulWidget {
     required this.onGroupUpdated,
     required this.onGroupDeleted,
     required this.onStudentMoved,
+    this.onGroupEdited,
   });
 
   @override
@@ -117,7 +119,9 @@ class _GroupViewState extends State<GroupView> {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG] GroupView build 호출, _pendingDeleteStudent=${_pendingDeleteStudent?.student.name}');
+    print('[DEBUG] GroupView build 시작');
+    print('[DEBUG] widget.groups: ${widget.groups}');
+    print('[DEBUG] widget.students: ${widget.students}');
     _rootContext = context;
     if (_pendingDeleteStudent != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -160,6 +164,8 @@ class _GroupViewState extends State<GroupView> {
         }
       });
     }
+    final nonNullGroups = widget.groups.where((g) => g != null).toList();
+    print('[DEBUG] nonNullGroups: $nonNullGroups');
     return Center(
       child: Container(
         width: 1000,
@@ -259,10 +265,11 @@ class _GroupViewState extends State<GroupView> {
                   child: child,
                 );
               },
-              itemCount: widget.groups.length,
+              itemCount: nonNullGroups.length,
               itemBuilder: (context, index) {
-                final groupInfo = widget.groups[index];
+                final groupInfo = nonNullGroups[index];
                 final studentsInGroup = widget.students.where((s) => s.groupInfo == groupInfo).toList();
+                print('[DEBUG] 그룹카드 생성: groupInfo=$groupInfo, studentsInGroup=${studentsInGroup.length}');
                 final isExpanded = widget.expandedGroups.contains(groupInfo);
                 return Padding(
                   key: ValueKey(groupInfo),
@@ -385,8 +392,20 @@ class _GroupViewState extends State<GroupView> {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           IconButton(
-                                            onPressed: () {
-                                              // TODO: 그룹 수정 다이얼로그 표시
+                                            onPressed: () async {
+                                              print('[DEBUG] 수정 버튼 클릭: groupInfo=$groupInfo');
+                                              await showDialog(
+                                                context: context,
+                                                builder: (context) => GroupRegistrationDialog(
+                                                  editMode: true,
+                                                  groupInfo: groupInfo,
+                                                  currentMemberCount: studentsInGroup.length,
+                                                  onSave: (updatedGroup) {
+                                                    widget.onGroupEdited?.call(updatedGroup, index);
+                                                    Navigator.of(context).pop();
+                                                  },
+                                                ),
+                                              );
                                             },
                                             icon: const Icon(Icons.edit_rounded),
                                             style: IconButton.styleFrom(

@@ -397,6 +397,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                       context: context,
                                                       builder: (context) => GroupRegistrationDialog(
                                                         editMode: true,
+                                                        groupInfo: groupInfo,
                                                         onSave: (updatedGroup) {
                                                           Navigator.of(context).pop(updatedGroup);
                                                         },
@@ -412,8 +413,29 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                   ),
                                                 ),
                                                 IconButton(
-                                                  onPressed: () {
-                                                    widget.onGroupDeleted(groupInfo);
+                                                  onPressed: () async {
+                                                    final confirm = await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (context) => AlertDialog(
+                                                        backgroundColor: const Color(0xFF232326),
+                                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                        title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
+                                                        content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(false),
+                                                            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(true),
+                                                            child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirm == true) {
+                                                      widget.onGroupDeleted(groupInfo);
+                                                    }
                                                   },
                                                   icon: const Icon(Icons.delete_rounded),
                                                   style: IconButton.styleFrom(
