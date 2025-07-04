@@ -79,8 +79,8 @@ class AcademyDbService {
           )
         ''');
         await db.execute('''
-          CREATE TABLE teachers (
-            id TEXT PRIMARY KEY,
+          CREATE TABLE IF NOT EXISTS teachers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             role INTEGER,
             contact TEXT,
@@ -128,6 +128,16 @@ class AcademyDbService {
         if (!hasGroupId) {
           await db.execute("ALTER TABLE students ADD COLUMN group_id TEXT");
         }
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS teachers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            role INTEGER,
+            contact TEXT,
+            email TEXT,
+            description TEXT
+          )
+        ''');
       },
     );
   }

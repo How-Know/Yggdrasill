@@ -396,19 +396,50 @@ class DataManager {
   }
 
   Future<void> saveTeachers() async {
-    await AcademyDbService.instance.saveTeachers(_teachers);
-    await loadTeachers();
+    try {
+      print('[DEBUG] saveTeachers 시작: \\${_teachers.length}명');
+      final dbClient = await AcademyDbService.instance.db;
+      print('[DEBUG] saveTeachers: \\${_teachers.length}명');
+      await dbClient.delete('teachers');
+      for (final t in _teachers) {
+        print('[DB] insert teacher: $t');
+        await dbClient.insert('teachers', {
+          'name': t.name,
+          'role': t.role.index,
+          'contact': t.contact,
+          'email': t.email,
+          'description': t.description,
+        });
+      }
+      print('[DEBUG] saveTeachers 완료');
+    } catch (e, st) {
+      print('[DB][ERROR] saveTeachers: $e\\n$st');
+      rethrow;
+    }
   }
 
   void addTeacher(Teacher teacher) {
+    print('[DEBUG] addTeacher 호출: $teacher');
     _teachers.add(teacher);
+    print('[DEBUG] saveTeachers 호출 전 teachers.length: ${_teachers.length}');
     saveTeachers();
+    teachersNotifier.value = List.unmodifiable(_teachers);
+    print('[DEBUG] teachersNotifier.value 갱신: ${teachersNotifier.value.length}');
   }
 
   void deleteTeacher(int idx) {
     if (idx >= 0 && idx < _teachers.length) {
       _teachers.removeAt(idx);
       saveTeachers();
+      teachersNotifier.value = List.unmodifiable(_teachers);
+    }
+  }
+
+  void updateTeacher(int idx, Teacher updated) {
+    if (idx >= 0 && idx < _teachers.length) {
+      _teachers[idx] = updated;
+      saveTeachers();
+      teachersNotifier.value = List.unmodifiable(_teachers);
     }
   }
 
@@ -417,5 +448,11 @@ class DataManager {
     _groupsById = {for (var g in _groups) g.id: g};
     _notifyListeners();
     saveGroups();
+  }
+
+  void setTeachersOrder(List<Teacher> newOrder) {
+    _teachers = List<Teacher>.from(newOrder);
+    teachersNotifier.value = List.unmodifiable(_teachers);
+    saveTeachers();
   }
 } 

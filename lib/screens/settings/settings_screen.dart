@@ -11,6 +11,9 @@ import '../../widgets/custom_tab_bar.dart';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import '../../models/teacher.dart';
+import '../../widgets/main_fab.dart';
+import '../../widgets/teacher_registration_dialog.dart';
+import '../../widgets/teacher_details_dialog.dart';
 
 enum SettingType {
   academy,
@@ -111,6 +114,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // FAB 위치 조정용 상태 변수 추가
   double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
+
+  bool _isTabAnimating = false;
 
   @override
   void initState() {
@@ -943,6 +948,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] SettingsScreen build: _customTabIndex=$_customTabIndex, _prevTabIndex=$_prevTabIndex');
     if (_academyLogo != null && _academyLogo!.isNotEmpty) {
       print('[UI] _academyLogo type=\x1b[36m${_academyLogo.runtimeType}\x1b[0m, length=\x1b[36m${_academyLogo?.length}\x1b[0m, isNull=${_academyLogo == null}');
     }
@@ -981,45 +987,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
           CustomTabBar(
             selectedIndex: _customTabIndex,
             tabs: const ['학원', '선생님', '일반'],
-            onTabSelected: (idx) => setState(() {
-              _prevTabIndex = _customTabIndex;
-              _customTabIndex = idx;
-            }),
+            onTabSelected: (idx) {
+              if (_isTabAnimating || idx == _customTabIndex) return;
+              setState(() {
+                print('[DEBUG] 탭 클릭: 이전(_prevTabIndex)=$_prevTabIndex, 현재(_customTabIndex)=$_customTabIndex, 선택(idx)=$idx');
+                _prevTabIndex = _customTabIndex;
+                _customTabIndex = idx;
+                _isTabAnimating = true;
+              });
+            },
           ),
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 400),
+              child: _customTabIndex == 0
+                  ? KeyedSubtree(key: ValueKey(0), child: _buildAcademySettings())
+                  : _customTabIndex == 1
+                      ? KeyedSubtree(key: ValueKey(1), child: _buildTeacherSettings())
+                      : KeyedSubtree(key: ValueKey(2), child: _buildGeneralSettings()),
               transitionBuilder: (child, animation) {
+                animation.addStatusListener((status) {
+                  if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
+                    if (_isTabAnimating) {
+                      setState(() {
+                        _isTabAnimating = false;
+                      });
+                    }
+                  }
+                });
                 final isForward = _customTabIndex > _prevTabIndex;
-                return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: Offset(isForward ? 1 : -1, 0),
-                    end: Offset.zero,
-                  ).animate(animation),
-                  child: child,
-                );
+                final childKey = (child.key as ValueKey<int>).value;
+                if (childKey == _customTabIndex) {
+                  // 들어오는 위젯: 오른쪽(또는 왼쪽)에서 슬라이드 인
+                  return SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset(isForward ? 1.0 : -1.0, 0.0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  );
+                } else {
+                  // 나가는 위젯: 왼쪽(또는 오른쪽)으로 슬라이드 아웃
+                  return SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset.zero,
+                      end: Offset(isForward ? -1.0 : 1.0, 0.0),
+                    ).animate(animation),
+                    child: child,
+                  );
+                }
               },
-              layoutBuilder: (currentChild, previousChildren) {
-                return Stack(
-                  children: <Widget>[...
-                    previousChildren,
-                    if (currentChild != null) currentChild,
-                  ],
-                );
-              },
-              child: Builder(
-                key: ValueKey(_customTabIndex),
-                builder: (context) {
-                  if (_customTabIndex == 0) return _buildAcademySettings();
-                  if (_customTabIndex == 1) return _buildTeacherSettings();
-                  return _buildGeneralSettings();
-                },
-              ),
             ),
           ),
         ],
       ),
-      // floatingActionButton은 정의하지 않음 (MainScreen의 FAB가 노출됨)
+      floatingActionButton: const MainFab(),
     );
   }
 
@@ -1125,112 +1147,245 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showAddTeacherDialog() async {
-    String name = '';
-    TeacherRole role = TeacherRole.all;
-    String contact = '';
-    String email = '';
-    String description = '';
     await showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('선생님 등록'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                decoration: InputDecoration(labelText: '이름'),
-                onChanged: (v) => name = v,
-              ),
-              DropdownButton<TeacherRole>(
-                value: role,
-                items: TeacherRole.values.map((r) => DropdownMenuItem(
-                  value: r,
-                  child: Text(getTeacherRoleLabel(r)),
-                )).toList(),
-                onChanged: (v) { if (v != null) role = v; },
-              ),
-              TextField(
-                decoration: InputDecoration(labelText: '연락처'),
-                onChanged: (v) => contact = v,
-              ),
-              TextField(
-                decoration: InputDecoration(labelText: '이메일'),
-                onChanged: (v) => email = v,
-              ),
-              TextField(
-                decoration: InputDecoration(labelText: '설명'),
-                onChanged: (v) => description = v,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('취소'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                DataManager.instance.addTeacher(Teacher(
-                  name: name,
-                  role: role,
-                  contact: contact,
-                  email: email,
-                  description: description,
-                ));
-                Navigator.pop(context);
-              },
-              child: Text('등록'),
-            ),
-          ],
-        );
-      },
+      builder: (context) => TeacherRegistrationDialog(
+        onSave: (teacher) {
+          DataManager.instance.addTeacher(teacher);
+        },
+      ),
     );
   }
 
   Widget _buildTeacherSettings() {
-    return ValueListenableBuilder<List<Teacher>>(
-      valueListenable: DataManager.instance.teachersNotifier,
-      builder: (context, teachers, _) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Padding(
+      padding: const EdgeInsets.only(top: 48),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: SizedBox(
+          width: 650,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF18181A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('선생님 목록', style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold)),
-                ElevatedButton.icon(
-                  onPressed: _showAddTeacherDialog,
-                  icon: Icon(Icons.add),
-                  label: Text('선생님 등록'),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      '선생님 관리',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: _showAddTeacherDialog,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1976D2),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                      ),
+                      child: const Text('선생님 등록', style: TextStyle(fontSize: 16, color: Colors.white)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                ValueListenableBuilder<List<Teacher>>(
+                  valueListenable: DataManager.instance.teachersNotifier,
+                  builder: (context, teachers, _) {
+                    if (teachers.isEmpty) {
+                      return Center(
+                        child: Text(
+                          '등록된 선생님이 없습니다.',
+                          style: TextStyle(color: Colors.white70, fontSize: 18),
+                        ),
+                      );
+                    }
+                    return SizedBox(
+                      height: (teachers.length * 64.0) + ((teachers.length - 1) * 16.0),
+                      child: ReorderableListView(
+                        buildDefaultDragHandles: false,
+                        proxyDecorator: (child, index, animation) {
+                          return Material(
+                            color: Colors.transparent,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF23232A),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: child,
+                            ),
+                          );
+                        },
+                        onReorder: (oldIndex, newIndex) {
+                          if (newIndex > oldIndex) newIndex--;
+                          final newList = List<Teacher>.from(teachers);
+                          final item = newList.removeAt(oldIndex);
+                          newList.insert(newIndex, item);
+                          DataManager.instance.setTeachersOrder(newList);
+                        },
+                        children: [
+                          for (int i = 0; i < teachers.length; i++)
+                            Padding(
+                              key: ValueKey(teachers[i]),
+                              padding: EdgeInsets.only(bottom: i == teachers.length - 1 ? 0 : 16),
+                              child: _buildTeacherCard(teachers[i], key: ValueKey(teachers[i])),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 24), // 하단 여백
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTeacherCard(Teacher t, {Key? key}) {
+    return Container(
+      key: key,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF23232A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              t.name,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(width: 16),
+          SizedBox(
+            width: 60,
+            child: Text(
+              getTeacherRoleLabel(t.role),
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(width: 16),
+          SizedBox(
+            width: 320,
+            child: Text(
+              t.description,
+              style: const TextStyle(color: Colors.white60, fontSize: 13),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.white54),
+                  color: const Color(0xFF2A2A2A),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onSelected: (value) async {
+                    if (value == 'edit') {
+                      await showDialog(
+                        context: context,
+                        builder: (context) => TeacherRegistrationDialog(
+                          teacher: t,
+                          onSave: (updatedTeacher) {
+                            final idx = DataManager.instance.teachersNotifier.value.indexOf(t);
+                            if (idx != -1) {
+                              DataManager.instance.updateTeacher(idx, updatedTeacher);
+                            }
+                          },
+                        ),
+                      );
+                    } else if (value == 'delete') {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          backgroundColor: const Color(0xFF2A2A2A),
+                          title: const Text('선생님 삭제', style: TextStyle(color: Colors.white)),
+                          content: const Text('정말로 이 선생님을 삭제하시겠습니까?', style: TextStyle(color: Colors.white)),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('취소'),
+                            ),
+                            FilledButton(
+                              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                              onPressed: () => Navigator.of(context).pop(true),
+                              child: const Text('삭제'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        final idx = DataManager.instance.teachersNotifier.value.indexOf(t);
+                        if (idx != -1) {
+                          DataManager.instance.deleteTeacher(idx);
+                        }
+                      }
+                    } else if (value == 'details') {
+                      await showDialog(
+                        context: context,
+                        builder: (context) => TeacherDetailsDialog(teacher: t),
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: ListTile(
+                        leading: const Icon(Icons.edit_outlined, color: Colors.white70),
+                        title: const Text('수정', style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: ListTile(
+                        leading: const Icon(Icons.delete_outline, color: Colors.red),
+                        title: const Text('삭제', style: TextStyle(color: Colors.red)),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'details',
+                      child: ListTile(
+                        leading: const Icon(Icons.info_outline, color: Colors.white70),
+                        title: const Text('상세보기', style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 2),
+                ReorderableDragStartListener(
+                  index: DataManager.instance.teachersNotifier.value.indexOf(t),
+                  child: Icon(Icons.drag_handle, color: Colors.white38),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: ListView.builder(
-                itemCount: teachers.length,
-                itemBuilder: (context, idx) {
-                  final t = teachers[idx];
-                  return Card(
-                    color: Color(0xFF23232A),
-                    child: ListTile(
-                      title: Text(t.name, style: TextStyle(color: Colors.white)),
-                      subtitle: Text('${getTeacherRoleLabel(t.role)} | ${t.contact} | ${t.email}\n${t.description}', style: TextStyle(color: Colors.white70)),
-                      trailing: IconButton(
-                        icon: Icon(Icons.delete, color: Colors.red),
-                        onPressed: () {
-                          DataManager.instance.deleteTeacher(idx);
-                        },
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
     );
   }
 

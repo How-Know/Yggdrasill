@@ -71,13 +71,23 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                     PageRouteBuilder(
                       pageBuilder: (context, animation, secondaryAnimation) => const SettingsScreen(),
                       transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                        const begin = Offset(1.0, 0.0);
-                        const end = Offset.zero;
-                        const curve = Curves.ease;
-                        final tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                        // Material 3 Forward/Backward 효과: 슬라이드 + 페이드
+                        // push: 오른쪽→가운데, pop: 가운데→오른쪽
+                        final isPop = animation.value < secondaryAnimation.value;
+                        final beginOffset = isPop ? Offset.zero : Offset(1.0, 0.0);
+                        final endOffset = isPop ? Offset(1.0, 0.0) : Offset.zero;
+                        final slideAnimation = Tween<Offset>(begin: beginOffset, end: endOffset)
+                            .chain(CurveTween(curve: Curves.easeInOut))
+                            .animate(animation);
+                        final fadeAnimation = Tween<double>(begin: 0.0, end: 1.0)
+                            .chain(CurveTween(curve: Curves.easeInOut))
+                            .animate(animation);
                         return SlideTransition(
-                          position: animation.drive(tween),
-                          child: child,
+                          position: slideAnimation,
+                          child: FadeTransition(
+                            opacity: fadeAnimation,
+                            child: child,
+                          ),
                         );
                       },
                     ),
