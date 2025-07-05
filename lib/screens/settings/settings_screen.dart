@@ -14,6 +14,7 @@ import '../../models/teacher.dart';
 import '../../widgets/main_fab.dart';
 import '../../widgets/teacher_registration_dialog.dart';
 import '../../widgets/teacher_details_dialog.dart';
+import 'package:animations/animations.dart';
 
 enum SettingType {
   academy,
@@ -179,172 +180,174 @@ class _SettingsScreenState extends State<SettingsScreen> {
       alignment: Alignment.topCenter,
       child: Padding(
         padding: const EdgeInsets.only(top: 48),
-        child: Container(
-          width: 1000,
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          decoration: BoxDecoration(
-            color: Color(0xFF18181A),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 테마 설정
-              const Padding(
-                padding: EdgeInsets.only(top: 24),
-                child: Text(
-                  '테마',
+        child: SizedBox(
+          width: 650,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            decoration: BoxDecoration(
+              color: Color(0xFF18181A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 테마 설정
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: Text(
+                    '테마',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SegmentedButton<ThemeMode>(
+                  segments: const [
+                    ButtonSegment<ThemeMode>(
+                      value: ThemeMode.system,
+                      label: Text('시스템'),
+                    ),
+                    ButtonSegment<ThemeMode>(
+                      value: ThemeMode.light,
+                      label: Text('라이트'),
+                    ),
+                    ButtonSegment<ThemeMode>(
+                      value: ThemeMode.dark,
+                      label: Text('다크'),
+                    ),
+                  ],
+                  selected: {ThemeMode.dark},
+                  onSelectionChanged: (Set<ThemeMode> newSelection) {
+                    // TODO: 테마 변경 기능 구현
+                  },
+                  style: ButtonStyle(
+                    backgroundColor: MaterialStateProperty.resolveWith<Color>(
+                      (Set<MaterialState> states) {
+                        if (states.contains(MaterialState.selected)) {
+                          return const Color(0xFF78909C);
+                        }
+                        return Colors.transparent;
+                      },
+                    ),
+                    foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                      (Set<MaterialState> states) {
+                        if (states.contains(MaterialState.selected)) {
+                          return Colors.white;
+                        }
+                        return Colors.white70;
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 40),
+                // 언어 설정
+                const Text(
+                  '언어',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.system,
-                    label: Text('시스템'),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.light,
-                    label: Text('라이트'),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.dark,
-                    label: Text('다크'),
-                  ),
-                ],
-                selected: {ThemeMode.dark},
-                onSelectionChanged: (Set<ThemeMode> newSelection) {
-                  // TODO: 테마 변경 기능 구현
-                },
-                style: ButtonStyle(
-                  backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                    (Set<MaterialState> states) {
-                      if (states.contains(MaterialState.selected)) {
-                        return const Color(0xFF78909C);
-                      }
-                      return Colors.transparent;
-                    },
-                  ),
-                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                    (Set<MaterialState> states) {
-                      if (states.contains(MaterialState.selected)) {
-                        return Colors.white;
-                      }
-                      return Colors.white70;
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: 300,
+                  child: DropdownButtonFormField<String>(
+                    value: 'ko',
+                    decoration: InputDecoration(
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    dropdownColor: const Color(0xFF1F1F1F),
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    items: const [
+                      DropdownMenuItem(value: 'ko', child: Text('한국어')),
+                      DropdownMenuItem(value: 'en', child: Text('English')),
+                      DropdownMenuItem(value: 'ja', child: Text('日本語')),
+                    ],
+                    onChanged: (String? value) {
+                      // TODO: 언어 변경 기능 구현
                     },
                   ),
                 ),
-              ),
-              const SizedBox(height: 40),
-              // 언어 설정
-              const Text(
-                '언어',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: 300,
-                child: DropdownButtonFormField<String>(
-                  value: 'ko',
-                  decoration: InputDecoration(
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF1976D2)),
-                    ),
+                const SizedBox(height: 40),
+                // 알림 설정
+                const Text(
+                  '알림',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
                   ),
-                  dropdownColor: const Color(0xFF1F1F1F),
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                  items: const [
-                    DropdownMenuItem(value: 'ko', child: Text('한국어')),
-                    DropdownMenuItem(value: 'en', child: Text('English')),
-                    DropdownMenuItem(value: 'ja', child: Text('日本語')),
-                  ],
-                  onChanged: (String? value) {
-                    // TODO: 언어 변경 기능 구현
+                ),
+                const SizedBox(height: 20),
+                SwitchListTile(
+                  title: const Text(
+                    '수업 시작 알림',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                  subtitle: const Text(
+                    '수업 시작 10분 전에 알림을 받습니다',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  value: true,
+                  onChanged: (bool value) {
+                    // TODO: 알림 설정 기능 구현
                   },
+                  activeColor: const Color(0xFF1976D2),
                 ),
-              ),
-              const SizedBox(height: 40),
-              // 알림 설정
-              const Text(
-                '알림',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
+                SwitchListTile(
+                  title: const Text(
+                    '휴식 시간 알림',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                  subtitle: const Text(
+                    '휴식 시간 시작과 종료 시 알림을 받습니다',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  value: true,
+                  onChanged: (bool value) {
+                    // TODO: 알림 설정 기능 구현
+                  },
+                  activeColor: const Color(0xFF1976D2),
                 ),
-              ),
-              const SizedBox(height: 20),
-              SwitchListTile(
-                title: const Text(
-                  '수업 시작 알림',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
+                const SizedBox(height: 40),
+                // 자동 백업
+                const Text(
+                  '자동 백업',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-                subtitle: const Text(
-                  '수업 시작 10분 전에 알림을 받습니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                const SizedBox(height: 20),
+                SwitchListTile(
+                  title: const Text(
+                    '클라우드 백업',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                  subtitle: const Text(
+                    '매일 자정에 데이터를 자동으로 백업합니다',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  value: true,
+                  onChanged: (bool value) {
+                    // TODO: 백업 설정 기능 구현
+                  },
+                  activeColor: const Color(0xFF1976D2),
                 ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 알림 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
-              SwitchListTile(
-                title: const Text(
-                  '휴식 시간 알림',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                subtitle: const Text(
-                  '휴식 시간 시작과 종료 시 알림을 받습니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 알림 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
-              const SizedBox(height: 40),
-              // 자동 백업
-              const Text(
-                '자동 백업',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SwitchListTile(
-                title: const Text(
-                  '클라우드 백업',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                subtitle: const Text(
-                  '매일 자정에 데이터를 자동으로 백업합니다',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                value: true,
-                onChanged: (bool value) {
-                  // TODO: 백업 설정 기능 구현
-                },
-                activeColor: const Color(0xFF1976D2),
-              ),
-              const Padding(padding: EdgeInsets.only(bottom: 24)),
-            ],
+                const Padding(padding: EdgeInsets.only(bottom: 24)),
+              ],
+            ),
           ),
         ),
       ),
@@ -948,69 +951,136 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG] SettingsScreen build: _customTabIndex=$_customTabIndex, _prevTabIndex=$_prevTabIndex');
-    if (_academyLogo != null && _academyLogo!.isNotEmpty) {
-      print('[UI] _academyLogo type=\x1b[36m${_academyLogo.runtimeType}\x1b[0m, length=\x1b[36m${_academyLogo?.length}\x1b[0m, isNull=${_academyLogo == null}');
-    }
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       appBar: AppBarTitle(
         title: '설정',
         onBack: () {
-          try {
-            if (identical(0, 0.0)) {
-              // ignore: avoid_web_libraries_in_flutter
-              // html.window.history.back();
-            } else {
-              if (Navigator.of(context).canPop()) {
-                Navigator.of(context).pop();
-              }
-            }
-          } catch (_) {}
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
         },
-        onForward: () {
-          try {
-            if (identical(0, 0.0)) {
-              // ignore: avoid_web_libraries_in_flutter
-              // html.window.history.forward();
-            }
-          } catch (_) {}
-        },
+        onForward: () {},
         onRefresh: () => setState(() {}),
-        onSettings: () {
-          // MainScreen의 네비게이션 레일에서 처리하므로 별도 동작 없음
-        },
       ),
       body: Column(
         children: [
-          const SizedBox(height: 5),
-          CustomTabBar(
-            selectedIndex: _customTabIndex,
-            tabs: const ['학원', '선생님', '일반'],
-            onTabSelected: (idx) {
-              if (_isTabAnimating || idx == _customTabIndex) return;
-              setState(() {
-                print('[DEBUG] 탭 클릭: 이전(_prevTabIndex)=$_prevTabIndex, 현재(_customTabIndex)=$_customTabIndex, 선택(idx)=$idx');
-                _prevTabIndex = _customTabIndex;
-                _customTabIndex = idx;
-                _isTabAnimating = true;
-              });
-            },
+          const SizedBox(height: 0),
+          SizedBox(height: 5),
+          SizedBox(
+            height: 48,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const tabWidth = 120.0;
+                const tabCount = 3;
+                final tabGap = 21.0;
+                final totalWidth = tabWidth * tabCount + tabGap * 2;
+                final leftPadding = (constraints.maxWidth - totalWidth) / 2;
+                return Stack(
+                  children: [
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 400),
+                      curve: Curves.easeOutBack,
+                      left: leftPadding + (_customTabIndex == 0 ? 0 : _customTabIndex == 1 ? tabWidth + tabGap : (tabWidth + tabGap) * 2),
+                      bottom: 0,
+                      child: Container(
+                        width: tabWidth,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: Colors.blue,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: tabWidth,
+                          child: TextButton(
+                            onPressed: () => setState(() {
+                              _prevTabIndex = _customTabIndex;
+                              _customTabIndex = 0;
+                              _selectedType = SettingType.academy;
+                            }),
+                            child: Text(
+                              '학원',
+                              style: TextStyle(
+                                color: _customTabIndex == 0 ? Colors.blue : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: tabGap),
+                        SizedBox(
+                          width: tabWidth,
+                          child: TextButton(
+                            onPressed: () => setState(() {
+                              _prevTabIndex = _customTabIndex;
+                              _customTabIndex = 1;
+                              _selectedType = SettingType.general;
+                            }),
+                            child: Text(
+                              '선생님',
+                              style: TextStyle(
+                                color: _customTabIndex == 1 ? Colors.blue : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: tabGap),
+                        SizedBox(
+                          width: tabWidth,
+                          child: TextButton(
+                            onPressed: () => setState(() {
+                              _prevTabIndex = _customTabIndex;
+                              _customTabIndex = 2;
+                            }),
+                            child: Text(
+                              '일반',
+                              style: TextStyle(
+                                color: _customTabIndex == 2 ? Colors.blue : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
+          const SizedBox(height: 24),
           Expanded(
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 800),
-              child: _customTabIndex == 0
-                  ? KeyedSubtree(key: ValueKey(0), child: _buildAcademySettings())
-                  : _customTabIndex == 1
-                      ? KeyedSubtree(key: ValueKey(1), child: _buildTeacherSettings())
-                      : KeyedSubtree(key: ValueKey(2), child: _buildGeneralSettings()),
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeInOut,
+              switchOutCurve: Curves.easeInOut,
               transitionBuilder: (child, animation) {
                 return FadeTransition(
                   opacity: animation,
                   child: child,
                 );
               },
+              child: Builder(
+                key: ValueKey(_customTabIndex),
+                builder: (context) {
+                  if (_customTabIndex == 0) {
+                    return _buildAcademySettingsContainer();
+                  } else if (_customTabIndex == 1) {
+                    return _buildTeacherSettingsContainer();
+                  } else {
+                    return _buildGeneralSettingsContainer();
+                  }
+                },
+              ),
             ),
           ),
         ],
@@ -1373,5 +1443,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _fabBottomPadding = 16.0;
     });
+  }
+
+  // 각 내용 위젯을 배경색 컨테이너로 감싸는 래퍼 추가
+  Widget _buildAcademySettingsContainer() {
+    return Container(
+      color: const Color(0xFF1F1F1F),
+      child: _buildAcademySettings(),
+    );
+  }
+  Widget _buildTeacherSettingsContainer() {
+    return Container(
+      color: const Color(0xFF1F1F1F),
+      child: _buildTeacherSettings(),
+    );
+  }
+  Widget _buildGeneralSettingsContainer() {
+    return Container(
+      color: const Color(0xFF1F1F1F),
+      child: _buildGeneralSettings(),
+    );
   }
 } 

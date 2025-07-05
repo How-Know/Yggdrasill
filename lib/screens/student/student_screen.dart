@@ -259,18 +259,78 @@ class StudentScreenState extends State<StudentScreen> {
           body: Column(
             children: [
               const SizedBox(height: 0),
-              CustomTabBar(
-                selectedIndex: _customTabIndex,
-                tabs: const ['학생 목록', '성향 조사'],
-                onTabSelected: (idx) => setState(() {
-                  _prevTabIndex = _customTabIndex;
-                  _customTabIndex = idx;
-                  if (idx == 0) {
-                    _viewType = StudentViewType.all;
-                  } else if (idx == 1) {
-                    _viewType = StudentViewType.byDate;
-                  }
-                }),
+              SizedBox(height: 5),
+              SizedBox(
+                height: 48,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const tabWidth = 120.0;
+                    const tabCount = 2;
+                    final tabGap = 21.0;
+                    final totalWidth = tabWidth * tabCount + tabGap; // 버튼 간격 포함
+                    final leftPadding = (constraints.maxWidth - totalWidth) / 2;
+                    return Stack(
+                      children: [
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 400),
+                          curve: Curves.easeOutBack,
+                          left: leftPadding + (_customTabIndex == 0 ? 0 : tabWidth + tabGap),
+                          bottom: 0,
+                          child: Container(
+                            width: tabWidth,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: Colors.blue,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: tabWidth,
+                              child: TextButton(
+                                onPressed: () => setState(() {
+                                  _prevTabIndex = _customTabIndex;
+                                  _customTabIndex = 0;
+                                  _viewType = StudentViewType.all;
+                                }),
+                                child: Text(
+                                  '학생 목록',
+                                  style: TextStyle(
+                                    color: _customTabIndex == 0 ? Colors.blue : Colors.white70,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: tabGap),
+                            SizedBox(
+                              width: tabWidth,
+                              child: TextButton(
+                                onPressed: () => setState(() {
+                                  _prevTabIndex = _customTabIndex;
+                                  _customTabIndex = 1;
+                                  _viewType = StudentViewType.byDate;
+                                }),
+                                child: Text(
+                                  '성향 조사',
+                                  style: TextStyle(
+                                    color: _customTabIndex == 1 ? Colors.blue : Colors.white70,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
               const SizedBox(height: 8),
               Row(
