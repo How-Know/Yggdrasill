@@ -999,43 +999,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Expanded(
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 400),
+              duration: const Duration(milliseconds: 800),
               child: _customTabIndex == 0
                   ? KeyedSubtree(key: ValueKey(0), child: _buildAcademySettings())
                   : _customTabIndex == 1
                       ? KeyedSubtree(key: ValueKey(1), child: _buildTeacherSettings())
                       : KeyedSubtree(key: ValueKey(2), child: _buildGeneralSettings()),
               transitionBuilder: (child, animation) {
-                animation.addStatusListener((status) {
-                  if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
-                    if (_isTabAnimating) {
-                      setState(() {
-                        _isTabAnimating = false;
-                      });
-                    }
-                  }
-                });
-                final isForward = _customTabIndex > _prevTabIndex;
-                final childKey = (child.key as ValueKey<int>).value;
-                if (childKey == _customTabIndex) {
-                  // 들어오는 위젯: 오른쪽(또는 왼쪽)에서 슬라이드 인
-                  return SlideTransition(
-                    position: Tween<Offset>(
-                      begin: Offset(isForward ? 1.0 : -1.0, 0.0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  );
-                } else {
-                  // 나가는 위젯: 왼쪽(또는 오른쪽)으로 슬라이드 아웃
-                  return SlideTransition(
-                    position: Tween<Offset>(
-                      begin: Offset.zero,
-                      end: Offset(isForward ? -1.0 : 1.0, 0.0),
-                    ).animate(animation),
-                    child: child,
-                  );
-                }
+                return FadeTransition(
+                  opacity: animation,
+                  child: child,
+                );
               },
             ),
           ),

@@ -80,11 +80,6 @@ class Student {
       'school': school,
       'grade': grade,
       'education_level': educationLevel.index,
-      'phone_number': phoneNumber,
-      'parent_phone_number': parentPhoneNumber,
-      'registration_date': registrationDate?.toIso8601String(),
-      'weekly_class_count': weeklyClassCount,
-      'group_id': groupId,
     };
   }
 }

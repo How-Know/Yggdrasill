@@ -356,7 +356,21 @@ class StudentScreenState extends State<StudentScreen> {
               const SizedBox(height: 24),
               Expanded(
                 child: SingleChildScrollView(
-                  child: _buildContent(),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    switchInCurve: Curves.easeInOut,
+                    switchOutCurve: Curves.easeInOut,
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      );
+                    },
+                    child: Builder(
+                      key: ValueKey(_customTabIndex),
+                      builder: (context) => _buildContent(),
+                    ),
+                  ),
                 ),
               ),
             ],
