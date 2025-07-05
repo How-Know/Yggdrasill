@@ -88,10 +88,34 @@ class StudentScreenState extends State<StudentScreen> {
                 onGroupDeleted: (groupInfo) {
                   DataManager.instance.deleteGroup(groupInfo);
                 },
-                onStudentMoved: (studentWithInfo, newGroup) {
+                onStudentMoved: (studentWithInfo, newGroup) async {
                   print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
                   if (newGroup != null) {
-                    DataManager.instance.updateStudent(
+                    // capacity 체크
+                    final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
+                    print('[DEBUG] onStudentMoved - 현재 그룹 인원: \\${groupStudents.length}, 정원: \\${newGroup.capacity}');
+                    if (groupStudents.length >= (newGroup.capacity ?? 0)) {
+                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
+                      await showDialog(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          backgroundColor: const Color(0xFF232326),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          title: Text('${newGroup.name} 정원 초과', style: const TextStyle(color: Colors.white)),
+                          content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.', style: TextStyle(color: Colors.white70)),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                            ),
+                          ],
+                        ),
+                      );
+                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 종료');
+                      return;
+                    }
+                    print('[DEBUG] onStudentMoved - updateStudent 호출');
+                    await DataManager.instance.updateStudent(
                       studentWithInfo.student.copyWith(groupInfo: newGroup),
                       studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
                     );
@@ -120,10 +144,34 @@ class StudentScreenState extends State<StudentScreen> {
                 onGroupDeleted: (groupInfo) {
                   DataManager.instance.deleteGroup(groupInfo);
                 },
-                onStudentMoved: (studentWithInfo, newGroup) {
+                onStudentMoved: (studentWithInfo, newGroup) async {
                   print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
                   if (newGroup != null) {
-                    DataManager.instance.updateStudent(
+                    // capacity 체크
+                    final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
+                    print('[DEBUG] onStudentMoved - 현재 그룹 인원: \\${groupStudents.length}, 정원: \\${newGroup.capacity}');
+                    if (groupStudents.length >= (newGroup.capacity ?? 0)) {
+                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
+                      await showDialog(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          backgroundColor: const Color(0xFF232326),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          title: Text('${newGroup.name} 정원 초과', style: const TextStyle(color: Colors.white)),
+                          content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.', style: TextStyle(color: Colors.white70)),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                            ),
+                          ],
+                        ),
+                      );
+                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 종료');
+                      return;
+                    }
+                    print('[DEBUG] onStudentMoved - updateStudent 호출');
+                    await DataManager.instance.updateStudent(
                       studentWithInfo.student.copyWith(groupInfo: newGroup),
                       studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
                     );
@@ -215,6 +263,7 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => GroupRegistrationDialog(
         editMode: false,
         onSave: (groupInfo) {
+          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=[33m${groupInfo.id}[0m');
           DataManager.instance.addGroup(groupInfo);
         },
       ),

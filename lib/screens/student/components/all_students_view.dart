@@ -393,11 +393,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                               children: [
                                                 IconButton(
                                                   onPressed: () async {
+                                                    final studentsInGroup = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
+                                                    print('[DEBUG] all_students_view.dart: studentsInGroup.length=${studentsInGroup.length}');
                                                     final result = await showDialog<GroupInfo>(
                                                       context: context,
                                                       builder: (context) => GroupRegistrationDialog(
                                                         editMode: true,
                                                         groupInfo: groupInfo,
+                                                        currentMemberCount: studentsInGroup.length,
                                                         onSave: (updatedGroup) {
                                                           Navigator.of(context).pop(updatedGroup);
                                                         },

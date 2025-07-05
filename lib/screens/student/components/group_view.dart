@@ -268,22 +268,78 @@ class _GroupViewState extends State<GroupView> {
               itemCount: nonNullGroups.length,
               itemBuilder: (context, index) {
                 final groupInfo = nonNullGroups[index];
-                final studentsInGroup = widget.students.where((s) => s.groupInfo == groupInfo).toList();
-                print('[DEBUG] 그룹카드 생성: groupInfo=$groupInfo, studentsInGroup=${studentsInGroup.length}');
+                print('[DEBUG] 그룹카드 생성: groupInfo.id=${groupInfo.id}');
+                print('[DEBUG] widget.students.length=${widget.students.length}');
+                for (final s in widget.students) {
+                  print('[DEBUG] 학생: name=${s.student.name}, groupInfo=[33m${s.groupInfo}[0m, groupInfo?.id=${s.groupInfo?.id}, groupId=${s.student.groupId}');
+                }
+                final studentsInGroup = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
+                print('[DEBUG] studentsInGroup.length=${studentsInGroup.length}');
                 final isExpanded = widget.expandedGroups.contains(groupInfo);
                 return Padding(
                   key: ValueKey(groupInfo),
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DragTarget<StudentWithInfo>(
-                    onWillAccept: (student) => student != null,
+                    onWillAccept: (student) {
+                      if (student == null) return false;
+                      if (studentsInGroup.length >= (groupInfo.capacity ?? 0)) {
+                        // 정원 초과 경고 다이얼로그 (비동기지만, 드롭 자체를 막기 위해 동기적으로 false 반환)
+                        WidgetsBinding.instance.addPostFrameCallback((_) async {
+                          await showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              backgroundColor: const Color(0xFF232326),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              title: const Text('정원 초과', style: TextStyle(color: Colors.white)),
+                              content: Text('이 그룹의 정원(${groupInfo.capacity}명)이 가득 찼습니다. 더 이상 학생을 추가할 수 없습니다.', style: const TextStyle(color: Colors.white70)),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                                ),
+                              ],
+                            ),
+                          );
+                        });
+                        return false;
+                      }
+                      return true;
+                    },
                     onAccept: (student) async {
+                      print('[DEBUG] onAccept 진입: student=${student.student.name}, group=${groupInfo.name}');
                       // 이미 해당 그룹에 소속된 학생은 무시
-                      if (student.student.groupInfo?.id == groupInfo.id) return;
-                      // 그룹 소속 변경 및 저장
+                      if (student.student.groupInfo?.id == groupInfo.id) {
+                        print('[DEBUG] 이미 해당 그룹에 소속된 학생: ${student.student.name}');
+                        return;
+                      }
+                      // 반드시 UI에서 capacity 체크
+                      print('[DEBUG] 현재 그룹 인원: ${studentsInGroup.length}, 정원: ${groupInfo.capacity}');
+                      if (studentsInGroup.length >= (groupInfo.capacity ?? 0)) {
+                        print('[DEBUG] 정원 초과 다이얼로그 진입');
+                        await showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            backgroundColor: const Color(0xFF232326),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            title: const Text('정원 초과', style: TextStyle(color: Colors.white)),
+                            content: Text('이 그룹의 정원(${groupInfo.capacity}명)이 가득 찼습니다. 더 이상 학생을 추가할 수 없습니다.', style: const TextStyle(color: Colors.white70)),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                              ),
+                            ],
+                          ),
+                        );
+                        print('[DEBUG] 정원 초과 다이얼로그 종료');
+                        return;
+                      }
+                      print('[DEBUG] updateStudent 호출');
                       await DataManager.instance.updateStudent(
                         student.student.copyWith(groupInfo: groupInfo, groupId: groupInfo.id),
                         student.basicInfo.copyWith(groupId: groupInfo.id),
                       );
+                      print('[DEBUG] setState 호출');
                       setState(() {});
                     },
                     builder: (context, candidateData, rejectedData) {
@@ -393,16 +449,16 @@ class _GroupViewState extends State<GroupView> {
                                         children: [
                                           IconButton(
                                             onPressed: () async {
-                                              print('[DEBUG] 수정 버튼 클릭: groupInfo=$groupInfo');
+                                              print('[DEBUG] 그룹카드 수정 진입: groupInfo.id=${groupInfo.id}');
                                               await showDialog(
                                                 context: context,
                                                 builder: (context) => GroupRegistrationDialog(
                                                   editMode: true,
                                                   groupInfo: groupInfo,
+                                                  index: index,
                                                   currentMemberCount: studentsInGroup.length,
                                                   onSave: (updatedGroup) {
-                                                    widget.onGroupEdited?.call(updatedGroup, index);
-                                                    Navigator.of(context).pop();
+                                                    widget.onGroupUpdated(updatedGroup, index);
                                                   },
                                                 ),
                                               );

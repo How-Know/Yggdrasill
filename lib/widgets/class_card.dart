@@ -103,6 +103,7 @@ class GroupCard extends StatelessWidget {
                       size: 20,
                     ),
                     onPressed: () async {
+                      print('[DEBUG] GroupRegistrationDialog 호출: class_card.dart, groupInfo.id=[33m${groupInfo.id}[0m');
                       final result = await showDialog<GroupInfo>(
                         context: context,
                         builder: (context) => GroupRegistrationDialog(

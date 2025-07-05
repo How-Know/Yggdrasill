@@ -241,12 +241,32 @@ class DataManager {
   }
 
   Future<void> addStudent(Student student, StudentBasicInfo basicInfo) async {
+    // 그룹 정원 초과 이중 방어
+    if (basicInfo.groupId != null) {
+      final group = _groupsById[basicInfo.groupId];
+      if (group != null) {
+        final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id).length;
+        if (currentCount >= group.capacity) {
+          throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
+        }
+      }
+    }
     await AcademyDbService.instance.addStudent(student);
     await AcademyDbService.instance.insertStudentBasicInfo(basicInfo.toDb());
     await loadStudents();
   }
 
   Future<void> updateStudent(Student student, StudentBasicInfo basicInfo) async {
+    // 그룹 정원 초과 이중 방어
+    if (basicInfo.groupId != null) {
+      final group = _groupsById[basicInfo.groupId];
+      if (group != null) {
+        final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id && s.student.id != student.id).length;
+        if (currentCount >= group.capacity) {
+          throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
+        }
+      }
+    }
     print('[DEBUG] updateStudent: \x1B[33m${student.name}\x1B[0m, group=\x1B[36m${student.groupInfo?.name}\x1B[0m, groupId=\x1B[36m${basicInfo.groupId}\x1B[0m');
     print('[DEBUG] student.toDb(): ' + student.toDb().toString());
     print('[DEBUG] basicInfo.toDb(): ' + basicInfo.toDb().toString());

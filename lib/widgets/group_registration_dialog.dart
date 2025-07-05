@@ -99,11 +99,12 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     print('[DEBUG] _handleSave: name=$name, description=$description, capacity=$capacity, duration=$duration, color=$color');
     if (widget.editMode && widget.groupInfo != null) {
       final old = widget.groupInfo!;
-      print('[DEBUG] _handleSave: old.name=${old.name}, old.description=${old.description}, old.capacity=${old.capacity}, old.duration=${old.duration}, old.color=${old.color}');
+      print('[DEBUG] _handleSave: old.name=[33m${old.name}[0m, old.description=[33m${old.description}[0m, old.capacity=[33m${old.capacity}[0m, old.duration=[33m${old.duration}[0m, old.color=$old.color');
       print('[DEBUG] _handleSave: 비교 결과 name=${name == old.name}, description=${description == old.description}, capacity=${capacity == old.capacity}, duration=${duration == old.duration}, color=${color == old.color}');
     }
 
     if (name.isEmpty) {
+      print('[DEBUG] _handleSave: 그룹명 미입력');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('그룹명을 입력해주세요'),
@@ -114,7 +115,9 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
       return;
     }
 
+    print('[DEBUG] _handleSave: capacity=$capacity, currentMemberCount=${widget.currentMemberCount}');
     if (capacity < widget.currentMemberCount) {
+      print('[DEBUG] _handleSave: 정원 오류 다이얼로그 진입');
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -130,10 +133,12 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           ],
         ),
       );
+      print('[DEBUG] _handleSave: 정원 오류 다이얼로그 종료');
       return;
     }
 
     if (widget.editMode && widget.groupInfo == null) {
+      print('[DEBUG] _handleSave: editMode인데 groupInfo가 null');
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -149,6 +154,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           ],
         ),
       );
+      print('[DEBUG] _handleSave: editMode 오류 다이얼로그 종료');
       return;
     }
 
@@ -159,6 +165,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           capacity == old.capacity &&
           duration == old.duration &&
           color == old.color) {
+        print('[DEBUG] _handleSave: 변경된 내용 없음 다이얼로그 진입');
         await showDialog(
           context: context,
           builder: (context) => AlertDialog(
@@ -174,6 +181,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
             ],
           ),
         );
+        print('[DEBUG] _handleSave: 변경된 내용 없음 다이얼로그 종료');
         return;
       }
       final updatedGroup = old.copyWith(
@@ -183,6 +191,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
         duration: duration,
         color: color,
       );
+      print('[DEBUG] _handleSave: updatedGroup 저장');
       widget.onSave(updatedGroup);
     } else {
       final newGroup = GroupInfo(
@@ -193,6 +202,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
         duration: duration,
         color: color,
       );
+      print('[DEBUG] _handleSave: newGroup 저장');
       widget.onSave(newGroup);
     }
   }

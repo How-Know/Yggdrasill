@@ -37,6 +37,7 @@ class _ClassScreenState extends State<ClassScreen> {
     GroupInfo? classInfo,
     int? index,
   }) {
+    print('[DEBUG] GroupRegistrationDialog 호출: class_screen.dart, groupInfo.id=[33m${classInfo?.id}[0m');
     showDialog(
       context: context,
       builder: (context) => GroupRegistrationDialog(
