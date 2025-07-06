@@ -7,6 +7,7 @@ import '../../../widgets/student_registration_dialog.dart';
 import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
+import '../../../widgets/app_snackbar.dart';
 
 class AllStudentsView extends StatefulWidget {
   final List<StudentWithInfo> students;
@@ -266,21 +267,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 ScaffoldMessenger.of(context).hideCurrentSnackBar();
                                 Future.delayed(const Duration(milliseconds: 50), () {
                                   print('[DEBUG] showSnackBar 호출');
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '${student.student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
-                                      ),
-                                      backgroundColor: const Color(0xFF2A2A2A),
-                                      behavior: SnackBarBehavior.floating,
-                                      action: SnackBarAction(
-                                        label: '실행 취소',
-                                        onPressed: () {
-                                          widget.onStudentMoved(student, oldGroupInfo);
-                                        },
-                                      ),
-                                    ),
-                                  );
+                                  showAppSnackBar(context, '${student.student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.', useRoot: true);
                                 });
                                 return const SizedBox.shrink();
                               },
@@ -551,6 +538,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               basicInfoCopy,
                             );
                             setState(() {});
+                            // 그룹에서 제외되었을 때 스낵바 출력
+                            showAppSnackBar(context, '그룹에서 제외되었습니다.');
                           }
                         },
                         builder: (context, candidateData, rejectedData) {

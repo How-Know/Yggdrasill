@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/group_info.dart';
 import 'package:uuid/uuid.dart';
+import 'app_snackbar.dart';
 
 class GroupRegistrationDialog extends StatefulWidget {
   final bool editMode;
@@ -105,13 +106,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
 
     if (name.isEmpty) {
       print('[DEBUG] _handleSave: 그룹명 미입력');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('그룹명을 입력해주세요'),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
-        ),
-      );
+      showAppSnackBar(context, '그룹명을 입력해주세요', useRoot: true);
       return;
     }
 

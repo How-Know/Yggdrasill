@@ -5,6 +5,7 @@ import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
 import '../../../main.dart';
+import '../../../widgets/app_snackbar.dart';
 
 class GroupView extends StatefulWidget {
   final List<GroupInfo> groups;
@@ -96,25 +97,7 @@ class _GroupViewState extends State<GroupView> {
     print('[DEBUG] _onDeleteZoneAccepted: 삭제 후 setState 호출');
     setState(() {});
     // 2. 스낵바로 삭제 알림 및 실행 취소 제공
-    ScaffoldMessenger.of(rootNavigatorKey.currentContext!).hideCurrentSnackBar();
-    ScaffoldMessenger.of(rootNavigatorKey.currentContext!).showSnackBar(
-      SnackBar(
-        content: Text('${student.name} 학생이 삭제되었습니다.'),
-        backgroundColor: const Color(0xFF2A2A2A),
-        behavior: SnackBarBehavior.floating,
-        action: SnackBarAction(
-          label: '실행 취소',
-          onPressed: () async {
-            print('[DEBUG] _onDeleteZoneAccepted: 실행 취소');
-            await DataManager.instance.updateStudent(
-              student.copyWith(groupInfo: prevGroupInfo),
-              prevBasicInfo.copyWith(groupId: prevGroupInfo?.id),
-            );
-            setState(() {});
-          },
-        ),
-      ),
-    );
+    showAppSnackBar(context, '${student.name} 학생이 삭제되었습니다.', useRoot: true);
   }
 
   @override
@@ -137,25 +120,7 @@ class _GroupViewState extends State<GroupView> {
           await DataManager.instance.loadStudents(); // 명시적 갱신
           setState(() {});
           // 2. 스낵바
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${student.name} 학생이 삭제되었습니다.'),
-              backgroundColor: const Color(0xFF2A2A2A),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: '실행 취소',
-                onPressed: () async {
-                  await DataManager.instance.updateStudent(
-                    student.copyWith(groupInfo: prevGroupInfo),
-                    prevBasicInfo.copyWith(groupId: prevGroupInfo?.id),
-                  );
-                  await DataManager.instance.loadStudents();
-                  setState(() {});
-                },
-              ),
-            ),
-          );
+          showAppSnackBar(context, '${student.name} 학생이 삭제되었습니다.', useRoot: true);
           setState(() {
             _pendingDeleteStudent = null;
           });

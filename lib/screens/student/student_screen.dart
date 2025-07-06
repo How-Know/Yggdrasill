@@ -14,6 +14,7 @@ import '../../widgets/app_bar_title.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/custom_tab_bar.dart';
 import 'package:flutter/foundation.dart';
+import '../../widgets/app_snackbar.dart';
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -119,6 +120,15 @@ class StudentScreenState extends State<StudentScreen> {
                       studentWithInfo.student.copyWith(groupInfo: newGroup),
                       studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
                     );
+                    showAppSnackBar(context, '그룹이 변경되었습니다.');
+                  } else {
+                    // 그룹에서 제외
+                    await DataManager.instance.updateStudent(
+                      studentWithInfo.student.copyWith(groupInfo: null),
+                      studentWithInfo.basicInfo.copyWith(groupId: null),
+                    );
+                    print('[DEBUG] 그룹에서 제외 스낵바 호출 직전');
+                    showAppSnackBar(context, '그룹에서 제외되었습니다.');
                   }
                 },
               );
@@ -137,12 +147,15 @@ class StudentScreenState extends State<StudentScreen> {
                 expandedGroups: _expandedGroups,
                 onGroupAdded: (groupInfo) {
                   DataManager.instance.addGroup(groupInfo);
+                  showAppSnackBar(context, '그룹이 등록되었습니다.');
                 },
                 onGroupUpdated: (groupInfo, index) {
                   DataManager.instance.updateGroup(groupInfo);
+                  showAppSnackBar(context, '그룹 정보가 수정되었습니다.');
                 },
                 onGroupDeleted: (groupInfo) {
                   DataManager.instance.deleteGroup(groupInfo);
+                  showAppSnackBar(context, '그룹이 삭제되었습니다.');
                 },
                 onStudentMoved: (studentWithInfo, newGroup) async {
                   print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
@@ -175,6 +188,15 @@ class StudentScreenState extends State<StudentScreen> {
                       studentWithInfo.student.copyWith(groupInfo: newGroup),
                       studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
                     );
+                    showAppSnackBar(context, '그룹이 변경되었습니다.');
+                  } else {
+                    // 그룹에서 제외
+                    await DataManager.instance.updateStudent(
+                      studentWithInfo.student.copyWith(groupInfo: null),
+                      studentWithInfo.basicInfo.copyWith(groupId: null),
+                    );
+                    print('[DEBUG] 그룹에서 제외 스낵바 호출 직전');
+                    showAppSnackBar(context, '그룹에서 제외되었습니다.');
                   }
                 },
                 onGroupExpanded: (groupInfo) {
@@ -195,12 +217,14 @@ class StudentScreenState extends State<StudentScreen> {
                 },
                 onDeleteStudent: (studentWithInfo) async {
                   await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                  showAppSnackBar(context, '학생이 삭제되었습니다.');
                 },
                 onStudentUpdated: (updatedStudentWithInfo) async {
                   await DataManager.instance.updateStudent(
                     updatedStudentWithInfo.student,
                     updatedStudentWithInfo.basicInfo
                   );
+                  showAppSnackBar(context, '학생 정보가 수정되었습니다.');
                 },
               );
             }
@@ -263,8 +287,9 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => GroupRegistrationDialog(
         editMode: false,
         onSave: (groupInfo) {
-          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=[33m${groupInfo.id}[0m');
+          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=\x1b[33m[33m${groupInfo.id}\x1b[0m');
           DataManager.instance.addGroup(groupInfo);
+          showAppSnackBar(context, '그룹이 등록되었습니다.');
         },
       ),
     );
@@ -276,6 +301,7 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => StudentRegistrationDialog(
         onSave: (student) async {
           await DataManager.instance.addStudent(student, StudentBasicInfo(studentId: student.id, registrationDate: DateTime.now()));
+          showAppSnackBar(context, '학생이 등록되었습니다.');
         },
         groups: DataManager.instance.groups,
       ),

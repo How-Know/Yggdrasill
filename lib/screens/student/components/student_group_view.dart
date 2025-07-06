@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../models/student.dart';
 import '../../../models/class_info.dart';
 import '../../../widgets/class_student_card.dart';
+import '../../../widgets/app_snackbar.dart';
 
 class StudentGroupView extends StatefulWidget {
   final List<ClassInfo> classes;
@@ -70,27 +71,7 @@ class _StudentGroupViewState extends State<StudentGroupView> {
                     widget.students[index] = student.copyWith(classInfo: classInfo);
                   }
                 });
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      '${student.name}님이 ${oldClassInfo?.name ?? '미배정'} → ${classInfo.name}으로 이동되었습니다.',
-                    ),
-                    backgroundColor: const Color(0xFF2A2A2A),
-                    behavior: SnackBarBehavior.floating,
-                    action: SnackBarAction(
-                      label: '실행 취소',
-                      onPressed: () {
-                        setState(() {
-                          final index = widget.students.indexOf(student);
-                          if (index != -1) {
-                            widget.students[index] = student.copyWith(classInfo: oldClassInfo);
-                          }
-                        });
-                      },
-                    ),
-                  ),
-                );
+                showAppSnackBar(context, '${student.name}님이 ${oldClassInfo?.name ?? '미배정'} → ${classInfo.name}으로 이동되었습니다.', useRoot: true);
               },
               builder: (context, candidateData, rejectedData) {
                 return Container(
