@@ -11,6 +11,8 @@ import 'views/classes_view.dart';
 import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
+import '../../widgets/custom_tab_bar.dart';
+import '../../widgets/app_bar_title.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -173,200 +175,85 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        children: [
-          const Center(
-            child: Text(
-              '시간',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Container(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Primary Button
-                    SizedBox(
-                      width: 110,
-                      height: 40,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1976D2),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          minimumSize: const Size.fromHeight(40),
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: BorderRadius.horizontal(
-                              left: Radius.circular(20),
-                              right: Radius.circular(4),
-                            ),
-                          ),
-                        ),
-                        onPressed: _handleRegistrationButton,
-                        icon: const Icon(Icons.edit, size: 20),
-                        label: Text(
-                          _registrationButtonText,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
+    return Column(
+      children: [
+        const AppBarTitle(title: '시간'),
+        const SizedBox(height: 5),
+        CustomTabBar(
+          selectedIndex: TimetableViewType.values.indexOf(_viewType),
+          tabs: TimetableViewType.values.map((e) => e.name).toList(),
+          onTabSelected: (i) {
+            setState(() {
+              _viewType = TimetableViewType.values[i];
+            });
+          },
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 메인(시간표) 컨테이너
+                Expanded(
+                  flex: 5,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Color(0xFF18181A),
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                    const SizedBox(width: 3),
-                    // Menu Button
-                    MenuAnchor(
-                      controller: _menuController,
-                      menuChildren: [
-                        MenuItemButton(
-                          child: const Text(
-                            '학생',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                            ),
-                          ),
-                          onPressed: () {
-                            _handleStudentMenu();
-                            _menuController.close();
-                          },
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      children: [
+                        TimetableHeader(
+                          selectedDate: _selectedDate,
+                          onDateChanged: _handleDateChanged,
+                          selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
+                          onDaySelected: _onDayHeaderSelected,
+                          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
                         ),
-                        ..._groups.map((groupInfo) => 
-                          MenuItemButton(
-                            child: Text(
-                              groupInfo.name,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                              ),
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _selectedGroup = groupInfo;
-                                _registrationButtonText = '클래스';
-                                _isStudentRegistrationMode = false;
-                              });
-                              _menuController.close();
-                            },
+                        const SizedBox(height: 24),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: _buildContent(),
                           ),
-                        ).toList(),
+                        ),
                       ],
-                      style: const MenuStyle(
-                        backgroundColor: MaterialStatePropertyAll(Color(0xFF2A2A2A)),
-                        padding: MaterialStatePropertyAll(EdgeInsets.symmetric(vertical: 8)),
-                        shape: MaterialStatePropertyAll(
-                          RoundedRectangleBorder(
-                            borderRadius: BorderRadius.all(Radius.circular(8)),
-                          ),
-                        ),
-                      ),
-                      builder: (context, controller, child) {
-                        return SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: IconButton(
-                            style: IconButton.styleFrom(
-                              backgroundColor: const Color(0xFF1976D2),
-                              shape: controller.isOpen 
-                                ? const CircleBorder()
-                                : const RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.horizontal(
-                                      left: Radius.circular(4),
-                                      right: Radius.circular(20),
-                                    ),
-                                  ),
-                              padding: EdgeInsets.zero,
-                            ),
-                            icon: Icon(
-                              controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: () {
-                              if (controller.isOpen) {
-                                controller.close();
-                              } else {
-                                controller.open();
-                              }
-                            },
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Center(
-                  child: SizedBox(
-                    width: 250,
-                    child: SegmentedButton<TimetableViewType>(
-                      segments: TimetableViewType.values.map((type) => ButtonSegment(
-                        value: type,
-                        label: Text(
-                          type.name,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      )).toList(),
-                      selected: {_viewType},
-                      onSelectionChanged: (Set<TimetableViewType> newSelection) {
-                        setState(() {
-                          _viewType = newSelection.first;
-                        });
-                      },
-                      style: ButtonStyle(
-                        backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                          (Set<MaterialState> states) {
-                            if (states.contains(MaterialState.selected)) {
-                              return const Color(0xFF78909C);
-                            }
-                            return Colors.transparent;
-                          },
-                        ),
-                        foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                          (Set<MaterialState> states) {
-                            if (states.contains(MaterialState.selected)) {
-                              return Colors.white;
-                            }
-                            return Colors.white70;
-                          },
-                        ),
-                      ),
                     ),
                   ),
                 ),
-              ),
-              Container(width: 140),
-            ],
-          ),
-          const SizedBox(height: 24),
-          TimetableHeader(
-            selectedDate: _selectedDate,
-            onDateChanged: _handleDateChanged,
-            selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
-            onDaySelected: _onDayHeaderSelected,
-            isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-          ),
-          const SizedBox(height: 24),
-          Expanded(
-            child: SingleChildScrollView(
-              child: _buildContent(),
+                const SizedBox(width: 32),
+                // 오른쪽 2:5 비율 컨테이너 (상하 분할)
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Color(0xFF18181A),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          margin: const EdgeInsets.only(bottom: 12),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Color(0xFF18181A),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          margin: const EdgeInsets.only(top: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

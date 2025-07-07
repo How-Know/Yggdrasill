@@ -84,11 +84,23 @@ class CustomNavigationRail extends StatelessWidget {
           padding: EdgeInsets.symmetric(vertical: 10),
           icon: Tooltip(
             message: '학습',
-            child: Icon(Symbols.school_rounded),
+            child: Icon(Symbols.network_intel_node),
           ),
           selectedIcon: Tooltip(
             message: '학습',
-            child: Icon(Symbols.school_rounded, weight: 700),
+            child: Icon(Symbols.network_intel_node, weight: 700),
+          ),
+          label: Text(''),
+        ),
+        NavigationRailDestination(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          icon: Tooltip(
+            message: '자료',
+            child: Icon(Symbols.auto_stories),
+          ),
+          selectedIcon: Tooltip(
+            message: '자료',
+            child: Icon(Symbols.auto_stories, weight: 700),
           ),
           label: Text(''),
         ),
