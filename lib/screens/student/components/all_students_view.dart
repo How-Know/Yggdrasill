@@ -90,12 +90,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             flex: 2,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final maxHeight = MediaQuery.of(context).size.height * 0.8;
+                final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
                 return Container(
                   constraints: BoxConstraints(
                     maxHeight: maxHeight,
-                    minWidth: 600,
-                    maxWidth: 600,
+                    minWidth: 624,
+                    maxWidth: 624,
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
                   decoration: BoxDecoration(
@@ -169,12 +169,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             flex: 1,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final maxHeight = MediaQuery.of(context).size.height * 0.8;
+                final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
                 return Container(
                   constraints: BoxConstraints(
                     maxHeight: maxHeight,
-                    minWidth: 400,
-                    maxWidth: 400,
+                    minWidth: 424,
+                    maxWidth: 424,
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
                   decoration: BoxDecoration(
@@ -296,30 +296,15 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       children: [
                                         Material(
                                           color: Colors.transparent,
-                                          borderRadius: candidateData.isNotEmpty
-                                            ? const BorderRadius.vertical(
-                                                top: Radius.circular(10),
-                                                bottom: Radius.zero,
-                                              )
-                                            : BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(12),
                                           child: InkWell(
-                                            borderRadius: candidateData.isNotEmpty
-                                              ? const BorderRadius.vertical(
-                                                  top: Radius.circular(10),
-                                                  bottom: Radius.zero,
-                                                )
-                                              : BorderRadius.circular(12),
+                                            borderRadius: BorderRadius.circular(12),
                                             onTap: () => widget.onGroupExpanded(groupInfo),
                                             child: Container(
                                               height: 88,
                                               decoration: BoxDecoration(
                                                 color: const Color(0xFF121212),
-                                                borderRadius: candidateData.isNotEmpty
-                                                  ? const BorderRadius.vertical(
-                                                      top: Radius.circular(10),
-                                                      bottom: Radius.zero,
-                                                    )
-                                                  : BorderRadius.circular(12),
+                                                borderRadius: BorderRadius.circular(12),
                                               ),
                                               child: Row(
                                                 children: [
@@ -464,12 +449,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                             ? Container(
                                                 decoration: BoxDecoration(
                                                   color: const Color(0xFF121212),
-                                                  borderRadius: candidateData.isNotEmpty
-                                                    ? const BorderRadius.vertical(
-                                                        top: Radius.zero,
-                                                        bottom: Radius.circular(10),
-                                                      )
-                                                    : BorderRadius.circular(12),
+                                                  borderRadius: BorderRadius.circular(12),
                                                 ),
                                                 child: Padding(
                                                   padding: const EdgeInsets.fromLTRB(30, 16, 24, 16),
@@ -663,38 +643,68 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     final students = groupedStudents[level]!;
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
 
-    final List<Widget> schoolWidgets = students.entries
-        .where((entry) => entry.value.isNotEmpty)
-        .map<Widget>((entry) {
-          final schoolStudents = entry.value;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 16, bottom: 8),
-                child: Text(
-                  entry.key, // 학교명
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
+    final List<Widget> schoolWidgets = [];
+    for (final entry in students.entries.where((e) => e.value.isNotEmpty)) {
+      final schoolName = entry.key;
+      final schoolStudents = entry.value;
+      // 학년별로 그룹화
+      final Map<int, List<StudentWithInfo>> studentsByGrade = {};
+      for (final s in schoolStudents) {
+        studentsByGrade[s.student.grade] ??= [];
+        studentsByGrade[s.student.grade]!.add(s);
+      }
+      final sortedGrades = studentsByGrade.keys.toList()..sort();
+      schoolWidgets.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
+          child: Text(
+            schoolName, // 학교명
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      );
+      for (final grade in sortedGrades) {
+        final gradeStudents = studentsByGrade[grade]!;
+        gradeStudents.sort((a, b) => a.student.name.compareTo(b.student.name));
+        schoolWidgets.add(
+          Padding(
+            padding: const EdgeInsets.only(left: 50, bottom: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Text(
+                    '${grade}학년',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
-              Wrap(
-                spacing: 4,
-                runSpacing: 8,
-                children: schoolStudents.map((studentWithInfo) => StudentCard(
-                  studentWithInfo: studentWithInfo,
-                  onShowDetails: (_) {},
-                  onUpdate: widget.onStudentUpdated,
-                  onDelete: widget.onDeleteStudent,
-                )).toList(),
-              ),
-            ],
-          );
-        })
-        .toList();
+                Expanded(
+                  child: Wrap(
+                    spacing: 4,
+                    runSpacing: 8,
+                    children: gradeStudents.map((studentWithInfo) => StudentCard(
+                      studentWithInfo: studentWithInfo,
+                      onShowDetails: (_) {},
+                      onUpdate: widget.onStudentUpdated,
+                      onDelete: widget.onDeleteStudent,
+                    )).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
