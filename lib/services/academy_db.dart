@@ -262,12 +262,13 @@ class AcademyDbService {
       print('[DB] saveOperatingHours: ${hours.length}개');
       await dbClient.delete('operating_hours');
       for (final h in hours) {
-        print('[DB] insert operating hour: day=[36m${h.dayOfWeek}[0m, start=${h.startTime}, end=${h.endTime}');
+        final breakTimesJson = h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]';
+        print('[DB] insert operating hour: day=${h.dayOfWeek}, start=${h.startTime}, end=${h.endTime}, breakTimes=$breakTimesJson');
         await dbClient.insert('operating_hours', {
           'day_of_week': h.dayOfWeek,
           'start_time': h.startTime.toIso8601String(),
           'end_time': h.endTime.toIso8601String(),
-          'break_times': h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]',
+          'break_times': breakTimesJson,
         });
       }
     } catch (e, st) {

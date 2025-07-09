@@ -894,7 +894,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: () async {
                   try {
                     ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                    print('[DEBUG] 저장 버튼 클릭: _academyLogo type=${_academyLogo.runtimeType}, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
+                    print('[DEBUG] 저장 버튼 클릭: _academyLogo type= [36m${_academyLogo.runtimeType} [0m, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
                     final academySettings = AcademySettings(
                       name: _academyNameController.text.trim(),
                       slogan: _sloganController.text.trim(),
@@ -904,6 +904,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                     await DataManager.instance.saveAcademySettings(academySettings);
                     await DataManager.instance.savePaymentType(_paymentType);
+                    // 운영시간/휴식시간도 함께 저장
+                    final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
+                      final range = e.value!;
+                      final breaks = _breakTimes[e.key] ?? [];
+                      return OperatingHours(
+                        startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
+                        endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
+                        breakTimes: breaks.map((b) => BreakTime(
+                          startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
+                          endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
+                        )).toList(),
+                        dayOfWeek: e.key.index,
+                      );
+                    }).toList();
+                    print('[DEBUG] 저장 버튼에서 hoursList: ${hoursList.length}개, breaks: ' + hoursList.map((h) => h.breakTimes.length).toList().toString());
+                    await DataManager.instance.saveOperatingHours(hoursList);
                     await DataManager.instance.loadAcademySettings();
                     print('[DEBUG] 저장 후 불러온 logo: type=${DataManager.instance.academySettings.logo?.runtimeType}, length=${DataManager.instance.academySettings.logo?.length}, isNull=${DataManager.instance.academySettings.logo == null}');
                     setState(() {

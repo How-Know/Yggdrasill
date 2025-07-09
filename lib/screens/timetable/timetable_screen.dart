@@ -49,6 +49,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   GroupInfo? _selectedGroup;
   GroupSchedule? _currentGroupSchedule;
   bool _showOperatingHoursAlert = false;
+  // SplitButton 관련 상태 추가
+  String _splitButtonSelected = '학생';
 
   @override
   void initState() {
@@ -235,6 +237,108 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             borderRadius: BorderRadius.circular(16),
                           ),
                           margin: const EdgeInsets.only(bottom: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.all(12.0),
+                                child: Row(
+                                  children: [
+                                    // SplitButton: 등록 + 드롭다운
+                                    Expanded(
+                                      child: Material(
+                                        color: const Color(0xFF7C4DFF),
+                                        borderRadius: const BorderRadius.only(
+                                          topLeft: Radius.circular(32),
+                                          bottomLeft: Radius.circular(32),
+                                          topRight: Radius.circular(12),
+                                          bottomRight: Radius.circular(12),
+                                        ),
+                                        child: InkWell(
+                                          borderRadius: const BorderRadius.only(
+                                            topLeft: Radius.circular(32),
+                                            bottomLeft: Radius.circular(32),
+                                            topRight: Radius.circular(12),
+                                            bottomRight: Radius.circular(12),
+                                          ),
+                                          onTap: () {
+                                            if (_splitButtonSelected == '학생') {
+                                              setState(() {
+                                                _isStudentRegistrationMode = !_isStudentRegistrationMode;
+                                                _isClassRegistrationMode = false;
+                                              });
+                                            } else {
+                                              // 그룹명과 매칭되는 그룹 찾기 (GroupInfo? 타입 안전 처리)
+                                              GroupInfo? group;
+                                              if (_groups.isNotEmpty) {
+                                                group = _groups.firstWhere(
+                                                  (g) => g.name == _splitButtonSelected,
+                                                  orElse: () => _groups.first,
+                                                );
+                                              } else {
+                                                group = null;
+                                              }
+                                              if (group != null) {
+                                                setState(() {
+                                                  _selectedGroup = group;
+                                                });
+                                                _showGroupScheduleDialog();
+                                              }
+                                            }
+                                          },
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Icon(Icons.edit, color: Colors.white),
+                                                const SizedBox(width: 8),
+                                                Text('등록', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      height: 56,
+                                      width: 2,
+                                      color: Colors.white.withOpacity(0.1),
+                                    ),
+                                    Material(
+                                      color: const Color(0xFF7C4DFF),
+                                      borderRadius: const BorderRadius.only(
+                                        topRight: Radius.circular(32),
+                                        bottomRight: Radius.circular(32),
+                                      ),
+                                      child: PopupMenuButton<String>(
+                                        icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white),
+                                        color: Colors.white,
+                                        onSelected: (value) {
+                                          setState(() {
+                                            _splitButtonSelected = value;
+                                          });
+                                        },
+                                        itemBuilder: (context) {
+                                          return [
+                                            const PopupMenuItem<String>(
+                                              value: '학생',
+                                              child: Text('학생'),
+                                            ),
+                                            ..._groups.map((g) => PopupMenuItem<String>(
+                                              value: g.name,
+                                              child: Text(g.name),
+                                            )),
+                                          ];
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // 기존 컨테이너 내용이 있다면 여기에 추가
+                            ],
+                          ),
                         ),
                       ),
                       Expanded(
