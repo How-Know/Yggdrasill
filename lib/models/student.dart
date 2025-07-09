@@ -82,6 +82,11 @@ class Student {
       'education_level': educationLevel.index,
     };
   }
+
+  @override
+  String toString() {
+    return 'Student(id: $id, name: $name, school: $school, grade: $grade, educationLevel: $educationLevel, groupInfo: $groupInfo, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, registrationDate: $registrationDate, weeklyClassCount: $weeklyClassCount, groupId: $groupId)';
+  }
 }
 
 class StudentBasicInfo {
@@ -138,6 +143,11 @@ class StudentBasicInfo {
       'weekly_class_count': weeklyClassCount,
       'group_id': groupId,
     };
+  }
+
+  @override
+  String toString() {
+    return 'StudentBasicInfo(studentId: $studentId, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, registrationDate: $registrationDate, weeklyClassCount: $weeklyClassCount, groupId: $groupId)';
   }
 }
 

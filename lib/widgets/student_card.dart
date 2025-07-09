@@ -26,18 +26,20 @@ class StudentCard extends StatelessWidget {
       context: context,
       builder: (context) => StudentRegistrationDialog(
         student: studentWithInfo.student,
-        onSave: (updatedStudent) async {
-          await DataManager.instance.updateStudent(updatedStudent, studentWithInfo.basicInfo);
+        onSave: (updatedStudent, basicInfo) async {
+          await DataManager.instance.updateStudent(updatedStudent, basicInfo);
         },
         groups: DataManager.instance.groups,
       ),
     );
-    if (result != null) {
-      await DataManager.instance.updateStudent(result, studentWithInfo.basicInfo);
-      if (onUpdate != null) {
-        onUpdate!(StudentWithInfo(student: result, basicInfo: studentWithInfo.basicInfo));
-      }
-    }
+    // result는 Student만 반환되므로, 별도 후처리 필요 없음
+  }
+
+  void _showDetails(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
+    );
   }
 
   Future<void> _handleDelete(BuildContext context) async {
@@ -139,7 +141,7 @@ class StudentCard extends StatelessWidget {
           child: SizedBox(
             width: 120,
             child: Card(
-              color: const Color(0xFF2A2A2A),
+              color: const Color(0xFF1F1F1F),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8.0),
               ),
@@ -169,7 +171,7 @@ class StudentCard extends StatelessWidget {
   Widget _buildCardContent(BuildContext context) {
     final student = studentWithInfo.student;
     return Card(
-      color: const Color(0xFF2A2A2A),
+      color: const Color(0xFF1F1F1F),
       margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8.0),
@@ -207,11 +209,66 @@ class StudentCard extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.more_vert, color: Colors.white54, size: 18),
-                onPressed: () => _showMenu(context),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: Colors.white54),
+                color: const Color(0xFF2A2A2A),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                tooltip: '',
+                onSelected: (value) async {
+                  if (value == 'edit') {
+                    await _handleEdit(context);
+                  } else if (value == 'delete') {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        backgroundColor: const Color(0xFF2A2A2A),
+                        title: const Text('선생님 삭제', style: TextStyle(color: Colors.white)),
+                        content: const Text('정말로 이 선생님을 삭제하시겠습니까?', style: TextStyle(color: Colors.white)),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            child: const Text('취소'),
+                          ),
+                          FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            onPressed: () => Navigator.of(context).pop(true),
+                            child: const Text('삭제'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true) {
+                      if (onDelete != null) {
+                        onDelete!(studentWithInfo);
+                      }
+                    }
+                  } else if (value == 'details') {
+                    _showDetails(context);
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'details',
+                    child: ListTile(
+                      leading: const Icon(Icons.info_outline, color: Colors.white70),
+                      title: const Text('상세보기', style: TextStyle(color: Colors.white)),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: ListTile(
+                      leading: const Icon(Icons.edit_outlined, color: Colors.white70),
+                      title: const Text('수정', style: TextStyle(color: Colors.white)),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: const Icon(Icons.delete_outline, color: Colors.red),
+                      title: const Text('삭제', style: TextStyle(color: Colors.red)),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

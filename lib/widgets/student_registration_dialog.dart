@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
-  final Function(Student) onSave;
+  final Function(Student, StudentBasicInfo) onSave;
   final List<GroupInfo> groups;
 
   const StudentRegistrationDialog({
@@ -36,26 +36,35 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.student?.name);
-    _schoolController = TextEditingController(text: widget.student?.school);
-    _phoneController = TextEditingController(text: widget.student?.phoneNumber);
-    _parentPhoneController = TextEditingController(text: widget.student?.parentPhoneNumber);
-    _registrationDate = widget.student?.registrationDate ?? DateTime.now();
-    _educationLevel = widget.student?.educationLevel ?? EducationLevel.elementary;
-    _weeklyClassCountController = TextEditingController(text: (widget.student?.weeklyClassCount ?? 1).toString());
-    
-    if (widget.student != null) {
-      final grades = gradesByLevel[widget.student!.educationLevel] ?? [];
+    final student = widget.student;
+    StudentBasicInfo? basicInfo;
+    if (student != null) {
+      // DataManager에서 StudentWithInfo로 들어온 경우라면, StudentBasicInfo를 찾아서 사용
+      final studentsWithInfo = DataManager.instance.students;
+      final match = studentsWithInfo.firstWhere(
+        (s) => s.student.id == student.id,
+        orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+      );
+      basicInfo = match.basicInfo;
+    }
+    _nameController = TextEditingController(text: student?.name);
+    _schoolController = TextEditingController(text: student?.school);
+    _phoneController = TextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
+    _parentPhoneController = TextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
+    _registrationDate = basicInfo?.registrationDate ?? student?.registrationDate ?? DateTime.now();
+    _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
+    _weeklyClassCountController = TextEditingController(text: (basicInfo?.weeklyClassCount ?? student?.weeklyClassCount ?? 1).toString());
+    if (student != null) {
+      final grades = gradesByLevel[student.educationLevel] ?? [];
       _grade = grades.firstWhere(
-        (g) => g.value == widget.student!.grade,
+        (g) => g.value == student.grade,
         orElse: () => grades.first,
       );
     } else {
       final grades = gradesByLevel[_educationLevel] ?? [];
       _grade = grades.isNotEmpty ? grades.first : null;
     }
-    
-    _selectedGroup = widget.student?.groupInfo;
+    _selectedGroup = student?.groupInfo;
   }
 
   @override
@@ -118,6 +127,11 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   }
 
   void _handleSave() {
+    print('[DEBUG][dialog] _phoneController.text: \'${_phoneController.text}\'');
+    print('[DEBUG][dialog] _parentPhoneController.text: \'${_parentPhoneController.text}\'');
+    print('[DEBUG][dialog] _weeklyClassCountController.text: \'${_weeklyClassCountController.text}\'');
+    print('[DEBUG][dialog] _registrationDate: $_registrationDate');
+    print('[DEBUG][dialog] _selectedGroup?.id: ${_selectedGroup?.id}');
     if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
       return;
     }
@@ -133,8 +147,17 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       registrationDate: _registrationDate,
       groupInfo: null,
       weeklyClassCount: weeklyClassCount,
+      groupId: _selectedGroup?.id,
     );
-    widget.onSave(student);
+    final basicInfo = StudentBasicInfo(
+      studentId: student.id,
+      phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
+      parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
+      registrationDate: _registrationDate,
+      weeklyClassCount: weeklyClassCount,
+      groupId: _selectedGroup?.id,
+    );
+    widget.onSave(student, basicInfo);
     Navigator.of(context).pop(student);
   }
 

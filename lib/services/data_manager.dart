@@ -241,6 +241,8 @@ class DataManager {
   }
 
   Future<void> addStudent(Student student, StudentBasicInfo basicInfo) async {
+    print('[DEBUG][addStudent] student: ' + student.toString());
+    print('[DEBUG][addStudent] basicInfo: ' + basicInfo.toString());
     // 그룹 정원 초과 이중 방어
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
@@ -251,12 +253,17 @@ class DataManager {
         }
       }
     }
+    print('[DEBUG][addStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
+    print('[DEBUG][addStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
     await AcademyDbService.instance.addStudent(student);
     await AcademyDbService.instance.insertStudentBasicInfo(basicInfo.toDb());
+    print('[DEBUG][addStudent] DB 저장 완료');
     await loadStudents();
   }
 
   Future<void> updateStudent(Student student, StudentBasicInfo basicInfo) async {
+    print('[DEBUG][updateStudent] student: ' + student.toString());
+    print('[DEBUG][updateStudent] basicInfo: ' + basicInfo.toString());
     // 그룹 정원 초과 이중 방어
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
@@ -267,11 +274,11 @@ class DataManager {
         }
       }
     }
-    print('[DEBUG] updateStudent: \x1B[33m${student.name}\x1B[0m, group=\x1B[36m${student.groupInfo?.name}\x1B[0m, groupId=\x1B[36m${basicInfo.groupId}\x1B[0m');
-    print('[DEBUG] student.toDb(): ' + student.toDb().toString());
-    print('[DEBUG] basicInfo.toDb(): ' + basicInfo.toDb().toString());
+    print('[DEBUG][updateStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
+    print('[DEBUG][updateStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
     await AcademyDbService.instance.updateStudent(student);
     await AcademyDbService.instance.updateStudentBasicInfo(student.id, basicInfo.toDb());
+    print('[DEBUG][updateStudent] DB 저장 완료');
     await loadStudents();
   }
 

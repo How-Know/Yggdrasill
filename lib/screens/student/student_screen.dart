@@ -249,23 +249,23 @@ class StudentScreenState extends State<StudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '학교: [33m${student.school}[0m',
+              '학교:  [33m${student.school} [0m',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 8),
             Text(
-              '과정: [33m${getEducationLevelName(student.educationLevel)}[0m',
+              '과정:  [33m${getEducationLevelName(student.educationLevel)} [0m',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 8),
             Text(
-              '학년: [33m${student.grade}학년[0m',
+              '학년:  [33m${student.grade}학년 [0m',
               style: const TextStyle(color: Colors.white70),
             ),
             if (student.groupInfo != null) ...[
               const SizedBox(height: 8),
               Text(
-                '그룹: [33m${student.groupInfo!.name}[0m',
+                '그룹:  [33m${student.groupInfo!.name} [0m',
                 style: TextStyle(color: student.groupInfo!.color),
               ),
             ],
@@ -287,7 +287,7 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => GroupRegistrationDialog(
         editMode: false,
         onSave: (groupInfo) {
-          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=\x1b[33m[33m${groupInfo.id}\x1b[0m');
+          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=\x1b[33m [33m${groupInfo.id}\x1b[0m');
           DataManager.instance.addGroup(groupInfo);
           showAppSnackBar(context, '그룹이 등록되었습니다.');
         },
@@ -299,8 +299,8 @@ class StudentScreenState extends State<StudentScreen> {
     showDialog(
       context: context,
       builder: (context) => StudentRegistrationDialog(
-        onSave: (student) async {
-          await DataManager.instance.addStudent(student, StudentBasicInfo(studentId: student.id, registrationDate: DateTime.now()));
+        onSave: (student, basicInfo) async {
+          await DataManager.instance.addStudent(student, basicInfo);
           showAppSnackBar(context, '학생이 등록되었습니다.');
         },
         groups: DataManager.instance.groups,

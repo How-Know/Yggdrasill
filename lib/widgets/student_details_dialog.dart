@@ -8,11 +8,11 @@ import 'package:mneme_flutter/widgets/student_registration_dialog.dart';
 import '../main.dart';
 
 class StudentDetailsDialog extends StatelessWidget {
-  final Student student;
+  final StudentWithInfo studentWithInfo;
 
   const StudentDetailsDialog({
     Key? key,
-    required this.student,
+    required this.studentWithInfo,
   }) : super(key: key);
 
   String _getEducationLevelName(EducationLevel level) {
@@ -39,12 +39,9 @@ class StudentDetailsDialog extends StatelessWidget {
     final result = await showDialog(
       context: rootNavigatorKey.currentContext!,
       builder: (context) => StudentRegistrationDialog(
-        student: student,
-        onSave: (updatedStudent) async {
-          await DataManager.instance.updateStudent(
-            updatedStudent,
-            StudentBasicInfo(studentId: updatedStudent.id, registrationDate: DateTime.now())
-          );
+        student: studentWithInfo.student,
+        onSave: (updatedStudent, basicInfo) async {
+          await DataManager.instance.updateStudent(updatedStudent, basicInfo);
         },
         groups: DataManager.instance.groups,
       ),
@@ -75,52 +72,151 @@ class StudentDetailsDialog extends StatelessWidget {
     );
 
     if (confirmed == true) {
-      await DataManager.instance.deleteStudent(student.id);
+      await DataManager.instance.deleteStudent(studentWithInfo.student.id);
       Navigator.of(context).pop(true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(student.name),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('학교: ${student.school}'),
-          const SizedBox(height: 8),
-          Text('과정: ${_getEducationLevelName(student.educationLevel)}'),
-          const SizedBox(height: 8),
-          Text('학년: ${_getGradeName(student)}'),
-          const SizedBox(height: 8),
-          if (student.phoneNumber != null) ...[
-            Text('연락처: ${student.phoneNumber}'),
-            const SizedBox(height: 8),
+    final student = studentWithInfo.student;
+    final basicInfo = studentWithInfo.basicInfo;
+    return Dialog(
+      backgroundColor: const Color(0xFF1F1F1F), // 다이얼로그 배경색 변경
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 400,
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 상단: 이름, 학년, 학교, 그룹
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        student.name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_getEducationLevelName(student.educationLevel)} ${_getGradeName(student)}학년',
+                        style: const TextStyle(color: Colors.white70, fontSize: 16),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        student.school,
+                        style: const TextStyle(color: Colors.white54, fontSize: 15),
+                      ),
+                      if (student.groupInfo != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(Icons.group, color: student.groupInfo!.color, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              student.groupInfo!.name,
+                              style: TextStyle(color: student.groupInfo!.color, fontSize: 15, fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            // 중간: 정보 카드
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F1F1F), // 정보 카드 배경색도 검정색으로 변경
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.phone, color: Colors.white38, size: 18),
+                      const SizedBox(width: 8),
+                      Text('연락처: ', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                      Text(
+                        student.phoneNumber ?? basicInfo.phoneNumber ?? '정보 없음',
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.family_restroom, color: Colors.white38, size: 18),
+                      const SizedBox(width: 8),
+                      Text('보호자 연락처: ', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                      Text(
+                        basicInfo.parentPhoneNumber ?? '정보 없음',
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.repeat, color: Colors.white38, size: 18),
+                      const SizedBox(width: 8),
+                      Text('수업 횟수: ', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                      Text(
+                        '${basicInfo.weeklyClassCount}',
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.calendar_today, color: Colors.white38, size: 18),
+                      const SizedBox(width: 8),
+                      Text('등록일: ', style: TextStyle(color: Colors.white70, fontSize: 15)),
+                      Text(
+                        DateFormat('yyyy년 MM월 dd일').format(basicInfo.registrationDate),
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
+            Align(
+              alignment: Alignment.centerRight, // 오른쪽 정렬
+              child: SizedBox(
+                width: 96, // 20% 감소
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2), // 시그니처 색상
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)), // 라운드 크게
+                    elevation: 0,
+                  ),
+                  child: const Text('닫기', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                ),
+              ),
+            ),
           ],
-          Text(
-            '등록일: '
-            + (student.registrationDate != null ? DateFormat('yyyy년 MM월 dd일').format(student.registrationDate!) : '정보 없음'),
-          ),
-          const SizedBox(height: 8),
-          if (student.groupInfo != null)
-            Text('소속 그룹: ${student.groupInfo!.name}'),
-        ],
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Future.microtask(() => Navigator.of(context).pop(false)),
-          child: const Text('닫기'),
-        ),
-        TextButton(
-          onPressed: () => _handleEdit(context),
-          child: const Text('수정'),
-        ),
-        FilledButton(
-          onPressed: () => _handleDelete(context),
-          child: const Text('삭제'),
-        ),
-      ],
     );
   }
 } 

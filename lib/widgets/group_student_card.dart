@@ -47,7 +47,7 @@ class GroupStudentCard extends StatelessWidget {
       width: 160,
       height: 80,
       decoration: BoxDecoration(
-        color: isOriginal ? const Color(0xFF1F1F1F) : const Color(0xFF2A2A2A),
+        color: const Color(0xFF1F1F1F),
         borderRadius: BorderRadius.circular(12),
         boxShadow: isOriginal ? null : [
           BoxShadow(
