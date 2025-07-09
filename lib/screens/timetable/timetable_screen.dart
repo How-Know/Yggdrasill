@@ -13,6 +13,8 @@ import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
 import '../../widgets/custom_tab_bar.dart';
 import '../../widgets/app_bar_title.dart';
+import 'package:morphable_shape/morphable_shape.dart';
+import 'package:dimension/dimension.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -51,6 +53,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   bool _showOperatingHoursAlert = false;
   // SplitButton 관련 상태 추가
   String _splitButtonSelected = '학생';
+  bool _isDropdownOpen = false;
 
   @override
   void initState() {
@@ -224,42 +227,46 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 32),
+                const SizedBox(width: 32), // 여백 원복
                 // 오른쪽 2:5 비율 컨테이너 (상하 분할)
                 Expanded(
                   flex: 2,
                   child: Column(
                     children: [
                       Expanded(
+                        flex: 2, // 상단 컨테이너 2
                         child: Container(
                           decoration: BoxDecoration(
                             color: Color(0xFF18181A),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          margin: const EdgeInsets.only(bottom: 12),
+                          margin: const EdgeInsets.only(bottom: 18), // 세로 여백 18로 수정
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.all(12.0),
+                                padding: const EdgeInsets.only(left: 24.0, top: 24.0, bottom: 8.0), // 위쪽 24, 왼쪽 24 여백 추가
                                 child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.start, // 왼쪽 정렬
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // SplitButton: 등록 + 드롭다운
-                                    Expanded(
+                                    SizedBox(
+                                      width: 113, // 기존보다 10% 감소
+                                      height: 44, // 학생 메뉴 등록 버튼과 동일
                                       child: Material(
-                                        color: const Color(0xFF7C4DFF),
+                                        color: const Color(0xFF1976D2), // 시그니처 색상
                                         borderRadius: const BorderRadius.only(
                                           topLeft: Radius.circular(32),
                                           bottomLeft: Radius.circular(32),
-                                          topRight: Radius.circular(12),
-                                          bottomRight: Radius.circular(12),
+                                          topRight: Radius.circular(6), // 오른쪽 라운드 축소
+                                          bottomRight: Radius.circular(6),
                                         ),
                                         child: InkWell(
                                           borderRadius: const BorderRadius.only(
                                             topLeft: Radius.circular(32),
                                             bottomLeft: Radius.circular(32),
-                                            topRight: Radius.circular(12),
-                                            bottomRight: Radius.circular(12),
+                                            topRight: Radius.circular(6), // 오른쪽 라운드 축소
+                                            bottomRight: Radius.circular(6),
                                           ),
                                           onTap: () {
                                             if (_splitButtonSelected == '학생') {
@@ -268,7 +275,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
                                                 _isClassRegistrationMode = false;
                                               });
                                             } else {
-                                              // 그룹명과 매칭되는 그룹 찾기 (GroupInfo? 타입 안전 처리)
                                               GroupInfo? group;
                                               if (_groups.isNotEmpty) {
                                                 group = _groups.firstWhere(
@@ -286,50 +292,46 @@ class _TimetableScreenState extends State<TimetableScreen> {
                                               }
                                             }
                                           },
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-                                            child: Row(
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              children: [
-                                                Icon(Icons.edit, color: Colors.white),
-                                                const SizedBox(width: 8),
-                                                Text('등록', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                                              ],
-                                            ),
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            mainAxisSize: MainAxisSize.max,
+                                            children: [
+                                              Icon(Icons.edit, color: Colors.white, size: 20),
+                                              const SizedBox(width: 8),
+                                              Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                                            ],
                                           ),
                                         ),
                                       ),
                                     ),
+                                    // 구분선
                                     Container(
-                                      height: 56,
-                                      width: 2,
-                                      color: Colors.white.withOpacity(0.1),
-                                    ),
-                                    Material(
-                                      color: const Color(0xFF7C4DFF),
-                                      borderRadius: const BorderRadius.only(
-                                        topRight: Radius.circular(32),
-                                        bottomRight: Radius.circular(32),
+                                      height: 44,
+                                      width: 4.5, // 10% 줄임
+                                      color: Colors.transparent,
+                                      child: Center(
+                                        child: Container(
+                                          width: 2,
+                                          height: 28,
+                                          color: Colors.white.withOpacity(0.1),
+                                        ),
                                       ),
-                                      child: PopupMenuButton<String>(
-                                        icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white),
-                                        color: Colors.white,
+                                    ),
+                                    // 드롭다운 버튼
+                                    _BouncyDropdownButton(
+                                      isOpen: _isDropdownOpen,
+                                      child: _DropdownMenuButton(
+                                        isOpen: _isDropdownOpen,
+                                        onOpenChanged: (open) {
+                                          setState(() {
+                                            _isDropdownOpen = open;
+                                          });
+                                        },
                                         onSelected: (value) {
                                           setState(() {
                                             _splitButtonSelected = value;
+                                            _isDropdownOpen = false;
                                           });
-                                        },
-                                        itemBuilder: (context) {
-                                          return [
-                                            const PopupMenuItem<String>(
-                                              value: '학생',
-                                              child: Text('학생'),
-                                            ),
-                                            ..._groups.map((g) => PopupMenuItem<String>(
-                                              value: g.name,
-                                              child: Text(g.name),
-                                            )),
-                                          ];
                                         },
                                       ),
                                     ),
@@ -342,12 +344,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         ),
                       ),
                       Expanded(
+                        flex: 3, // 하단 컨테이너 3
                         child: Container(
                           decoration: BoxDecoration(
                             color: Color(0xFF18181A),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          margin: const EdgeInsets.only(top: 12),
+                          margin: const EdgeInsets.only(top: 18), // 세로 여백 18로 수정
                         ),
                       ),
                     ],
@@ -520,5 +523,238 @@ class _TimetableScreenState extends State<TimetableScreen> {
         );
       }
     }
+  }
+}
+
+class _DropdownMenuButton extends StatefulWidget {
+  final bool isOpen;
+  final ValueChanged<bool> onOpenChanged;
+  final ValueChanged<String> onSelected;
+  const _DropdownMenuButton({required this.isOpen, required this.onOpenChanged, required this.onSelected});
+
+  @override
+  State<_DropdownMenuButton> createState() => _DropdownMenuButtonState();
+}
+
+class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTickerProviderStateMixin {
+  final GlobalKey _buttonKey = GlobalKey();
+  OverlayEntry? _overlayEntry;
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  void _toggleDropdown() {
+    if (_overlayEntry == null) {
+      _controller.forward();
+      _overlayEntry = _createOverlayEntry();
+      Overlay.of(context).insert(_overlayEntry!);
+      widget.onOpenChanged(true);
+    } else {
+      _controller.reverse();
+      _removeOverlay();
+      widget.onOpenChanged(false);
+    }
+  }
+
+  OverlayEntry _createOverlayEntry() {
+    RenderBox renderBox = _buttonKey.currentContext!.findRenderObject() as RenderBox;
+    final size = renderBox.size;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    return OverlayEntry(
+      builder: (context) => Positioned(
+        left: offset.dx,
+        top: offset.dy + size.height + 4,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.all(24), // 상하좌우 여백 24
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F1F1F), // 학생카드와 동일한 색상
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.18),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...['학생', '그룹', '보강', '일정'].map((label) =>
+                  FadeTransition(
+                    opacity: _controller,
+                    child: ScaleTransition(
+                      scale: _controller,
+                      child: _DropdownMenuItem(
+                        label: label,
+                        onTap: () {
+                          widget.onSelected(label);
+                          _toggleDropdown();
+                        },
+                        width: 84, // 30% 줄임 (120 -> 84)
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      key: _buttonKey,
+      onTap: _toggleDropdown,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 350),
+        width: 44,
+        height: 44,
+        decoration: ShapeDecoration(
+          color: const Color(0xFF1976D2),
+          shape: RectangleShapeBorder(
+            borderRadius: widget.isOpen
+              ? DynamicBorderRadius.all(DynamicRadius.circular(50.toPercentLength))
+              : DynamicBorderRadius.only(
+                  topLeft: DynamicRadius.circular(6.toPXLength),
+                  bottomLeft: DynamicRadius.circular(6.toPXLength),
+                  topRight: DynamicRadius.circular(32.toPXLength),
+                  bottomRight: DynamicRadius.circular(32.toPXLength),
+                ),
+          ),
+        ),
+        child: Center(
+          child: AnimatedRotation(
+            turns: widget.isOpen ? 0.5 : 0.0, // 0.5turn = 180도
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeInOut,
+            child: const Icon(
+              Icons.keyboard_arrow_down,
+              color: Colors.white,
+              size: 28,
+              key: ValueKey('arrow'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 학생카드 하위 버튼 스타일과 동일하게
+class _DropdownMenuItem extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  final double width;
+  const _DropdownMenuItem({required this.label, required this.onTap, this.width = 84});
+
+  @override
+  State<_DropdownMenuItem> createState() => _DropdownMenuItemState();
+}
+
+class _DropdownMenuItemState extends State<_DropdownMenuItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: widget.width,
+          height: 38, // 기존 48에서 20% 감소
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14), // 높이 줄임
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          decoration: BoxDecoration(
+            color: _hovered ? const Color(0xFF353545) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.centerLeft,
+          child: Text(
+            widget.label,
+            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 버튼이 원형/네모로 바뀔 때만 바운스 효과 적용하는 위젯
+class _BouncyDropdownButton extends StatefulWidget {
+  final bool isOpen;
+  final Widget child;
+  const _BouncyDropdownButton({required this.isOpen, required this.child});
+
+  @override
+  State<_BouncyDropdownButton> createState() => _BouncyDropdownButtonState();
+}
+
+class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnim;
+  bool _prevIsOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _scaleAnim = Tween<double>(begin: 1.0, end: 1.08)
+        .chain(CurveTween(curve: Curves.elasticOut))
+        .animate(_controller);
+    _prevIsOpen = widget.isOpen;
+  }
+
+  @override
+  void didUpdateWidget(covariant _BouncyDropdownButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isOpen != widget.isOpen) {
+      if (widget.isOpen) {
+        _controller.forward(from: 0);
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(
+      scale: _scaleAnim,
+      child: widget.child,
+    );
   }
 }
