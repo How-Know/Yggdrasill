@@ -180,187 +180,184 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const AppBarTitle(title: '시간'),
-        const SizedBox(height: 5),
-        CustomTabBar(
-          selectedIndex: TimetableViewType.values.indexOf(_viewType),
-          tabs: TimetableViewType.values.map((e) => e.name).toList(),
-          onTabSelected: (i) {
-            setState(() {
-              _viewType = TimetableViewType.values[i];
-            });
-          },
-        ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 메인(시간표) 컨테이너
-                Expanded(
-                  flex: 5,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Color(0xFF18181A),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      children: [
-                        TimetableHeader(
-                          selectedDate: _selectedDate,
-                          onDateChanged: _handleDateChanged,
-                          selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
-                          onDaySelected: _onDayHeaderSelected,
-                          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-                        ),
-                        const SizedBox(height: 24),
-                        Expanded(
-                          child: SingleChildScrollView(
+    return Scaffold(
+      backgroundColor: const Color(0xFF1F1F1F), // 학생 메뉴와 동일하게
+      appBar: const AppBarTitle(title: '시간'),
+      body: Column(
+        children: [
+          CustomTabBar(
+            selectedIndex: TimetableViewType.values.indexOf(_viewType),
+            tabs: TimetableViewType.values.map((e) => e.name).toList(),
+            onTabSelected: (i) {
+              setState(() {
+                _viewType = TimetableViewType.values[i];
+              });
+            },
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 메인(시간표) 컨테이너
+                    Container(
+                      width: 700, // 더 작게 조정
+                      decoration: BoxDecoration(
+                        color: Color(0xFF18181A),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        children: [
+                          TimetableHeader(
+                            selectedDate: _selectedDate,
+                            onDateChanged: _handleDateChanged,
+                            selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
+                            onDaySelected: _onDayHeaderSelected,
+                            isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                          ),
+                          const SizedBox(height: 24),
+                          Expanded(
                             child: _buildContent(),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 32), // 여백 원복
-                // 오른쪽 2:5 비율 컨테이너 (상하 분할)
-                Expanded(
-                  flex: 2,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        flex: 2, // 상단 컨테이너 2
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Color(0xFF18181A),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          margin: const EdgeInsets.only(bottom: 18), // 세로 여백 18로 수정
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.only(left: 24.0, top: 24.0, bottom: 8.0), // 위쪽 24, 왼쪽 24 여백 추가
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.start, // 왼쪽 정렬
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SizedBox(
-                                      width: 113, // 기존보다 10% 감소
-                                      height: 44, // 학생 메뉴 등록 버튼과 동일
-                                      child: Material(
-                                        color: const Color(0xFF1976D2), // 시그니처 색상
-                                        borderRadius: const BorderRadius.only(
-                                          topLeft: Radius.circular(32),
-                                          bottomLeft: Radius.circular(32),
-                                          topRight: Radius.circular(6), // 오른쪽 라운드 축소
-                                          bottomRight: Radius.circular(6),
-                                        ),
-                                        child: InkWell(
+                    const SizedBox(width: 24), // 여백
+                    // 오른쪽 컨테이너
+                    Container(
+                      width: 260, // 더 작게 조정
+                      child: Column(
+                        children: [
+                          Container(
+                            height: 180,
+                            decoration: BoxDecoration(
+                              color: Color(0xFF18181A),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            margin: const EdgeInsets.only(bottom: 18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 24.0, top: 24.0, bottom: 8.0),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      SizedBox(
+                                        width: 113,
+                                        height: 44,
+                                        child: Material(
+                                          color: const Color(0xFF1976D2),
                                           borderRadius: const BorderRadius.only(
                                             topLeft: Radius.circular(32),
                                             bottomLeft: Radius.circular(32),
-                                            topRight: Radius.circular(6), // 오른쪽 라운드 축소
+                                            topRight: Radius.circular(6),
                                             bottomRight: Radius.circular(6),
                                           ),
-                                          onTap: () {
-                                            if (_splitButtonSelected == '학생') {
-                                              setState(() {
-                                                _isStudentRegistrationMode = !_isStudentRegistrationMode;
-                                                _isClassRegistrationMode = false;
-                                              });
-                                            } else {
-                                              GroupInfo? group;
-                                              if (_groups.isNotEmpty) {
-                                                group = _groups.firstWhere(
-                                                  (g) => g.name == _splitButtonSelected,
-                                                  orElse: () => _groups.first,
-                                                );
-                                              } else {
-                                                group = null;
-                                              }
-                                              if (group != null) {
+                                          child: InkWell(
+                                            borderRadius: const BorderRadius.only(
+                                              topLeft: Radius.circular(32),
+                                              bottomLeft: Radius.circular(32),
+                                              topRight: Radius.circular(6),
+                                              bottomRight: Radius.circular(6),
+                                            ),
+                                            onTap: () {
+                                              if (_splitButtonSelected == '학생') {
                                                 setState(() {
-                                                  _selectedGroup = group;
+                                                  _isStudentRegistrationMode = !_isStudentRegistrationMode;
+                                                  _isClassRegistrationMode = false;
                                                 });
-                                                _showGroupScheduleDialog();
+                                              } else {
+                                                GroupInfo? group;
+                                                if (_groups.isNotEmpty) {
+                                                  group = _groups.firstWhere(
+                                                    (g) => g.name == _splitButtonSelected,
+                                                    orElse: () => _groups.first,
+                                                  );
+                                                } else {
+                                                  group = null;
+                                                }
+                                                if (group != null) {
+                                                  setState(() {
+                                                    _selectedGroup = group;
+                                                  });
+                                                  _showGroupScheduleDialog();
+                                                }
                                               }
-                                            }
-                                          },
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            mainAxisSize: MainAxisSize.max,
-                                            children: [
-                                              Icon(Icons.edit, color: Colors.white, size: 20),
-                                              const SizedBox(width: 8),
-                                              Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                                            ],
+                                            },
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              mainAxisSize: MainAxisSize.max,
+                                              children: [
+                                                Icon(Icons.edit, color: Colors.white, size: 20),
+                                                const SizedBox(width: 8),
+                                                Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    // 구분선
-                                    Container(
-                                      height: 44,
-                                      width: 4.5, // 10% 줄임
-                                      color: Colors.transparent,
-                                      child: Center(
-                                        child: Container(
-                                          width: 2,
-                                          height: 28,
-                                          color: Colors.white.withOpacity(0.1),
+                                      // 구분선
+                                      Container(
+                                        height: 44,
+                                        width: 4.5,
+                                        color: Colors.transparent,
+                                        child: Center(
+                                          child: Container(
+                                            width: 2,
+                                            height: 28,
+                                            color: Colors.white.withOpacity(0.1),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    // 드롭다운 버튼
-                                    _BouncyDropdownButton(
-                                      isOpen: _isDropdownOpen,
-                                      child: _DropdownMenuButton(
+                                      // 드롭다운 버튼
+                                      _BouncyDropdownButton(
                                         isOpen: _isDropdownOpen,
-                                        onOpenChanged: (open) {
-                                          setState(() {
-                                            _isDropdownOpen = open;
-                                          });
-                                        },
-                                        onSelected: (value) {
-                                          setState(() {
-                                            _splitButtonSelected = value;
-                                            _isDropdownOpen = false;
-                                          });
-                                        },
+                                        child: _DropdownMenuButton(
+                                          isOpen: _isDropdownOpen,
+                                          onOpenChanged: (open) {
+                                            setState(() {
+                                              _isDropdownOpen = open;
+                                            });
+                                          },
+                                          onSelected: (value) {
+                                            setState(() {
+                                              _splitButtonSelected = value;
+                                              _isDropdownOpen = false;
+                                            });
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                              // 기존 컨테이너 내용이 있다면 여기에 추가
-                            ],
+                                // 기존 컨테이너 내용이 있다면 여기에 추가
+                              ],
+                            ),
                           ),
-                        ),
-                      ),
-                      Expanded(
-                        flex: 3, // 하단 컨테이너 3
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Color(0xFF18181A),
-                            borderRadius: BorderRadius.circular(16),
+                          Container(
+                            height: 270,
+                            decoration: BoxDecoration(
+                              color: Color(0xFF18181A),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            margin: const EdgeInsets.only(top: 18),
                           ),
-                          margin: const EdgeInsets.only(top: 18), // 세로 여백 18로 수정
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
