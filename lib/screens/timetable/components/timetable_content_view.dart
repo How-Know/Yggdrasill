@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-class TimetableContentView extends StatelessWidget {
+class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
   final VoidCallback onRegisterPressed;
   final String splitButtonSelected;
@@ -19,6 +19,71 @@ class TimetableContentView extends StatelessWidget {
   }) : super(key: key);
 
   @override
+  State<TimetableContentView> createState() => _TimetableContentViewState();
+}
+
+class _TimetableContentViewState extends State<TimetableContentView> {
+  final GlobalKey _dropdownButtonKey = GlobalKey();
+  OverlayEntry? _dropdownOverlay;
+
+  void _showDropdownMenu() {
+    final RenderBox buttonRenderBox = _dropdownButtonKey.currentContext!.findRenderObject() as RenderBox;
+    final Offset buttonPosition = buttonRenderBox.localToGlobal(Offset.zero);
+    final Size buttonSize = buttonRenderBox.size;
+    _dropdownOverlay = OverlayEntry(
+      builder: (context) => Positioned(
+        left: buttonPosition.dx,
+        top: buttonPosition.dy + buttonSize.height + 4,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: 140,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Color(0xFF2A2A2A), width: 1), // 윤곽선이 티 안 나게
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.18),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...['학생', '그룹', '보강', '자습'].map((label) => _DropdownMenuHoverItem(
+                  label: label,
+                  selected: widget.splitButtonSelected == label,
+                  onTap: () {
+                    widget.onDropdownSelected(label);
+                    _removeDropdownMenu();
+                  },
+                )),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_dropdownOverlay!);
+  }
+
+  void _removeDropdownMenu() {
+    _dropdownOverlay?.remove();
+    _dropdownOverlay = null;
+    widget.onDropdownOpenChanged(false);
+  }
+
+  @override
+  void dispose() {
+    _removeDropdownMenu();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
     return Row(
@@ -32,7 +97,7 @@ class TimetableContentView extends StatelessWidget {
               color: const Color(0xFF18181A),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: timetableChild,
+            child: widget.timetableChild,
           ),
         ),
         const SizedBox(width: 32),
@@ -69,7 +134,7 @@ class TimetableContentView extends StatelessWidget {
                             topRight: Radius.circular(6),
                             bottomRight: Radius.circular(6),
                           ),
-                          onTap: onRegisterPressed,
+                          onTap: widget.onRegisterPressed,
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             mainAxisSize: MainAxisSize.max,
@@ -85,7 +150,7 @@ class TimetableContentView extends StatelessWidget {
                     // 구분선
                     Container(
                       height: 44,
-                      width: 4.5,
+                      width: 3.0,
                       color: Colors.transparent,
                       child: Center(
                         child: Container(
@@ -96,12 +161,49 @@ class TimetableContentView extends StatelessWidget {
                       ),
                     ),
                     // 드롭다운 버튼
-                    _BouncyDropdownButton(
-                      isOpen: isDropdownOpen,
-                      child: _DropdownMenuButton(
-                        isOpen: isDropdownOpen,
-                        onOpenChanged: onDropdownOpenChanged,
-                        onSelected: onDropdownSelected,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2.5), // 간격 1/3로 축소
+                      child: GestureDetector(
+                        key: _dropdownButtonKey,
+                        onTap: () {
+                          if (_dropdownOverlay == null) {
+                            widget.onDropdownOpenChanged(true);
+                            _showDropdownMenu();
+                          } else {
+                            _removeDropdownMenu();
+                          }
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 350),
+                          width: 44, // 원형 유지
+                          height: 44, // 등록버튼과 동일하게
+                          decoration: ShapeDecoration(
+                            color: const Color(0xFF1976D2),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: widget.isDropdownOpen
+                                ? BorderRadius.circular(50)
+                                : const BorderRadius.only(
+                                    topLeft: Radius.circular(6),
+                                    bottomLeft: Radius.circular(6),
+                                    topRight: Radius.circular(32),
+                                    bottomRight: Radius.circular(32),
+                                  ),
+                            ),
+                          ),
+                          child: Center(
+                            child: AnimatedRotation(
+                              turns: widget.isDropdownOpen ? 0.5 : 0.0,
+                              duration: const Duration(milliseconds: 350),
+                              curve: Curves.easeInOut,
+                              child: const Icon(
+                                Icons.keyboard_arrow_down,
+                                color: Colors.white,
+                                size: 28,
+                                key: ValueKey('arrow'),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -116,102 +218,47 @@ class TimetableContentView extends StatelessWidget {
   }
 }
 
-// SplitButton 관련 위젯 복사 (간단화)
-class _DropdownMenuButton extends StatelessWidget {
-  final bool isOpen;
-  final ValueChanged<bool> onOpenChanged;
-  final ValueChanged<String> onSelected;
-  const _DropdownMenuButton({required this.isOpen, required this.onOpenChanged, required this.onSelected});
+// 드롭다운 메뉴 항목 위젯
+class _DropdownMenuHoverItem extends StatefulWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _DropdownMenuHoverItem({required this.label, required this.selected, required this.onTap});
 
   @override
+  State<_DropdownMenuHoverItem> createState() => _DropdownMenuHoverItemState();
+}
+
+class _DropdownMenuHoverItemState extends State<_DropdownMenuHoverItem> {
+  bool _hovered = false;
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onOpenChanged(!isOpen),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 350),
-        width: 44,
-        height: 44,
-        decoration: ShapeDecoration(
-          color: const Color(0xFF1976D2),
-          shape: RoundedRectangleBorder(
-            borderRadius: isOpen
-              ? BorderRadius.circular(50)
-              : const BorderRadius.only(
-                  topLeft: Radius.circular(6),
-                  bottomLeft: Radius.circular(6),
-                  topRight: Radius.circular(32),
-                  bottomRight: Radius.circular(32),
-                ),
+    final highlight = _hovered || widget.selected;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 140,
+          height: 40,
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+          decoration: BoxDecoration(
+            color: highlight ? const Color(0xFF383838).withOpacity(0.7) : Colors.transparent, // 학생등록 다이얼로그와 유사한 하이라이트
+            borderRadius: BorderRadius.circular(8),
           ),
-        ),
-        child: Center(
-          child: AnimatedRotation(
-            turns: isOpen ? 0.5 : 0.0, // 0.5turn = 180도
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeInOut,
-            child: const Icon(
-              Icons.keyboard_arrow_down,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            widget.label,
+            style: TextStyle(
               color: Colors.white,
-              size: 28,
-              key: ValueKey('arrow'),
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _BouncyDropdownButton extends StatefulWidget {
-  final bool isOpen;
-  final Widget child;
-  const _BouncyDropdownButton({required this.isOpen, required this.child});
-
-  @override
-  State<_BouncyDropdownButton> createState() => _BouncyDropdownButtonState();
-}
-
-class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnim;
-  bool _prevIsOpen = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 320),
-    );
-    _scaleAnim = Tween<double>(begin: 1.0, end: 1.08)
-        .chain(CurveTween(curve: Curves.elasticOut))
-        .animate(_controller);
-    _prevIsOpen = widget.isOpen;
-  }
-
-  @override
-  void didUpdateWidget(covariant _BouncyDropdownButton oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.isOpen != widget.isOpen) {
-      if (widget.isOpen) {
-        _controller.forward(from: 0);
-      } else {
-        _controller.reverse();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _scaleAnim,
-      child: widget.child,
     );
   }
 } 

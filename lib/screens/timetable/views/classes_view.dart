@@ -103,6 +103,34 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             final isExpanded = _expandedCellKey == cellKey;
                             final isHighlight = widget.isRegistrationMode && widget.selectedDayIndex == dayIdx;
                             
+                            // --- 여기서 breakTime 체크 ---
+                            bool isBreakTime = false;
+                            if (widget.operatingHours.length > dayIdx) {
+                              final hours = widget.operatingHours[dayIdx];
+                              for (final breakTime in hours.breakTimes) {
+                                final breakStart = DateTime(
+                                  timeBlocks[blockIdx].startTime.year,
+                                  timeBlocks[blockIdx].startTime.month,
+                                  timeBlocks[blockIdx].startTime.day,
+                                  breakTime.startTime.hour,
+                                  breakTime.startTime.minute,
+                                );
+                                final breakEnd = DateTime(
+                                  timeBlocks[blockIdx].startTime.year,
+                                  timeBlocks[blockIdx].startTime.month,
+                                  timeBlocks[blockIdx].startTime.day,
+                                  breakTime.endTime.hour,
+                                  breakTime.endTime.minute,
+                                );
+                                if ((timeBlocks[blockIdx].startTime.isAfter(breakStart) || timeBlocks[blockIdx].startTime.isAtSameMomentAs(breakStart)) &&
+                                    timeBlocks[blockIdx].startTime.isBefore(breakEnd)) {
+                                  isBreakTime = true;
+                                  break;
+                                }
+                              }
+                            }
+                            // --- breakTime 체크 끝 ---
+                            
                             // 수업 정원 확인을 위한 클래스 정보 가져오기
                             final activeStudentCount = activeBlocks.length;
                             Color? countColor;
@@ -229,18 +257,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       final endTime = DateTime(now.year, now.month, now.day, maxHour, maxMinute);
       while (currentTime.isBefore(endTime)) {
         final blockEndTime = currentTime.add(const Duration(minutes: 30));
-        // 해당 시간대가 어떤 요일의 breakTime에 포함되는지 체크
-        final isBreakTime = widget.operatingHours.any((hours) {
-          return hours.breakTimes.any((breakTime) {
-            final breakStart = DateTime(now.year, now.month, now.day, breakTime.startTime.hour, breakTime.startTime.minute);
-            final breakEnd = DateTime(now.year, now.month, now.day, breakTime.endTime.hour, breakTime.endTime.minute);
-            return (currentTime.isAfter(breakStart) || currentTime.isAtSameMomentAs(breakStart)) && currentTime.isBefore(breakEnd);
-          });
-        });
+        // 각 요일별로 breakTime 체크
+        // blocks는 시간 단위로만 생성, 요일별 breakTime은 셀에서 판단
         blocks.add(TimeBlock(
           startTime: currentTime,
           endTime: blockEndTime,
-          isBreakTime: isBreakTime,
+          isBreakTime: false, // 기본값 false, 실제 셀에서 판단
         ));
         currentTime = blockEndTime;
       }

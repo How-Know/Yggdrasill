@@ -222,6 +222,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             ),
             child: Column(
               children: [
+                SizedBox(height: 10),
                 SizedBox(
                   width: 450, // 기존 375에서 20% 증가 (375 * 1.2 = 450)
                   child: SegmentedButton<int>(
@@ -253,7 +254,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 20), // 기존 10 → 20으로 변경
+                SizedBox(height: 20), // 기존 10 → 20으로 변경
                 TimetableHeader(
                   selectedDate: _selectedDate,
                   onDateChanged: _handleDateChanged,
