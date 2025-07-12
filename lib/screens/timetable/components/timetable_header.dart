@@ -41,7 +41,7 @@ class TimetableHeader extends StatelessWidget {
     final weekDays = _getWeekDays();
     
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: EdgeInsets.zero,
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
@@ -99,7 +99,7 @@ class TimetableHeader extends StatelessWidget {
                             : isSelected
                               ? Colors.blue
                               : Colors.grey.shade400,
-                          fontSize: 14,
+                          fontSize: 16, // 기존 14 → 16
                           fontWeight: FontWeight.w500,
                         ),
                       ),

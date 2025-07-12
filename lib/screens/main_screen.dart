@@ -99,7 +99,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildContent() {
-    print('[DEBUG] _buildContent 진입, _selectedIndex=[38;5;246m$_selectedIndex[0m');
+    print('[DEBUG] _buildContent 진입, _selectedIndex= [38;5;246m$_selectedIndex [0m');
     switch (_selectedIndex) {
       case 0:
         return const Center(child: Text('홈', style: TextStyle(color: Colors.white)));
