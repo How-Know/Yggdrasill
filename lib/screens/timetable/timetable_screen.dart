@@ -16,6 +16,7 @@ import '../../widgets/app_bar_title.dart';
 import 'package:morphable_shape/morphable_shape.dart';
 import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
+import '../../widgets/app_snackbar.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -44,7 +45,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   TimetableViewType _viewType = TimetableViewType.classes;
   List<OperatingHours> _operatingHours = [];
   final MenuController _menuController = MenuController();
-  int? _selectedDayIndex = 0;
+  int? _selectedDayIndex = null;
   DateTime? _selectedStartTime;
   bool _isStudentRegistrationMode = false;
   bool _isClassRegistrationMode = false;
@@ -56,6 +57,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   String _splitButtonSelected = '학생';
   bool _isDropdownOpen = false;
   int _segmentIndex = 0; // 0: 모두, 1: 학년, 2: 학교, 3: 그룹
+  // 클래스 멤버에 선택된 학생 상태 추가
+  Student? _selectedStudentForTime;
 
   @override
   void initState() {
@@ -135,15 +138,30 @@ class _TimetableScreenState extends State<TimetableScreen> {
     });
   }
 
-  void _handleRegistrationButton() {
-    if (_registrationButtonText == '학생') {
-      setState(() {
-        _isStudentRegistrationMode = !_isStudentRegistrationMode;
-        _isClassRegistrationMode = false;
-        if (!_isStudentRegistrationMode) {
-          _registrationButtonText = '등록';
-        }
-      });
+  void _handleRegistrationButton() async {
+    print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+    if (_splitButtonSelected == '학생') {
+      // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
+      final selectedStudent = await showDialog<Student>(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => StudentSearchDialog(onlyShowIncompleteStudents: true),
+      );
+      if (selectedStudent != null) {
+        setState(() {
+          _isStudentRegistrationMode = true;
+          _isClassRegistrationMode = false;
+          _selectedStudentForTime = selectedStudent;
+        });
+        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      } else {
+        setState(() {
+          _isStudentRegistrationMode = false;
+          _isClassRegistrationMode = false;
+          _selectedStudentForTime = null;
+        });
+        print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      }
     } else if (_selectedGroup != null) {
       // 클래스 등록 모드
       _showGroupScheduleDialog();
@@ -169,19 +187,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   // TimetableHeader 요일 클릭 콜백
   void _onDayHeaderSelected(int dayIndex) {
-    if (_isStudentRegistrationMode || _isClassRegistrationMode) {
-      setState(() {
-        _selectedDayIndex = dayIndex;
-        if (_currentGroupSchedule != null) {
-          // 클래스 스케줄의 요일 업데이트
-          _currentGroupSchedule = _currentGroupSchedule!.copyWith(dayIndex: dayIndex);
-        }
-      });
-    }
+    // 요일 선택 기능 완전 비활성화: 아무 동작도 하지 않음
   }
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG][TimetableScreen] build: _isStudentRegistrationMode=$_isStudentRegistrationMode');
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       appBar: const AppBarTitle(title: '시간'),
@@ -213,6 +224,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     switch (_viewType) {
       case TimetableViewType.classes:
         return TimetableContentView(
+          key: ValueKey(_isStudentRegistrationMode), // 등록모드 변경 시 강제 리빌드
           timetableChild: Container(
             width: double.infinity,
             padding: EdgeInsets.zero,
@@ -222,43 +234,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
             ),
             child: Column(
               children: [
-                SizedBox(height: 10),
-                SizedBox(
-                  width: 450, // 기존 375에서 20% 증가 (375 * 1.2 = 450)
-                  child: SegmentedButton<int>(
-                    segments: const [
-                      ButtonSegment(value: 0, label: Text('모두')),
-                      ButtonSegment(value: 1, label: Text('학년')),
-                      ButtonSegment(value: 2, label: Text('학교')),
-                      ButtonSegment(value: 3, label: Text('그룹')),
-                    ],
-                    selected: {_segmentIndex},
-                    onSelectionChanged: (Set<int> newSelection) {
-                      setState(() {
-                        _segmentIndex = newSelection.first;
-                      });
-                    },
-                    style: ButtonStyle(
-                      backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                      foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                        (Set<MaterialState> states) {
-                          if (states.contains(MaterialState.selected)) {
-                            return Colors.white;
-                          }
-                          return Colors.white70;
-                        },
-                      ),
-                      textStyle: MaterialStateProperty.all(
-                        const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(height: 20), // 기존 10 → 20으로 변경
+                SizedBox(height: 20),
                 TimetableHeader(
                   selectedDate: _selectedDate,
                   onDateChanged: _handleDateChanged,
-                  selectedDayIndex: _isStudentRegistrationMode ? (_selectedDayIndex ?? 0) : null,
+                  selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
                   onDaySelected: _onDayHeaderSelected,
                   isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
                 ),
@@ -270,9 +250,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
             ),
           ),
           onRegisterPressed: () {
-            setState(() {
-              _isClassRegistrationMode = true;
-            });
+            if (_splitButtonSelected == '학생') {
+              _handleRegistrationButton();
+            } else if (_splitButtonSelected == '그룹') {
+              setState(() {
+                _isClassRegistrationMode = true;
+              });
+            }
           },
           splitButtonSelected: _splitButtonSelected,
           isDropdownOpen: _isDropdownOpen,
@@ -284,7 +268,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onDropdownSelected: (value) {
             setState(() {
               _splitButtonSelected = value;
-              _isDropdownOpen = false;
             });
           },
         );
@@ -295,53 +278,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Widget _buildClassView() {
     return ClassesView(
+      key: ValueKey(_isStudentRegistrationMode), // 등록모드 변경 시 강제 리빌드
       operatingHours: _operatingHours,
       breakTimeColor: const Color(0xFF424242),
-      selectedDayIndex: _selectedDayIndex ?? 0,
       isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-      onTimeSelected: _handleTimeSelection,
+      selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+      onTimeSelected: (int dayIdx, DateTime startTime) {
+        _handleTimeSelection(dayIdx, startTime);
+      },
     );
   }
 
-  Future<void> _onTimeCellSelected(DateTime startTime) async {
-    if (_isStudentRegistrationMode && _selectedDayIndex != null) {
-      setState(() {
-        _selectedStartTime = startTime;
-      });
-      final student = await showDialog<Student>(
-        context: context,
-        builder: (context) => const StudentSearchDialog(),
-      );
-      if (student != null) {
-        final block = StudentTimeBlock(
-          id: const Uuid().v4(),
-          studentId: student.id,
-          groupId: student.groupInfo?.id,
-          dayIndex: _selectedDayIndex!,
-          startTime: startTime,
-          duration: const Duration(hours: 1),
-          createdAt: DateTime.now(),
-        );
-        await DataManager.instance.addStudentTimeBlock(block);
-      }
-      setState(() {
-        _isStudentRegistrationMode = false;
-        _selectedDayIndex = null;
-        _selectedStartTime = null;
-        _registrationButtonText = '등록';
-      });
-    }
-  }
-
-  Future<void> _handleTimeSelection(DateTime startTime) async {
+  Future<void> _handleTimeSelection(int dayIdx, DateTime startTime) async {
+    print('[DEBUG] _handleTimeSelection called: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode');
     if (_isStudentRegistrationMode) {
       // 요일별 운영시간 체크
-      final dayIdx = _selectedDayIndex ?? 0;
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
         final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
         final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
         if (startTime.isBefore(start) || !startTime.isBefore(end)) {
+          print('[DEBUG] 시간 범위 벗어남: start=$start, end=$end');
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
@@ -359,43 +316,47 @@ class _TimetableScreenState extends State<TimetableScreen> {
           return;
         }
       }
-      // 기존 학생 등록 코드
-      final existingBlocks = DataManager.instance.studentTimeBlocksNotifier.value
-          .where((block) => 
-              block.dayIndex == (_selectedDayIndex ?? 0) &&
-              block.startTime.hour == startTime.hour &&
-              block.startTime.minute == startTime.minute)
-          .toList();
-      final excludedStudentIds = existingBlocks.map((block) => block.studentId).toSet();
-      
-      final student = await showDialog<Student>(
-        context: context,
-        builder: (context) => StudentSearchDialog(excludedStudentIds: excludedStudentIds),
-      );
+      // 학생 등록: 이미 선택된 학생(_selectedStudentForTime)로 바로 등록
+      final student = _selectedStudentForTime;
+      print('[DEBUG] _selectedStudentForTime: $student');
       if (student != null) {
         final block = StudentTimeBlock(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           studentId: student.id,
           groupId: student.groupInfo?.id,
-          dayIndex: _selectedDayIndex ?? 0,
+          dayIndex: dayIdx,
           startTime: startTime,
           duration: const Duration(hours: 1),
           createdAt: DateTime.now(),
         );
         await DataManager.instance.addStudentTimeBlock(block);
+        print('[DEBUG] StudentTimeBlock 등록 완료: $block');
+        // 스낵바 출력
+        if (mounted) {
+          print('[DEBUG] 스낵바 출력');
+          showAppSnackBar(context, '${student.name} 학생의 시간이 등록되었습니다.');
+        } else {
+          print('[DEBUG] context not mounted, 스낵바 출력 불가');
+        }
+      } else {
+        print('[DEBUG] student == null, 등록 실패');
       }
       setState(() {
+        print('[DEBUG] setState: 등록모드 종료');
         _isStudentRegistrationMode = false;
-        // 버튼 텍스트는 변경하지 않음 (학생으로 유지)
+        _selectedStudentForTime = null;
+        _selectedDayIndex = null;
+        _selectedStartTime = null;
       });
     } else if (_isClassRegistrationMode && _currentGroupSchedule != null) {
-      // 클래스 스케줄 등록/수정 전 운영시간 체크
-      final dayIdx = _currentGroupSchedule!.dayIndex;
+      print('[DEBUG] 클래스 등록모드 진입');
+      // 기존 클래스 등록 로직은 유지
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
         final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
         final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
         if (startTime.isBefore(start) || !startTime.isBefore(end)) {
+          print('[DEBUG] 클래스 시간 범위 벗어남: start=$start, end=$end');
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
@@ -413,30 +374,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
           return;
         }
       }
-      // 클래스 스케줄 등록/수정
       final updatedSchedule = _currentGroupSchedule!.copyWith(
         startTime: startTime,
-        dayIndex: _selectedDayIndex ?? 0,
+        dayIndex: dayIdx,
       );
-      
       if (_currentGroupSchedule!.createdAt == _currentGroupSchedule!.updatedAt) {
-        // 새로운 스케줄
         await DataManager.instance.addGroupSchedule(updatedSchedule);
+        print('[DEBUG] 새 클래스 스케줄 등록');
       } else {
-        // 기존 스케줄 수정
         await DataManager.instance.updateGroupSchedule(updatedSchedule);
+        print('[DEBUG] 기존 클래스 스케줄 수정');
       }
-      
-      // 해당 클래스의 모든 학생들에게 적용
       await DataManager.instance.applyGroupScheduleToStudents(updatedSchedule);
-      
       setState(() {
+        print('[DEBUG] setState: 클래스 등록모드 종료');
         _isClassRegistrationMode = false;
         _currentGroupSchedule = null;
+        _selectedDayIndex = null;
+        _selectedStartTime = null;
       });
-      
-      // 성공 메시지 표시
       if (mounted) {
+        print('[DEBUG] 클래스 스낵바 출력');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${_selectedGroup!.name} 클래스 시간이 등록되었습니다.'),
@@ -445,6 +403,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
             margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
           ),
         );
+      } else {
+        print('[DEBUG] context not mounted, 클래스 스낵바 출력 불가');
       }
     }
   }

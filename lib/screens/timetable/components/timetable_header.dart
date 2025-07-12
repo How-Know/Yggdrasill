@@ -69,37 +69,20 @@ class TimetableHeader extends StatelessWidget {
           // 요일 헤더들
           ...List.generate(7, (index) {
             final date = weekDays[index];
-            final isSelected = index == selectedDayIndex;
-            
             return Expanded(
               child: Tooltip(
                 message: _formatDate(date),
                 child: InkWell(
-                  onTap: () {
-                    onDaySelected(index);
-                    onDateChanged(date);
-                  },
+                  onTap: null, // 요일 클릭 비활성화
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isSelected && isRegistrationMode 
-                        ? Colors.orange.withOpacity(0.2)
-                        : isSelected 
-                          ? Colors.blue.withOpacity(0.2) 
-                          : null,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
+                    duration: const Duration(milliseconds: 200),
+                    decoration: const BoxDecoration(), // 하이라이트 없음
                     child: Center(
                       child: Text(
                         _getWeekdayName(date.weekday),
                         style: TextStyle(
-                          color: isSelected && isRegistrationMode
-                            ? Colors.orange
-                            : isSelected
-                              ? Colors.blue
-                              : Colors.grey.shade400,
-                          fontSize: 16, // 기존 14 → 16
+                          color: Colors.grey.shade400,
+                          fontSize: 16,
                           fontWeight: FontWeight.w500,
                         ),
                       ),

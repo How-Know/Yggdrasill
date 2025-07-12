@@ -12,7 +12,7 @@ class ClassesView extends StatefulWidget {
   final Color breakTimeColor;
   final bool isRegistrationMode;
   final int? selectedDayIndex;
-  final Function(DateTime)? onTimeSelected;
+  final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
 
   const ClassesView({
     super.key,
@@ -33,6 +33,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
   final ScrollController _scrollController = ScrollController();
+  String? _hoveredCellKey;
 
   @override
   void dispose() {
@@ -44,6 +45,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG][ClassesView] build: isRegistrationMode= ${widget.isRegistrationMode}');
     final timeBlocks = _generateTimeBlocks();
     return Stack(
       children: [
@@ -101,7 +103,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 b.startTime.minute == timeBlocks[blockIdx].startTime.minute;
                             }).toList();
                             final isExpanded = _expandedCellKey == cellKey;
-                            final isHighlight = widget.isRegistrationMode && widget.selectedDayIndex == dayIdx;
+                            bool isHoverHighlight = false;
+                            // 상태 변수로 hover 추적 필요: _hoveredCellKey
                             
                             // --- 여기서 breakTime 체크 ---
                             bool isBreakTime = false;
@@ -154,68 +157,74 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   final cellWidth = constraints.maxWidth;
                                   return Stack(
                                     children: [
-                                      GestureDetector(
-                                        onTap: () {
-                                          if (widget.isRegistrationMode && widget.selectedDayIndex == dayIdx && widget.onTimeSelected != null) {
-                                            widget.onTimeSelected!(timeBlocks[blockIdx].startTime);
-                                          } else if (cellBlocks.isNotEmpty) {
-                                            setState(() {
-                                              if (_expandedCellKey == null || _expandedCellKey != cellKey) {
-                                                _expandedCellKey = cellKey;
-                                              } else {
-                                                _expandedCellKey = null;
-                                              }
-                                            });
-                                          } else {
-                                            if (_expandedCellKey != null) {
+                                      MouseRegion(
+                                        onEnter: (_) => setState(() { _hoveredCellKey = cellKey; }),
+                                        onExit: (_) => setState(() { if (_hoveredCellKey == cellKey) _hoveredCellKey = null; }),
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            if (widget.isRegistrationMode && widget.onTimeSelected != null) {
+                                              widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
+                                            } else if (cellBlocks.isNotEmpty) {
                                               setState(() {
-                                                _expandedCellKey = null;
+                                                if (_expandedCellKey == null || _expandedCellKey != cellKey) {
+                                                  _expandedCellKey = cellKey;
+                                                } else {
+                                                  _expandedCellKey = null;
+                                                }
                                               });
+                                            } else {
+                                              if (_expandedCellKey != null) {
+                                                setState(() {
+                                                  _expandedCellKey = null;
+                                                });
+                                              }
                                             }
-                                          }
-                                        },
-                                        child: Container(
-                                          width: cellWidth,
-                                          child: Stack(
-                                            children: [
-                                              // 정원카드/정원표시 카드
-                                              Container(
-                                                decoration: BoxDecoration(
-                                                  color: isHighlight ? const Color(0xFF1976D2).withOpacity(0.10) : Colors.transparent,
-                                                  border: Border(
-                                                    left: BorderSide(
-                                                      color: Colors.white.withOpacity(0.1),
+                                          },
+                                          child: Container(
+                                            width: cellWidth,
+                                            child: Stack(
+                                              children: [
+                                                // 정원카드/정원표시 카드
+                                                Container(
+                                                  decoration: BoxDecoration(
+                                                    color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
+                                                      ? const Color(0xFF1976D2).withOpacity(0.10)
+                                                      : Colors.transparent,
+                                                    border: Border(
+                                                      left: BorderSide(
+                                                        color: Colors.white.withOpacity(0.1),
+                                                      ),
                                                     ),
                                                   ),
+                                                  child: cellBlocks.isEmpty
+                                                      ? (activeStudentCount > 0 
+                                                          ? CapacityCountWidget(count: activeStudentCount, color: countColor)
+                                                          : null)
+                                                      : !isExpanded
+                                                          ? CapacityCardWidget(
+                                                              count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                              color: countColor,
+                                                              showArrow: true,
+                                                              isExpanded: false,
+                                                              expandedBlocks: cellBlocks,
+                                                              students: students.map((s) => s.student).toList(),
+                                                              groups: groups,
+                                                            )
+                                                          : CapacityCardWidget(
+                                                              count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                              color: countColor,
+                                                              showArrow: true,
+                                                              isExpanded: true,
+                                                              expandedBlocks: cellBlocks,
+                                                              students: students.map((s) => s.student).toList(),
+                                                              groups: groups,
+                                                            ),
                                                 ),
-                                                child: cellBlocks.isEmpty
-                                                    ? (activeStudentCount > 0 
-                                                        ? CapacityCountWidget(count: activeStudentCount, color: countColor)
-                                                        : null)
-                                                    : !isExpanded
-                                                        ? CapacityCardWidget(
-                                                            count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
-                                                            color: countColor,
-                                                            showArrow: true,
-                                                            isExpanded: false,
-                                                            expandedBlocks: cellBlocks,
-                                                            students: students.map((s) => s.student).toList(),
-                                                            groups: groups,
-                                                          )
-                                                        : CapacityCardWidget(
-                                                            count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
-                                                            color: countColor,
-                                                            showArrow: true,
-                                                            isExpanded: true,
-                                                            expandedBlocks: cellBlocks,
-                                                            students: students.map((s) => s.student).toList(),
-                                                            groups: groups,
-                                                          ),
-                                              ),
-                                              // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                              if (isExpanded && cellBlocks.isNotEmpty)
-                                                _buildExpandedStudentCards(cellBlocks, students.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
-                                            ],
+                                                // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
+                                                if (isExpanded && cellBlocks.isNotEmpty)
+                                                  _buildExpandedStudentCards(cellBlocks, students.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),

@@ -37,7 +37,7 @@ class DataManager {
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
 
   List<GroupInfo> get groups {
-    print('[DEBUG] DataManager.groups: $_groups');
+    // print('[DEBUG] DataManager.groups: $_groups');
     return List.unmodifiable(_groups);
   }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
@@ -335,19 +335,24 @@ class DataManager {
   }
 
   Future<void> loadStudentTimeBlocks() async {
-    // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
+    _studentTimeBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
   }
 
   Future<void> saveStudentTimeBlocks() async {
-    // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
+    await AcademyDbService.instance.saveStudentTimeBlocks(_studentTimeBlocks);
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
-    // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
+    _studentTimeBlocks.add(block);
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    await AcademyDbService.instance.addStudentTimeBlock(block);
   }
 
   Future<void> removeStudentTimeBlock(String id) async {
-    // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
+    _studentTimeBlocks.removeWhere((b) => b.id == id);
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    await AcademyDbService.instance.deleteStudentTimeBlock(id);
   }
 
   // GroupSchedule 관련 메서드들

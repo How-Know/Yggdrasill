@@ -4,10 +4,12 @@ import '../services/data_manager.dart';
 
 class StudentSearchDialog extends StatefulWidget {
   final Set<String> excludedStudentIds;
+  final bool onlyShowIncompleteStudents;
   
   const StudentSearchDialog({
     Key? key,
     this.excludedStudentIds = const {},
+    this.onlyShowIncompleteStudents = false,
   }) : super(key: key);
 
   @override
@@ -22,10 +24,21 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   @override
   void initState() {
     super.initState();
-    _students = DataManager.instance.students
+    final allStudents = DataManager.instance.students
         .where((student) => !widget.excludedStudentIds.contains(student.student.id))
         .map((s) => s.student)
         .toList();
+    if (widget.onlyShowIncompleteStudents) {
+      // 학생별로 등록된 수업시간 개수와 weeklyClassCount 비교
+      final timeBlocks = DataManager.instance.studentTimeBlocks;
+      _students = allStudents.where((student) {
+        final count = timeBlocks.where((b) => b.studentId == student.id).length;
+        final required = student.weeklyClassCount ?? 1;
+        return count < required;
+      }).toList();
+    } else {
+      _students = allStudents;
+    }
     _filteredStudents = _students;
   }
 

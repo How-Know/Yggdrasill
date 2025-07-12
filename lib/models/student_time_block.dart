@@ -31,17 +31,15 @@ class StudentTimeBlock {
     );
   }
 
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'studentId': studentId,
-      'groupId': groupId,
-      'dayIndex': dayIndex,
-      'startTime': startTime.toIso8601String(),
-      'duration': duration.inMinutes,
-      'createdAt': createdAt.toIso8601String(),
-    };
-  }
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'student_id': studentId,
+    'group_id': groupId,
+    'day_index': dayIndex,
+    'start_time': startTime.toIso8601String(),
+    'duration': duration.inMinutes,
+    'created_at': createdAt.toIso8601String(),
+  };
 
   StudentTimeBlock copyWith({
     String? id,

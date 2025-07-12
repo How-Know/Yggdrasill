@@ -8,6 +8,7 @@ import '../models/student.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import '../models/student_time_block.dart';
 
 class AcademyDbService {
   static final AcademyDbService instance = AcademyDbService._internal();
@@ -26,7 +27,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -88,6 +89,17 @@ class AcademyDbService {
             description TEXT
           )
         ''');
+        await db.execute('''
+          CREATE TABLE student_time_blocks (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            group_id TEXT,
+            day_index INTEGER,
+            start_time TEXT,
+            duration INTEGER,
+            created_at TEXT
+          )
+        ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -122,6 +134,19 @@ class AcademyDbService {
               SELECT id, phone_number, parent_phone_number, registration_date, weekly_class_count, group_id FROM students
             ''');
           }
+        }
+        if (oldVersion < 4) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS student_time_blocks (
+              id TEXT PRIMARY KEY,
+              student_id TEXT,
+              group_id TEXT,
+              day_index INTEGER,
+              start_time TEXT,
+              duration INTEGER,
+              created_at TEXT
+            )
+          ''');
         }
         final columns = await db.rawQuery("PRAGMA table_info(students)");
         final hasGroupId = columns.any((col) => col['name'] == 'group_id');
@@ -305,7 +330,7 @@ class AcademyDbService {
   }
 
   Future<void> updateStudent(Student student) async {
-    print('[DB] updateStudent: [33m${student.name}[0m, id=[36m${student.id}[0m');
+    print('[DB] updateStudent:  [33m${student.name} [0m, id= [36m${student.id} [0m');
     final dbClient = await db;
     await dbClient.update('students', student.toDb(), where: 'id = ?', whereArgs: [student.id]);
   }
@@ -343,7 +368,7 @@ class AcademyDbService {
   }
 
   Future<void> updateStudentBasicInfo(String studentId, Map<String, dynamic> info) async {
-    print('[DB] updateStudentBasicInfo: [33mstudentId=$studentId[0m, groupId=[36m${info['group_id']}[0m');
+    print('[DB] updateStudentBasicInfo:  [33mstudentId=$studentId [0m, groupId= [36m${info['group_id']} [0m');
     final dbClient = await db;
     await dbClient.update('students_basic_info', info, where: 'student_id = ?', whereArgs: [studentId]);
   }
@@ -351,5 +376,50 @@ class AcademyDbService {
   Future<void> deleteStudentBasicInfo(String studentId) async {
     final dbClient = await db;
     await dbClient.delete('students_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+  }
+
+  Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
+    final dbClient = await db;
+    print('[DB] addStudentTimeBlock: ${block.toJson()}');
+    await dbClient.insert(
+      'student_time_blocks',
+      block.toJson(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<StudentTimeBlock>> getStudentTimeBlocks() async {
+    final dbClient = await db;
+    final result = await dbClient.query('student_time_blocks');
+    return result.map((row) => StudentTimeBlock(
+      id: row['id'] as String,
+      studentId: row['student_id'] as String,
+      groupId: row['group_id'] as String?,
+      dayIndex: row['day_index'] as int,
+      startTime: DateTime.parse(row['start_time'] as String),
+      duration: Duration(minutes: row['duration'] as int),
+      createdAt: DateTime.parse(row['created_at'] as String),
+    )).toList();
+  }
+
+  Future<void> saveStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
+    final dbClient = await db;
+    await dbClient.delete('student_time_blocks');
+    for (final block in blocks) {
+      await dbClient.insert('student_time_blocks', {
+        'id': block.id,
+        'student_id': block.studentId,
+        'group_id': block.groupId,
+        'day_index': block.dayIndex,
+        'start_time': block.startTime.toIso8601String(),
+        'duration': block.duration.inMinutes,
+        'created_at': block.createdAt.toIso8601String(),
+      });
+    }
+  }
+
+  Future<void> deleteStudentTimeBlock(String id) async {
+    final dbClient = await db;
+    await dbClient.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
   }
 } 
