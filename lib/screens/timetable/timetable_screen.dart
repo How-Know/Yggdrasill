@@ -59,6 +59,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   int _segmentIndex = 0; // 0: 모두, 1: 학년, 2: 학교, 3: 그룹
   // 클래스 멤버에 선택된 학생 상태 추가
   Student? _selectedStudentForTime;
+  // 학생 연속 등록을 위한 상태 변수 추가
+  int? _remainingRegisterCount;
   final ScrollController _timetableScrollController = ScrollController();
   bool _hasScrolledToCurrentTime = false;
 
@@ -247,17 +249,26 @@ class _TimetableScreenState extends State<TimetableScreen> {
         builder: (context) => StudentSearchDialog(onlyShowIncompleteStudents: true),
       );
       if (selectedStudent != null) {
+        // StudentWithInfo에서 basicInfo.weeklyClassCount를 가져옴
+        final studentWithInfo = DataManager.instance.students.firstWhere(
+          (s) => s.student.id == selectedStudent.id,
+          orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id, registrationDate: selectedStudent.registrationDate ?? DateTime.now())),
+        );
+        final classCount = studentWithInfo.basicInfo.weeklyClassCount;
         setState(() {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
           _selectedStudentForTime = selectedStudent;
+          // StudentBasicInfo의 weeklyClassCount로 초기화
+          _remainingRegisterCount = classCount;
         });
-        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
       } else {
         setState(() {
           _isStudentRegistrationMode = false;
           _isClassRegistrationMode = false;
           _selectedStudentForTime = null;
+          _remainingRegisterCount = null;
         });
         print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
@@ -376,22 +387,50 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildClassView() {
-    return ClassesView(
-      scrollController: _timetableScrollController,
-      // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
-      operatingHours: _operatingHours,
-      breakTimeColor: const Color(0xFF424242),
-      isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-      selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
-      onTimeSelected: (int dayIdx, DateTime startTime) {
-        _handleTimeSelection(dayIdx, startTime);
-      },
+    // StudentWithInfo에서 basicInfo.weeklyClassCount를 가져옴
+    int? totalClassCount;
+    if (_isStudentRegistrationMode && _selectedStudentForTime != null) {
+      final studentWithInfo = DataManager.instance.students.firstWhere(
+        (s) => s.student.id == _selectedStudentForTime!.id,
+        orElse: () => StudentWithInfo(
+          student: _selectedStudentForTime!,
+          basicInfo: StudentBasicInfo(
+            studentId: _selectedStudentForTime!.id,
+            registrationDate: _selectedStudentForTime!.registrationDate ?? DateTime.now(),
+          ),
+        ),
+      );
+      totalClassCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
+    }
+    return Column(
+      children: [
+        if (_isStudentRegistrationMode && _selectedStudentForTime != null && _remainingRegisterCount != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: Text(
+              '${_selectedStudentForTime!.name} 학생: 수업시간 등록 (${(totalClassCount ?? 1) - (_remainingRegisterCount ?? 0) + 1}/${totalClassCount ?? 1})',
+              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+            ),
+          ),
+        Expanded(
+          child: ClassesView(
+            scrollController: _timetableScrollController,
+            operatingHours: _operatingHours,
+            breakTimeColor: const Color(0xFF424242),
+            isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+            selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+            onTimeSelected: (int dayIdx, DateTime startTime) {
+              _handleTimeSelection(dayIdx, startTime);
+            },
+          ),
+        ),
+      ],
     );
   }
 
   Future<void> _handleTimeSelection(int dayIdx, DateTime startTime) async {
-    print('[DEBUG] _handleTimeSelection called: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode');
-    if (_isStudentRegistrationMode) {
+    print('[DEBUG] _handleTimeSelection called: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
+    if (_isStudentRegistrationMode && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
       // 요일별 운영시간 체크
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
@@ -442,13 +481,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
         print('[DEBUG] student == null, 등록 실패');
       }
       setState(() {
-        print('[DEBUG] setState: 등록모드 종료');
-        _isStudentRegistrationMode = false;
-        _selectedStudentForTime = null;
-        _selectedDayIndex = null;
-        _selectedStartTime = null;
+        if (_remainingRegisterCount != null && _remainingRegisterCount! > 1) {
+          _remainingRegisterCount = _remainingRegisterCount! - 1;
+          // 등록모드 유지, 다음 셀 선택 대기
+        } else {
+          // 마지막 등록, 등록모드 종료
+          _isStudentRegistrationMode = false;
+          _selectedStudentForTime = null;
+          _selectedDayIndex = null;
+          _selectedStartTime = null;
+          _remainingRegisterCount = null;
+        }
       });
-    } else if (_isClassRegistrationMode && _currentGroupSchedule != null) {
+      // 마지막 등록 후 안내
+      if (_remainingRegisterCount == null) {
+        if (mounted && student != null) {
+          showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.');
+        }
+      }
+      return;
+    }
+    if (_isClassRegistrationMode && _currentGroupSchedule != null) {
       print('[DEBUG] 클래스 등록모드 진입');
       // 기존 클래스 등록 로직은 유지
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
