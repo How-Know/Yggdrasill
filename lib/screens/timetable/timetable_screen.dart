@@ -59,12 +59,106 @@ class _TimetableScreenState extends State<TimetableScreen> {
   int _segmentIndex = 0; // 0: 모두, 1: 학년, 2: 학교, 3: 그룹
   // 클래스 멤버에 선택된 학생 상태 추가
   Student? _selectedStudentForTime;
+  final ScrollController _timetableScrollController = ScrollController();
+  bool _hasScrolledToCurrentTime = false;
 
   @override
   void initState() {
     super.initState();
     _loadData();
     _loadOperatingHours();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 운영시간 로드 후에만 스크롤 이동하도록 변경 (여기서는 호출하지 않음)
+    // if (!_hasScrolledToCurrentTime) {
+    //   WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+    //   _hasScrolledToCurrentTime = true;
+    // }
+  }
+
+  void _scrollToCurrentTime() {
+    final timeBlocks = _generateTimeBlocks();
+    // 타임블록 개수 및 각 블록 정보 로그 출력
+    print('[DEBUG][_scrollToCurrentTime] timeBlocks.length: ' + timeBlocks.length.toString());
+    for (int i = 0; i < timeBlocks.length; i++) {
+      final block = timeBlocks[i];
+      print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + block.startTime.toString() + ' ~ ' + block.endTime.toString());
+    }
+    // 대한민국 표준시(KST)로 현재 시간 계산
+    final nowKst = DateTime.now().toUtc().add(const Duration(hours: 9));
+    final now = TimeOfDay(hour: nowKst.hour, minute: nowKst.minute);
+    print('[DEBUG][_scrollToCurrentTime] nowKst: ' + nowKst.toString() + ', now: ' + now.format(context));
+    int currentIdx = 0;
+    for (int i = 0; i < timeBlocks.length; i++) {
+      final block = timeBlocks[i];
+      if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+        currentIdx = i;
+      }
+    }
+    final blockHeight = 90.0;
+    final visibleRows = 5;
+    final firstBlock = timeBlocks.isNotEmpty ? timeBlocks.first : null;
+    final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
+    int scrollIdx = currentIdx;
+    if (firstBlock != null && lastBlock != null) {
+      final nowMinutes = now.hour * 60 + now.minute;
+      final firstMinutes = firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
+      final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+      if (nowMinutes < firstMinutes) {
+        scrollIdx = 0;
+      } else if (nowMinutes > lastMinutes) {
+        scrollIdx = timeBlocks.length - 1;
+      }
+    }
+    final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
+    print('[DEBUG][_scrollToCurrentTime] scrollIdx: ' + scrollIdx.toString() + ', targetOffset: ' + targetOffset.toString());
+    if (_timetableScrollController.hasClients) {
+      final maxOffset = _timetableScrollController.position.maxScrollExtent;
+      final minOffset = _timetableScrollController.position.minScrollExtent;
+      final scrollTo = targetOffset.clamp(minOffset, maxOffset);
+      print('[DEBUG][_scrollToCurrentTime] scrollTo: ' + scrollTo.toString() + ', minOffset: ' + minOffset.toString() + ', maxOffset: ' + maxOffset.toString());
+      _timetableScrollController.animateTo(
+        scrollTo,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      print('[DEBUG][_scrollToCurrentTime] _timetableScrollController.hasClients == false');
+    }
+  }
+
+  List<TimeBlock> _generateTimeBlocks() {
+    // ClassesView의 _generateTimeBlocks 로직 복사
+    final List<TimeBlock> blocks = [];
+    if (_operatingHours.isNotEmpty) {
+      final now = DateTime.now();
+      int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
+      for (final hours in _operatingHours) {
+        if (hours.startTime.hour < minHour || (hours.startTime.hour == minHour && hours.startTime.minute < minMinute)) {
+          minHour = hours.startTime.hour;
+          minMinute = hours.startTime.minute;
+        }
+        if (hours.endTime.hour > maxHour || (hours.endTime.hour == maxHour && hours.endTime.minute > maxMinute)) {
+          maxHour = hours.endTime.hour;
+          maxMinute = hours.endTime.minute;
+        }
+      }
+      var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
+      final endTime = DateTime(now.year, now.month, now.day, maxHour, maxMinute);
+      while (currentTime.isBefore(endTime)) {
+        final blockEndTime = currentTime.add(const Duration(minutes: 30));
+        blocks.add(TimeBlock(
+          startTime: currentTime,
+          endTime: blockEndTime,
+          isBreakTime: false,
+        ));
+        currentTime = blockEndTime;
+      }
+    }
+    return blocks;
   }
 
   Future<void> _loadData() async {
@@ -79,6 +173,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
     setState(() {
       _operatingHours = hours;
     });
+    // 운영시간 로드 후에만 스크롤 이동 시도
+    if (!_hasScrolledToCurrentTime) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+      _hasScrolledToCurrentTime = true;
+    }
     // 운영시간 외 학생 시간 삭제 및 안내
     final allHours = hours;
     final toRemove = <StudentTimeBlock>[];
@@ -224,7 +323,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     switch (_viewType) {
       case TimetableViewType.classes:
         return TimetableContentView(
-          key: ValueKey(_isStudentRegistrationMode), // 등록모드 변경 시 강제 리빌드
+          // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
           timetableChild: Container(
             width: double.infinity,
             padding: EdgeInsets.zero,
@@ -278,7 +377,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Widget _buildClassView() {
     return ClassesView(
-      key: ValueKey(_isStudentRegistrationMode), // 등록모드 변경 시 강제 리빌드
+      scrollController: _timetableScrollController,
+      // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
       operatingHours: _operatingHours,
       breakTimeColor: const Color(0xFF424242),
       isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,

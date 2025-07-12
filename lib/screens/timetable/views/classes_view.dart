@@ -13,6 +13,7 @@ class ClassesView extends StatefulWidget {
   final bool isRegistrationMode;
   final int? selectedDayIndex;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
+  final ScrollController scrollController;
 
   const ClassesView({
     super.key,
@@ -21,6 +22,7 @@ class ClassesView extends StatefulWidget {
     this.isRegistrationMode = false,
     this.selectedDayIndex,
     this.onTimeSelected,
+    required this.scrollController,
   });
 
   @override
@@ -32,8 +34,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   final Map<String, GlobalKey> _cellKeys = {};
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
-  final ScrollController _scrollController = ScrollController();
+  // 기존: final ScrollController _scrollController = ScrollController();
+  // 변경: widget.scrollController 사용
   String? _hoveredCellKey;
+  bool _hasScrolledToCurrentTime = false;
 
   @override
   void dispose() {
@@ -50,7 +54,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     return Stack(
       children: [
         SingleChildScrollView(
-          controller: _scrollController,
+          controller: widget.scrollController,
           child: ValueListenableBuilder<List<StudentTimeBlock>>(
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
@@ -300,7 +304,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tryScrollToCurrentTime());
+    // 스크롤 이동 로직 완전 제거
   }
 
   void _tryScrollToCurrentTime() async {
@@ -335,11 +339,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       }
     }
     final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
-    if (_scrollController.hasClients) {
-      final maxOffset = _scrollController.position.maxScrollExtent;
-      final minOffset = _scrollController.position.minScrollExtent;
+    if (widget.scrollController.hasClients) {
+      final maxOffset = widget.scrollController.position.maxScrollExtent;
+      final minOffset = widget.scrollController.position.minScrollExtent;
       final scrollTo = targetOffset.clamp(minOffset, maxOffset);
-      _scrollController.animateTo(
+      widget.scrollController.animateTo(
         scrollTo,
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeInOut,
