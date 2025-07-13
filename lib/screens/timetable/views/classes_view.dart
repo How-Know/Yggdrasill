@@ -178,81 +178,55 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                           }
                                         }
                                       },
-                                      child: Container(
-                                        width: cellWidth,
-                                        child: Stack(
-                                          children: [
-                                            // 정원카드/정원표시 카드
-                                            Container(
-                                              decoration: BoxDecoration(
-                                                color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
-                                                  ? const Color(0xFF1976D2).withOpacity(0.10)
-                                                  : Colors.transparent,
-                                                border: Border(
-                                                  left: BorderSide(
-                                                    color: Colors.white.withOpacity(0.1),
-                                                  ),
+                                      child: Stack(
+                                        children: [
+                                          // 셀 배경 및 경계선(구분선)은 그대로 유지
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
+                                                ? const Color(0xFF1976D2).withOpacity(0.10)
+                                                : Colors.transparent,
+                                              border: Border(
+                                                left: BorderSide(
+                                                  color: Colors.white.withOpacity(0.1),
                                                 ),
                                               ),
-                                              child: activeBlocks.isEmpty
-                                                  ? (activeStudentCount > 0 
-                                                      ? CapacityCountWidget(count: activeStudentCount, color: countColor)
-                                                      : null)
-                                                  : !isExpanded
-                                                      ? CapacityCardWidget(
-                                                          count: activeStudentCount > 0 ? activeStudentCount : activeBlocks.length,
-                                                          color: countColor,
-                                                          showArrow: true,
-                                                          isExpanded: false,
-                                                          expandedBlocks: activeBlocks,
-                                                          students: activeBlocks.map((b) =>
-                                                            studentsWithInfo.firstWhere(
-                                                              (s) => s.student.id == b.studentId,
-                                                              orElse: () => StudentWithInfo(
-                                                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                                              )
-                                                            ).student
-                                                          ).toList(),
-                                                          groups: groups,
-                                                        )
-                                                      : CapacityCardWidget(
-                                                          count: activeStudentCount > 0 ? activeStudentCount : activeBlocks.length,
-                                                          color: countColor,
-                                                          showArrow: true,
-                                                          isExpanded: true,
-                                                          expandedBlocks: activeBlocks,
-                                                          students: activeBlocks.map((b) =>
-                                                            studentsWithInfo.firstWhere(
-                                                              (s) => s.student.id == b.studentId,
-                                                              orElse: () => StudentWithInfo(
-                                                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                                              )
-                                                            ).student
-                                                          ).toList(),
-                                                          groups: groups,
-                                                        ),
                                             ),
-                                            // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                            if (isExpanded && activeBlocks.isNotEmpty)
-                                              _buildExpandedStudentCards(
-                                                activeBlocks,
-                                                activeBlocks.map((b) =>
-                                                  studentsWithInfo.firstWhere(
-                                                    (s) => s.student.id == b.studentId,
-                                                    orElse: () => StudentWithInfo(
-                                                      student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                                      basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                                    )
-                                                  ).student
-                                                ).toList(),
-                                                groups,
-                                                constraints.maxWidth,
-                                                isExpanded,
-                                              ),
-                                          ],
-                                        ),
+                                          ),
+                                          // 인원수 카드: 0명이면 아무것도 출력하지 않음, 1명 이상이면 상단에 붙임
+                                          if (activeStudentCount > 0)
+                                            Positioned(
+                                              top: 0,
+                                              left: 0,
+                                              right: 0,
+                                              child: !isExpanded
+                                                ? CapacityCardWidget(
+                                                    count: activeStudentCount,
+                                                    color: countColor,
+                                                  )
+                                                : CapacityCardWidget(
+                                                    count: activeStudentCount,
+                                                    color: countColor,
+                                                  ),
+                                            ),
+                                          // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
+                                          if (isExpanded && activeBlocks.isNotEmpty)
+                                            _buildExpandedStudentCards(
+                                              activeBlocks,
+                                              activeBlocks.map((b) =>
+                                                studentsWithInfo.firstWhere(
+                                                  (s) => s.student.id == b.studentId,
+                                                  orElse: () => StudentWithInfo(
+                                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                  )
+                                                ).student
+                                              ).toList(),
+                                              groups,
+                                              constraints.maxWidth,
+                                              isExpanded,
+                                            ),
+                                        ],
                                       ),
                                     ),
                                   );
@@ -492,163 +466,57 @@ class _StudentTimeBlockCard extends StatelessWidget {
   }
 }
 
-class CapacityCardWidget extends StatefulWidget {
+class CapacityCardWidget extends StatelessWidget {
   final int count;
   final Color? color;
-  final bool showArrow;
-  final bool isExpanded;
-  final List<StudentTimeBlock>? expandedBlocks;
-  final List<Student>? students;
-  final List<GroupInfo>? groups;
+  final double cellHeight;
   const CapacityCardWidget({
     required this.count,
     this.color,
-    this.showArrow = false,
-    this.isExpanded = false,
-    this.expandedBlocks,
-    this.students,
-    this.groups,
+    this.cellHeight = 90.0,
     Key? key,
   }) : super(key: key);
 
   @override
-  State<CapacityCardWidget> createState() => _CapacityCardWidgetState();
-}
-
-class _CapacityCardWidgetState extends State<CapacityCardWidget> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
-    _controller.value = widget.isExpanded ? 1.0 : 0.0;
-  }
-
-  @override
-  void didUpdateWidget(covariant CapacityCardWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isExpanded != oldWidget.isExpanded) {
-      if (widget.isExpanded) {
-        _controller.forward();
-      } else {
-        _controller.reverse();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (widget.isExpanded && widget.expandedBlocks != null && widget.students != null && widget.groups != null) {
-      final cellBlocks = widget.expandedBlocks!;
-      final students = widget.students!;
-      final groups = widget.groups!;
-      return Container(
-        width: double.infinity,
-        child: AnimatedScale(
-          scale: widget.isExpanded ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 1000),
-          curve: Curves.easeOut,
-          child: AnimatedOpacity(
-            opacity: widget.isExpanded ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 1000),
-            child: Wrap(
-              spacing: 5,
-              runSpacing: 10,
-              children: List.generate(cellBlocks.length, (i) {
-                final block = cellBlocks[i];
-                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
-                final groupInfo = block.groupId != null ?
-                  groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
-                return GestureDetector(
-                  onTapDown: (details) async {
-                    final selected = await showMenu<String>(
-                      context: context,
-                      position: RelativeRect.fromLTRB(
-                        details.globalPosition.dx,
-                        details.globalPosition.dy,
-                        details.globalPosition.dx + 1,
-                        details.globalPosition.dy + 1,
-                      ),
-                      color: Colors.black,
-                      items: [
-                        const PopupMenuItem<String>(
-                          value: 'edit',
-                          child: Text('수정', style: TextStyle(color: Colors.white)),
-                        ),
-                        const PopupMenuItem<String>(
-                          value: 'delete',
-                          child: Text('삭제', style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    );
-                    if (selected == 'edit') {
-                      // TODO: 시간/요일 수정 다이얼로그 진입
-                    } else if (selected == 'delete') {
-                      // TODO: 삭제 확인 다이얼로그 진입
-                    }
-                  },
-                  child: SizedBox(
-                    width: 109,
-                    height: 39,
-                    child: _StudentTimeBlockCard(student: student, groupInfo: groupInfo),
-                  ),
-                );
-              }),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 색상 인디케이터(막대) - 셀 전체 높이, 둥근 직사각형
+        Container(
+          width: 11, // 기존 8에서 20% 증가
+          height: cellHeight,
+          margin: EdgeInsets.zero,
+          decoration: BoxDecoration(
+            color: color ?? Colors.blue,
+            borderRadius: BorderRadius.circular(5), // 둥근 직사각형
+          ),
+        ),
+        // 인원수 바 (셀 전체 너비, 배경색)
+        Expanded(
+          child: Container(
+            height: 28,
+            width: double.infinity,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+            decoration: BoxDecoration(
+              color: Colors.transparent, // 배경색 완전 투명
+              borderRadius: const BorderRadius.only(
+                topRight: Radius.circular(8),
+                bottomRight: Radius.circular(8),
+              ),
+            ),
+            child: Text(
+              '$count', // 숫자만 표시
+              style: const TextStyle(
+                fontSize: 22, // 기존 15에서 2포인트 증가
+                fontWeight: FontWeight.w600,
+                color: Colors.white70, // 요일 row와 동일한 회색
+              ),
             ),
           ),
         ),
-      );
-    }
-    return Center(
-      child: Container(
-        width: 110,
-        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-        padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-        constraints: const BoxConstraints(minHeight: 35, maxHeight: 35),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: widget.color ?? Colors.grey,
-            width: 2,
-          ),
-        ),
-        child: widget.count > 0
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${widget.count}명',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: widget.color ?? Colors.black87,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  if (widget.showArrow) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      Icons.arrow_downward,
-                      size: 16,
-                      color: widget.color ?? Colors.black87,
-                    ),
-                  ],
-                ],
-              )
-            : null,
-      ),
+      ],
     );
   }
 }
