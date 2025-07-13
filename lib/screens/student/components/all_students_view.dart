@@ -594,12 +594,35 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               Wrap(
                 spacing: 4,
                 runSpacing: 8,
-                children: gradeStudents.map((student) => StudentCard(
-                  studentWithInfo: student,
-                  onShowDetails: (_) {},
-                  onUpdate: widget.onStudentUpdated,
-                  onDelete: widget.onDeleteStudent,
-                )).toList(),
+                children: gradeStudents.map((student) =>
+                  Draggable<StudentWithInfo>(
+                    data: student,
+                    feedback: Material(
+                      color: Colors.transparent,
+                      child: Opacity(
+                        opacity: 0.85,
+                        child: StudentCard(
+                          studentWithInfo: student,
+                          onShowDetails: (_) {},
+                          onUpdate: widget.onStudentUpdated,
+                        ),
+                      ),
+                    ),
+                    childWhenDragging: Opacity(
+                      opacity: 0.3,
+                      child: StudentCard(
+                        studentWithInfo: student,
+                        onShowDetails: (_) {},
+                        onUpdate: widget.onStudentUpdated,
+                      ),
+                    ),
+                    child: StudentCard(
+                      studentWithInfo: student,
+                      onShowDetails: (_) {},
+                      onUpdate: widget.onStudentUpdated,
+                    ),
+                  )
+                ).toList(),
               ),
             ],
           );

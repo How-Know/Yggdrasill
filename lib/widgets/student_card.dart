@@ -132,40 +132,7 @@ class StudentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final student = studentWithInfo.student;
-    return Draggable<StudentWithInfo>(
-      data: studentWithInfo,
-      feedback: Material(
-        color: Colors.transparent,
-        child: Opacity(
-          opacity: 0.85,
-          child: SizedBox(
-            width: 120,
-            child: Card(
-              color: const Color(0xFF1F1F1F),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Text(
-                  student.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-      childWhenDragging: Opacity(
-        opacity: 0.3,
-        child: _buildCardContent(context),
-      ),
-      child: _buildCardContent(context),
-    );
+    return _buildCardContent(context);
   }
 
   Widget _buildCardContent(BuildContext context) {

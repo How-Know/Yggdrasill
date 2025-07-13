@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
+import '../../../models/student.dart';
+import '../../../models/education_level.dart';
+import '../../../main.dart'; // rootScaffoldMessengerKey import
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -12,6 +15,7 @@ class TimetableContentView extends StatefulWidget {
   final List<StudentWithInfo>? selectedCellStudents;
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
+  final void Function(List<StudentWithInfo>)? onCellStudentsChanged;
 
   const TimetableContentView({
     Key? key,
@@ -24,6 +28,7 @@ class TimetableContentView extends StatefulWidget {
     this.selectedCellStudents,
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
+    this.onCellStudentsChanged,
   }) : super(key: key);
 
   @override
@@ -33,6 +38,7 @@ class TimetableContentView extends StatefulWidget {
 class _TimetableContentViewState extends State<TimetableContentView> {
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
+  bool _showDeleteZone = false;
 
   void _showDropdownMenu() {
     final RenderBox buttonRenderBox = _dropdownButtonKey.currentContext!.findRenderObject() as RenderBox;
@@ -247,14 +253,129 @@ class _TimetableContentViewState extends State<TimetableContentView> {
                               child: Wrap(
                                 spacing: 0,
                                 runSpacing: 4,
-                                children: widget.selectedCellStudents!.map((info) => StudentCard(
-                                  studentWithInfo: info,
-                                  onShowDetails: (info) {},
-                                )).toList(),
+                                children: widget.selectedCellStudents!.map((info) =>
+                                  Draggable<StudentWithInfo>(
+                                    data: info,
+                                    onDragStarted: () => setState(() => _showDeleteZone = true),
+                                    onDragEnd: (_) => setState(() => _showDeleteZone = false),
+                                    feedback: Material(
+                                      color: Colors.transparent,
+                                      child: Opacity(
+                                        opacity: 0.85,
+                                        child: StudentCard(
+                                          studentWithInfo: info,
+                                          onShowDetails: (info) {},
+                                        ),
+                                      ),
+                                    ),
+                                    childWhenDragging: Opacity(
+                                      opacity: 0.3,
+                                      child: StudentCard(
+                                        studentWithInfo: info,
+                                        onShowDetails: (info) {},
+                                      ),
+                                    ),
+                                    child: StudentCard(
+                                      studentWithInfo: info,
+                                      onShowDetails: (info) {},
+                                    ),
+                                  )
+                                ).toList(),
                               ),
                             ),
                           ),
                         ),
+                  // 삭제 드롭존
+                  if (_showDeleteZone)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16.0),
+                      child: DragTarget<StudentWithInfo>(
+                        onWillAccept: (student) => true,
+                        onAccept: (student) async {
+                          // 해당 학생의 시간표 블록 삭제
+                          final studentId = student.student.id;
+                          final dayIdx = widget.selectedCellDayIndex;
+                          final startTime = widget.selectedCellStartTime;
+                          if (dayIdx != null && startTime != null) {
+                            // student_time_block에서 해당 학생+요일+시간 블록 찾기
+                            final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                              b.studentId == studentId &&
+                              b.dayIndex == dayIdx &&
+                              b.startTime.hour == startTime.hour &&
+                              b.startTime.minute == startTime.minute
+                            ).toList();
+                            for (final block in blocks) {
+                              await DataManager.instance.removeStudentTimeBlock(block.id);
+                            }
+                            // 삭제 후 데이터 즉시 새로고침
+                            await DataManager.instance.loadStudents();
+                            await DataManager.instance.loadStudentTimeBlocks();
+                            setState(() {
+                              _showDeleteZone = false;
+                              // (필요하다면 다른 상태도 여기서 갱신)
+                            });
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) {
+                                  rootScaffoldMessengerKey.currentState?.showSnackBar(
+                                    SnackBar(
+                                      content: Text('${student.student.name} 학생의 수업시간이 삭제되었습니다.'),
+                                      backgroundColor: const Color(0xFF1976D2),
+                                      behavior: SnackBarBehavior.floating,
+                                      margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
+                                    ),
+                                  );
+                                }
+                              });
+                            });
+                            // 삭제 후 등록버튼 컨테이너 내 학생카드 리스트도 즉시 반영
+                            if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null) {
+                              final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                                b.dayIndex == widget.selectedCellDayIndex &&
+                                b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                                b.startTime.minute == widget.selectedCellStartTime!.minute
+                              ).toList();
+                              final updatedStudents = DataManager.instance.students;
+                              final updatedCellStudents = updatedBlocks.map((b) =>
+                                updatedStudents.firstWhere(
+                                  (s) => s.student.id == b.studentId,
+                                  orElse: () => StudentWithInfo(
+                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                  ),
+                                )
+                              ).toList();
+                              if (widget.onCellStudentsChanged != null) {
+                                widget.onCellStudentsChanged!(updatedCellStudents);
+                              }
+                            }
+                          }
+                        },
+                        builder: (context, candidateData, rejectedData) {
+                          final isHover = candidateData.isNotEmpty;
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: double.infinity,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[900],
+                              border: Border.all(
+                                color: isHover ? Colors.red : Colors.grey[700]!,
+                                width: isHover ? 3 : 2,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.delete_outline,
+                                color: isHover ? Colors.red : Colors.white70,
+                                size: 36,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                     ],
                   ),
                 ),

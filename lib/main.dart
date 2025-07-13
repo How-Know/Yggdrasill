@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 void main() {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -22,6 +23,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     print('[DEBUG] MyApp build');
     return MaterialApp(
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       navigatorKey: rootNavigatorKey,
       title: 'Yggdrasill',
       theme: ThemeData(

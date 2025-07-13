@@ -387,6 +387,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
           selectedCellStudents: _selectedCellStudents,
           selectedCellDayIndex: _selectedCellDayIndex,
           selectedCellStartTime: _selectedCellStartTime,
+          onCellStudentsChanged: (updatedList) {
+            setState(() {
+              _selectedCellStudents = updatedList;
+            });
+          },
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
