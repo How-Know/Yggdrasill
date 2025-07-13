@@ -83,14 +83,30 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                           // Time indicator
                           SizedBox(
                             width: 60,
-                            child: Center(
-                              child: Text(
-                                timeBlocks[blockIdx].timeString,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
+                            child: Row(
+                              children: [
+                                if (blockIdx == _getCurrentTimeBlockIndex(timeBlocks))
+                                  Container(
+                                    width: 8,
+                                    height: blockHeight - 10,
+                                    margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 0),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1976D2), // 시그니처 색상(탭바 인디케이터와 동일)
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                  ),
+                                Expanded(
+                                  child: Center(
+                                    child: Text(
+                                      timeBlocks[blockIdx].timeString,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                              ),
+                              ],
                             ),
                           ),
                           // Day columns
@@ -183,9 +199,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                           // 셀 배경 및 경계선(구분선)은 그대로 유지
                                           Container(
                                             decoration: BoxDecoration(
-                                              color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
-                                                ? const Color(0xFF1976D2).withOpacity(0.10)
-                                                : Colors.transparent,
+                                              color: isBreakTime
+                                                ? const Color(0xFF1F1F1F) // 프로그램 배경색
+                                                : (_hoveredCellKey == cellKey && widget.isRegistrationMode)
+                                                  ? const Color(0xFF1976D2).withOpacity(0.10)
+                                                  : Colors.transparent,
                                               border: Border(
                                                 left: BorderSide(
                                                   color: Colors.white.withOpacity(0.1),
@@ -193,39 +211,48 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                               ),
                                             ),
                                           ),
-                                          // 인원수 카드: 0명이면 아무것도 출력하지 않음, 1명 이상이면 상단에 붙임
-                                          if (activeStudentCount > 0)
-                                            Positioned(
-                                              top: 0,
-                                              left: 0,
-                                              right: 0,
-                                              child: !isExpanded
-                                                ? CapacityCardWidget(
-                                                    count: activeStudentCount,
-                                                    color: countColor,
-                                                  )
-                                                : CapacityCardWidget(
-                                                    count: activeStudentCount,
-                                                    color: countColor,
-                                                  ),
-                                            ),
-                                          // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                          if (isExpanded && activeBlocks.isNotEmpty)
-                                            _buildExpandedStudentCards(
-                                              activeBlocks,
-                                              activeBlocks.map((b) =>
-                                                studentsWithInfo.firstWhere(
-                                                  (s) => s.student.id == b.studentId,
-                                                  orElse: () => StudentWithInfo(
-                                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                                  )
-                                                ).student
-                                              ).toList(),
-                                              groups,
-                                              constraints.maxWidth,
-                                              isExpanded,
-                                            ),
+                                          // 휴식시간 셀: 중앙에 '휴식' 텍스트만 표시, 나머지 위젯은 출력하지 않음
+                                          if (isBreakTime)
+                                            Center(
+                                              child: Text(
+                                                '휴식',
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade400, // 앱바 타이틀 색상
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            )
+                                          else ...[
+                                            // 인원수 카드: 0명이면 아무것도 출력하지 않음, 1명 이상이면 상단에 붙임
+                                            if (activeStudentCount > 0)
+                                              Positioned(
+                                                top: 0,
+                                                left: 0,
+                                                right: 0,
+                                                child: CapacityCardWidget(
+                                                  count: activeStudentCount,
+                                                  color: countColor,
+                                                ),
+                                              ),
+                                            // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
+                                            if (isExpanded && activeBlocks.isNotEmpty)
+                                              _buildExpandedStudentCards(
+                                                activeBlocks,
+                                                activeBlocks.map((b) =>
+                                                  studentsWithInfo.firstWhere(
+                                                    (s) => s.student.id == b.studentId,
+                                                    orElse: () => StudentWithInfo(
+                                                      student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                      basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                    )
+                                                  ).student
+                                                ).toList(),
+                                                groups,
+                                                constraints.maxWidth,
+                                                isExpanded,
+                                              ),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -583,4 +610,25 @@ class TimeBlock {
     final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
+} 
+
+int _getCurrentTimeBlockIndex(List<TimeBlock> timeBlocks) {
+  final now = DateTime.now();
+  int currentIdx = 0;
+  for (int i = 0; i < timeBlocks.length; i++) {
+    final block = timeBlocks[i];
+    if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+      currentIdx = i;
+    }
+  }
+  // 운영시간 외일 때(현재 시간이 마지막 블록보다 늦음) 마지막 셀에 인디케이터
+  final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
+  if (lastBlock != null) {
+    final nowMinutes = now.hour * 60 + now.minute;
+    final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+    if (nowMinutes > lastMinutes) {
+      return timeBlocks.length - 1;
+    }
+  }
+  return currentIdx;
 } 

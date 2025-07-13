@@ -48,47 +48,62 @@ class _TimetableHeaderState extends State<TimetableHeader> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // 세그먼트 버튼 추가
-        const SizedBox(height: 2), // 세그먼트 버튼 상단 여백 추가
+        const SizedBox(height: 0), // 세그먼트 버튼 상단 여백을 0으로 변경
         Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(
-              width: 440, // 30% 증가
-              child: SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(value: 0, label: Text('모든')),
-                  ButtonSegment(value: 1, label: Text('학년')),
-                  ButtonSegment(value: 2, label: Text('학교')),
-                  ButtonSegment(value: 3, label: Text('그룹')),
-                ],
-                selected: {_selectedSegment},
-                onSelectionChanged: (Set<int> newSelection) {
-                  setState(() {
-                    _selectedSegment = newSelection.first;
-                  });
-                },
-                style: ButtonStyle(
-                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                    (Set<MaterialState> states) {
-                      if (states.contains(MaterialState.selected)) {
-                        return Colors.white;
-                      }
-                      return Colors.white70;
+            Padding(
+              padding: EdgeInsets.only(left: 30), // 월 정보만 왼쪽 여백
+              child: Text(
+                '${widget.selectedDate.month}',
+                style: TextStyle(
+                  color: Colors.grey.shade400,
+                  fontSize: 60,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Align(
+                alignment: Alignment.center,
+                child: SizedBox(
+                  width: 440, // 세그먼트 버튼 너비
+                  child: SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('모든')),
+                      ButtonSegment(value: 1, label: Text('학년')),
+                      ButtonSegment(value: 2, label: Text('학교')),
+                      ButtonSegment(value: 3, label: Text('그룹')),
+                    ],
+                    selected: {_selectedSegment},
+                    onSelectionChanged: (Set<int> newSelection) {
+                      setState(() {
+                        _selectedSegment = newSelection.first;
+                      });
                     },
-                  ),
-                  textStyle: MaterialStateProperty.all(
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                    style: ButtonStyle(
+                      backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                      foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                        (Set<MaterialState> states) {
+                          if (states.contains(MaterialState.selected)) {
+                            return Colors.white;
+                          }
+                          return Colors.white70;
+                        },
+                      ),
+                      textStyle: MaterialStateProperty.all(
+                        const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 40), // 세그먼트 버튼과 요일 row 사이 여백 추가
+        const SizedBox(height: 20), // 세그먼트 버튼과 요일 row 사이 여백 추가
+        // 요일 row는 Row 바깥에 별도 배치
         Container(
-          padding: EdgeInsets.zero,
+          padding: EdgeInsets.symmetric(horizontal: 0), // 좌우 여백을 0으로 변경
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(

@@ -314,7 +314,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
         child: Column(
           children: [
-            const SizedBox(height: 5),
+            SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
             CustomTabBar(
               selectedIndex: TimetableViewType.values.indexOf(_viewType),
               tabs: TimetableViewType.values.map((e) => e.name).toList(),
