@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../services/data_manager.dart';
+import '../../../widgets/student_card.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -7,6 +9,9 @@ class TimetableContentView extends StatefulWidget {
   final bool isDropdownOpen;
   final ValueChanged<bool> onDropdownOpenChanged;
   final ValueChanged<String> onDropdownSelected;
+  final List<StudentWithInfo>? selectedCellStudents;
+  final int? selectedCellDayIndex;
+  final DateTime? selectedCellStartTime;
 
   const TimetableContentView({
     Key? key,
@@ -16,6 +21,9 @@ class TimetableContentView extends StatefulWidget {
     required this.isDropdownOpen,
     required this.onDropdownOpenChanged,
     required this.onDropdownSelected,
+    this.selectedCellStudents,
+    this.selectedCellDayIndex,
+    this.selectedCellStartTime,
   }) : super(key: key);
 
   @override
@@ -92,6 +100,7 @@ class _TimetableContentViewState extends State<TimetableContentView> {
         Expanded(
           flex: 3,
           child: Container(
+            margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
             decoration: BoxDecoration(
               color: const Color(0xFF18181A),
@@ -103,113 +112,177 @@ class _TimetableContentViewState extends State<TimetableContentView> {
         const SizedBox(width: 32),
         Expanded(
           flex: 1,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-            decoration: BoxDecoration(
-              color: const Color(0xFF18181A),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.max,
-                  children: [
-                    SizedBox(
-                      width: 113,
-                      height: 44,
-                      child: Material(
-                        color: const Color(0xFF1976D2),
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(32),
-                          bottomLeft: Radius.circular(32),
-                          topRight: Radius.circular(6),
-                          bottomRight: Radius.circular(6),
-                        ),
-                        child: InkWell(
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(32),
-                            bottomLeft: Radius.circular(32),
-                            topRight: Radius.circular(6),
-                            bottomRight: Radius.circular(6),
-                          ),
-                          onTap: widget.onRegisterPressed,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.max,
-                            children: const [
-                              Icon(Icons.edit, color: Colors.white, size: 20),
-                              SizedBox(width: 8),
-                              Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                        ),
+          child: Column(
+            children: [
+              Expanded(
+                flex: 3, // 3:5 비율로 수정
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 16, top: 8, left: 4, right: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF18181A),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.13),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
                       ),
-                    ),
-                    // 구분선
-                    Container(
-                      height: 44,
-                      width: 3.0,
-                      color: Colors.transparent,
-                      child: Center(
-                        child: Container(
-                          width: 2,
-                          height: 28,
-                          color: Colors.white.withOpacity(0.1),
-                        ),
-                      ),
-                    ),
-                    // 드롭다운 버튼
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2.5), // 간격 1/3로 축소
-                      child: GestureDetector(
-                        key: _dropdownButtonKey,
-                        onTap: () {
-                          if (_dropdownOverlay == null) {
-                            widget.onDropdownOpenChanged(true);
-                            _showDropdownMenu();
-                          } else {
-                            _removeDropdownMenu();
-                          }
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 350),
-                          width: 44, // 원형 유지
-                          height: 44, // 등록버튼과 동일하게
-                          decoration: ShapeDecoration(
-                            color: const Color(0xFF1976D2),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: widget.isDropdownOpen
-                                ? BorderRadius.circular(50)
-                                : const BorderRadius.only(
-                                    topLeft: Radius.circular(6),
-                                    bottomLeft: Radius.circular(6),
-                                    topRight: Radius.circular(32),
-                                    bottomRight: Radius.circular(32),
-                                  ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.max,
+                        children: [
+                          SizedBox(
+                            width: 113,
+                            height: 44,
+                            child: Material(
+                              color: const Color(0xFF1976D2),
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(32),
+                                bottomLeft: Radius.circular(32),
+                                topRight: Radius.circular(6),
+                                bottomRight: Radius.circular(6),
+                              ),
+                              child: InkWell(
+                                borderRadius: const BorderRadius.only(
+                                  topLeft: Radius.circular(32),
+                                  bottomLeft: Radius.circular(32),
+                                  topRight: Radius.circular(6),
+                                  bottomRight: Radius.circular(6),
+                                ),
+                                onTap: widget.onRegisterPressed,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  mainAxisSize: MainAxisSize.max,
+                                  children: const [
+                                    Icon(Icons.edit, color: Colors.white, size: 20),
+                                    SizedBox(width: 8),
+                                    Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                          child: Center(
-                            child: AnimatedRotation(
-                              turns: widget.isDropdownOpen ? 0.5 : 0.0,
-                              duration: const Duration(milliseconds: 350),
-                              curve: Curves.easeInOut,
-                              child: const Icon(
-                                Icons.keyboard_arrow_down,
-                                color: Colors.white,
-                                size: 28,
-                                key: ValueKey('arrow'),
+                          // 구분선
+                          Container(
+                            height: 44,
+                            width: 3.0,
+                            color: Colors.transparent,
+                            child: Center(
+                              child: Container(
+                                width: 2,
+                                height: 28,
+                                color: Colors.white.withOpacity(0.1),
+                              ),
+                            ),
+                          ),
+                          // 드롭다운 버튼
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2.5),
+                            child: GestureDetector(
+                              key: _dropdownButtonKey,
+                              onTap: () {
+                                if (_dropdownOverlay == null) {
+                                  widget.onDropdownOpenChanged(true);
+                                  _showDropdownMenu();
+                                } else {
+                                  _removeDropdownMenu();
+                                }
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 350),
+                                width: 44,
+                                height: 44,
+                                decoration: ShapeDecoration(
+                                  color: const Color(0xFF1976D2),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: widget.isDropdownOpen
+                                      ? BorderRadius.circular(50)
+                                      : const BorderRadius.only(
+                                          topLeft: Radius.circular(6),
+                                          bottomLeft: Radius.circular(6),
+                                          topRight: Radius.circular(32),
+                                          bottomRight: Radius.circular(32),
+                                        ),
+                                  ),
+                                ),
+                                child: Center(
+                                  child: AnimatedRotation(
+                                    turns: widget.isDropdownOpen ? 0.5 : 0.0,
+                                    duration: const Duration(milliseconds: 350),
+                                    curve: Curves.easeInOut,
+                                    child: const Icon(
+                                      Icons.keyboard_arrow_down,
+                                      color: Colors.white,
+                                      size: 28,
+                                      key: ValueKey('arrow'),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      // 학생카드 리스트 위에 요일+시간 출력
+                      if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
+                          child: Text(
+                            _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                            style: const TextStyle(color: Colors.white70, fontSize: 20),
+                          ),
+                        ),
+                      if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 2.0),
+                              child: Wrap(
+                                spacing: 0,
+                                runSpacing: 4,
+                                children: widget.selectedCellStudents!.map((info) => StudentCard(
+                                  studentWithInfo: info,
+                                  onShowDetails: (info) {},
+                                )).toList(),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ],
-            ),
+              ),
+              Expanded(
+                flex: 5, // 3:5 비율로 수정
+                child: Container(
+                  margin: const EdgeInsets.only(top: 16, left: 4, right: 4, bottom: 8),
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF18181A),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.13),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '컨테이너 (1)',
+                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(width: 24),
@@ -261,4 +334,13 @@ class _DropdownMenuHoverItemState extends State<_DropdownMenuHoverItem> {
       ),
     );
   }
-} 
+}
+
+  String _getDayTimeString(int? dayIdx, DateTime? startTime) {
+    if (dayIdx == null || startTime == null) return '';
+    const days = ['월', '화', '수', '목', '금', '토', '일'];
+    final dayStr = (dayIdx >= 0 && dayIdx < days.length) ? days[dayIdx] : '';
+    final hour = startTime.hour.toString().padLeft(2, '0');
+    final min = startTime.minute.toString().padLeft(2, '0');
+    return '$dayStr요일 $hour:$min';
+  } 

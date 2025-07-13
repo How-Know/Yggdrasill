@@ -63,6 +63,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
   int? _remainingRegisterCount;
   final ScrollController _timetableScrollController = ScrollController();
   bool _hasScrolledToCurrentTime = false;
+  // 셀 선택 시 학생 리스트 상태 추가
+  List<StudentWithInfo>? _selectedCellStudents;
+  int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
+  DateTime? _selectedCellStartTime; // 셀 선택시 시작 시간
 
   @override
   void initState() {
@@ -380,6 +384,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _splitButtonSelected = value;
             });
           },
+          selectedCellStudents: _selectedCellStudents,
+          selectedCellDayIndex: _selectedCellDayIndex,
+          selectedCellStartTime: _selectedCellStartTime,
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
@@ -421,6 +428,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
             selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
             onTimeSelected: (int dayIdx, DateTime startTime) {
               _handleTimeSelection(dayIdx, startTime);
+            },
+            onCellStudentsSelected: (int dayIdx, DateTime startTime, List<StudentWithInfo> students) {
+              setState(() {
+                _selectedCellStudents = students;
+                _selectedCellDayIndex = dayIdx;
+                _selectedCellStartTime = startTime;
+              });
             },
           ),
         ),

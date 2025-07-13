@@ -6,6 +6,7 @@ import '../../../models/student.dart';
 import '../../../models/group_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/education_level.dart';
+import '../../../services/data_manager.dart';
 
 class ClassesView extends StatefulWidget {
   final List<OperatingHours> operatingHours;
@@ -13,6 +14,7 @@ class ClassesView extends StatefulWidget {
   final bool isRegistrationMode;
   final int? selectedDayIndex;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
+  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
 
   const ClassesView({
@@ -22,6 +24,7 @@ class ClassesView extends StatefulWidget {
     this.isRegistrationMode = false,
     this.selectedDayIndex,
     this.onTimeSelected,
+    this.onCellStudentsSelected,
     required this.scrollController,
   });
 
@@ -59,7 +62,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
               final double blockHeight = 90.0;
-              final students = DataManager.instance.students;
+              final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               return Column(
@@ -106,6 +109,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 b.startTime.hour == timeBlocks[blockIdx].startTime.hour &&
                                 b.startTime.minute == timeBlocks[blockIdx].startTime.minute;
                             }).toList();
+                            final cellStudentWithInfos = cellBlocks.map((b) => studentsWithInfo.firstWhere(
+                              (s) => s.student.id == b.studentId,
+                              orElse: () => StudentWithInfo(
+                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                              ),
+                            )).toList();
                             final isExpanded = _expandedCellKey == cellKey;
                             bool isHoverHighlight = false;
                             // 상태 변수로 hover 추적 필요: _hoveredCellKey
@@ -159,80 +169,67 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               child: LayoutBuilder(
                                 builder: (context, constraints) {
                                   final cellWidth = constraints.maxWidth;
-                                  return Stack(
-                                    children: [
-                                      MouseRegion(
-                                        onEnter: (_) => setState(() { _hoveredCellKey = cellKey; }),
-                                        onExit: (_) => setState(() { if (_hoveredCellKey == cellKey) _hoveredCellKey = null; }),
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            if (widget.isRegistrationMode && widget.onTimeSelected != null) {
-                                              widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
-                                            } else if (cellBlocks.isNotEmpty) {
-                                              setState(() {
-                                                if (_expandedCellKey == null || _expandedCellKey != cellKey) {
-                                                  _expandedCellKey = cellKey;
-                                                } else {
-                                                  _expandedCellKey = null;
-                                                }
-                                              });
-                                            } else {
-                                              if (_expandedCellKey != null) {
-                                                setState(() {
-                                                  _expandedCellKey = null;
-                                                });
-                                              }
-                                            }
-                                          },
-                                          child: Container(
-                                            width: cellWidth,
-                                            child: Stack(
-                                              children: [
-                                                // 정원카드/정원표시 카드
-                                                Container(
-                                                  decoration: BoxDecoration(
-                                                    color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
-                                                      ? const Color(0xFF1976D2).withOpacity(0.10)
-                                                      : Colors.transparent,
-                                                    border: Border(
-                                                      left: BorderSide(
-                                                        color: Colors.white.withOpacity(0.1),
-                                                      ),
-                                                    ),
+                                  return MouseRegion(
+                                    onEnter: (_) => setState(() { _hoveredCellKey = cellKey; }),
+                                    onExit: (_) => setState(() { if (_hoveredCellKey == cellKey) _hoveredCellKey = null; }),
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        if (widget.isRegistrationMode && widget.onTimeSelected != null) {
+                                          widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
+                                        } else {
+                                          // 셀 클릭 시 학생 리스트 상위로 전달
+                                          if (widget.onCellStudentsSelected != null) {
+                                            widget.onCellStudentsSelected!(dayIdx, timeBlocks[blockIdx].startTime, cellStudentWithInfos);
+                                          }
+                                        }
+                                      },
+                                      child: Container(
+                                        width: cellWidth,
+                                        child: Stack(
+                                          children: [
+                                            // 정원카드/정원표시 카드
+                                            Container(
+                                              decoration: BoxDecoration(
+                                                color: (_hoveredCellKey == cellKey && widget.isRegistrationMode)
+                                                  ? const Color(0xFF1976D2).withOpacity(0.10)
+                                                  : Colors.transparent,
+                                                border: Border(
+                                                  left: BorderSide(
+                                                    color: Colors.white.withOpacity(0.1),
                                                   ),
-                                                  child: cellBlocks.isEmpty
-                                                      ? (activeStudentCount > 0 
-                                                          ? CapacityCountWidget(count: activeStudentCount, color: countColor)
-                                                          : null)
-                                                      : !isExpanded
-                                                          ? CapacityCardWidget(
-                                                              count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
-                                                              color: countColor,
-                                                              showArrow: true,
-                                                              isExpanded: false,
-                                                              expandedBlocks: cellBlocks,
-                                                              students: students.map((s) => s.student).toList(),
-                                                              groups: groups,
-                                                            )
-                                                          : CapacityCardWidget(
-                                                              count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
-                                                              color: countColor,
-                                                              showArrow: true,
-                                                              isExpanded: true,
-                                                              expandedBlocks: cellBlocks,
-                                                              students: students.map((s) => s.student).toList(),
-                                                              groups: groups,
-                                                            ),
                                                 ),
-                                                // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                                if (isExpanded && cellBlocks.isNotEmpty)
-                                                  _buildExpandedStudentCards(cellBlocks, students.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
-                                              ],
+                                              ),
+                                              child: cellBlocks.isEmpty
+                                                  ? (activeStudentCount > 0 
+                                                      ? CapacityCountWidget(count: activeStudentCount, color: countColor)
+                                                      : null)
+                                                  : !isExpanded
+                                                      ? CapacityCardWidget(
+                                                          count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                          color: countColor,
+                                                          showArrow: true,
+                                                          isExpanded: false,
+                                                          expandedBlocks: cellBlocks,
+                                                          students: studentsWithInfo.map((s) => s.student).toList(),
+                                                          groups: groups,
+                                                        )
+                                                      : CapacityCardWidget(
+                                                          count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                          color: countColor,
+                                                          showArrow: true,
+                                                          isExpanded: true,
+                                                          expandedBlocks: cellBlocks,
+                                                          students: studentsWithInfo.map((s) => s.student).toList(),
+                                                          groups: groups,
+                                                        ),
                                             ),
-                                          ),
+                                            // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
+                                            if (isExpanded && cellBlocks.isNotEmpty)
+                                              _buildExpandedStudentCards(cellBlocks, studentsWithInfo.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
+                                          ],
                                         ),
                                       ),
-                                    ],
+                                    ),
                                   );
                                 },
                               ),
