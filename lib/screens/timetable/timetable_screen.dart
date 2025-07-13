@@ -328,6 +328,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             Expanded(
               child: _buildContent(),
             ),
+            const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
           ],
         ),
       ),
@@ -341,7 +342,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
           timetableChild: Container(
             width: double.infinity,
-            padding: EdgeInsets.zero,
+            // margin: EdgeInsets.zero, // margin 제거
             decoration: BoxDecoration(
               color: Color(0xFF18181A),
               borderRadius: BorderRadius.circular(16),
@@ -492,7 +493,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 스낵바 출력
         if (mounted) {
           print('[DEBUG] 스낵바 출력');
-          showAppSnackBar(context, '${student.name} 학생의 시간이 등록되었습니다.');
+          showAppSnackBar(context, '${student.name} 학생의 시간이 등록되었습니다.', useRoot: true);
         } else {
           print('[DEBUG] context not mounted, 스낵바 출력 불가');
         }
@@ -515,7 +516,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       // 마지막 등록 후 안내
       if (_remainingRegisterCount == null) {
         if (mounted && student != null) {
-          showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.');
+          showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
         }
       }
       return;

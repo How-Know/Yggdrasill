@@ -107,7 +107,7 @@ class _TimetableContentViewState extends State<TimetableContentView> {
           flex: 3,
           child: Container(
             margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16), // vertical 32 -> 16으로 조정
             decoration: BoxDecoration(
               color: const Color(0xFF18181A),
               borderRadius: BorderRadius.circular(16),

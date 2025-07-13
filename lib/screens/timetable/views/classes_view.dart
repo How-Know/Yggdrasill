@@ -97,19 +97,14 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                           ...List.generate(7, (dayIdx) {
                             final cellKey = '$dayIdx-$blockIdx';
                             _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                            // 현재 시간에 수업 중인 모든 학생 블록 가져오기
+                            // 셀 내부에서 학생카드와 인원수 카운트 모두 activeBlocks 기준으로 표시
                             final activeBlocks = _getActiveStudentBlocks(
                               studentTimeBlocks, 
                               dayIdx, 
                               timeBlocks[blockIdx].startTime,
                               lessonDuration,
                             );
-                            final cellBlocks = studentTimeBlocks.where((b) {
-                              return b.dayIndex == dayIdx &&
-                                b.startTime.hour == timeBlocks[blockIdx].startTime.hour &&
-                                b.startTime.minute == timeBlocks[blockIdx].startTime.minute;
-                            }).toList();
-                            final cellStudentWithInfos = cellBlocks.map((b) => studentsWithInfo.firstWhere(
+                            final cellStudentWithInfos = activeBlocks.map((b) => studentsWithInfo.firstWhere(
                               (s) => s.student.id == b.studentId,
                               orElse: () => StudentWithInfo(
                                 student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
@@ -199,33 +194,63 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                   ),
                                                 ),
                                               ),
-                                              child: cellBlocks.isEmpty
+                                              child: activeBlocks.isEmpty
                                                   ? (activeStudentCount > 0 
                                                       ? CapacityCountWidget(count: activeStudentCount, color: countColor)
                                                       : null)
                                                   : !isExpanded
                                                       ? CapacityCardWidget(
-                                                          count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                          count: activeStudentCount > 0 ? activeStudentCount : activeBlocks.length,
                                                           color: countColor,
                                                           showArrow: true,
                                                           isExpanded: false,
-                                                          expandedBlocks: cellBlocks,
-                                                          students: studentsWithInfo.map((s) => s.student).toList(),
+                                                          expandedBlocks: activeBlocks,
+                                                          students: activeBlocks.map((b) =>
+                                                            studentsWithInfo.firstWhere(
+                                                              (s) => s.student.id == b.studentId,
+                                                              orElse: () => StudentWithInfo(
+                                                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                              )
+                                                            ).student
+                                                          ).toList(),
                                                           groups: groups,
                                                         )
                                                       : CapacityCardWidget(
-                                                          count: activeStudentCount > 0 ? activeStudentCount : cellBlocks.length,
+                                                          count: activeStudentCount > 0 ? activeStudentCount : activeBlocks.length,
                                                           color: countColor,
                                                           showArrow: true,
                                                           isExpanded: true,
-                                                          expandedBlocks: cellBlocks,
-                                                          students: studentsWithInfo.map((s) => s.student).toList(),
+                                                          expandedBlocks: activeBlocks,
+                                                          students: activeBlocks.map((b) =>
+                                                            studentsWithInfo.firstWhere(
+                                                              (s) => s.student.id == b.studentId,
+                                                              orElse: () => StudentWithInfo(
+                                                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                              )
+                                                            ).student
+                                                          ).toList(),
                                                           groups: groups,
                                                         ),
                                             ),
                                             // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                            if (isExpanded && cellBlocks.isNotEmpty)
-                                              _buildExpandedStudentCards(cellBlocks, studentsWithInfo.map((s) => s.student).toList(), groups, constraints.maxWidth, isExpanded),
+                                            if (isExpanded && activeBlocks.isNotEmpty)
+                                              _buildExpandedStudentCards(
+                                                activeBlocks,
+                                                activeBlocks.map((b) =>
+                                                  studentsWithInfo.firstWhere(
+                                                    (s) => s.student.id == b.studentId,
+                                                    orElse: () => StudentWithInfo(
+                                                      student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                      basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                    )
+                                                  ).student
+                                                ).toList(),
+                                                groups,
+                                                constraints.maxWidth,
+                                                isExpanded,
+                                              ),
                                           ],
                                         ),
                                       ),
@@ -398,7 +423,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                     if (selected == 'edit') {
                       // TODO: 시간/요일 수정 다이얼로그 진입
                     } else if (selected == 'delete') {
-                      // TODO: 삭제 확인 다이얼로그 진입
+                      try {
+                        await DataManager.instance.removeStudentTimeBlock(block.id);
+                      } catch (_) {}
                     }
                   },
                   child: SizedBox(

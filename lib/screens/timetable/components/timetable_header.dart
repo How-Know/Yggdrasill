@@ -40,60 +40,77 @@ class TimetableHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final weekDays = _getWeekDays();
     
-    return Container(
-      padding: EdgeInsets.zero,
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-            color: Colors.grey.shade800,
-            width: 1,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // 시간 열 헤더
-          SizedBox(
-            width: 60,
-            child: Center(
-              child: Text(
-                '시간',
-                style: TextStyle(
-                  color: Colors.grey.shade400,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: EdgeInsets.zero,
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: Colors.grey.shade800,
+                width: 1,
               ),
             ),
           ),
-          // 요일 헤더들
-          ...List.generate(7, (index) {
-            final date = weekDays[index];
-            return Expanded(
-              child: Tooltip(
-                message: _formatDate(date),
-                child: InkWell(
-                  onTap: null, // 요일 클릭 비활성화
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    decoration: const BoxDecoration(), // 하이라이트 없음
-                    child: Center(
-                      child: Text(
-                        _getWeekdayName(date.weekday),
+          child: Row(
+            children: [
+              // 시간 열 헤더
+              SizedBox(
+                width: 60,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '시간',
                         style: TextStyle(
                           color: Colors.grey.shade400,
-                          fontSize: 16,
+                          fontSize: 18, // 기존 14에서 18로 증가
                           fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      SizedBox(height: 15), // 요일과 줄 맞춤
+                    ],
+                  ),
+                ),
+              ),
+              // 요일 헤더들
+              ...List.generate(7, (index) {
+                final date = weekDays[index];
+                return Expanded(
+                  child: Tooltip(
+                    message: _formatDate(date),
+                    child: InkWell(
+                      onTap: null, // 요일 클릭 비활성화
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        decoration: const BoxDecoration(), // 하이라이트 없음
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _getWeekdayName(date.weekday),
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 18, // 기존 16에서 2 증가
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              SizedBox(height: 15), // 요일 글자와 밑줄 사이 여백 추가
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
-            );
-          }),
-        ],
-      ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
     );
   }
 } 
