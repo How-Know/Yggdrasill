@@ -5,7 +5,7 @@ import '../../../models/student.dart';
 import '../../../widgets/student_registration_dialog.dart';
 import '../timetable_screen.dart';  // TimetableViewType enum을 가져오기 위한 import
 
-class TimetableHeader extends StatelessWidget {
+class TimetableHeader extends StatefulWidget {
   final Function(DateTime) onDateChanged;
   final DateTime selectedDate;
   final int? selectedDayIndex;
@@ -21,9 +21,15 @@ class TimetableHeader extends StatelessWidget {
     this.isRegistrationMode = false,
   }) : super(key: key);
 
+  @override
+  State<TimetableHeader> createState() => _TimetableHeaderState();
+}
+
+class _TimetableHeaderState extends State<TimetableHeader> {
+  int _selectedSegment = 0; // 0: 모든, 1: 학년, 2: 학교, 3: 그룹
+
   List<DateTime> _getWeekDays() {
-    // 현재 선택된 날짜가 있는 주의 월요일을 찾습니다
-    final monday = selectedDate.subtract(Duration(days: selectedDate.weekday - 1));
+    final monday = widget.selectedDate.subtract(Duration(days: widget.selectedDate.weekday - 1));
     return List.generate(7, (index) => monday.add(Duration(days: index)));
   }
 
@@ -39,10 +45,48 @@ class TimetableHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final weekDays = _getWeekDays();
-    
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 세그먼트 버튼 추가
+        const SizedBox(height: 2), // 세그먼트 버튼 상단 여백 추가
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 440, // 30% 증가
+              child: SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 0, label: Text('모든')),
+                  ButtonSegment(value: 1, label: Text('학년')),
+                  ButtonSegment(value: 2, label: Text('학교')),
+                  ButtonSegment(value: 3, label: Text('그룹')),
+                ],
+                selected: {_selectedSegment},
+                onSelectionChanged: (Set<int> newSelection) {
+                  setState(() {
+                    _selectedSegment = newSelection.first;
+                  });
+                },
+                style: ButtonStyle(
+                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                  foregroundColor: MaterialStateProperty.resolveWith<Color>(
+                    (Set<MaterialState> states) {
+                      if (states.contains(MaterialState.selected)) {
+                        return Colors.white;
+                      }
+                      return Colors.white70;
+                    },
+                  ),
+                  textStyle: MaterialStateProperty.all(
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 40), // 세그먼트 버튼과 요일 row 사이 여백 추가
         Container(
           padding: EdgeInsets.zero,
           decoration: BoxDecoration(
