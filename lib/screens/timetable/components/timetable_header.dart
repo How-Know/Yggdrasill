@@ -12,6 +12,7 @@ class TimetableHeader extends StatefulWidget {
   final Function(int) onDaySelected;
   final bool isRegistrationMode;
   final VoidCallback? onFilterPressed; // 추가
+  final bool isFilterActive; // 추가
 
   const TimetableHeader({
     Key? key,
@@ -21,6 +22,7 @@ class TimetableHeader extends StatefulWidget {
     required this.onDaySelected,
     this.isRegistrationMode = false,
     this.onFilterPressed, // 추가
+    this.isFilterActive = false, // 추가
   }) : super(key: key);
 
   @override
@@ -121,10 +123,14 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.max,
-                  children: const [
-                    Icon(Icons.filter_alt_outlined, size: 20),
-                    SizedBox(width: 6),
-                    Text('filter'),
+                  children: [
+                    const Icon(Icons.filter_alt_outlined, size: 20),
+                    const SizedBox(width: 6),
+                    const Text('filter'),
+                    if (widget.isFilterActive) ...[
+                      const SizedBox(width: 6),
+                      Icon(Icons.close, size: 18, color: Colors.white70),
+                    ],
                   ],
                 ),
               ),

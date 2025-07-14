@@ -16,6 +16,7 @@ class ClassesView extends StatefulWidget {
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
+  final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
 
   const ClassesView({
     super.key,
@@ -26,6 +27,7 @@ class ClassesView extends StatefulWidget {
     this.onTimeSelected,
     this.onCellStudentsSelected,
     required this.scrollController,
+    this.filteredStudentIds, // 추가
   });
 
   @override
@@ -65,6 +67,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              // 필터 적용: studentTimeBlocks에서 filteredStudentIds에 포함된 학생만 남김
+              final filteredBlocks = widget.filteredStudentIds == null
+                  ? studentTimeBlocks
+                  : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
               return Column(
                 children: [
                   for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
@@ -115,7 +121,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
                             // 셀 내부에서 학생카드와 인원수 카운트 모두 activeBlocks 기준으로 표시
                             final activeBlocks = _getActiveStudentBlocks(
-                              studentTimeBlocks, 
+                              filteredBlocks, // 필터 적용된 블록만 전달
                               dayIdx, 
                               timeBlocks[blockIdx].startTime,
                               lessonDuration,

@@ -74,6 +74,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Set<String> _selectedGrades = {};
   Set<String> _selectedSchools = {};
   Set<String> _selectedGroups = {};
+  // 실제 적용된 필터 상태
+  Map<String, Set<String>>? _activeFilter;
 
   @override
   void initState() {
@@ -330,164 +332,200 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final chipUnselectedBg = const Color(0xFF1F1F1F); // 다이얼로그 배경색
     final chipLabelStyle = TextStyle(color: chipBorderColor, fontWeight: FontWeight.w500, fontSize: 15);
     final chipShape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
-    await showDialog(
+    // chips 임시 상태 변수
+    Set<String> tempSelectedEducationLevels = Set.from(_selectedEducationLevels);
+    Set<String> tempSelectedGrades = Set.from(_selectedGrades);
+    Set<String> tempSelectedSchools = Set.from(_selectedSchools);
+    Set<String> tempSelectedGroups = Set.from(_selectedGroups);
+    final result = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          contentPadding: const EdgeInsets.fromLTRB(32, 28, 32, 16),
-          title: const Text('filter', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-          content: SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 학년 chips
-                  Row(
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              contentPadding: const EdgeInsets.fromLTRB(32, 28, 32, 16),
+              title: const Text('filter', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+              content: SizedBox(
+                width: 480,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.school_outlined, color: chipBorderColor, size: 20),
-                      const SizedBox(width: 6),
-                      Text('학년별', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
+                      // 학년 chips
+                      Row(
+                        children: [
+                          Icon(Icons.school_outlined, color: chipBorderColor, size: 20),
+                          const SizedBox(width: 6),
+                          Text('학년별', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: [
+                          ...educationLevels.map((level) => FilterChip(
+                            label: Text(level, style: chipLabelStyle),
+                            selected: tempSelectedEducationLevels.contains(level),
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  tempSelectedEducationLevels.add(level);
+                                } else {
+                                  tempSelectedEducationLevels.remove(level);
+                                }
+                              });
+                            },
+                            backgroundColor: chipUnselectedBg,
+                            selectedColor: chipSelectedBg,
+                            side: BorderSide(color: chipBorderColor, width: 1.2),
+                            shape: chipShape,
+                            showCheckmark: true,
+                            checkmarkColor: chipBorderColor,
+                          )),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: [
+                          ...grades.map((grade) => FilterChip(
+                            label: Text(grade, style: chipLabelStyle),
+                            selected: tempSelectedGrades.contains(grade),
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  tempSelectedGrades.add(grade);
+                                } else {
+                                  tempSelectedGrades.remove(grade);
+                                }
+                              });
+                            },
+                            backgroundColor: chipUnselectedBg,
+                            selectedColor: chipSelectedBg,
+                            side: BorderSide(color: chipBorderColor, width: 1.2),
+                            shape: chipShape,
+                            showCheckmark: true,
+                            checkmarkColor: chipBorderColor,
+                          )),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      // 학교 chips
+                      Row(
+                        children: [
+                          Icon(Icons.location_city_outlined, color: chipBorderColor, size: 20),
+                          const SizedBox(width: 6),
+                          Text('학교', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: [
+                          ...schools.map((school) => FilterChip(
+                            label: Text(school, style: chipLabelStyle),
+                            selected: tempSelectedSchools.contains(school),
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  tempSelectedSchools.add(school);
+                                } else {
+                                  tempSelectedSchools.remove(school);
+                                }
+                              });
+                            },
+                            backgroundColor: chipUnselectedBg,
+                            selectedColor: chipSelectedBg,
+                            side: BorderSide(color: chipBorderColor, width: 1.2),
+                            shape: chipShape,
+                            showCheckmark: true,
+                            checkmarkColor: chipBorderColor,
+                          )),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      // 그룹 chips
+                      Row(
+                        children: [
+                          Icon(Icons.groups_2_outlined, color: chipBorderColor, size: 20),
+                          const SizedBox(width: 6),
+                          Text('그룹', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: [
+                          ...groupNames.map((group) => FilterChip(
+                            label: Text(group, style: chipLabelStyle),
+                            selected: tempSelectedGroups.contains(group),
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  tempSelectedGroups.add(group);
+                                } else {
+                                  tempSelectedGroups.remove(group);
+                                }
+                              });
+                            },
+                            backgroundColor: chipUnselectedBg,
+                            selectedColor: chipSelectedBg,
+                            side: BorderSide(color: chipBorderColor, width: 1.2),
+                            shape: chipShape,
+                            showCheckmark: true,
+                            checkmarkColor: chipBorderColor,
+                          )),
+                        ],
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8, runSpacing: 8,
-                    children: [
-                      ...educationLevels.map((level) => FilterChip(
-                        label: Text(level, style: chipLabelStyle),
-                        selected: _selectedEducationLevels.contains(level),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedEducationLevels.add(level);
-                            } else {
-                              _selectedEducationLevels.remove(level);
-                            }
-                          });
-                        },
-                        backgroundColor: chipUnselectedBg,
-                        selectedColor: chipSelectedBg,
-                        side: BorderSide(color: chipBorderColor, width: 1.2),
-                        shape: chipShape,
-                        showCheckmark: true,
-                        checkmarkColor: chipBorderColor,
-                      )),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8, runSpacing: 8,
-                    children: [
-                      ...grades.map((grade) => FilterChip(
-                        label: Text(grade, style: chipLabelStyle),
-                        selected: _selectedGrades.contains(grade),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedGrades.add(grade);
-                            } else {
-                              _selectedGrades.remove(grade);
-                            }
-                          });
-                        },
-                        backgroundColor: chipUnselectedBg,
-                        selectedColor: chipSelectedBg,
-                        side: BorderSide(color: chipBorderColor, width: 1.2),
-                        shape: chipShape,
-                        showCheckmark: true,
-                        checkmarkColor: chipBorderColor,
-                      )),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  // 학교 chips
-                  Row(
-                    children: [
-                      Icon(Icons.location_city_outlined, color: chipBorderColor, size: 20),
-                      const SizedBox(width: 6),
-                      Text('학교', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8, runSpacing: 8,
-                    children: [
-                      ...schools.map((school) => FilterChip(
-                        label: Text(school, style: chipLabelStyle),
-                        selected: _selectedSchools.contains(school),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedSchools.add(school);
-                            } else {
-                              _selectedSchools.remove(school);
-                            }
-                          });
-                        },
-                        backgroundColor: chipUnselectedBg,
-                        selectedColor: chipSelectedBg,
-                        side: BorderSide(color: chipBorderColor, width: 1.2),
-                        shape: chipShape,
-                        showCheckmark: true,
-                        checkmarkColor: chipBorderColor,
-                      )),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  // 그룹 chips
-                  Row(
-                    children: [
-                      Icon(Icons.groups_2_outlined, color: chipBorderColor, size: 20),
-                      const SizedBox(width: 6),
-                      Text('그룹', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8, runSpacing: 8,
-                    children: [
-                      ...groupNames.map((group) => FilterChip(
-                        label: Text(group, style: chipLabelStyle),
-                        selected: _selectedGroups.contains(group),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedGroups.add(group);
-                            } else {
-                              _selectedGroups.remove(group);
-                            }
-                          });
-                        },
-                        backgroundColor: chipUnselectedBg,
-                        selectedColor: chipSelectedBg,
-                        side: BorderSide(color: chipBorderColor, width: 1.2),
-                        shape: chipShape,
-                        showCheckmark: true,
-                        checkmarkColor: chipBorderColor,
-                      )),
-                    ],
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('취소', style: TextStyle(color: Color(0xFFB0B0B0))),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-              child: const Text('적용', style: TextStyle(color: Colors.white)),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소', style: TextStyle(color: Color(0xFFB0B0B0))),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    // chips 상태를 부모에 반영
+                    _selectedEducationLevels = Set.from(tempSelectedEducationLevels);
+                    _selectedGrades = Set.from(tempSelectedGrades);
+                    _selectedSchools = Set.from(tempSelectedSchools);
+                    _selectedGroups = Set.from(tempSelectedGroups);
+                    _activeFilter = {
+                      'educationLevels': Set.from(tempSelectedEducationLevels),
+                      'grades': Set.from(tempSelectedGrades),
+                      'schools': Set.from(tempSelectedSchools),
+                      'groups': Set.from(tempSelectedGroups),
+                    };
+                    Navigator.of(context).pop(true);
+                  },
+                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                  child: const Text('적용', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
         );
       },
     );
+    // 다이얼로그 닫힌 후, 적용 시 화면 리빌드
+    if (result == true) {
+      setState(() {});
+    }
+  }
+
+  void _clearFilter() {
+    setState(() {
+      _activeFilter = null;
+      _selectedEducationLevels.clear();
+      _selectedGrades.clear();
+      _selectedSchools.clear();
+      _selectedGroups.clear();
+    });
   }
 
   @override
@@ -575,7 +613,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
                   onDaySelected: _onDayHeaderSelected,
                   isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-                  onFilterPressed: _showFilterDialog, // 추가
+                  onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
+                  isFilterActive: _activeFilter != null, // 추가
                 ),
                 SizedBox(height: 0),
                 Flexible(
@@ -635,6 +674,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
       );
       totalClassCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
     }
+    // 필터 적용: _filteredStudents에서 id만 추출
+    final Set<String>? filteredStudentIds = _activeFilter == null
+        ? null
+        : _filteredStudents.map((s) => s.student.id).toSet();
     return Column(
       children: [
         if (_isStudentRegistrationMode && _selectedStudentForTime != null && _remainingRegisterCount != null)
@@ -662,6 +705,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 _selectedCellStartTime = startTime;
               });
             },
+            filteredStudentIds: filteredStudentIds, // 추가: 필터 적용
           ),
         ),
       ],
@@ -800,6 +844,48 @@ class _TimetableScreenState extends State<TimetableScreen> {
         print('[DEBUG] context not mounted, 클래스 스낵바 출력 불가');
       }
     }
+  }
+
+  // --- 필터 학생 getter 및 변환 함수 복구 ---
+  List<StudentWithInfo> get _filteredStudents {
+    final all = DataManager.instance.students;
+    final f = _activeFilter;
+    if (f == null) return all;
+    final filtered = all.where((s) {
+      final student = s.student;
+      final info = s.basicInfo;
+      if (f['educationLevels']!.isNotEmpty) {
+        final levelStr = _educationLevelToKor(student.educationLevel);
+        if (!f['educationLevels']!.contains(levelStr)) return false;
+      }
+      if (f['grades']!.isNotEmpty) {
+        final gradeStr = _gradeToKor(student.educationLevel, student.grade);
+        if (!f['grades']!.contains(gradeStr)) return false;
+      }
+      if (f['schools']!.isNotEmpty && !f['schools']!.contains(student.school)) return false;
+      if (f['groups']!.isNotEmpty && (student.groupInfo == null || !f['groups']!.contains(student.groupInfo!.name))) return false;
+      return true;
+    }).toList();
+    print('[DEBUG] 필터 적용 결과: ${filtered.map((s) => s.student.name).toList()}');
+    return filtered;
+  }
+
+  String _educationLevelToKor(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary: return '초등';
+      case EducationLevel.middle: return '중등';
+      case EducationLevel.high: return '고등';
+    }
+  }
+
+  String _gradeToKor(EducationLevel level, int grade) {
+    if (level == EducationLevel.elementary) return '초$grade';
+    if (level == EducationLevel.middle) return '중$grade';
+    if (level == EducationLevel.high) {
+      if (grade >= 1 && grade <= 3) return '고$grade';
+      if (grade == 0) return 'N수';
+    }
+    return '';
   }
 }
 
