@@ -70,13 +70,11 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               child: Align(
                 alignment: Alignment.center,
                 child: SizedBox(
-                  width: 440, // 세그먼트 버튼 너비
+                  width: 220, // 기존 440에서 220으로 축소
                   child: SegmentedButton<int>(
                     segments: const [
-                      ButtonSegment(value: 0, label: Text('모든')),
-                      ButtonSegment(value: 1, label: Text('학년')),
-                      ButtonSegment(value: 2, label: Text('학교')),
-                      ButtonSegment(value: 3, label: Text('그룹')),
+                      ButtonSegment(value: 0, label: Text('메인')),
+                      ButtonSegment(value: 1, label: Text('특강')),
                     ],
                     selected: {_selectedSegment},
                     onSelectionChanged: (Set<int> newSelection) {

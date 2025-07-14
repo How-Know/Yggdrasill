@@ -39,6 +39,9 @@ class _TimetableContentViewState extends State<TimetableContentView> {
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
+  String _searchQuery = '';
+  List<StudentWithInfo> _searchResults = [];
+  final TextEditingController _searchController = TextEditingController();
 
   void _showDropdownMenu() {
     final RenderBox buttonRenderBox = _dropdownButtonKey.currentContext!.findRenderObject() as RenderBox;
@@ -234,55 +237,76 @@ class _TimetableContentViewState extends State<TimetableContentView> {
                               ),
                             ),
                           ),
+                          // 학생 메뉴와 동일한 SearchBar (오른쪽 정렬, 고정 너비, 스타일 일치)
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(width: 16),
+                                  SizedBox(
+                                    width: 220,
+                                    height: 48,
+                                    child: SearchBar(
+                                      controller: _searchController,
+                                      onChanged: _onSearchChanged,
+                                      hintText: '학생 검색',
+                                      leading: const Icon(
+                                        Icons.search,
+                                        color: Colors.white70,
+                                        size: 24,
+                                      ),
+                                      backgroundColor: MaterialStateColor.resolveWith(
+                                        (states) => const Color(0xFF2A2A2A),
+                                      ),
+                                      elevation: MaterialStateProperty.all(0),
+                                      padding: const MaterialStatePropertyAll<EdgeInsets>(
+                                        EdgeInsets.symmetric(horizontal: 18.0),
+                                      ),
+                                      textStyle: const MaterialStatePropertyAll<TextStyle>(
+                                        TextStyle(color: Colors.white, fontSize: 16.5),
+                                      ),
+                                      hintStyle: MaterialStatePropertyAll<TextStyle>(
+                                        TextStyle(color: Colors.white54, fontSize: 16.5),
+                                      ),
+                                      side: MaterialStatePropertyAll<BorderSide>(
+                                        BorderSide(color: Colors.white.withOpacity(0.2), width: 1, style: BorderStyle.solid),
+                                      ),
+                                      constraints: const BoxConstraints(
+                                        minHeight: 50,
+                                        maxHeight: 50,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                       // 학생카드 리스트 위에 요일+시간 출력
-                      if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
-                          child: Text(
-                            _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
-                            style: const TextStyle(color: Colors.white70, fontSize: 20),
-                          ),
-                        ),
-                      if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
+                      if (_searchQuery.isNotEmpty && _searchResults.isNotEmpty)
                         Expanded(
                           child: SingleChildScrollView(
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 2.0),
-                              child: Wrap(
-                                spacing: 0,
-                                runSpacing: 4,
-                                children: widget.selectedCellStudents!.map((info) =>
-                                  Draggable<StudentWithInfo>(
-                                    data: info,
-                                    onDragStarted: () => setState(() => _showDeleteZone = true),
-                                    onDragEnd: (_) => setState(() => _showDeleteZone = false),
-                                    feedback: Material(
-                                      color: Colors.transparent,
-                                      child: Opacity(
-                                        opacity: 0.85,
-                                        child: StudentCard(
-                                          studentWithInfo: info,
-                                          onShowDetails: (info) {},
-                                        ),
-                                      ),
-                                    ),
-                                    childWhenDragging: Opacity(
-                                      opacity: 0.3,
-                                      child: StudentCard(
-                                        studentWithInfo: info,
-                                        onShowDetails: (info) {},
-                                      ),
-                                    ),
-                                    child: StudentCard(
-                                      studentWithInfo: info,
-                                      onShowDetails: (info) {},
-                                    ),
-                                  )
-                                ).toList(),
-                              ),
+                            child: _buildStudentCardList(_searchResults),
+                          ),
+                        )
+                      else if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: _buildStudentCardList(
+                              widget.selectedCellStudents!,
+                              dayTimeLabel: widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null
+                                ? _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime)
+                                : null,
                             ),
+                          ),
+                        )
+                      else
+                        const Expanded(
+                          child: Center(
+                            child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
                           ),
                         ),
                   // 삭제 드롭존
@@ -409,6 +433,66 @@ class _TimetableContentViewState extends State<TimetableContentView> {
         const SizedBox(width: 24),
       ],
     );
+  }
+
+  // --- 학생카드 리스트(셀 선택/검색 결과) 공통 출력 함수 ---
+  Widget _buildStudentCardList(List<StudentWithInfo> students, {String? dayTimeLabel}) {
+    if (students.isEmpty) {
+      return const Center(
+        child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (dayTimeLabel != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
+            child: Text(
+              dayTimeLabel,
+              style: const TextStyle(color: Colors.white70, fontSize: 20),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(top: 2.0),
+          child: Wrap(
+            spacing: 0,
+            runSpacing: 4,
+            children: students.map((info) =>
+              Draggable<StudentWithInfo>(
+                data: info,
+                onDragStarted: () => setState(() => _showDeleteZone = true),
+                onDragEnd: (_) => setState(() => _showDeleteZone = false),
+                feedback: Material(
+                  color: Colors.transparent,
+                  child: Opacity(
+                    opacity: 0.85,
+                    child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: 0.3,
+                  child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+                ),
+                child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+              )
+            ).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value;
+      _searchResults = DataManager.instance.students.where((student) {
+        final nameMatch = student.student.name.toLowerCase().contains(_searchQuery.toLowerCase());
+        final schoolMatch = student.student.school.toLowerCase().contains(_searchQuery.toLowerCase());
+        final gradeMatch = student.student.grade.toString().contains(_searchQuery);
+        return nameMatch || schoolMatch || gradeMatch;
+      }).toList();
+    });
   }
 }
 
