@@ -17,6 +17,7 @@ import 'package:morphable_shape/morphable_shape.dart';
 import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
 import '../../widgets/app_snackbar.dart';
+import 'package:flutter/services.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -67,6 +68,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   List<StudentWithInfo>? _selectedCellStudents;
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
   DateTime? _selectedCellStartTime; // 셀 선택시 시작 시간
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
@@ -305,31 +307,64 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    print('[DEBUG][TimetableScreen] build: _isStudentRegistrationMode=$_isStudentRegistrationMode');
-    return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
-      appBar: const AppBarTitle(title: '시간'),
-      body: Container(
-        color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
-        child: Column(
-          children: [
-            SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
-            CustomTabBar(
-              selectedIndex: TimetableViewType.values.indexOf(_viewType),
-              tabs: TimetableViewType.values.map((e) => e.name).toList(),
-              onTabSelected: (i) {
-                setState(() {
-                  _viewType = TimetableViewType.values[i];
-                });
-              },
+    print('[DEBUG][TimetableScreen] build: _isStudentRegistrationMode= [38;5;246m$_isStudentRegistrationMode [0m');
+    return RawKeyboardListener(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKey: (event) {
+        if ((event.logicalKey == LogicalKeyboardKey.escape) && (_isStudentRegistrationMode || _isClassRegistrationMode)) {
+          setState(() {
+            _isStudentRegistrationMode = false;
+            _isClassRegistrationMode = false;
+            _selectedStudentForTime = null;
+            _remainingRegisterCount = null;
+          });
+        }
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+            setState(() {
+              _isStudentRegistrationMode = false;
+              _isClassRegistrationMode = false;
+              _selectedStudentForTime = null;
+              _remainingRegisterCount = null;
+            });
+          }
+        },
+        child: Scaffold(
+          backgroundColor: const Color(0xFF1F1F1F),
+          appBar: const AppBarTitle(title: '시간'),
+          body: Container(
+            color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
+            child: Column(
+              children: [
+                SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
+                CustomTabBar(
+                  selectedIndex: TimetableViewType.values.indexOf(_viewType),
+                  tabs: TimetableViewType.values.map((e) => e.name).toList(),
+                  onTabSelected: (i) {
+                    setState(() {
+                      _viewType = TimetableViewType.values[i];
+                    });
+                  },
+                ),
+                const SizedBox(height: 24),
+                Expanded(
+                  child: _buildContent(),
+                ),
+                const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
+              ],
             ),
-            const SizedBox(height: 24),
-            Expanded(
-              child: _buildContent(),
-            ),
-            const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
-          ],
+          ),
         ),
       ),
     );

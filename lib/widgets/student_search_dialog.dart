@@ -24,6 +24,10 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   @override
   void initState() {
     super.initState();
+    _refreshStudentList();
+  }
+
+  void _refreshStudentList() {
     final allStudents = DataManager.instance.students
         .where((student) => !widget.excludedStudentIds.contains(student.student.id))
         .map((s) => s.student)
@@ -42,7 +46,14 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     _filteredStudents = _students;
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _refreshStudentList();
+  }
+
   void _filterStudents(String query) {
+    _refreshStudentList();
     setState(() {
       _filteredStudents = _students.where((student) {
         final name = student.name.toLowerCase();

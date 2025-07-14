@@ -362,6 +362,7 @@ class DataManager {
     _studentTimeBlocks.removeWhere((b) => b.id == id);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.deleteStudentTimeBlock(id);
+    await loadStudentTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
   }
 
   // GroupSchedule 관련 메서드들
