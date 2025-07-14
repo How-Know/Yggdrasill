@@ -11,6 +11,7 @@ class TimetableHeader extends StatefulWidget {
   final int? selectedDayIndex;
   final Function(int) onDaySelected;
   final bool isRegistrationMode;
+  final VoidCallback? onFilterPressed; // 추가
 
   const TimetableHeader({
     Key? key,
@@ -19,6 +20,7 @@ class TimetableHeader extends StatefulWidget {
     this.selectedDayIndex,
     required this.onDaySelected,
     this.isRegistrationMode = false,
+    this.onFilterPressed, // 추가
   }) : super(key: key);
 
   @override
@@ -95,6 +97,35 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                       ),
                     ),
                   ),
+                ),
+              ),
+            ),
+            // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
+            SizedBox(width: 16),
+            SizedBox(
+              height: 40,
+              width: 104, // 기존 80~90에서 30% 증가(80*1.3=104)
+              child: OutlinedButton(
+                style: ButtonStyle(
+                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                  shape: MaterialStateProperty.all(RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  )),
+                  side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
+                  padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
+                  foregroundColor: MaterialStateProperty.all(Colors.white70),
+                  textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                  overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
+                ),
+                onPressed: widget.onFilterPressed,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.max,
+                  children: const [
+                    Icon(Icons.filter_alt_outlined, size: 20),
+                    SizedBox(width: 6),
+                    Text('filter'),
+                  ],
                 ),
               ),
             ),

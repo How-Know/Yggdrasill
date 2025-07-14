@@ -447,7 +447,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                 );
                                 if (selected == 'edit') {
-                                  // TODO: 운영시간 수정 다이얼로그 연결
+                                  // 운영시간 수정 다이얼로그 연결
+                                  final currentRange = _operatingHours[day]!;
+                                  final TimeOfDay? newStart = await showTimePicker(
+                                    context: context,
+                                    initialTime: currentRange.start,
+                                    builder: (context, child) {
+                                      return Theme(
+                                        data: Theme.of(context).copyWith(
+                                          colorScheme: const ColorScheme.dark(
+                                            primary: Color(0xFF1976D2),
+                                            onPrimary: Colors.white,
+                                            surface: Color(0xFF1F1F1F),
+                                            onSurface: Colors.white,
+                                          ),
+                                        ),
+                                        child: child!,
+                                      );
+                                    },
+                                  );
+                                  if (newStart == null) return;
+                                  final TimeOfDay? newEnd = await showTimePicker(
+                                    context: context,
+                                    initialTime: currentRange.end,
+                                    builder: (context, child) {
+                                      return Theme(
+                                        data: Theme.of(context).copyWith(
+                                          colorScheme: const ColorScheme.dark(
+                                            primary: Color(0xFF1976D2),
+                                            onPrimary: Colors.white,
+                                            surface: Color(0xFF1F1F1F),
+                                            onSurface: Colors.white,
+                                          ),
+                                        ),
+                                        child: child!,
+                                      );
+                                    },
+                                  );
+                                  if (newEnd == null) return;
+                                  setState(() {
+                                    _operatingHours[day] = TimeRange(start: newStart, end: newEnd);
+                                  });
+                                  // DB 저장
+                                  final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
+                                    final range = e.value!;
+                                    final breaks = _breakTimes[e.key] ?? [];
+                                    return OperatingHours(
+                                      startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
+                                      endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
+                                      breakTimes: breaks.map((b) => BreakTime(
+                                        startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
+                                        endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
+                                      )).toList(),
+                                      dayOfWeek: e.key.index,
+                                    );
+                                  }).toList();
+                                  await DataManager.instance.saveOperatingHours(hoursList);
+                                  final hours = await DataManager.instance.getOperatingHours();
+                                  setState(() {
+                                    for (var d in DayOfWeek.values) {
+                                      _operatingHours[d] = null;
+                                      _breakTimes[d] = [];
+                                    }
+                                    for (var hour in hours) {
+                                      final d = DayOfWeek.values[hour.dayOfWeek];
+                                      _operatingHours[d] = TimeRange(
+                                        start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
+                                        end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+                                      );
+                                      _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
+                                        start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
+                                        end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+                                      )).toList();
+                                    }
+                                  });
+                                  return;
                                 } else if (selected == 'delete') {
                                   setState(() {
                                     _operatingHours[day] = null;

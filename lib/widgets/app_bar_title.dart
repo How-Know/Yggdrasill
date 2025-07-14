@@ -75,6 +75,16 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (actions != null) ...actions!,
+                    // apps 아이콘 버튼 추가
+                    IconButton(
+                      icon: const Icon(Icons.apps, color: Colors.white70),
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('앱스 버튼 클릭됨')),
+                        );
+                      },
+                      tooltip: '앱스',
+                    ),
                     IconButton(
                       icon: const Icon(Icons.settings, color: Colors.white70),
                       onPressed: onSettings ?? () {
