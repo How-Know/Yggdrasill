@@ -43,6 +43,7 @@ class StudentCard extends StatelessWidget {
   }
 
   Future<void> _handleDelete(BuildContext context) async {
+    print('[DEBUG][StudentCard] _handleDelete 진입: id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -70,10 +71,14 @@ class StudentCard extends StatelessWidget {
         ],
       ),
     );
-
+    print('[DEBUG][StudentCard] _handleDelete 다이얼로그 결과: confirmed=$confirmed');
     if (confirmed == true) {
+      print('[DEBUG][StudentCard] onDelete 콜백 호출 직전');
       if (onDelete != null) {
         onDelete!(studentWithInfo);
+        print('[DEBUG][StudentCard] onDelete 콜백 호출 완료');
+      } else {
+        print('[DEBUG][StudentCard] onDelete 콜백이 null');
       }
     }
   }
@@ -182,15 +187,17 @@ class StudentCard extends StatelessWidget {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 tooltip: '',
                 onSelected: (value) async {
+                  print('[DEBUG][StudentCard] PopupMenuButton onSelected: value=$value, id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');
                   if (value == 'edit') {
                     await _handleEdit(context);
                   } else if (value == 'delete') {
+                    print('[DEBUG][StudentCard] 삭제 다이얼로그 호출 직전');
                     final confirmed = await showDialog<bool>(
                       context: context,
                       builder: (context) => AlertDialog(
                         backgroundColor: const Color(0xFF2A2A2A),
-                        title: const Text('선생님 삭제', style: TextStyle(color: Colors.white)),
-                        content: const Text('정말로 이 선생님을 삭제하시겠습니까?', style: TextStyle(color: Colors.white)),
+                        title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
+                        content: const Text('정말로 이 학생을 삭제하시겠습니까?', style: TextStyle(color: Colors.white)),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.of(context).pop(false),
@@ -204,9 +211,14 @@ class StudentCard extends StatelessWidget {
                         ],
                       ),
                     );
+                    print('[DEBUG][StudentCard] 삭제 다이얼로그 결과: confirmed=$confirmed');
                     if (confirmed == true) {
+                      print('[DEBUG][StudentCard] onDelete 콜백 호출 직전');
                       if (onDelete != null) {
                         onDelete!(studentWithInfo);
+                        print('[DEBUG][StudentCard] onDelete 콜백 호출 완료');
+                      } else {
+                        print('[DEBUG][StudentCard] onDelete 콜백이 null');
                       }
                     }
                   } else if (value == 'details') {

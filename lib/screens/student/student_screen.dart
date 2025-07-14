@@ -65,6 +65,7 @@ class StudentScreenState extends State<StudentScreen> {
         return ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (context, students, __) {
+            print('[DEBUG][StudentScreen] ValueListenableBuilder build: students.length=' + students.length.toString());
             final filteredStudents = filterStudents(students);
             if (_viewType == StudentViewType.byClass) {
               return GroupView(
@@ -216,8 +217,11 @@ class StudentScreenState extends State<StudentScreen> {
                   DataManager.instance.setGroupsOrder(newGroups);
                 },
                 onDeleteStudent: (studentWithInfo) async {
+                  print('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
                   await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                  print('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
                   showAppSnackBar(context, '학생이 삭제되었습니다.');
+                  print('[DEBUG][StudentScreen] 스낵바 호출 완료');
                 },
                 onStudentUpdated: (updatedStudentWithInfo) async {
                   await DataManager.instance.updateStudent(

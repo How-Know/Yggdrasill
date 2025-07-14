@@ -60,6 +60,7 @@ class GroupView extends StatelessWidget {
                   child: StudentCard(
                     student: student,
                     onShowDetails: onShowDetails,
+                    onDelete: onDeleteStudent,
                   ),
                 );
               },

@@ -604,6 +604,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         child: StudentCard(
                           studentWithInfo: student,
                           onShowDetails: (_) {},
+                          onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                           onUpdate: widget.onStudentUpdated,
                         ),
                       ),
@@ -613,12 +614,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       child: StudentCard(
                         studentWithInfo: student,
                         onShowDetails: (_) {},
+                        onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                         onUpdate: widget.onStudentUpdated,
                       ),
                     ),
                     child: StudentCard(
                       studentWithInfo: student,
                       onShowDetails: (_) {},
+                      onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                       onUpdate: widget.onStudentUpdated,
                     ),
                   )
@@ -717,8 +720,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     children: gradeStudents.map((studentWithInfo) => StudentCard(
                       studentWithInfo: studentWithInfo,
                       onShowDetails: (_) {},
+                      onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                       onUpdate: widget.onStudentUpdated,
-                      onDelete: widget.onDeleteStudent,
                     )).toList(),
                   ),
                 ),

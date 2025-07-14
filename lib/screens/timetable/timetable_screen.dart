@@ -485,7 +485,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           groupId: student.groupInfo?.id,
           dayIndex: dayIdx,
           startTime: startTime,
-          duration: const Duration(hours: 1),
+          duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
           createdAt: DateTime.now(),
         );
         await DataManager.instance.addStudentTimeBlock(block);

@@ -54,6 +54,7 @@ class EducationLevelSchoolGroup extends StatelessWidget {
                 child: StudentCard(
                   student: student,
                   onShowDetails: onShowDetails,
+                  onDelete: onShowDetails,
                 ),
               );
             },

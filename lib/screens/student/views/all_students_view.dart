@@ -6,11 +6,13 @@ import '../components/education_level_group.dart';
 class AllStudentsView extends StatelessWidget {
   final List<Student> students;
   final Function(Student) onShowDetails;
+  final Function(Student) onDeleteStudent;
 
   const AllStudentsView({
     Key? key,
     required this.students,
     required this.onShowDetails,
+    required this.onDeleteStudent,
   }) : super(key: key);
 
   @override
@@ -25,6 +27,7 @@ class AllStudentsView extends StatelessWidget {
           child: StudentCard(
             student: student,
             onShowDetails: onShowDetails,
+            onDelete: onDeleteStudent,
           ),
         );
       },

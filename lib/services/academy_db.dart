@@ -422,4 +422,9 @@ class AcademyDbService {
     final dbClient = await db;
     await dbClient.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
   }
+
+  Future<void> deleteStudentTimeBlocksByStudentId(String studentId) async {
+    final dbClient = await db;
+    await dbClient.delete('student_time_blocks', where: 'student_id = ?', whereArgs: [studentId]);
+  }
 } 

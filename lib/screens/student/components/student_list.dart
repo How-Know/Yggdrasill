@@ -80,6 +80,7 @@ class StudentList extends StatelessWidget {
                 children: gradeStudents.map((student) => StudentCard(
                   student: student,
                   onShowDetails: onStudentTap,
+                  onDelete: onStudentTap,
                 )).toList(),
               ),
             ],

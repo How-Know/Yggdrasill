@@ -110,6 +110,7 @@ class StudentSchoolView extends StatelessWidget {
                   StudentCard(
                     student: student,
                     onShowDetails: onStudentTap,
+                    onDelete: onStudentTap,
                   ),
               ],
             ),

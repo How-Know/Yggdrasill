@@ -315,12 +315,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   ) {
     return allBlocks.where((block) {
       if (block.dayIndex != dayIndex) return false;
-      
-      final blockEndTime = block.startTime.add(Duration(minutes: lessonDurationMinutes));
-      final checkEndTime = checkTime.add(const Duration(minutes: 30));
-      
-      // 블록이 체크 시간 범위와 겹치는지 확인
-      return block.startTime.isBefore(checkEndTime) && blockEndTime.isAfter(checkTime);
+      // 날짜 무시, 요일+시:분+duration만 비교
+      final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
+      final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
+      final checkMinutes = checkTime.hour * 60 + checkTime.minute;
+      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
     }).toList();
   }
 
@@ -399,6 +398,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                 final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
                 final groupInfo = block.groupId != null ?
                   groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                // 삭제된 학생이면 카드 자체를 렌더링하지 않음
+                if (student.id.isEmpty) return const SizedBox.shrink();
                 return GestureDetector(
                   onTapDown: (details) async {
                     final selected = await showMenu<String>(

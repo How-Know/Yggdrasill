@@ -106,6 +106,7 @@ class DataManager {
   }
 
   Future<void> loadStudents() async {
+    print('[DEBUG][loadStudents] 진입');
     // 1. students 테이블에서 기본 정보 불러오기
     final studentsRaw = await AcademyDbService.instance.getStudents();
     // 2. students_basic_info 테이블에서 부가 정보 불러오기
@@ -145,6 +146,7 @@ class DataManager {
         StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
     ];
     studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+    print('[DEBUG][loadStudents] studentsNotifier.value 갱신: ${_studentsWithInfo.length}명');
   }
 
   Future<void> saveStudents() async {
@@ -283,9 +285,16 @@ class DataManager {
   }
 
   Future<void> deleteStudent(String id) async {
+    print('[DEBUG][deleteStudent] 진입: id=$id');
+    // 학생의 모든 수업시간 블록도 함께 삭제
+    await AcademyDbService.instance.deleteStudentTimeBlocksByStudentId(id);
+    print('[DEBUG][deleteStudent] StudentTimeBlock 삭제 완료: id=$id');
     await AcademyDbService.instance.deleteStudent(id);
-    await AcademyDbService.instance.deleteStudentBasicInfo(id);
+    print('[DEBUG][deleteStudent] DB 삭제 완료: id=$id');
     await loadStudents();
+    print('[DEBUG][deleteStudent] loadStudents() 호출 완료');
+    await loadStudentTimeBlocks();
+    print('[DEBUG][deleteStudent] loadStudentTimeBlocks() 호출 완료');
   }
 
   void updateStudentGroup(Student student, GroupInfo? newGroup) {
