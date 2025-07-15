@@ -16,6 +16,7 @@ class TimetableContentView extends StatefulWidget {
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
   final void Function(List<StudentWithInfo>)? onCellStudentsChanged;
+  final VoidCallback? clearSearch; // 추가: 외부에서 검색 리셋 요청
 
   const TimetableContentView({
     Key? key,
@@ -29,13 +30,14 @@ class TimetableContentView extends StatefulWidget {
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
     this.onCellStudentsChanged,
+    this.clearSearch, // 추가
   }) : super(key: key);
 
   @override
-  State<TimetableContentView> createState() => _TimetableContentViewState();
+  State<TimetableContentView> createState() => TimetableContentViewState();
 }
 
-class _TimetableContentViewState extends State<TimetableContentView> {
+class TimetableContentViewState extends State<TimetableContentView> {
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
@@ -98,6 +100,17 @@ class _TimetableContentViewState extends State<TimetableContentView> {
   void dispose() {
     _removeDropdownMenu();
     super.dispose();
+  }
+
+  // 외부에서 검색 상태를 리셋할 수 있도록 public 메서드 제공
+  void clearSearch() {
+    if (_searchQuery.isNotEmpty || _searchResults.isNotEmpty) {
+      setState(() {
+        _searchQuery = '';
+        _searchResults = [];
+        _searchController.clear();
+      });
+    }
   }
 
   @override
@@ -289,7 +302,7 @@ class _TimetableContentViewState extends State<TimetableContentView> {
                       if (_searchQuery.isNotEmpty && _searchResults.isNotEmpty)
                         Expanded(
                           child: SingleChildScrollView(
-                            child: _buildStudentCardList(_searchResults),
+                            child: _buildGroupedStudentCardsByDayTime(_searchResults),
                           ),
                         )
                       else if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
@@ -454,7 +467,7 @@ class _TimetableContentViewState extends State<TimetableContentView> {
             ),
           ),
         Padding(
-          padding: const EdgeInsets.only(top: 2.0),
+          padding: const EdgeInsets.only(top: 16.0), // 상단 여백을 16으로 늘림
           child: Wrap(
             spacing: 0,
             runSpacing: 4,
@@ -479,6 +492,82 @@ class _TimetableContentViewState extends State<TimetableContentView> {
             ).toList(),
           ),
         ),
+      ],
+    );
+  }
+
+  // --- 검색 결과를 요일/시간별로 그룹핑해서 보여주는 함수 ---
+  Widget _buildGroupedStudentCardsByDayTime(List<StudentWithInfo> students) {
+    // 학생이 속한 모든 시간블록을 (요일, 시간)별로 그룹핑
+    final blocks = DataManager.instance.studentTimeBlocks;
+    // Map<(dayIdx, startTime), List<StudentWithInfo>>
+    final Map<String, List<StudentWithInfo>> grouped = {};
+    for (final student in students) {
+      final studentBlocks = blocks.where((b) => b.studentId == student.student.id).toList();
+      for (final block in studentBlocks) {
+        final key = '${block.dayIndex}-${block.startTime.hour}:${block.startTime.minute.toString().padLeft(2, '0')}';
+        grouped.putIfAbsent(key, () => []);
+        grouped[key]!.add(student);
+      }
+    }
+    // key를 요일/시간 순으로 정렬
+    final sortedKeys = grouped.keys.toList()
+      ..sort((a, b) {
+        final aDay = int.parse(a.split('-')[0]);
+        final aTime = a.split('-')[1];
+        final bDay = int.parse(b.split('-')[0]);
+        final bTime = b.split('-')[1];
+        if (aDay != bDay) return aDay.compareTo(bDay);
+        return aTime.compareTo(bTime);
+      });
+    if (grouped.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 32.0),
+        child: Center(
+          child: Text('검색된 학생이 시간표에 등록되어 있지 않습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 24), // 검색 결과 상단 여백
+        ...sortedKeys.map((key) {
+          final dayIdx = int.parse(key.split('-')[0]);
+          final timeStr = key.split('-')[1];
+          final hour = int.parse(timeStr.split(':')[0]);
+          final min = int.parse(timeStr.split(':')[1]);
+          final dayTimeLabel = _getDayTimeString(dayIdx, DateTime(0, 1, 1, hour, min));
+          final students = grouped[key]!;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 90,
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: Text(
+                    dayTimeLabel,
+                    style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Expanded(
+                  child: Wrap(
+                    spacing: 0,
+                    runSpacing: 4,
+                    children: students.map((info) =>
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+                      )
+                    ).toList(),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
       ],
     );
   }

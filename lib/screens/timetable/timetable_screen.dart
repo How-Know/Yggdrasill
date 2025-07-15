@@ -76,6 +76,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Set<String> _selectedGroups = {};
   // 실제 적용된 필터 상태
   Map<String, Set<String>>? _activeFilter;
+  // TimetableContentView의 검색 리셋 메서드에 접근하기 위한 key
+  final GlobalKey<TimetableContentViewState> _contentViewKey = GlobalKey<TimetableContentViewState>();
 
   @override
   void initState() {
@@ -553,6 +555,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () {
+          // 검색 내역이 있으면 리셋
+          _contentViewKey.currentState?.clearSearch();
           if (_isStudentRegistrationMode || _isClassRegistrationMode) {
             setState(() {
               _isStudentRegistrationMode = false;
@@ -596,6 +600,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     switch (_viewType) {
       case TimetableViewType.classes:
         return TimetableContentView(
+          key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
           timetableChild: Container(
             width: double.infinity,
@@ -652,6 +657,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _selectedCellStudents = updatedList;
             });
           },
+          clearSearch: () => _contentViewKey.currentState?.clearSearch(), // 추가: 검색 리셋 콜백 전달
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
@@ -699,6 +705,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _handleTimeSelection(dayIdx, startTime);
             },
             onCellStudentsSelected: (int dayIdx, DateTime startTime, List<StudentWithInfo> students) {
+              // 셀 클릭 시 검색 리셋
+              _contentViewKey.currentState?.clearSearch();
               setState(() {
                 _selectedCellStudents = students;
                 _selectedCellDayIndex = dayIdx;
