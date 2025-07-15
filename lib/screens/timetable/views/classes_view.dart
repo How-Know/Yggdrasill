@@ -202,52 +202,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       },
                                       child: Stack(
                                         children: [
-                                          // 셀 드롭 타겟 (학생카드 드래그 시)
-                                          DragTarget<StudentWithInfo>(
-                                            onWillAccept: (student) => student != null,
-                                            onAccept: (student) async {
-                                              // 학생의 기존 StudentTimeBlock 찾기
-                                              StudentTimeBlock? oldBlock;
-                                              try {
-                                                oldBlock = DataManager.instance.studentTimeBlocks.firstWhere(
-                                                  (b) => b.studentId == student.student.id,
-                                                );
-                                              } catch (_) {
-                                                oldBlock = null;
-                                              }
-                                              if (oldBlock != null) {
-                                                // 기존 블록 삭제
-                                                await DataManager.instance.removeStudentTimeBlock(oldBlock.id);
-                                              }
-                                              // 새 블록 추가 (해당 셀의 요일/시간)
-                                              final newBlock = StudentTimeBlock(
-                                                id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                                studentId: student.student.id,
-                                                groupId: student.groupInfo?.id,
-                                                dayIndex: dayIdx,
-                                                startTime: timeBlocks[blockIdx].startTime,
-                                                duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
-                                                createdAt: DateTime.now(),
-                                              );
-                                              await DataManager.instance.addStudentTimeBlock(newBlock);
-                                              // 데이터 새로고침
-                                              await DataManager.instance.loadStudents();
-                                              await DataManager.instance.loadStudentTimeBlocks();
-                                              if (context.mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  SnackBar(
-                                                    content: Text('${student.student.name} 학생의 수업시간이 이동되었습니다.'),
-                                                    backgroundColor: const Color(0xFF1976D2),
-                                                    behavior: SnackBarBehavior.floating,
-                                                    margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
-                                                  ),
-                                                );
-                                              }
-                                            },
-                                            builder: (context, candidateData, rejectedData) {
-                                              return const SizedBox.expand(); // 셀 전체가 드롭 타겟
-                                            },
-                                          ),
                                           // 셀 배경 및 경계선(구분선)은 그대로 유지
                                           Container(
                                             decoration: BoxDecoration(
@@ -274,29 +228,79 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                   fontWeight: FontWeight.bold,
                                                 ),
                                               ),
-                                            )
-                                          else ...[
-                                            // 인원수 카드: 0명이면 아무것도 출력하지 않음, 1명 이상이면 상단에 붙임
-                                            if (activeStudentCount > 0)
-                                              Positioned(
-                                                top: 0,
-                                                left: 0,
-                                                right: 0,
-                                                child: CapacityCardWidget(
-                                                  count: activeStudentCount,
-                                                  color: countColor,
-                                                ),
+                                            ),
+                                          // 인원수 카드: 0명이면 아무것도 출력하지 않음, 1명 이상이면 상단에 붙임
+                                          if (activeStudentCount > 0)
+                                            Positioned(
+                                              top: 0,
+                                              left: 0,
+                                              right: 0,
+                                              child: CapacityCardWidget(
+                                                count: activeStudentCount,
+                                                color: countColor,
                                               ),
-                                            // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
-                                            if (isExpanded && activeBlocks.isNotEmpty)
-                                              _buildExpandedStudentCards(
-                                                activeBlocks,
-                                                cellStudentWithInfos,
-                                                groups,
-                                                constraints.maxWidth,
-                                                isExpanded,
-                                              ),
-                                          ],
+                                            ),
+                                          // 펼침 상태일 때만 학생카드 그리드 + 닫힘 GestureDetector
+                                          if (isExpanded && activeBlocks.isNotEmpty)
+                                            _buildExpandedStudentCards(
+                                              activeBlocks,
+                                              cellStudentWithInfos,
+                                              groups,
+                                              constraints.maxWidth,
+                                              isExpanded,
+                                            ),
+                                          // DragTarget을 Stack의 맨 마지막(맨 위)에 둠!
+                                          if (!widget.isRegistrationMode)
+                                            DragTarget<StudentWithInfo>(
+                                              onWillAccept: (student) {
+                                                print('[DragTarget] onWillAccept: student = ' + (student?.student.name ?? 'null'));
+                                                return student != null;
+                                              },
+                                              onAccept: (student) async {
+                                                print('[DragTarget] onAccept: student = ' + (student.student.name));
+                                                // 이동 전 시간블록(해당 학생의 기존 블록)만 삭제
+                                                final oldBlocks = DataManager.instance.studentTimeBlocks.where(
+                                                  (b) => b.studentId == student.student.id
+                                                ).toList();
+                                                for (final oldBlock in oldBlocks) {
+                                                  await DataManager.instance.removeStudentTimeBlock(oldBlock.id);
+                                                }
+                                                // 새 블록 추가 (해당 셀의 요일/시간)
+                                                final newBlock = StudentTimeBlock(
+                                                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                                  studentId: student.student.id,
+                                                  groupId: student.groupInfo?.id,
+                                                  dayIndex: dayIdx,
+                                                  startTime: timeBlocks[blockIdx].startTime,
+                                                  duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
+                                                  createdAt: DateTime.now(),
+                                                );
+                                                print('[DragTarget] 새 블록 추가: studentId = ' + newBlock.studentId + ', dayIndex = ' + newBlock.dayIndex.toString() + ', startTime = ' + newBlock.startTime.toString());
+                                                await DataManager.instance.addStudentTimeBlock(newBlock);
+                                                // 데이터 새로고침
+                                                await DataManager.instance.loadStudents();
+                                                await DataManager.instance.loadStudentTimeBlocks();
+                                                if (context.mounted) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('${student.student.name} 학생의 수업시간이 이동되었습니다.'),
+                                                      backgroundColor: const Color(0xFF1976D2),
+                                                      behavior: SnackBarBehavior.floating,
+                                                      margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
+                                                    ),
+                                                  );
+                                                }
+                                              },
+                                              builder: (context, candidateData, rejectedData) {
+                                                // 호버링 효과: 드래그 중이면 파란색 하이라이트, 아니면 완전 투명
+                                                final isHover = candidateData.isNotEmpty;
+                                                return AnimatedContainer(
+                                                  duration: const Duration(milliseconds: 120),
+                                                  color: isHover ? const Color(0xFF1976D2).withOpacity(0.10) : Colors.transparent,
+                                                  child: const SizedBox.expand(),
+                                                );
+                                              },
+                                            ),
                                         ],
                                       ),
                                     ),
