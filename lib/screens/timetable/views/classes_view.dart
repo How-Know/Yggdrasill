@@ -202,6 +202,52 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       },
                                       child: Stack(
                                         children: [
+                                          // 셀 드롭 타겟 (학생카드 드래그 시)
+                                          DragTarget<StudentWithInfo>(
+                                            onWillAccept: (student) => student != null,
+                                            onAccept: (student) async {
+                                              // 학생의 기존 StudentTimeBlock 찾기
+                                              StudentTimeBlock? oldBlock;
+                                              try {
+                                                oldBlock = DataManager.instance.studentTimeBlocks.firstWhere(
+                                                  (b) => b.studentId == student.student.id,
+                                                );
+                                              } catch (_) {
+                                                oldBlock = null;
+                                              }
+                                              if (oldBlock != null) {
+                                                // 기존 블록 삭제
+                                                await DataManager.instance.removeStudentTimeBlock(oldBlock.id);
+                                              }
+                                              // 새 블록 추가 (해당 셀의 요일/시간)
+                                              final newBlock = StudentTimeBlock(
+                                                id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                                studentId: student.student.id,
+                                                groupId: student.groupInfo?.id,
+                                                dayIndex: dayIdx,
+                                                startTime: timeBlocks[blockIdx].startTime,
+                                                duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
+                                                createdAt: DateTime.now(),
+                                              );
+                                              await DataManager.instance.addStudentTimeBlock(newBlock);
+                                              // 데이터 새로고침
+                                              await DataManager.instance.loadStudents();
+                                              await DataManager.instance.loadStudentTimeBlocks();
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('${student.student.name} 학생의 수업시간이 이동되었습니다.'),
+                                                    backgroundColor: const Color(0xFF1976D2),
+                                                    behavior: SnackBarBehavior.floating,
+                                                    margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
+                                                  ),
+                                                );
+                                              }
+                                            },
+                                            builder: (context, candidateData, rejectedData) {
+                                              return const SizedBox.expand(); // 셀 전체가 드롭 타겟
+                                            },
+                                          ),
                                           // 셀 배경 및 경계선(구분선)은 그대로 유지
                                           Container(
                                             decoration: BoxDecoration(
@@ -245,15 +291,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                             if (isExpanded && activeBlocks.isNotEmpty)
                                               _buildExpandedStudentCards(
                                                 activeBlocks,
-                                                activeBlocks.map((b) =>
-                                                  studentsWithInfo.firstWhere(
-                                                    (s) => s.student.id == b.studentId,
-                                                    orElse: () => StudentWithInfo(
-                                                      student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                                      basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                                    )
-                                                  ).student
-                                                ).toList(),
+                                                cellStudentWithInfos,
                                                 groups,
                                                 constraints.maxWidth,
                                                 isExpanded,
@@ -379,7 +417,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
   }
 
-  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<Student> students, List<GroupInfo> groups, double cellWidth, bool isExpanded) {
+  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<StudentWithInfo> studentsWithInfo, List<GroupInfo> groups, double cellWidth, bool isExpanded) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: () {
@@ -401,11 +439,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               runSpacing: 10,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
-                final student = students.firstWhere((s) => s.id == block.studentId, orElse: () => Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1));
+                final studentWithInfo = studentsWithInfo.firstWhere((s) => s.student.id == block.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())));
                 final groupInfo = block.groupId != null ?
                   groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 // 삭제된 학생이면 카드 자체를 렌더링하지 않음
-                if (student.id.isEmpty) return const SizedBox.shrink();
+                if (studentWithInfo.student.id.isEmpty) return const SizedBox.shrink();
                 return GestureDetector(
                   onTapDown: (details) async {
                     final selected = await showMenu<String>(
@@ -439,7 +477,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   child: SizedBox(
                     width: 109,
                     height: 39,
-                    child: _StudentTimeBlockCard(student: student, groupInfo: groupInfo),
+                    child: _StudentTimeBlockCard(student: studentWithInfo.student, groupInfo: groupInfo),
                   ),
                 );
               }),

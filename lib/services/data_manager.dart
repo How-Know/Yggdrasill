@@ -20,7 +20,8 @@ class StudentWithInfo {
   String? get phoneNumber => student.phoneNumber;
   String? get parentPhoneNumber => student.parentPhoneNumber;
   DateTime? get registrationDate => student.registrationDate;
-  int? get weeklyClassCount => student.weeklyClassCount;
+  // 반드시 basicInfo.weeklyClassCount만 사용해야 함
+  int get weeklyClassCount => basicInfo.weeklyClassCount;
 }
 
 class DataManager {

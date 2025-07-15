@@ -333,6 +333,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           final studentId = student.student.id;
                           final dayIdx = widget.selectedCellDayIndex;
                           final startTime = widget.selectedCellStartTime;
+                          print('[삭제드롭존] onAccept 호출: studentId=$studentId, dayIdx=$dayIdx, startTime=$startTime');
                           if (dayIdx != null && startTime != null) {
                             // student_time_block에서 해당 학생+요일+시간 블록 찾기
                             final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
@@ -341,7 +342,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               b.startTime.hour == startTime.hour &&
                               b.startTime.minute == startTime.minute
                             ).toList();
+                            print('[삭제드롭존] 삭제 대상 블록 개수: ${blocks.length}');
                             for (final block in blocks) {
+                              print('[삭제드롭존] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
                               await DataManager.instance.removeStudentTimeBlock(block.id);
                             }
                             // 삭제 후 데이터 즉시 새로고침
@@ -351,6 +354,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               _showDeleteZone = false;
                               // (필요하다면 다른 상태도 여기서 갱신)
                             });
+                            print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               WidgetsBinding.instance.addPostFrameCallback((_) {
                                 if (mounted) {
@@ -365,7 +369,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 }
                               });
                             });
-                            // 삭제 후 등록버튼 컨테이너 내 학생카드 리스트도 즉시 반영
+                            // 삭제 후 등록버튼 컨테이너 내 학생카드 리스트도 즉시 반영 (데이터 새로고침 후에 실행)
                             if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null) {
                               final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
                                 b.dayIndex == widget.selectedCellDayIndex &&
@@ -448,6 +452,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
     );
   }
 
+  // --- 학생카드 Draggable 래퍼 공통 함수 ---
+  Widget _buildDraggableStudentCard(StudentWithInfo info) {
+    return Draggable<StudentWithInfo>(
+      data: info,
+      onDragStarted: () => setState(() => _showDeleteZone = true),
+      onDragEnd: (_) => setState(() => _showDeleteZone = false),
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(
+          opacity: 0.85,
+          child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+      ),
+      child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+    );
+  }
+
   // --- 학생카드 리스트(셀 선택/검색 결과) 공통 출력 함수 ---
   Widget _buildStudentCardList(List<StudentWithInfo> students, {String? dayTimeLabel}) {
     if (students.isEmpty) {
@@ -471,25 +496,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Wrap(
             spacing: 0,
             runSpacing: 4,
-            children: students.map((info) =>
-              Draggable<StudentWithInfo>(
-                data: info,
-                onDragStarted: () => setState(() => _showDeleteZone = true),
-                onDragEnd: (_) => setState(() => _showDeleteZone = false),
-                feedback: Material(
-                  color: Colors.transparent,
-                  child: Opacity(
-                    opacity: 0.85,
-                    child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
-                  ),
-                ),
-                childWhenDragging: Opacity(
-                  opacity: 0.3,
-                  child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
-                ),
-                child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
-              )
-            ).toList(),
+            children: students.map(_buildDraggableStudentCard).toList(),
           ),
         ),
       ],
@@ -559,7 +566,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     children: students.map((info) =>
                       Padding(
                         padding: const EdgeInsets.only(right: 8.0),
-                        child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+                        child: _buildDraggableStudentCard(info),
                       )
                     ).toList(),
                   ),

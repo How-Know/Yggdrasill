@@ -18,27 +18,29 @@ class StudentSearchDialog extends StatefulWidget {
 
 class _StudentSearchDialogState extends State<StudentSearchDialog> {
   final TextEditingController _searchController = TextEditingController();
-  List<Student> _students = [];
-  List<Student> _filteredStudents = [];
+  List<StudentWithInfo> _students = [];
+  List<StudentWithInfo> _filteredStudents = [];
 
   @override
   void initState() {
     super.initState();
     _refreshStudentList();
+    DataManager.instance.studentTimeBlocksNotifier.addListener(_refreshStudentList); // 시간표 변경 시 자동 새로고침
   }
 
   void _refreshStudentList() {
     final allStudents = DataManager.instance.students
-        .where((student) => !widget.excludedStudentIds.contains(student.student.id))
-        .map((s) => s.student)
+        .where((studentWithInfo) => !widget.excludedStudentIds.contains(studentWithInfo.student.id))
         .toList();
     if (widget.onlyShowIncompleteStudents) {
       // 학생별로 등록된 수업시간 개수와 weeklyClassCount 비교
       final timeBlocks = DataManager.instance.studentTimeBlocks;
-      _students = allStudents.where((student) {
-        final count = timeBlocks.where((b) => b.studentId == student.id).length;
-        final required = student.weeklyClassCount ?? 1;
-        return count < required;
+      _students = allStudents.where((studentWithInfo) {
+        final count = timeBlocks.where((b) => b.studentId == studentWithInfo.student.id).length;
+        final required = studentWithInfo.basicInfo.weeklyClassCount;
+        final include = count < required;
+        print('[학생리스트필터] name=${studentWithInfo.student.name}, id=${studentWithInfo.student.id}, weeklyClassCount=$required, 등록된블록개수=$count, 리스트포함=$include');
+        return include;
       }).toList();
     } else {
       _students = allStudents;
@@ -55,9 +57,9 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   void _filterStudents(String query) {
     _refreshStudentList();
     setState(() {
-      _filteredStudents = _students.where((student) {
-        final name = student.name.toLowerCase();
-        final school = student.school?.toLowerCase() ?? '';
+      _filteredStudents = _students.where((studentWithInfo) {
+        final name = studentWithInfo.student.name.toLowerCase();
+        final school = studentWithInfo.student.school?.toLowerCase() ?? '';
         final searchQuery = query.toLowerCase();
         return name.contains(searchQuery) || school.contains(searchQuery);
       }).toList();
@@ -98,7 +100,8 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
               child: ListView.builder(
                 itemCount: _filteredStudents.length,
                 itemBuilder: (context, index) {
-                  final student = _filteredStudents[index];
+                  final studentWithInfo = _filteredStudents[index];
+                  final student = studentWithInfo.student;
                   return ListTile(
                     title: Text(
                       student.name,
@@ -132,7 +135,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   @override
   void dispose() {
-    _searchController.dispose();
+    DataManager.instance.studentTimeBlocksNotifier.removeListener(_refreshStudentList); // 리스너 해제
     super.dispose();
   }
 } 

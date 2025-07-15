@@ -256,8 +256,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   void _handleRegistrationButton() async {
     print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+    // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
+    // 1. 항상 최신 데이터로 동기화
+    await DataManager.instance.loadStudentTimeBlocks();
+    await DataManager.instance.loadStudents();
     if (_splitButtonSelected == '학생') {
-      // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
       final selectedStudent = await showDialog<Student>(
         context: context,
         barrierDismissible: true,
@@ -270,12 +273,17 @@ class _TimetableScreenState extends State<TimetableScreen> {
           orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id, registrationDate: selectedStudent.registrationDate ?? DateTime.now())),
         );
         final classCount = studentWithInfo.basicInfo.weeklyClassCount;
+        // 현재 등록된 블록 개수 계산
+        final existingBlocks = DataManager.instance.studentTimeBlocks
+            .where((b) => b.studentId == selectedStudent.id)
+            .length;
+        final remaining = classCount - existingBlocks;
         setState(() {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
           _selectedStudentForTime = selectedStudent;
-          // StudentBasicInfo의 weeklyClassCount로 초기화
-          _remainingRegisterCount = classCount;
+          // 남은 등록 가능 횟수로 세팅
+          _remainingRegisterCount = remaining > 0 ? remaining : 0;
         });
         print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
       } else {
@@ -721,7 +729,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Future<void> _handleTimeSelection(int dayIdx, DateTime startTime) async {
-    print('[DEBUG] _handleTimeSelection called: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
+    print('[DEBUG] _handleTimeSelection called: dayIdx= [33m$dayIdx [0m, startTime= [33m$startTime [0m, _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
     if (_isStudentRegistrationMode && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
       // 요일별 운영시간 체크
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
@@ -751,6 +759,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final student = _selectedStudentForTime;
       print('[DEBUG] _selectedStudentForTime: $student');
       if (student != null) {
+        // 1. 기존 등록된 블록 개수 확인
+        final existingBlocks = DataManager.instance.studentTimeBlocks
+            .where((b) => b.studentId == student.id)
+            .length;
+        final studentWithInfo = DataManager.instance.students.firstWhere(
+          (s) => s.student.id == student.id,
+          orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+        );
+        final maxCount = studentWithInfo.basicInfo.weeklyClassCount;
+        if (existingBlocks >= maxCount) {
+          // 이미 최대 등록, 추가 불가
+          showAppSnackBar(context, '${student.name} 학생은 이미 최대 수업시간이 등록되어 있습니다.', useRoot: true);
+          return;
+        }
+        // 2. 시간블록 추가
         final block = StudentTimeBlock(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           studentId: student.id,
