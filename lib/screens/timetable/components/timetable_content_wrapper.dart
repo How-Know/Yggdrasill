@@ -97,6 +97,9 @@ class TimetableContentWrapper extends StatelessWidget {
                         onSelected: onDropdownSelected,
                       ),
                     ),
+                    // 선택 버튼
+                    SizedBox(width: 8),
+                    _SelectButtonAnimated(),
                   ],
                 ),
               ),
@@ -219,6 +222,146 @@ class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with Singl
     return ScaleTransition(
       scale: _scaleAnim,
       child: widget.child,
+    );
+  }
+}
+
+// 선택 버튼 애니메이션 위젯
+class _SelectButtonAnimated extends StatefulWidget {
+  @override
+  State<_SelectButtonAnimated> createState() => _SelectButtonAnimatedState();
+}
+
+class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with SingleTickerProviderStateMixin {
+  bool _isSelecting = false;
+  late AnimationController _controller;
+  late Animation<double> _splitAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _splitAnim = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+  }
+
+  void _onSelectPressed() {
+    setState(() {
+      _isSelecting = true;
+      _controller.forward();
+    });
+  }
+
+  void _onCancelPressed() {
+    setState(() {
+      _isSelecting = false;
+      _controller.reverse();
+    });
+  }
+
+  void _onSelectAllPressed() {
+    // TODO: 전체 선택 로직 연결
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _splitAnim,
+      builder: (context, child) {
+        final split = _splitAnim.value;
+        if (!_isSelecting && split == 0) {
+          // 선택 버튼
+          return SizedBox(
+            width: 113,
+            height: 44,
+            child: Material(
+              color: const Color(0xFF1976D2),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(32),
+                bottomLeft: Radius.circular(32),
+                topRight: Radius.circular(6),
+                bottomRight: Radius.circular(6),
+              ),
+              child: InkWell(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(32),
+                  bottomLeft: Radius.circular(32),
+                  topRight: Radius.circular(6),
+                  bottomRight: Radius.circular(6),
+                ),
+                onTap: _onSelectPressed,
+                child: const Center(
+                  child: Text('선택', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ),
+          );
+        } else {
+          // 분리된 버튼 (모두, 취소)
+          return Row(
+            children: [
+              SizedBox(
+                width: 60 + 53 * (1 - split), // 애니메이션으로 자연스럽게 넓이 변화
+                height: 44,
+                child: Material(
+                  color: const Color(0xFF1976D2),
+                  borderRadius: BorderRadius.horizontal(
+                    left: const Radius.circular(32),
+                    right: Radius.circular(6 * (1 - split) + 32 * split),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.horizontal(
+                      left: const Radius.circular(32),
+                      right: Radius.circular(6 * (1 - split) + 32 * split),
+                    ),
+                    onTap: _onSelectAllPressed,
+                    child: Center(
+                      child: Text('모두', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 4 * split),
+              Opacity(
+                opacity: split,
+                child: SizedBox(
+                  width: 53 * split,
+                  height: 44,
+                  child: Material(
+                    color: const Color(0xFF1976D2),
+                    borderRadius: const BorderRadius.only(
+                      topRight: Radius.circular(32),
+                      bottomRight: Radius.circular(32),
+                      topLeft: Radius.circular(6),
+                      bottomLeft: Radius.circular(6),
+                    ),
+                    child: InkWell(
+                      borderRadius: const BorderRadius.only(
+                        topRight: Radius.circular(32),
+                        bottomRight: Radius.circular(32),
+                        topLeft: Radius.circular(6),
+                        bottomLeft: Radius.circular(6),
+                      ),
+                      onTap: _onCancelPressed,
+                      child: const Center(
+                        child: Icon(Icons.close, color: Colors.white, size: 20),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+      },
     );
   }
 } 

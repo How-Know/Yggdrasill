@@ -78,6 +78,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Map<String, Set<String>>? _activeFilter;
   // TimetableContentView의 검색 리셋 메서드에 접근하기 위한 key
   final GlobalKey<TimetableContentViewState> _contentViewKey = GlobalKey<TimetableContentViewState>();
+  // 선택 모드 및 선택 학생 상태 추가
+  bool _isSelectMode = false;
+  Set<String> _selectedStudentIds = {};
 
   @override
   void initState() {
@@ -546,7 +549,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][TimetableScreen] build: _isStudentRegistrationMode= [38;5;246m$_isStudentRegistrationMode [0m');
+    print('[DEBUG][TimetableScreen] build: _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
     return RawKeyboardListener(
       focusNode: _focusNode,
       autofocus: true,
@@ -628,6 +631,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
                   onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
                   isFilterActive: _activeFilter != null, // 추가
+                  onSelectModeChanged: (selecting) {
+                    setState(() {
+                      _isSelectMode = selecting;
+                      if (!selecting) _selectedStudentIds.clear();
+                      print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                    });
+                  },
                 ),
                 SizedBox(height: 0),
                 Flexible(
@@ -666,6 +676,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
           },
           clearSearch: () => _contentViewKey.currentState?.clearSearch(), // 추가: 검색 리셋 콜백 전달
+          isSelectMode: _isSelectMode,
+          selectedStudentIds: _selectedStudentIds,
+          onStudentSelectChanged: (id, selected) {
+            setState(() {
+              if (selected) {
+                _selectedStudentIds.add(id);
+              } else {
+                _selectedStudentIds.remove(id);
+              }
+              print('[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
+            });
+          },
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView

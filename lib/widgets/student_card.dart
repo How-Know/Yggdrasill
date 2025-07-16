@@ -11,6 +11,9 @@ class StudentCard extends StatelessWidget {
   final Function(StudentWithInfo) onShowDetails;
   final Function(StudentWithInfo)? onDelete;
   final Function(StudentWithInfo)? onUpdate;
+  final bool showCheckbox;
+  final bool checked;
+  final void Function(bool?)? onCheckboxChanged;
 
   const StudentCard({
     Key? key,
@@ -19,6 +22,9 @@ class StudentCard extends StatelessWidget {
     required this.onShowDetails,
     this.onDelete,
     this.onUpdate,
+    this.showCheckbox = false,
+    this.checked = false,
+    this.onCheckboxChanged,
   }) : super(key: key);
 
   Future<void> _handleEdit(BuildContext context) async {
@@ -148,15 +154,17 @@ class StudentCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8.0),
       ),
-      child: Container(
-        width: 110,
+      child: AnimatedContainer(
+        width: showCheckbox ? 142 : 112,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
         height: 50,
         padding: EdgeInsets.only(
           left: student.groupInfo == null ? 15.0 : 4.0,
           right: 4.0,
         ),
         child: SizedBox(
-          width: 120,
+          width: showCheckbox ? 142 : 122,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.start,
@@ -249,6 +257,20 @@ class StudentCard extends StatelessWidget {
                   ),
                 ],
               ),
+              if (showCheckbox)
+                Padding(
+                  padding: const EdgeInsets.only(left: 0.0),
+                  child: Checkbox(
+                    value: checked,
+                    onChanged: onCheckboxChanged,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    side: BorderSide(color: Colors.grey.shade500, width: 1.2),
+                    fillColor: MaterialStateProperty.resolveWith((states) => states.contains(MaterialState.selected) ? Colors.blue.shade400 : Colors.grey.shade200),
+                    checkColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
             ],
           ),
         ),

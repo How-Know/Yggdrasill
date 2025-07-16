@@ -13,6 +13,7 @@ class TimetableHeader extends StatefulWidget {
   final bool isRegistrationMode;
   final VoidCallback? onFilterPressed; // 추가
   final bool isFilterActive; // 추가
+  final void Function(bool selecting)? onSelectModeChanged;
 
   const TimetableHeader({
     Key? key,
@@ -23,6 +24,7 @@ class TimetableHeader extends StatefulWidget {
     this.isRegistrationMode = false,
     this.onFilterPressed, // 추가
     this.isFilterActive = false, // 추가
+    this.onSelectModeChanged,
   }) : super(key: key);
 
   @override
@@ -100,8 +102,10 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 ),
               ),
             ),
+            // 선택 버튼 (filter 버튼 왼쪽)
+            _SelectButtonAnimated(onSelectModeChanged: widget.onSelectModeChanged),
+            SizedBox(width: 12),
             // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
-            SizedBox(width: 16),
             SizedBox(
               height: 40,
               width: 104, // 기존 80~90에서 30% 증가(80*1.3=104)
@@ -205,6 +209,137 @@ class _TimetableHeaderState extends State<TimetableHeader> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// 선택 버튼 애니메이션 위젯
+class _SelectButtonAnimated extends StatefulWidget {
+  final void Function(bool selecting)? onSelectModeChanged;
+  const _SelectButtonAnimated({this.onSelectModeChanged});
+  @override
+  State<_SelectButtonAnimated> createState() => _SelectButtonAnimatedState();
+}
+
+class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with SingleTickerProviderStateMixin {
+  bool _isSelecting = false;
+  late AnimationController _controller;
+  late Animation<double> _splitAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    _splitAnim = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+  }
+
+  void _onSelectPressed() {
+    setState(() {
+      _isSelecting = true;
+      _controller.forward();
+      widget.onSelectModeChanged?.call(true);
+    });
+  }
+
+  void _onCancelPressed() {
+    setState(() {
+      _isSelecting = false;
+      _controller.reverse();
+      widget.onSelectModeChanged?.call(false);
+    });
+  }
+
+  void _onSelectAllPressed() {
+    // TODO: 전체 선택 로직 연결
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final buttonStyle = ButtonStyle(
+      backgroundColor: MaterialStateProperty.all(Colors.transparent),
+      shape: MaterialStateProperty.all(RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+      )),
+      side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
+      padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
+      foregroundColor: MaterialStateProperty.all(Colors.white70),
+      textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
+    );
+    return AnimatedBuilder(
+      animation: _splitAnim,
+      builder: (context, child) {
+        final split = _splitAnim.value;
+        if (!_isSelecting && split == 0) {
+          // 선택 버튼
+          return SizedBox(
+            height: 40,
+            width: 104,
+            child: OutlinedButton(
+              style: buttonStyle,
+              onPressed: _onSelectPressed,
+              child: const Center(
+                child: Text('선택'),
+              ),
+            ),
+          );
+        } else {
+          // 분리된 버튼 (모두, 취소)
+          return Row(
+            children: [
+              SizedBox(
+                height: 40,
+                width: 60 + 44 * (1 - split), // 애니메이션으로 자연스럽게 넓이 변화
+                child: OutlinedButton(
+                  style: buttonStyle.copyWith(
+                    shape: MaterialStateProperty.all(RoundedRectangleBorder(
+                      borderRadius: BorderRadius.horizontal(
+                        left: const Radius.circular(24),
+                        right: Radius.circular(24 * (1 - split) + 24 * split),
+                      ),
+                    )),
+                  ),
+                  onPressed: _onSelectAllPressed,
+                  child: const Center(
+                    child: Text('모두'),
+                  ),
+                ),
+              ),
+              SizedBox(width: 4 * split),
+              Opacity(
+                opacity: split,
+                child: SizedBox(
+                  height: 40,
+                  width: 44 * split,
+                  child: OutlinedButton(
+                    style: buttonStyle.copyWith(
+                      shape: MaterialStateProperty.all(RoundedRectangleBorder(
+                        borderRadius: BorderRadius.horizontal(
+                          left: Radius.circular(24 * split),
+                          right: const Radius.circular(24),
+                        ),
+                      )),
+                    ),
+                    onPressed: _onCancelPressed,
+                    child: const Center(
+                      child: Icon(Icons.close, color: Colors.white, size: 20),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+      },
     );
   }
 } 

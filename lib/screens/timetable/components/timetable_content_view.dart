@@ -17,6 +17,9 @@ class TimetableContentView extends StatefulWidget {
   final DateTime? selectedCellStartTime;
   final void Function(List<StudentWithInfo>)? onCellStudentsChanged;
   final VoidCallback? clearSearch; // 추가: 외부에서 검색 리셋 요청
+  final bool isSelectMode;
+  final Set<String> selectedStudentIds;
+  final void Function(String studentId, bool selected)? onStudentSelectChanged;
 
   const TimetableContentView({
     Key? key,
@@ -31,6 +34,9 @@ class TimetableContentView extends StatefulWidget {
     this.selectedCellStartTime,
     this.onCellStudentsChanged,
     this.clearSearch, // 추가
+    this.isSelectMode = false,
+    this.selectedStudentIds = const {},
+    this.onStudentSelectChanged,
   }) : super(key: key);
 
   @override
@@ -465,14 +471,44 @@ class TimetableContentViewState extends State<TimetableContentView> {
         color: Colors.transparent,
         child: Opacity(
           opacity: 0.85,
-          child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+          child: StudentCard(
+            studentWithInfo: info,
+            onShowDetails: (info) {},
+            showCheckbox: widget.isSelectMode,
+            checked: widget.selectedStudentIds.contains(info.student.id),
+            onCheckboxChanged: (checked) {
+              if (widget.onStudentSelectChanged != null && checked != null) {
+                widget.onStudentSelectChanged!(info.student.id, checked);
+              }
+            },
+          ),
         ),
       ),
       childWhenDragging: Opacity(
         opacity: 0.3,
-        child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+        child: StudentCard(
+          studentWithInfo: info,
+          onShowDetails: (info) {},
+          showCheckbox: widget.isSelectMode,
+          checked: widget.selectedStudentIds.contains(info.student.id),
+          onCheckboxChanged: (checked) {
+            if (widget.onStudentSelectChanged != null && checked != null) {
+              widget.onStudentSelectChanged!(info.student.id, checked);
+            }
+          },
+        ),
       ),
-      child: StudentCard(studentWithInfo: info, onShowDetails: (info) {}),
+      child: StudentCard(
+        studentWithInfo: info,
+        onShowDetails: (info) {},
+        showCheckbox: widget.isSelectMode,
+        checked: widget.selectedStudentIds.contains(info.student.id),
+        onCheckboxChanged: (checked) {
+          if (widget.onStudentSelectChanged != null && checked != null) {
+            widget.onStudentSelectChanged!(info.student.id, checked);
+          }
+        },
+      ),
     );
   }
 
@@ -497,8 +533,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         Padding(
           padding: const EdgeInsets.only(top: 16.0), // 상단 여백을 16으로 늘림
           child: Wrap(
-            spacing: 0,
-            runSpacing: 4,
+            spacing: 8,
+            runSpacing: 8,
             children: students.map((info) =>
               _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime)
             ).toList(),
