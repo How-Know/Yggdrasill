@@ -722,6 +722,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               });
             },
             filteredStudentIds: filteredStudentIds, // 추가: 필터 적용
+            selectedStudent: _selectedStudentForTime, // 추가
           ),
         ),
       ],

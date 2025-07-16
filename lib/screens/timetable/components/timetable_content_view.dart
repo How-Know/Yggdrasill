@@ -326,21 +326,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   if (_showDeleteZone)
                     Padding(
                       padding: const EdgeInsets.only(top: 16.0),
-                      child: DragTarget<StudentWithInfo>(
-                        onWillAccept: (student) => true,
-                        onAccept: (student) async {
-                          // 해당 학생의 시간표 블록 삭제
-                          final studentId = student.student.id;
-                          final dayIdx = widget.selectedCellDayIndex;
-                          final startTime = widget.selectedCellStartTime;
-                          print('[삭제드롭존] onAccept 호출: studentId=$studentId, dayIdx=$dayIdx, startTime=$startTime');
-                          if (dayIdx != null && startTime != null) {
+                      child: DragTarget<Map<String, dynamic>>(
+                        onWillAccept: (data) => true,
+                        onAccept: (data) async {
+                          final student = data['student'] as StudentWithInfo;
+                          final oldDayIndex = data['oldDayIndex'] as int?;
+                          final oldStartTime = data['oldStartTime'] as DateTime?;
+                          print('[삭제드롭존] onAccept 호출: studentId=${student.student.id}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+                          if (oldDayIndex != null && oldStartTime != null) {
                             // student_time_block에서 해당 학생+요일+시간 블록 찾기
                             final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                              b.studentId == studentId &&
-                              b.dayIndex == dayIdx &&
-                              b.startTime.hour == startTime.hour &&
-                              b.startTime.minute == startTime.minute
+                              b.studentId == student.student.id &&
+                              b.dayIndex == oldDayIndex &&
+                              b.startTime.hour == oldStartTime.hour &&
+                              b.startTime.minute == oldStartTime.minute
                             ).toList();
                             print('[삭제드롭존] 삭제 대상 블록 개수: ${blocks.length}');
                             for (final block in blocks) {
@@ -453,9 +452,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
-  Widget _buildDraggableStudentCard(StudentWithInfo info) {
-    return Draggable<StudentWithInfo>(
-      data: info,
+  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime}) {
+    return Draggable<Map<String, dynamic>>(
+      data: {
+        'student': info,
+        'oldDayIndex': dayIndex,
+        'oldStartTime': startTime,
+      },
       onDragStarted: () => setState(() => _showDeleteZone = true),
       onDragEnd: (_) => setState(() => _showDeleteZone = false),
       feedback: Material(
@@ -496,7 +499,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Wrap(
             spacing: 0,
             runSpacing: 4,
-            children: students.map(_buildDraggableStudentCard).toList(),
+            children: students.map((info) =>
+              _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime)
+            ).toList(),
           ),
         ),
       ],
@@ -566,7 +571,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     children: students.map((info) =>
                       Padding(
                         padding: const EdgeInsets.only(right: 8.0),
-                        child: _buildDraggableStudentCard(info),
+                        child: _buildDraggableStudentCard(info, dayIndex: dayIdx, startTime: DateTime(0, 1, 1, hour, min)),
                       )
                     ).toList(),
                   ),

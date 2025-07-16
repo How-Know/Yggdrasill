@@ -18,6 +18,7 @@ class ClassesView extends StatefulWidget {
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
+  final Student? selectedStudent; // 추가
 
   const ClassesView({
     super.key,
@@ -29,6 +30,7 @@ class ClassesView extends StatefulWidget {
     this.onCellStudentsSelected,
     required this.scrollController,
     this.filteredStudentIds, // 추가
+    this.selectedStudent, // 추가
   });
 
   @override
@@ -193,7 +195,16 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                         onEnter: (_) => setState(() { _hoveredCellKey = cellKey; }),
                                         onExit: (_) => setState(() { if (_hoveredCellKey == cellKey) _hoveredCellKey = null; }),
                                         child: GestureDetector(
-                                          onTap: () {
+                                          onTap: () async {
+                                            final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                                            final selectedStudent = widget.selectedStudent;
+                                            final studentId = selectedStudent?.id;
+                                            if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
+                                              if (scaffoldContext.mounted) {
+                                                showAppSnackBar(scaffoldContext, '이미 등록된 시간입니다');
+                                              }
+                                              return;
+                                            }
                                             if (widget.isRegistrationMode && widget.onTimeSelected != null) {
                                               widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
                                             } else {
@@ -254,32 +265,58 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                 ),
                                               // DragTarget을 Stack의 맨 마지막(맨 위)에 둠!
                                               if (!widget.isRegistrationMode)
-                                                DragTarget<StudentWithInfo>(
-                                                  onWillAccept: (student) {
+                                                DragTarget<Map<String, dynamic>>(
+                                                  onWillAccept: (data) {
+                                                    final student = data != null ? data['student'] as StudentWithInfo? : null;
                                                     print('[DragTarget] onWillAccept: student = ' + (student?.student.name ?? 'null'));
                                                     return student != null;
                                                   },
-                                                  onAccept: (student) async {
+                                                  onAccept: (data) async {
+                                                    final student = data['student'] as StudentWithInfo;
+                                                    final oldDayIndex = data['oldDayIndex'] as int?;
+                                                    final oldStartTime = data['oldStartTime'] as DateTime?;
                                                     print('[DragTarget] onAccept: student = ' + (student.student.name));
-                                                    // 이동 전 시간블록(해당 학생의 기존 블록)만 삭제
-                                                    final oldBlocks = DataManager.instance.studentTimeBlocks.where(
-                                                      (b) => b.studentId == student.student.id
-                                                    ).toList();
-                                                    for (final oldBlock in oldBlocks) {
-                                                      await DataManager.instance.removeStudentTimeBlock(oldBlock.id);
+                                                    final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                                                    // 0. 겹침 체크: 이미 등록된 시간대와 겹치면 등록/수정 불가
+                                                    if (_isStudentTimeOverlap(student.student.id, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
+                                                      if (scaffoldContext.mounted) {
+                                                        showAppSnackBar(scaffoldContext, '이미 등록된 시간입니다');
+                                                      }
+                                                      return;
                                                     }
-                                                    // 새 블록 추가 (해당 셀의 요일/시간)
-                                                    final newBlock = StudentTimeBlock(
-                                                      id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                                      studentId: student.student.id,
-                                                      groupId: student.groupInfo?.id,
-                                                      dayIndex: dayIdx,
-                                                      startTime: timeBlocks[blockIdx].startTime,
-                                                      duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
-                                                      createdAt: DateTime.now(),
+                                                    // 1. 드래그 시작 위치(이전 블록)만 삭제
+                                                    if (oldDayIndex != null && oldStartTime != null) {
+                                                      final oldBlocks = DataManager.instance.studentTimeBlocks.where(
+                                                        (b) => b.studentId == student.student.id &&
+                                                            b.dayIndex == oldDayIndex &&
+                                                            b.startTime.hour == oldStartTime.hour &&
+                                                            b.startTime.minute == oldStartTime.minute
+                                                      ).toList();
+                                                      for (final oldBlock in oldBlocks) {
+                                                        await DataManager.instance.removeStudentTimeBlock(oldBlock.id);
+                                                      }
+                                                    }
+                                                    // 2. 이미 해당 셀에 등록된 학생이면 중복 추가하지 않음 (등록 모드 포함 모든 상황)
+                                                    final alreadyExists = DataManager.instance.studentTimeBlocks.any(
+                                                      (b) => b.studentId == student.student.id &&
+                                                          b.dayIndex == dayIdx &&
+                                                          b.startTime.hour == timeBlocks[blockIdx].startTime.hour &&
+                                                          b.startTime.minute == timeBlocks[blockIdx].startTime.minute
                                                     );
-                                                    print('[DragTarget] 새 블록 추가: studentId = ' + newBlock.studentId + ', dayIndex = ' + newBlock.dayIndex.toString() + ', startTime = ' + newBlock.startTime.toString());
-                                                    await DataManager.instance.addStudentTimeBlock(newBlock);
+                                                    if (!alreadyExists) {
+                                                      // 새 블록 추가 (해당 셀의 요일/시간)
+                                                      final newBlock = StudentTimeBlock(
+                                                        id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                                        studentId: student.student.id,
+                                                        groupId: student.groupInfo?.id,
+                                                        dayIndex: dayIdx,
+                                                        startTime: timeBlocks[blockIdx].startTime,
+                                                        duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
+                                                        createdAt: DateTime.now(),
+                                                      );
+                                                      print('[DragTarget] 새 블록 추가: studentId = ' + newBlock.studentId + ', dayIndex = ' + newBlock.dayIndex.toString() + ', startTime = ' + newBlock.startTime.toString());
+                                                      await DataManager.instance.addStudentTimeBlock(newBlock);
+                                                    }
                                                     // 데이터 새로고침
                                                     await DataManager.instance.loadStudents();
                                                     await DataManager.instance.loadStudentTimeBlocks();
@@ -287,6 +324,24 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                                       WidgetsBinding.instance.addPostFrameCallback((_) {
                                                         showAppSnackBar(scaffoldContext, '${student.student.name} 학생의 수업시간이 이동되었습니다.');
                                                       });
+                                                    }
+                                                    // 학생 리스트 즉시 갱신: onCellStudentsSelected 콜백 호출
+                                                    if (widget.onCellStudentsSelected != null) {
+                                                      // 최신 학생 리스트를 다시 구함
+                                                      final updatedBlocks = _getActiveStudentBlocks(
+                                                        DataManager.instance.studentTimeBlocks,
+                                                        dayIdx,
+                                                        timeBlocks[blockIdx].startTime,
+                                                        lessonDuration,
+                                                      );
+                                                      final updatedStudentWithInfos = updatedBlocks.map((b) => studentsWithInfo.firstWhere(
+                                                        (s) => s.student.id == b.studentId,
+                                                        orElse: () => StudentWithInfo(
+                                                          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                                          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                                        ),
+                                                      )).toList();
+                                                      widget.onCellStudentsSelected!(dayIdx, timeBlocks[blockIdx].startTime, updatedStudentWithInfos);
                                                     }
                                                   },
                                                   builder: (context, candidateData, rejectedData) {
@@ -369,6 +424,21 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       final checkMinutes = checkTime.hour * 60 + checkTime.minute;
       return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
     }).toList();
+  }
+
+  // 학생의 기존 시간표와 (요일, 시작시간, 수업시간) 겹침 여부 체크
+  bool _isStudentTimeOverlap(String studentId, int dayIndex, DateTime startTime, int lessonDurationMinutes) {
+    final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final newStart = startTime.hour * 60 + startTime.minute;
+    final newEnd = newStart + lessonDurationMinutes;
+    for (final block in allBlocks) {
+      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockEnd = blockStart + block.duration.inMinutes;
+      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @override
