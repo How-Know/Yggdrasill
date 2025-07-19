@@ -17,7 +17,7 @@ class ClassesView extends StatefulWidget {
   final bool isRegistrationMode;
   final int? selectedDayIndex;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
-  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellStudentsSelected;
+  final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
   final Student? selectedStudent; // 추가
@@ -103,7 +103,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     if (widget.isRegistrationMode && widget.selectedStudent != null && widget.onCellStudentsSelected != null) {
       final timeBlocks = _generateTimeBlocks();
       final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
-      widget.onCellStudentsSelected!(dayIdx, startTimes.first, [StudentWithInfo(student: widget.selectedStudent!, basicInfo: StudentBasicInfo(studentId: widget.selectedStudent!.id, registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now()))]);
+      widget.onCellStudentsSelected!(dayIdx, startTimes, [StudentWithInfo(student: widget.selectedStudent!, basicInfo: StudentBasicInfo(studentId: widget.selectedStudent!.id, registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now()))]);
     }
   }
 
@@ -272,7 +272,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       return;
                                     }
                                     if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
-                                      widget.onCellStudentsSelected!(dayIdx, timeBlocks[blockIdx].startTime, cellStudentWithInfos);
+                                      widget.onCellStudentsSelected!(dayIdx, [timeBlocks[blockIdx].startTime], cellStudentWithInfos);
                                     } else if (widget.onTimeSelected != null) {
                                       widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
                                     }

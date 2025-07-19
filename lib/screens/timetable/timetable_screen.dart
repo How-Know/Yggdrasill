@@ -734,30 +734,26 @@ class _TimetableScreenState extends State<TimetableScreen> {
             onTimeSelected: (int dayIdx, DateTime startTime) {
               _handleTimeSelection(dayIdx, startTime);
             },
-            onCellStudentsSelected: (int dayIdx, DateTime startTime, List<StudentWithInfo> students) async {
+            onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
               // 셀 클릭 시 검색 리셋
               _contentViewKey.currentState?.clearSearch();
               setState(() {
                 _selectedCellStudents = students;
                 _selectedCellDayIndex = dayIdx;
-                _selectedCellStartTime = startTime;
+                _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
               });
               // 학생 등록 모드에서만 동작
               if (_isStudentRegistrationMode && _selectedStudentForTime != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
                 final student = _selectedStudentForTime!;
                 print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
-                // 수업시간(분)과 한 블록의 길이(분) 계산
-                final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                 final blockMinutes = 30; // 한 블록 30분 기준
-                final blockCount = (lessonDuration / blockMinutes).ceil();
-                // 선택된 셀의 startTime부터 duration만큼의 모든 블록의 startTime 리스트 생성
-                final startTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: i * blockMinutes)));
+                // 드래그/클릭 모두 startTimes 전체를 사용
                 print('[DEBUG][onCellStudentsSelected] 생성할 블록 startTimes: $startTimes');
                 final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                   studentIds: [student.id],
                   dayIndex: dayIdx,
                   startTimes: startTimes,
-                  duration: Duration(minutes: blockMinutes), // 각 블록은 30분 단위
+                  duration: Duration(minutes: blockMinutes),
                 );
                 print('[DEBUG][onCellStudentsSelected] 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
                 for (final block in blocks) {
