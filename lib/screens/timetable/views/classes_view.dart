@@ -474,11 +474,23 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                         ),
                       ],
                     );
-                    if (selected == 'edit') {
-                      // TODO: 시간/요일 수정 다이얼로그 진입
-                    } else if (selected == 'delete') {
+                    if (selected == 'delete') {
                       try {
-                        await DataManager.instance.removeStudentTimeBlock(block.id);
+                        if (block.setId != null) {
+                          final allBlocks = DataManager.instance.studentTimeBlocks;
+                          // 같은 학생 id와 set_id를 모두 만족하는 블록만 삭제
+                          final toDelete = allBlocks.where((b) => b.setId == block.setId && b.studentId == block.studentId).toList();
+                          print('[삭제드롭존][진단] 전체 블록 setId 목록: ' + allBlocks.map((b) => b.setId).toList().toString());
+                          print('[삭제드롭존][진단] 전체 블록 studentId 목록: ' + allBlocks.map((b) => b.studentId).toList().toString());
+                          print('[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
+                          for (final b in toDelete) {
+                            print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startTime=${b.startTime}');
+                            await DataManager.instance.removeStudentTimeBlock(b.id);
+                          }
+                        } else {
+                          print('[삭제드롭존] setId=null, 단일 삭제: block.id=${block.id}');
+                          await DataManager.instance.removeStudentTimeBlock(block.id);
+                        }
                       } catch (_) {}
                     }
                   },

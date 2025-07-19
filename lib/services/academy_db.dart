@@ -396,6 +396,8 @@ class AcademyDbService {
       startTime: DateTime.parse(row['start_time'] as String),
       duration: Duration(minutes: row['duration'] as int),
       createdAt: DateTime.parse(row['created_at'] as String),
+      setId: row['set_id'] as String?, // 추가
+      number: row['number'] as int?,   // 추가
     )).toList();
   }
 

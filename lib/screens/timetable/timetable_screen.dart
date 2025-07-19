@@ -732,7 +732,25 @@ class _TimetableScreenState extends State<TimetableScreen> {
             isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
             selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
             onTimeSelected: (int dayIdx, DateTime startTime) {
-              _handleTimeSelection(dayIdx, startTime);
+              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              final studentTimeBlocks = DataManager.instance.studentTimeBlocks;
+              final studentsWithInfo = DataManager.instance.students;
+              final cellBlocks = studentTimeBlocks.where((block) {
+                if (block.dayIndex != dayIdx) return false;
+                final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
+                final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
+                final checkMinutes = startTime.hour * 60 + startTime.minute;
+                return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
+              }).toList();
+              final cellStudentWithInfos = cellBlocks.map((b) => studentsWithInfo.firstWhere(
+                (s) => s.student.id == b.studentId,
+                orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())),
+              )).toList();
+              setState(() {
+                _selectedCellStudents = cellStudentWithInfos;
+                _selectedCellDayIndex = dayIdx;
+                _selectedCellStartTime = startTime;
+              });
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
               // 셀 클릭 시 검색 리셋
@@ -747,12 +765,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 final student = _selectedStudentForTime!;
                 print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
                 final blockMinutes = 30; // 한 블록 30분 기준
-                // 드래그/클릭 모두 startTimes 전체를 사용
-                print('[DEBUG][onCellStudentsSelected] 생성할 블록 startTimes: $startTimes');
+                List<DateTime> actualStartTimes = startTimes;
+                // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
+                if (startTimes.length == 1) {
+                  final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                  final blockCount = (lessonDuration / blockMinutes).ceil();
+                  actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
+                }
+                print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
                 final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                   studentIds: [student.id],
                   dayIndex: dayIdx,
-                  startTimes: startTimes,
+                  startTimes: actualStartTimes,
                   duration: Duration(minutes: blockMinutes),
                 );
                 print('[DEBUG][onCellStudentsSelected] 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');

@@ -4,6 +4,7 @@ import '../../../widgets/student_card.dart';
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import '../../../main.dart'; // rootScaffoldMessengerKey import
+import '../../../models/student_time_block.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -338,62 +339,94 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           final student = data['student'] as StudentWithInfo;
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
-                          print('[삭제드롭존] onAccept 호출: studentId=${student.student.id}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
-                          if (oldDayIndex != null && oldStartTime != null) {
-                            // student_time_block에서 해당 학생+요일+시간 블록 찾기
+                          print('[삭제드롭존] onAccept 호출: studentId= [33m${student.student.id} [0m, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+
+                          // setId 진단 로그 추가
+                          print('[삭제드롭존][진단] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
+
+                          // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                          final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
+                            (b) =>
+                              b.studentId == student.student.id &&
+                              b.dayIndex == oldDayIndex &&
+                              b.startTime.hour == oldStartTime?.hour &&
+                              b.startTime.minute == oldStartTime?.minute,
+                            orElse: () => StudentTimeBlock(
+                              id: '',
+                              studentId: '',
+                              dayIndex: -1,
+                              startTime: DateTime(0),
+                              duration: Duration.zero,
+                              createdAt: DateTime(0),
+                              setId: null,
+                              number: null,
+                            ),
+                          );
+
+                          if (targetBlock != null && targetBlock.setId != null) {
+                            // 2. setId+studentId로 모든 블록 삭제
+                            final allBlocks = DataManager.instance.studentTimeBlocks;
+                            final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
+                            print('[삭제드롭존] setId=${targetBlock.setId}, studentId=${student.student.id}, 삭제 대상 블록 개수: ${toDelete.length}');
+                            for (final b in toDelete) {
+                              print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
+                              await DataManager.instance.removeStudentTimeBlock(b.id);
+                            }
+                          } else if (oldDayIndex != null && oldStartTime != null) {
+                            // 3. setId가 없는 경우 기존 방식(단일 블록 삭제)
                             final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
                               b.studentId == student.student.id &&
                               b.dayIndex == oldDayIndex &&
                               b.startTime.hour == oldStartTime.hour &&
                               b.startTime.minute == oldStartTime.minute
                             ).toList();
-                            print('[삭제드롭존] 삭제 대상 블록 개수: ${blocks.length}');
+                            print('[삭제드롭존] (setId 없음) 삭제 대상 블록 개수: ${blocks.length}');
                             for (final block in blocks) {
                               print('[삭제드롭존] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
                               await DataManager.instance.removeStudentTimeBlock(block.id);
                             }
-                            // 삭제 후 데이터 즉시 새로고침
-                            await DataManager.instance.loadStudents();
-                            await DataManager.instance.loadStudentTimeBlocks();
-                            setState(() {
-                              _showDeleteZone = false;
-                              // (필요하다면 다른 상태도 여기서 갱신)
-                            });
-                            print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
+                          }
+                          // 삭제 후 데이터 즉시 새로고침
+                          await DataManager.instance.loadStudents();
+                          await DataManager.instance.loadStudentTimeBlocks();
+                          setState(() {
+                            _showDeleteZone = false;
+                            // (필요하다면 다른 상태도 여기서 갱신)
+                          });
+                          print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted) {
-                                  rootScaffoldMessengerKey.currentState?.showSnackBar(
-                                    SnackBar(
-                                      content: Text('${student.student.name} 학생의 수업시간이 삭제되었습니다.'),
-                                      backgroundColor: const Color(0xFF1976D2),
-                                      behavior: SnackBarBehavior.floating,
-                                      margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
-                                    ),
-                                  );
-                                }
-                              });
-                            });
-                            // 삭제 후 등록버튼 컨테이너 내 학생카드 리스트도 즉시 반영 (데이터 새로고침 후에 실행)
-                            if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null) {
-                              final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                                b.dayIndex == widget.selectedCellDayIndex &&
-                                b.startTime.hour == widget.selectedCellStartTime!.hour &&
-                                b.startTime.minute == widget.selectedCellStartTime!.minute
-                              ).toList();
-                              final updatedStudents = DataManager.instance.students;
-                              final updatedCellStudents = updatedBlocks.map((b) =>
-                                updatedStudents.firstWhere(
-                                  (s) => s.student.id == b.studentId,
-                                  orElse: () => StudentWithInfo(
-                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                              if (mounted) {
+                                rootScaffoldMessengerKey.currentState?.showSnackBar(
+                                  SnackBar(
+                                    content: Text('${student.student.name} 학생의 수업시간이 삭제되었습니다.'),
+                                    backgroundColor: const Color(0xFF1976D2),
+                                    behavior: SnackBarBehavior.floating,
+                                    margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
                                   ),
-                                )
-                              ).toList();
-                              if (widget.onCellStudentsChanged != null) {
-                                widget.onCellStudentsChanged!(updatedCellStudents);
+                                );
                               }
+                            });
+                          });
+                          // 삭제 후 등록버튼 컨테이너 내 학생카드 리스트도 즉시 반영 (데이터 새로고침 후에 실행)
+                          if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null) {
+                            final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                              b.dayIndex == widget.selectedCellDayIndex &&
+                              b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                              b.startTime.minute == widget.selectedCellStartTime!.minute
+                            ).toList();
+                            final updatedStudents = DataManager.instance.students;
+                            final updatedCellStudents = updatedBlocks.map((b) =>
+                              updatedStudents.firstWhere(
+                                (s) => s.student.id == b.studentId,
+                                orElse: () => StudentWithInfo(
+                                  student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                                  basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                ),
+                              )
+                            ).toList();
+                            if (widget.onCellStudentsChanged != null) {
+                              widget.onCellStudentsChanged!(updatedCellStudents);
                             }
                           }
                         },

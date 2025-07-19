@@ -345,7 +345,12 @@ class DataManager {
   }
 
   Future<void> loadStudentTimeBlocks() async {
-    _studentTimeBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
+    final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
+    for (final block in rawBlocks) {
+      print('[DEBUG][loadStudentTimeBlocks] block: $block');
+      print('[DEBUG][loadStudentTimeBlocks] setId: ${block.setId}, number: ${block.number}');
+    }
+    _studentTimeBlocks = rawBlocks;
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
   }
 

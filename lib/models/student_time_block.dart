@@ -27,13 +27,13 @@ class StudentTimeBlock {
   factory StudentTimeBlock.fromJson(Map<String, dynamic> json) {
     return StudentTimeBlock(
       id: json['id'] as String,
-      studentId: json['studentId'] as String,
-      groupId: json['groupId'] as String?,
-      dayIndex: json['dayIndex'] as int,
-      startTime: DateTime.parse(json['startTime'] as String),
+      studentId: json['student_id'] as String? ?? json['studentId'] as String,
+      groupId: json['group_id'] as String? ?? json['groupId'] as String?,
+      dayIndex: json['day_index'] as int? ?? json['dayIndex'] as int,
+      startTime: DateTime.parse(json['start_time'] as String? ?? json['startTime'] as String),
       duration: Duration(minutes: json['duration'] as int),
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      setId: json['setId'] as String?,
+      createdAt: DateTime.parse(json['created_at'] as String? ?? json['createdAt'] as String),
+      setId: json['set_id'] as String? ?? json['setId'] as String?,
       number: json['number'] as int?,
     );
   }
