@@ -9,6 +9,7 @@ import '../../../models/education_level.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
 import 'components/timetable_cell.dart';
+import '../components/timetable_drag_selector.dart';
 
 class ClassesView extends StatefulWidget {
   final List<OperatingHours> operatingHours;
@@ -48,6 +49,64 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   String? _hoveredCellKey;
   bool _hasScrolledToCurrentTime = false;
 
+  // 드래그 상태 변수 (UI 구조는 그대로, 상태만 추가)
+  int? dragStartIdx;
+  int? dragEndIdx;
+  int? dragDayIdx;
+  bool isDragging = false;
+
+  Set<String> get dragHighlightKeys {
+    if (!isDragging || dragDayIdx == null || dragStartIdx == null || dragEndIdx == null) return {};
+    final start = dragStartIdx!;
+    final end = dragEndIdx!;
+    final day = dragDayIdx!;
+    if (start <= end) {
+      return {for (int i = start; i <= end; i++) '$day-$i'};
+    } else {
+      return {for (int i = end; i <= start; i++) '$day-$i'};
+    }
+  }
+
+  void _onCellPanStart(int dayIdx, int blockIdx) {
+    setState(() {
+      dragStartIdx = blockIdx;
+      dragEndIdx = blockIdx;
+      dragDayIdx = dayIdx;
+      isDragging = true;
+    });
+  }
+
+  void _onCellPanUpdate(int dayIdx, int blockIdx) {
+    if (!isDragging || dragDayIdx != dayIdx) return;
+    setState(() {
+      dragEndIdx = blockIdx;
+    });
+  }
+
+  void _onCellPanEnd(int dayIdx) async {
+    if (!isDragging || dragDayIdx != dayIdx || dragStartIdx == null || dragEndIdx == null) {
+      setState(() { isDragging = false; });
+      return;
+    }
+    final start = dragStartIdx!;
+    final end = dragEndIdx!;
+    final selectedIdxs = start <= end
+        ? [for (int i = start; i <= end; i++) i]
+        : [for (int i = end; i <= start; i++) i];
+    setState(() {
+      isDragging = false;
+      dragStartIdx = null;
+      dragEndIdx = null;
+      dragDayIdx = null;
+    });
+    // 팩토리+DB 저장 로직 호출
+    if (widget.isRegistrationMode && widget.selectedStudent != null && widget.onCellStudentsSelected != null) {
+      final timeBlocks = _generateTimeBlocks();
+      final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+      widget.onCellStudentsSelected!(dayIdx, startTimes.first, [StudentWithInfo(student: widget.selectedStudent!, basicInfo: StudentBasicInfo(studentId: widget.selectedStudent!.id, registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now()))]);
+    }
+  }
+
   @override
   void dispose() {
     for (var controller in _animationControllers.values) {
@@ -60,6 +119,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   Widget build(BuildContext context) {
     print('[DEBUG][ClassesView] build: isRegistrationMode= ${widget.isRegistrationMode}');
     final timeBlocks = _generateTimeBlocks();
+    final double blockHeight = 90.0;
     return Stack(
       children: [
         SingleChildScrollView(
@@ -67,162 +127,181 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
           child: ValueListenableBuilder<List<StudentTimeBlock>>(
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
-              final double blockHeight = 90.0;
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-              // 필터 적용: studentTimeBlocks에서 filteredStudentIds에 포함된 학생만 남김
               final filteredBlocks = widget.filteredStudentIds == null
                   ? studentTimeBlocks
                   : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
-              return Column(
-                children: [
-                  for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
-                    Container(
-                      height: blockHeight,
-                      decoration: BoxDecoration(
-                        color: timeBlocks[blockIdx].isBreakTime ? widget.breakTimeColor : Colors.transparent,
-                        border: Border(
-                          bottom: BorderSide(
-                            color: Colors.white.withOpacity(0.1),
+              return Listener(
+                onPointerDown: (event) {
+                  if (!widget.isRegistrationMode) return;
+                  final box = context.findRenderObject() as RenderBox;
+                  final local = box.globalToLocal(event.position);
+                  final blockIdx = (local.dy / blockHeight).floor();
+                  final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
+                  if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx >= 0 && dayIdx < 7) {
+                    _onCellPanStart(dayIdx, blockIdx);
+                  }
+                },
+                onPointerMove: (event) {
+                  if (!widget.isRegistrationMode || !isDragging) return;
+                  final box = context.findRenderObject() as RenderBox;
+                  final local = box.globalToLocal(event.position);
+                  final blockIdx = (local.dy / blockHeight).floor();
+                  final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
+                  if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx == dragDayIdx) {
+                    _onCellPanUpdate(dayIdx, blockIdx);
+                  }
+                },
+                onPointerUp: (event) {
+                  if (!widget.isRegistrationMode || !isDragging) return;
+                  if (dragDayIdx != null) {
+                    _onCellPanEnd(dragDayIdx!);
+                  }
+                },
+                child: Column(
+                  children: [
+                    for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
+                      Container(
+                        height: blockHeight,
+                        decoration: BoxDecoration(
+                          color: timeBlocks[blockIdx].isBreakTime ? widget.breakTimeColor : Colors.transparent,
+                          border: Border(
+                            bottom: BorderSide(
+                              color: Colors.white.withOpacity(0.1),
+                            ),
                           ),
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          // Time indicator
-                          SizedBox(
-                            width: 60,
-                            child: Row(
-                              children: [
-                                if (blockIdx == _getCurrentTimeBlockIndex(timeBlocks))
-                                  Container(
-                                    width: 8,
-                                    height: blockHeight - 10,
-                                    margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 0),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1976D2), // 시그니처 색상(탭바 인디케이터와 동일)
-                                      borderRadius: BorderRadius.circular(3),
+                        child: Row(
+                          children: [
+                            // Time indicator
+                            SizedBox(
+                              width: 60,
+                              child: Row(
+                                children: [
+                                  if (blockIdx == _getCurrentTimeBlockIndex(timeBlocks))
+                                    Container(
+                                      width: 8,
+                                      height: blockHeight - 10,
+                                      margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 0),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1976D2),
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
                                     ),
-                                  ),
-                                Expanded(
-                                  child: Center(
-                                    child: Text(
-                                      timeBlocks[blockIdx].timeString,
-                                      style: const TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 14,
+                                  Expanded(
+                                    child: Center(
+                                      child: Text(
+                                        timeBlocks[blockIdx].timeString,
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 14,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Day columns
-                          ...List.generate(7, (dayIdx) {
-                            final cellKey = '$dayIdx-$blockIdx';
-                            _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                            // 셀 내부에서 학생카드와 인원수 카운트 모두 activeBlocks 기준으로 표시
-                            final activeBlocks = _getActiveStudentBlocks(
-                              filteredBlocks, // 필터 적용된 블록만 전달
-                              dayIdx, 
-                              timeBlocks[blockIdx].startTime,
-                              lessonDuration,
-                            );
-                            final cellStudentWithInfos = activeBlocks.map((b) => studentsWithInfo.firstWhere(
-                              (s) => s.student.id == b.studentId,
-                              orElse: () => StudentWithInfo(
-                                student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                ],
                               ),
-                            )).toList();
-                            final isExpanded = _expandedCellKey == cellKey;
-                            bool isDragHighlight = false;
-                            // 상태 변수로 hover 추적 필요: _hoveredCellKey
-                            
-                            // --- 여기서 breakTime 체크 ---
-                            bool isBreakTime = false;
-                            if (widget.operatingHours.length > dayIdx) {
-                              final hours = widget.operatingHours[dayIdx];
-                              for (final breakTime in hours.breakTimes) {
-                                final breakStart = DateTime(
-                                  timeBlocks[blockIdx].startTime.year,
-                                  timeBlocks[blockIdx].startTime.month,
-                                  timeBlocks[blockIdx].startTime.day,
-                                  breakTime.startTime.hour,
-                                  breakTime.startTime.minute,
-                                );
-                                final breakEnd = DateTime(
-                                  timeBlocks[blockIdx].startTime.year,
-                                  timeBlocks[blockIdx].startTime.month,
-                                  timeBlocks[blockIdx].startTime.day,
-                                  breakTime.endTime.hour,
-                                  breakTime.endTime.minute,
-                                );
-                                if ((timeBlocks[blockIdx].startTime.isAfter(breakStart) || timeBlocks[blockIdx].startTime.isAtSameMomentAs(breakStart)) &&
-                                    timeBlocks[blockIdx].startTime.isBefore(breakEnd)) {
-                                  isBreakTime = true;
-                                  break;
+                            ),
+                            // Day columns
+                            ...List.generate(7, (dayIdx) {
+                              final cellKey = '$dayIdx-$blockIdx';
+                              _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
+                              final activeBlocks = _getActiveStudentBlocks(
+                                filteredBlocks,
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime,
+                                lessonDuration,
+                              );
+                              final cellStudentWithInfos = activeBlocks.map((b) => studentsWithInfo.firstWhere(
+                                (s) => s.student.id == b.studentId,
+                                orElse: () => StudentWithInfo(
+                                  student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
+                                  basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                ),
+                              )).toList();
+                              final isExpanded = _expandedCellKey == cellKey;
+                              final isDragHighlight = dragHighlightKeys.contains(cellKey);
+                              bool isBreakTime = false;
+                              if (widget.operatingHours.length > dayIdx) {
+                                final hours = widget.operatingHours[dayIdx];
+                                for (final breakTime in hours.breakTimes) {
+                                  final breakStart = DateTime(
+                                    timeBlocks[blockIdx].startTime.year,
+                                    timeBlocks[blockIdx].startTime.month,
+                                    timeBlocks[blockIdx].startTime.day,
+                                    breakTime.startTime.hour,
+                                    breakTime.startTime.minute,
+                                  );
+                                  final breakEnd = DateTime(
+                                    timeBlocks[blockIdx].startTime.year,
+                                    timeBlocks[blockIdx].startTime.month,
+                                    timeBlocks[blockIdx].startTime.day,
+                                    breakTime.endTime.hour,
+                                    breakTime.endTime.minute,
+                                  );
+                                  if ((timeBlocks[blockIdx].startTime.isAfter(breakStart) || timeBlocks[blockIdx].startTime.isAtSameMomentAs(breakStart)) &&
+                                      timeBlocks[blockIdx].startTime.isBefore(breakEnd)) {
+                                    isBreakTime = true;
+                                    break;
+                                  }
                                 }
                               }
-                            }
-                            // --- breakTime 체크 끝 ---
-                            
-                            // 수업 정원 확인을 위한 클래스 정보 가져오기
-                            final activeStudentCount = activeBlocks.length;
-                            Color? countColor;
-                            int? totalCapacity;
-                            
-                            if (activeStudentCount > 0) {
-                              if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.8) {
-                                countColor = Colors.green;
-                              } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
-                                countColor = Colors.red;
+                              final activeStudentCount = activeBlocks.length;
+                              Color? countColor;
+                              if (activeStudentCount > 0) {
+                                if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.8) {
+                                  countColor = Colors.green;
+                                } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
+                                  countColor = Colors.red;
+                                } else {
+                                  countColor = Colors.grey;
+                                }
                               } else {
-                                countColor = Colors.grey;
+                                countColor = Colors.green;
                               }
-                            } else {
-                              countColor = Colors.green;
-                            }
-                            
-                            return Expanded(
-                              child: TimetableCell(
-                                dayIdx: dayIdx,
-                                blockIdx: blockIdx,
-                                cellKey: cellKey,
-                                startTime: timeBlocks[blockIdx].startTime,
-                                endTime: timeBlocks[blockIdx].endTime,
-                                students: activeBlocks,
-                                isBreakTime: isBreakTime,
-                                isExpanded: isExpanded,
-                                isDragHighlight: isDragHighlight,
-                                onTap: () async {
-                                  final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-                                  final selectedStudent = widget.selectedStudent;
-                                  final studentId = selectedStudent?.id;
-                                  if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
-                                    showAppSnackBar(context, '이미 등록된 시간입니다');
-                                    return;
-                                  }
-                                  if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
-                                    widget.onCellStudentsSelected!(dayIdx, timeBlocks[blockIdx].startTime, cellStudentWithInfos);
-                                  } else if (widget.onTimeSelected != null) {
-                                    widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
-                                  }
-                                },
-                                countColor: countColor,
-                                activeStudentCount: activeStudentCount,
-                                cellStudentWithInfos: cellStudentWithInfos,
-                                groups: groups,
-                                cellWidth: 0, // 필요시 전달
-                              ),
-                            );
-                          }),
-                        ],
+                              return Expanded(
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                                    final selectedStudent = widget.selectedStudent;
+                                    final studentId = selectedStudent?.id;
+                                    if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
+                                      showAppSnackBar(context, '이미 등록된 시간입니다');
+                                      return;
+                                    }
+                                    if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
+                                      widget.onCellStudentsSelected!(dayIdx, timeBlocks[blockIdx].startTime, cellStudentWithInfos);
+                                    } else if (widget.onTimeSelected != null) {
+                                      widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
+                                    }
+                                  },
+                                  child: TimetableCell(
+                                    dayIdx: dayIdx,
+                                    blockIdx: blockIdx,
+                                    cellKey: cellKey,
+                                    startTime: timeBlocks[blockIdx].startTime,
+                                    endTime: timeBlocks[blockIdx].endTime,
+                                    students: activeBlocks,
+                                    isBreakTime: isBreakTime,
+                                    isExpanded: isExpanded,
+                                    isDragHighlight: isDragHighlight,
+                                    onTap: null,
+                                    countColor: countColor,
+                                    activeStudentCount: activeStudentCount,
+                                    cellStudentWithInfos: cellStudentWithInfos,
+                                    groups: groups,
+                                    cellWidth: 0, // 필요시 전달
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               );
             },
           ),
