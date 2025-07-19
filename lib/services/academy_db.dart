@@ -93,7 +93,6 @@ class AcademyDbService {
           CREATE TABLE student_time_blocks (
             id TEXT PRIMARY KEY,
             student_id TEXT,
-            group_id TEXT,
             day_index INTEGER,
             start_time TEXT,
             duration INTEGER,
@@ -140,7 +139,6 @@ class AcademyDbService {
             CREATE TABLE IF NOT EXISTS student_time_blocks (
               id TEXT PRIMARY KEY,
               student_id TEXT,
-              group_id TEXT,
               day_index INTEGER,
               start_time TEXT,
               duration INTEGER,
@@ -394,7 +392,6 @@ class AcademyDbService {
     return result.map((row) => StudentTimeBlock(
       id: row['id'] as String,
       studentId: row['student_id'] as String,
-      groupId: row['group_id'] as String?,
       dayIndex: row['day_index'] as int,
       startTime: DateTime.parse(row['start_time'] as String),
       duration: Duration(minutes: row['duration'] as int),
@@ -409,7 +406,6 @@ class AcademyDbService {
       await dbClient.insert('student_time_blocks', {
         'id': block.id,
         'student_id': block.studentId,
-        'group_id': block.groupId,
         'day_index': block.dayIndex,
         'start_time': block.startTime.toIso8601String(),
         'duration': block.duration.inMinutes,

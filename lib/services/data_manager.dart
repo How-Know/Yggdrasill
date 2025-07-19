@@ -407,13 +407,11 @@ class DataManager {
   Future<void> applyGroupScheduleToStudents(GroupSchedule schedule) async {
     // 해당 그룹에 속한 모든 학생 가져오기
     final groupStudents = _studentsWithInfo.where((si) => si.student.groupInfo?.id == schedule.groupId).toList();
-    
-    // 각 학생에 대한 시간 블록 생성
+    // 각 학생에 대한 시간 블록 생성 (groupId 전달 제거)
     for (final si in groupStudents) {
       final block = StudentTimeBlock(
         id: '${DateTime.now().millisecondsSinceEpoch}_${si.student.id}',
         studentId: si.student.id,
-        groupId: schedule.groupId,
         dayIndex: schedule.dayIndex,
         startTime: schedule.startTime,
         duration: schedule.duration,
@@ -421,7 +419,6 @@ class DataManager {
       );
       _studentTimeBlocks.add(block);
     }
-    
     _notifyListeners();
     await saveStudentTimeBlocks();
   }
