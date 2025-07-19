@@ -576,6 +576,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _remainingRegisterCount = null;
             });
           }
+          // 선택모드 해제: 셀 클릭 시 자동으로 선택모드 false
+          if (_isSelectMode) {
+            setState(() {
+              _isSelectMode = false;
+            });
+          }
         },
         child: Scaffold(
           backgroundColor: const Color(0xFF1F1F1F),
@@ -638,10 +644,43 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
                     });
                   },
+                  isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
                 ),
                 SizedBox(height: 0),
                 Flexible(
-                  child: _buildClassView(),
+                  child: ClassesView(
+                    operatingHours: _operatingHours,
+                    breakTimeColor: const Color(0xFF424242),
+                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                    selectedDayIndex: _selectedDayIndex,
+                    onTimeSelected: (dayIdx, startTime) {
+                      setState(() {
+                        _selectedCellDayIndex = dayIdx;
+                        _selectedCellStartTime = startTime;
+                        _selectedCellStudents = _getCellStudents(dayIdx, startTime);
+                      });
+                    },
+                    onCellStudentsSelected: (dayIdx, startTimes, students) {
+                      setState(() {
+                        _selectedCellDayIndex = dayIdx;
+                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                        _selectedCellStudents = students;
+                      });
+                    },
+                    scrollController: _timetableScrollController,
+                    // filteredStudentIds 정의 추가
+                    filteredStudentIds: _activeFilter == null
+                      ? null
+                      : _filteredStudents.map((s) => s.student.id).toSet(),
+                    selectedStudent: _selectedStudentForTime,
+                    onSelectModeChanged: (selecting) {
+                      setState(() {
+                        _isSelectMode = selecting;
+                        if (!selecting) _selectedStudentIds.clear();
+                        print('[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                      });
+                    },
+                  ),
                 ),
               ],
             ),
@@ -670,9 +709,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
           selectedCellStudents: _selectedCellStudents,
           selectedCellDayIndex: _selectedCellDayIndex,
           selectedCellStartTime: _selectedCellStartTime,
-          onCellStudentsChanged: (updatedList) {
+          onCellStudentsChanged: (dayIdx, startTime, students) {
             setState(() {
-              _selectedCellStudents = updatedList;
+              _selectedCellDayIndex = dayIdx;
+              _selectedCellStartTime = startTime;
+              _selectedCellStudents = students;
             });
           },
           clearSearch: () => _contentViewKey.currentState?.clearSearch(), // 추가: 검색 리셋 콜백 전달
@@ -1007,6 +1048,25 @@ class _TimetableScreenState extends State<TimetableScreen> {
       if (grade == 0) return 'N수';
     }
     return '';
+  }
+
+  // dayIdx, startTime에 해당하는 학생 리스트 반환
+  List<StudentWithInfo> _getCellStudents(int dayIdx, DateTime startTime) {
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
+      b.dayIndex == dayIdx &&
+      b.startTime.hour == startTime.hour &&
+      b.startTime.minute == startTime.minute
+    ).toList();
+    final students = DataManager.instance.students;
+    return blocks.map((b) =>
+      students.firstWhere(
+        (s) => s.student.id == b.studentId,
+        orElse: () => StudentWithInfo(
+          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+        ),
+      )
+    ).toList();
   }
 }
 

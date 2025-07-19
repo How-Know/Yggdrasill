@@ -14,6 +14,7 @@ class TimetableHeader extends StatefulWidget {
   final VoidCallback? onFilterPressed; // 추가
   final bool isFilterActive; // 추가
   final void Function(bool selecting)? onSelectModeChanged;
+  final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
 
   const TimetableHeader({
     Key? key,
@@ -25,6 +26,7 @@ class TimetableHeader extends StatefulWidget {
     this.onFilterPressed, // 추가
     this.isFilterActive = false, // 추가
     this.onSelectModeChanged,
+    this.isSelectMode = false, // 추가
   }) : super(key: key);
 
   @override
@@ -103,7 +105,10 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               ),
             ),
             // 선택 버튼 (filter 버튼 왼쪽)
-            _SelectButtonAnimated(onSelectModeChanged: widget.onSelectModeChanged),
+            _SelectButtonAnimated(
+              onSelectModeChanged: widget.onSelectModeChanged,
+              isSelectMode: widget.isSelectMode,
+            ),
             SizedBox(width: 12),
             // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
             SizedBox(
@@ -216,13 +221,13 @@ class _TimetableHeaderState extends State<TimetableHeader> {
 // 선택 버튼 애니메이션 위젯
 class _SelectButtonAnimated extends StatefulWidget {
   final void Function(bool selecting)? onSelectModeChanged;
-  const _SelectButtonAnimated({this.onSelectModeChanged});
+  final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
+  const _SelectButtonAnimated({this.onSelectModeChanged, this.isSelectMode = false});
   @override
   State<_SelectButtonAnimated> createState() => _SelectButtonAnimatedState();
 }
 
 class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with SingleTickerProviderStateMixin {
-  bool _isSelecting = false;
   late AnimationController _controller;
   late Animation<double> _splitAnim;
 
@@ -234,22 +239,31 @@ class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with Singl
       duration: const Duration(milliseconds: 280),
     );
     _splitAnim = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+    if (widget.isSelectMode) {
+      _controller.value = 1.0;
+    } else {
+      _controller.value = 0.0;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _SelectButtonAnimated oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isSelectMode != oldWidget.isSelectMode) {
+      if (widget.isSelectMode) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
   }
 
   void _onSelectPressed() {
-    setState(() {
-      _isSelecting = true;
-      _controller.forward();
-      widget.onSelectModeChanged?.call(true);
-    });
+    widget.onSelectModeChanged?.call(true);
   }
 
   void _onCancelPressed() {
-    setState(() {
-      _isSelecting = false;
-      _controller.reverse();
-      widget.onSelectModeChanged?.call(false);
-    });
+    widget.onSelectModeChanged?.call(false);
   }
 
   void _onSelectAllPressed() {
@@ -279,7 +293,7 @@ class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with Singl
       animation: _splitAnim,
       builder: (context, child) {
         final split = _splitAnim.value;
-        if (!_isSelecting && split == 0) {
+        if (!widget.isSelectMode && split == 0) {
           // 선택 버튼
           return SizedBox(
             height: 40,

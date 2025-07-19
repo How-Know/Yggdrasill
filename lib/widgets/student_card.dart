@@ -143,11 +143,77 @@ class StudentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final student = studentWithInfo.student;
-    return _buildCardContent(context);
+    return _StudentCardWithCheckboxDelay(
+      studentWithInfo: studentWithInfo,
+      onTap: onTap,
+      onShowDetails: onShowDetails,
+      onDelete: onDelete,
+      onUpdate: onUpdate,
+      showCheckbox: showCheckbox,
+      checked: checked,
+      onCheckboxChanged: onCheckboxChanged,
+    );
+  }
+}
+
+class _StudentCardWithCheckboxDelay extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+  final VoidCallback? onTap;
+  final Function(StudentWithInfo) onShowDetails;
+  final Function(StudentWithInfo)? onDelete;
+  final Function(StudentWithInfo)? onUpdate;
+  final bool showCheckbox;
+  final bool checked;
+  final void Function(bool?)? onCheckboxChanged;
+
+  const _StudentCardWithCheckboxDelay({
+    Key? key,
+    required this.studentWithInfo,
+    this.onTap,
+    required this.onShowDetails,
+    this.onDelete,
+    this.onUpdate,
+    this.showCheckbox = false,
+    this.checked = false,
+    this.onCheckboxChanged,
+  }) : super(key: key);
+
+  @override
+  State<_StudentCardWithCheckboxDelay> createState() => _StudentCardWithCheckboxDelayState();
+}
+
+class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxDelay> {
+  bool _showRealCheckbox = false;
+  bool _prevShowCheckbox = false;
+
+  @override
+  void didUpdateWidget(covariant _StudentCardWithCheckboxDelay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.showCheckbox != oldWidget.showCheckbox) {
+      if (widget.showCheckbox) {
+        // 애니메이션이 끝난 후에 체크박스 표시
+        setState(() {
+          _showRealCheckbox = false;
+        });
+      } else {
+        setState(() {
+          _showRealCheckbox = false;
+        });
+      }
+    }
   }
 
-  Widget _buildCardContent(BuildContext context) {
-    final student = studentWithInfo.student;
+  void _onAnimEnd() {
+    if (widget.showCheckbox) {
+      setState(() {
+        _showRealCheckbox = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final student = widget.studentWithInfo.student;
     return Card(
       color: const Color(0xFF1F1F1F),
       margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
@@ -155,16 +221,17 @@ class StudentCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8.0),
       ),
       child: AnimatedContainer(
-        width: showCheckbox ? 142 : 112,
+        width: widget.showCheckbox ? 144 : 112,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,
         height: 50,
+        onEnd: _onAnimEnd,
         padding: EdgeInsets.only(
           left: student.groupInfo == null ? 15.0 : 4.0,
           right: 4.0,
         ),
         child: SizedBox(
-          width: showCheckbox ? 142 : 122,
+          width: widget.showCheckbox ? 144 : 122,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.start,
@@ -195,42 +262,12 @@ class StudentCard extends StatelessWidget {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 tooltip: '',
                 onSelected: (value) async {
-                  print('[DEBUG][StudentCard] PopupMenuButton onSelected: value=$value, id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');
                   if (value == 'edit') {
-                    await _handleEdit(context);
+                    await widget.onShowDetails(widget.studentWithInfo);
                   } else if (value == 'delete') {
-                    print('[DEBUG][StudentCard] 삭제 다이얼로그 호출 직전');
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: const Color(0xFF2A2A2A),
-                        title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
-                        content: const Text('정말로 이 학생을 삭제하시겠습니까?', style: TextStyle(color: Colors.white)),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('취소'),
-                          ),
-                          FilledButton(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('삭제'),
-                          ),
-                        ],
-                      ),
-                    );
-                    print('[DEBUG][StudentCard] 삭제 다이얼로그 결과: confirmed=$confirmed');
-                    if (confirmed == true) {
-                      print('[DEBUG][StudentCard] onDelete 콜백 호출 직전');
-                      if (onDelete != null) {
-                        onDelete!(studentWithInfo);
-                        print('[DEBUG][StudentCard] onDelete 콜백 호출 완료');
-                      } else {
-                        print('[DEBUG][StudentCard] onDelete 콜백이 null');
-                      }
-                    }
+                    if (widget.onDelete != null) widget.onDelete!(widget.studentWithInfo);
                   } else if (value == 'details') {
-                    _showDetails(context);
+                    widget.onShowDetails(widget.studentWithInfo);
                   }
                 },
                 itemBuilder: (context) => [
@@ -257,12 +294,12 @@ class StudentCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (showCheckbox)
+              if (_showRealCheckbox)
                 Padding(
                   padding: const EdgeInsets.only(left: 0.0),
                   child: Checkbox(
-                    value: checked,
-                    onChanged: onCheckboxChanged,
+                    value: widget.checked,
+                    onChanged: widget.onCheckboxChanged,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                     side: BorderSide(color: Colors.grey.shade500, width: 1.2),
                     fillColor: MaterialStateProperty.resolveWith((states) => states.contains(MaterialState.selected) ? Colors.blue.shade400 : Colors.grey.shade200),

@@ -16,7 +16,7 @@ class TimetableContentView extends StatefulWidget {
   final List<StudentWithInfo>? selectedCellStudents;
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
-  final void Function(List<StudentWithInfo>)? onCellStudentsChanged;
+  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellStudentsChanged;
   final VoidCallback? clearSearch; // 추가: 외부에서 검색 리셋 요청
   final bool isSelectMode;
   final Set<String> selectedStudentIds;
@@ -117,6 +117,28 @@ class TimetableContentViewState extends State<TimetableContentView> {
         _searchResults = [];
         _searchController.clear();
       });
+    }
+  }
+
+  // timetable_content_view.dart에 아래 메서드 추가(클래스 내부)
+  void updateCellStudentsAfterMove(int dayIdx, DateTime startTime) {
+    final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
+      b.dayIndex == dayIdx &&
+      b.startTime.hour == startTime.hour &&
+      b.startTime.minute == startTime.minute
+    ).toList();
+    final updatedStudents = DataManager.instance.students;
+    final updatedCellStudents = updatedBlocks.map((b) =>
+      updatedStudents.firstWhere(
+        (s) => s.student.id == b.studentId,
+        orElse: () => StudentWithInfo(
+          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+        ),
+      )
+    ).toList();
+    if (widget.onCellStudentsChanged != null) {
+      widget.onCellStudentsChanged!(dayIdx, startTime, updatedCellStudents);
     }
   }
 
@@ -428,7 +450,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               )
                             ).toList();
                             if (widget.onCellStudentsChanged != null) {
-                              widget.onCellStudentsChanged!(updatedCellStudents);
+                              widget.onCellStudentsChanged!(widget.selectedCellDayIndex!, widget.selectedCellStartTime!, updatedCellStudents);
                             }
                           }
                         },

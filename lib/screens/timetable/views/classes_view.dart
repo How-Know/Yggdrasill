@@ -21,6 +21,7 @@ class ClassesView extends StatefulWidget {
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
   final Student? selectedStudent; // 추가
+  final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
 
   const ClassesView({
     super.key,
@@ -33,6 +34,7 @@ class ClassesView extends StatefulWidget {
     required this.scrollController,
     this.filteredStudentIds, // 추가
     this.selectedStudent, // 추가
+    this.onSelectModeChanged, // 추가
   });
 
   @override
@@ -275,6 +277,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       widget.onCellStudentsSelected!(dayIdx, [timeBlocks[blockIdx].startTime], cellStudentWithInfos);
                                     } else if (widget.onTimeSelected != null) {
                                       widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
+                                    }
+                                    // 선택모드 해제: 셀 클릭 시 onSelectModeChanged(false) 호출
+                                    if (widget.onSelectModeChanged != null) {
+                                      widget.onSelectModeChanged!(false);
                                     }
                                   },
                                   child: TimetableCell(

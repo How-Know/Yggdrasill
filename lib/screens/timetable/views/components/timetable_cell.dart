@@ -17,6 +17,7 @@ import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/widgets/app_snackbar.dart';
 import 'package:mneme_flutter/widgets/class_student_card.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
+import '../../components/timetable_content_view.dart';
 
 class TimetableCell extends StatelessWidget {
   final int dayIdx;
@@ -108,6 +109,11 @@ class TimetableCell extends StatelessWidget {
         // 이동 후 데이터 일괄 새로고침
         await DataManager.instance.loadStudentTimeBlocks();
         await DataManager.instance.loadStudents();
+        // 반드시 이동 후의 셀(dayIdx, startTime) 기준으로 학생카드 리스트 갱신
+        final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
+        if (timetableContentViewState != null) {
+          timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
+        }
       },
       builder: (context, candidateData, rejectedData) {
         return GestureDetector(
