@@ -364,31 +364,33 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           );
 
                           if (targetBlock != null && targetBlock.setId != null) {
-                            // 2. setId+studentId로 모든 블록 삭제
+                            // setId+studentId로 모든 블록 삭제 (일괄 삭제)
                             final allBlocks = DataManager.instance.studentTimeBlocks;
                             final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
-                            print('[삭제드롭존] setId=${targetBlock.setId}, studentId=${student.student.id}, 삭제 대상 블록 개수: ${toDelete.length}');
                             for (final b in toDelete) {
                               print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
                               await DataManager.instance.removeStudentTimeBlock(b.id);
                             }
+                            // 삭제 후 데이터 새로고침 (일괄)
+                            await DataManager.instance.loadStudents();
+                            await DataManager.instance.loadStudentTimeBlocks();
                           } else if (oldDayIndex != null && oldStartTime != null) {
-                            // 3. setId가 없는 경우 기존 방식(단일 블록 삭제)
+                            // setId가 없는 경우 단일 블록 삭제
                             final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
                               b.studentId == student.student.id &&
                               b.dayIndex == oldDayIndex &&
                               b.startTime.hour == oldStartTime.hour &&
                               b.startTime.minute == oldStartTime.minute
                             ).toList();
-                            print('[삭제드롭존] (setId 없음) 삭제 대상 블록 개수: ${blocks.length}');
                             for (final block in blocks) {
                               print('[삭제드롭존] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
                               await DataManager.instance.removeStudentTimeBlock(block.id);
                             }
+                            // 삭제 후 데이터 새로고침 (일괄)
+                            await DataManager.instance.loadStudents();
+                            await DataManager.instance.loadStudentTimeBlocks();
                           }
                           // 삭제 후 데이터 즉시 새로고침
-                          await DataManager.instance.loadStudents();
-                          await DataManager.instance.loadStudentTimeBlocks();
                           setState(() {
                             _showDeleteZone = false;
                             // (필요하다면 다른 상태도 여기서 갱신)
