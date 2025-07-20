@@ -557,6 +557,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
     super.dispose();
   }
 
+  void exitSelectMode() {
+    setState(() {
+      _isSelectMode = false;
+      _selectedStudentIds.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     print('[DEBUG][TimetableScreen] build: _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
@@ -701,12 +708,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
                       print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
-                      setState(() {
-                        _selectedCellDayIndex = dayIdx;
-                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
-                        _selectedCellStudents = students;
-                        print('[DEBUG][setState:onCellStudentsSelected] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedCellStartTime=$_selectedCellStartTime, _selectedCellStudents=$_selectedCellStudents');
-                      });
                       // 학생 등록 모드에서만 동작
                       if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
                         final studentWithInfo = _selectedStudentWithInfo!;
@@ -734,18 +735,32 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         }
                         print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
                         await DataManager.instance.loadStudentTimeBlocks();
-                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocks.map((b) => b.toJson()).toList()}');
-                        final setIds = allBlocks.map((b) => b.setId).toSet();
-                        int usedCount = setIds.length;
-                        print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
-                        final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                          (s) => s.student.id == student.id,
-                          orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
-                        );
-                        final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                        print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
+                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                          b.dayIndex == dayIdx &&
+                          b.startTime.hour == (startTimes.isNotEmpty ? startTimes.first.hour : 0) &&
+                          b.startTime.minute == (startTimes.isNotEmpty ? startTimes.first.minute : 0)
+                        ).toList();
+                        final allStudents = DataManager.instance.students;
+                        final updatedCellStudents = allBlocks.map((b) =>
+                          allStudents.firstWhere(
+                            (s) => s.student.id == b.studentId,
+                            orElse: () => StudentWithInfo(
+                              student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                              basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                            ),
+                          )
+                        ).toList();
                         setState(() {
+                          _selectedCellDayIndex = dayIdx;
+                          _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                          _selectedCellStudents = updatedCellStudents;
+                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                            (s) => s.student.id == student.id,
+                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                          );
+                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                          final allBlocksSetIds = allBlocks.map((b) => b.setId).toSet();
+                          int usedCount = allBlocksSetIds.length;
                           _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
                           print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
                           if (_remainingRegisterCount == 0) {
@@ -760,7 +775,31 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           print('[DEBUG][onCellStudentsSelected] 등록 완료 스낵바');
                           showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                         }
+                        return;
                       }
+                      // 학생 등록 모드가 아닐 때는 기존 동작 유지
+                      // 등록 후 셀의 전체 학생 리스트로 갱신
+                      final allBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                        b.dayIndex == dayIdx &&
+                        b.startTime.hour == (startTimes.isNotEmpty ? startTimes.first.hour : 0) &&
+                        b.startTime.minute == (startTimes.isNotEmpty ? startTimes.first.minute : 0)
+                      ).toList();
+                      final allStudents = DataManager.instance.students;
+                      final updatedCellStudents = allBlocks.map((b) =>
+                        allStudents.firstWhere(
+                          (s) => s.student.id == b.studentId,
+                          orElse: () => StudentWithInfo(
+                            student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                            basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                          ),
+                        )
+                      ).toList();
+                      setState(() {
+                        _selectedCellDayIndex = dayIdx;
+                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                        _selectedCellStudents = updatedCellStudents;
+                        print('[DEBUG][setState:onCellStudentsSelected] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedCellStartTime=$_selectedCellStartTime, _selectedCellStudents=$_selectedCellStudents');
+                      });
                     },
                     scrollController: _timetableScrollController,
                     // filteredStudentIds 정의 추가
@@ -824,6 +863,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               print('[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
             });
           },
+          onExitSelectMode: exitSelectMode, // 콜백 전달
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView

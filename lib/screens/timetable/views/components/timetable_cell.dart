@@ -117,6 +117,8 @@ class TimetableCell extends StatelessWidget {
         final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
         if (timetableContentViewState != null) {
           timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
+          // 다중 이동/수정 후 선택모드 종료 콜백 호출
+          timetableContentViewState.exitSelectModeIfNeeded();
         }
       },
       builder: (context, candidateData, rejectedData) {

@@ -21,6 +21,7 @@ class TimetableContentView extends StatefulWidget {
   final bool isSelectMode;
   final Set<String> selectedStudentIds;
   final void Function(String studentId, bool selected)? onStudentSelectChanged;
+  final VoidCallback? onExitSelectMode; // 추가: 다중모드 종료 콜백
 
   const TimetableContentView({
     Key? key,
@@ -38,6 +39,7 @@ class TimetableContentView extends StatefulWidget {
     this.isSelectMode = false,
     this.selectedStudentIds = const {},
     this.onStudentSelectChanged,
+    this.onExitSelectMode,
   }) : super(key: key);
 
   @override
@@ -139,6 +141,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
     ).toList();
     if (widget.onCellStudentsChanged != null) {
       widget.onCellStudentsChanged!(dayIdx, startTime, updatedCellStudents);
+    }
+  }
+
+  // 다중 이동/수정 후
+  void exitSelectModeIfNeeded() {
+    if (widget.onExitSelectMode != null) {
+      widget.onExitSelectMode!();
+    }
+  }
+
+  // 등록모드에서 수업횟수만큼 등록이 끝나면 자동 종료
+  void checkAndExitSelectModeAfterRegistration(int remaining) {
+    if (remaining <= 0 && widget.onExitSelectMode != null) {
+      widget.onExitSelectMode!();
     }
   }
 
@@ -362,9 +378,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
                           print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+                          List<Future> futures = [];
                           for (final student in students) {
                             // 기존 단일 삭제 로직 재사용
                             // setId 진단 로그 추가
+                            print('[삭제드롭존][진단] studentId=${student.student.id}');
                             print('[삭제드롭존][진단] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
                             // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
                             final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
@@ -390,10 +408,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
                               for (final b in toDelete) {
                                 print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
-                                await DataManager.instance.removeStudentTimeBlock(b.id);
+                                futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
                               }
-                              await DataManager.instance.loadStudents();
-                              await DataManager.instance.loadStudentTimeBlocks();
                             }
                             // setId가 없는 경우 단일 블록 삭제
                             final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
@@ -404,11 +420,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             ).toList();
                             for (final block in blocks) {
                               print('[삭제드롭존] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
-                              await DataManager.instance.removeStudentTimeBlock(block.id);
+                              futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
                             }
-                            await DataManager.instance.loadStudents();
-                            await DataManager.instance.loadStudentTimeBlocks();
                           }
+                          await Future.wait(futures);
+                          await DataManager.instance.loadStudents();
+                          await DataManager.instance.loadStudentTimeBlocks();
                           setState(() {
                             _showDeleteZone = false;
                           });
@@ -427,6 +444,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               }
                             });
                           });
+                          // 삭제 후 선택모드 종료 콜백 직접 호출
+                          if (widget.onExitSelectMode != null) {
+                            widget.onExitSelectMode!();
+                          }
                         },
                         builder: (context, candidateData, rejectedData) {
                           final isHover = candidateData.isNotEmpty;
