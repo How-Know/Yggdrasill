@@ -70,6 +70,7 @@ class TimetableCell extends StatelessWidget {
         final students = (data['students'] as List<StudentWithInfo>?) ?? [];
         final oldDayIndex = data['oldDayIndex'] as int?;
         final oldStartTime = data['oldStartTime'] as DateTime?;
+        List<Future> futures = [];
         for (final studentWithInfo in students) {
           if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
           final studentId = studentWithInfo.student.id;
@@ -86,8 +87,8 @@ class TimetableCell extends StatelessWidget {
             final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startTime.hour == oldStartTime.hour && b.startTime.minute == oldStartTime.minute);
             if (block != null) {
               final newBlock = block.copyWith(dayIndex: dayIdx, startTime: startTime);
-              await DataManager.instance.removeStudentTimeBlock(block.id);
-              await DataManager.instance.addStudentTimeBlock(newBlock);
+              futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
+              futures.add(DataManager.instance.addStudentTimeBlock(newBlock));
             }
             continue;
           }
@@ -104,10 +105,11 @@ class TimetableCell extends StatelessWidget {
             final diff = block.number! - baseNumber;
             final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
             final newBlock = block.copyWith(dayIndex: dayIdx, startTime: newTime);
-            await DataManager.instance.removeStudentTimeBlock(block.id);
-            await DataManager.instance.addStudentTimeBlock(newBlock);
+            futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
+            futures.add(DataManager.instance.addStudentTimeBlock(newBlock));
           }
         }
+        await Future.wait(futures);
         // 이동 후 데이터 일괄 새로고침
         await DataManager.instance.loadStudentTimeBlocks();
         await DataManager.instance.loadStudents();
