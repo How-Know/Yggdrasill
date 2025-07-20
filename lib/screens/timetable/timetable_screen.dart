@@ -285,8 +285,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
           _selectedStudentForTime = selectedStudent;
-          // 남은 등록 가능 횟수로 세팅
           _remainingRegisterCount = remaining > 0 ? remaining : 0;
+          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount');
         });
         print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
       } else {
@@ -295,6 +295,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           _isClassRegistrationMode = false;
           _selectedStudentForTime = null;
           _remainingRegisterCount = null;
+          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount');
         });
         print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
@@ -616,6 +617,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Widget _buildContent() {
     switch (_viewType) {
       case TimetableViewType.classes:
+        print('[DEBUG][_buildContent] 전달 상태: _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedCellStartTime=$_selectedCellStartTime, _selectedCellStudents=$_selectedCellStudents');
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
@@ -646,6 +648,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   },
                   isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
                 ),
+                if (_isStudentRegistrationMode && _selectedStudentForTime != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: Builder(
+                      builder: (context) {
+                        final studentId = _selectedStudentForTime!.id;
+                        final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+                        final setIds = blocks.map((b) => b.setId).toSet();
+                        final registeredCount = setIds.length;
+                        final totalCount = _selectedStudentForTime!.weeklyClassCount ?? 1;
+                        return Text(
+                          '${_selectedStudentForTime!.name} 학생: 수업시간 등록 ($registeredCount/$totalCount)',
+                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                        );
+                      },
+                    ),
+                  ),
                 SizedBox(height: 0),
                 Flexible(
                   child: ClassesView(
@@ -654,18 +673,75 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
                     selectedDayIndex: _selectedDayIndex,
                     onTimeSelected: (dayIdx, startTime) {
+                      print('[DEBUG][onTimeSelected] 호출: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount');
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedCellStartTime = startTime;
                         _selectedCellStudents = _getCellStudents(dayIdx, startTime);
+                        print('[DEBUG][setState:onTimeSelected] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedCellStartTime=$_selectedCellStartTime, _selectedCellStudents=$_selectedCellStudents');
                       });
                     },
-                    onCellStudentsSelected: (dayIdx, startTimes, students) {
+                    onCellStudentsSelected: (dayIdx, startTimes, students) async {
+                      print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount');
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
                         _selectedCellStudents = students;
+                        print('[DEBUG][setState:onCellStudentsSelected] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedCellStartTime=$_selectedCellStartTime, _selectedCellStudents=$_selectedCellStudents');
                       });
+                      // 학생 등록 모드에서만 동작
+                      if (_isStudentRegistrationMode && _selectedStudentForTime != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
+                        final student = _selectedStudentForTime!;
+                        print('[DEBUG][onCellStudentsSelected] 등록모드 진입: student=${student.id}, name=${student.name}');
+                        final blockMinutes = 30; // 한 블록 30분 기준
+                        List<DateTime> actualStartTimes = startTimes;
+                        // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
+                        if (startTimes.length == 1) {
+                          final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                          final blockCount = (lessonDuration / blockMinutes).ceil();
+                          actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
+                          print('[DEBUG][onCellStudentsSelected] 단일 셀 클릭: lessonDuration=$lessonDuration, blockCount=$blockCount, actualStartTimes=$actualStartTimes');
+                        }
+                        final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                          studentIds: [student.id],
+                          dayIndex: dayIdx,
+                          startTimes: actualStartTimes,
+                          duration: Duration(minutes: blockMinutes),
+                        );
+                        print('[DEBUG][onCellStudentsSelected] 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
+                        for (final block in blocks) {
+                          print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
+                          await DataManager.instance.addStudentTimeBlock(block);
+                        }
+                        print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                        await DataManager.instance.loadStudentTimeBlocks();
+                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocks.map((b) => b.toJson()).toList()}');
+                        final setIds = allBlocks.map((b) => b.setId).toSet();
+                        int usedCount = setIds.length;
+                        print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                        final studentWithInfo = DataManager.instance.students.firstWhere(
+                          (s) => s.student.id == student.id,
+                          orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                        );
+                        final maxCount = studentWithInfo.basicInfo.weeklyClassCount;
+                        print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
+                        setState(() {
+                          _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                          print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
+                          if (_remainingRegisterCount == 0) {
+                            print('[DEBUG][onCellStudentsSelected] 등록모드 종료');
+                            _isStudentRegistrationMode = false;
+                            _selectedStudentForTime = null;
+                            _selectedDayIndex = null;
+                            _selectedStartTime = null;
+                          }
+                        });
+                        if (_remainingRegisterCount == 0 && mounted) {
+                          print('[DEBUG][onCellStudentsSelected] 등록 완료 스낵바');
+                          showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                        }
+                      }
                     },
                     scrollController: _timetableScrollController,
                     // filteredStudentIds 정의 추가
@@ -736,7 +812,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildClassView() {
-    // StudentWithInfo에서 basicInfo.weeklyClassCount를 가져옴
     int? totalClassCount;
     if (_isStudentRegistrationMode && _selectedStudentForTime != null) {
       final studentWithInfo = DataManager.instance.students.firstWhere(
@@ -751,13 +826,32 @@ class _TimetableScreenState extends State<TimetableScreen> {
       );
       totalClassCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
     }
-    // 필터 적용: _filteredStudents에서 id만 추출
+    print('[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentForTime=$_selectedStudentForTime, _remainingRegisterCount=$_remainingRegisterCount');
     final Set<String>? filteredStudentIds = _activeFilter == null
         ? null
         : _filteredStudents.map((s) => s.student.id).toSet();
     return Column(
       children: [
-        if (_isStudentRegistrationMode && _selectedStudentForTime != null && _remainingRegisterCount != null)
+        // 상단 UI (월정보, 세그먼트, 선택, 필터 버튼 등)
+        TimetableHeader(
+          selectedDate: _selectedDate,
+          onDateChanged: _handleDateChanged,
+          selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+          onDaySelected: _onDayHeaderSelected,
+          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+          onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
+          isFilterActive: _activeFilter != null,
+          onSelectModeChanged: (selecting) {
+            setState(() {
+              _isSelectMode = selecting;
+              if (!selecting) _selectedStudentIds.clear();
+              print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+            });
+          },
+          isSelectMode: _isSelectMode,
+        ),
+        // 등록 안내문구/카운트
+        if (_isStudentRegistrationMode && _selectedStudentForTime != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 8.0),
             child: Text(
@@ -765,6 +859,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
             ),
           ),
+        // 시간표 본문
         Expanded(
           child: ClassesView(
             scrollController: _timetableScrollController,

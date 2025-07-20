@@ -516,6 +516,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
   Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime}) {
+    // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
+    final cardKey = ValueKey(
+      info.student.id + (info.student.groupInfo?.id ?? ''),
+    );
     return Draggable<Map<String, dynamic>>(
       data: {
         'student': info,
@@ -529,6 +533,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         child: Opacity(
           opacity: 0.85,
           child: StudentCard(
+            key: cardKey,
             studentWithInfo: info,
             onShowDetails: (info) {},
             showCheckbox: widget.isSelectMode,
@@ -544,6 +549,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       childWhenDragging: Opacity(
         opacity: 0.3,
         child: StudentCard(
+          key: cardKey,
           studentWithInfo: info,
           onShowDetails: (info) {},
           showCheckbox: widget.isSelectMode,
@@ -556,6 +562,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         ),
       ),
       child: StudentCard(
+        key: cardKey,
         studentWithInfo: info,
         onShowDetails: (info) {},
         showCheckbox: widget.isSelectMode,

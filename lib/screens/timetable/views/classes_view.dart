@@ -119,7 +119,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][ClassesView] build: isRegistrationMode= ${widget.isRegistrationMode}');
+    print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, selectedStudent=${widget.selectedStudent}');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
     return Stack(
@@ -129,19 +129,23 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
           child: ValueListenableBuilder<List<StudentTimeBlock>>(
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
+              print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length=${studentTimeBlocks.length}');
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               final filteredBlocks = widget.filteredStudentIds == null
                   ? studentTimeBlocks
                   : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
               return Listener(
                 onPointerDown: (event) {
+                  print('[DEBUG][Listener] onPointerDown: isRegistrationMode=${widget.isRegistrationMode}, isDragging=$isDragging');
                   if (!widget.isRegistrationMode) return;
                   final box = context.findRenderObject() as RenderBox;
                   final local = box.globalToLocal(event.position);
                   final blockIdx = (local.dy / blockHeight).floor();
                   final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
+                  print('[DEBUG][Listener] blockIdx=$blockIdx, dayIdx=$dayIdx');
                   if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx >= 0 && dayIdx < 7) {
                     _onCellPanStart(dayIdx, blockIdx);
                   }
@@ -152,11 +156,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   final local = box.globalToLocal(event.position);
                   final blockIdx = (local.dy / blockHeight).floor();
                   final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
+                  print('[DEBUG][Listener] onPointerMove: blockIdx=$blockIdx, dayIdx=$dayIdx, dragDayIdx=$dragDayIdx');
                   if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx == dragDayIdx) {
                     _onCellPanUpdate(dayIdx, blockIdx);
                   }
                 },
                 onPointerUp: (event) {
+                  print('[DEBUG][Listener] onPointerUp: isDragging=$isDragging, dragDayIdx=$dragDayIdx');
                   if (!widget.isRegistrationMode || !isDragging) return;
                   if (dragDayIdx != null) {
                     _onCellPanEnd(dragDayIdx!);
@@ -263,42 +269,74 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               } else {
                                 countColor = Colors.green;
                               }
+                              if (isDragHighlight) {
+                                print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
+                              }
                               return Expanded(
-                                child: GestureDetector(
-                                  onTap: () async {
-                                    final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-                                    final selectedStudent = widget.selectedStudent;
-                                    final studentId = selectedStudent?.id;
-                                    if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
-                                      showAppSnackBar(context, '이미 등록된 시간입니다');
-                                      return;
-                                    }
-                                    if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
-                                      widget.onCellStudentsSelected!(dayIdx, [timeBlocks[blockIdx].startTime], cellStudentWithInfos);
-                                    } else if (widget.onTimeSelected != null) {
-                                      widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
-                                    }
-                                    // 선택모드 해제: 셀 클릭 시 onSelectModeChanged(false) 호출
-                                    if (widget.onSelectModeChanged != null) {
-                                      widget.onSelectModeChanged!(false);
+                                child: MouseRegion(
+                                  onEnter: (_) {
+                                    if (widget.isRegistrationMode) {
+                                      setState(() {
+                                        _hoveredCellKey = cellKey;
+                                        print('[DEBUG][MouseRegion] onEnter: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                      });
                                     }
                                   },
-                                  child: TimetableCell(
-                                    dayIdx: dayIdx,
-                                    blockIdx: blockIdx,
-                                    cellKey: cellKey,
-                                    startTime: timeBlocks[blockIdx].startTime,
-                                    endTime: timeBlocks[blockIdx].endTime,
-                                    students: activeBlocks,
-                                    isBreakTime: isBreakTime,
-                                    isExpanded: isExpanded,
-                                    isDragHighlight: isDragHighlight,
-                                    onTap: null,
-                                    countColor: countColor,
-                                    activeStudentCount: activeStudentCount,
-                                    cellStudentWithInfos: cellStudentWithInfos,
-                                    groups: groups,
-                                    cellWidth: 0, // 필요시 전달
+                                  onExit: (_) {
+                                    if (widget.isRegistrationMode) {
+                                      setState(() {
+                                        if (_hoveredCellKey == cellKey) _hoveredCellKey = null;
+                                        print('[DEBUG][MouseRegion] onExit: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                      });
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                                      final selectedStudent = widget.selectedStudent;
+                                      final studentId = selectedStudent?.id;
+                                      print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudent=$selectedStudent');
+                                      if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
+                                        showAppSnackBar(context, '이미 등록된 시간입니다');
+                                        return;
+                                      }
+                                      if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
+                                        widget.onCellStudentsSelected!(
+                                          dayIdx,
+                                          [timeBlocks[blockIdx].startTime],
+                                          [StudentWithInfo(
+                                            student: widget.selectedStudent!,
+                                            basicInfo: StudentBasicInfo(
+                                              studentId: widget.selectedStudent!.id,
+                                              registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now(),
+                                            ),
+                                          )],
+                                        );
+                                      } else if (widget.onTimeSelected != null) {
+                                        widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
+                                      }
+                                      // 선택모드 해제: 셀 클릭 시 onSelectModeChanged(false) 호출
+                                      if (widget.onSelectModeChanged != null) {
+                                        widget.onSelectModeChanged!(false);
+                                      }
+                                    },
+                                    child: TimetableCell(
+                                      dayIdx: dayIdx,
+                                      blockIdx: blockIdx,
+                                      cellKey: cellKey,
+                                      startTime: timeBlocks[blockIdx].startTime,
+                                      endTime: timeBlocks[blockIdx].endTime,
+                                      students: activeBlocks,
+                                      isBreakTime: isBreakTime,
+                                      isExpanded: isExpanded,
+                                      isDragHighlight: isDragHighlight,
+                                      onTap: null,
+                                      countColor: countColor,
+                                      activeStudentCount: activeStudentCount,
+                                      cellStudentWithInfos: cellStudentWithInfos,
+                                      groups: groups,
+                                      cellWidth: 0, // 필요시 전달
+                                    ),
                                   ),
                                 ),
                               );
