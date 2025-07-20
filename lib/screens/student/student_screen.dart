@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/custom_tab_bar.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/student_details_dialog.dart';
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -136,14 +137,24 @@ class StudentScreenState extends State<StudentScreen> {
             } else if (_viewType == StudentViewType.bySchool) {
               return SchoolView(
                 students: filteredStudents,
-                onShowDetails: _showStudentDetails,
+                onShowDetails: (studentWithInfo) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
+                  );
+                },
               );
             } else if (_viewType == StudentViewType.byDate) {
               return const DateView();
             } else {
               return AllStudentsView(
                 students: filteredStudents,
-                onShowDetails: _showStudentDetails,
+                onShowDetails: (studentWithInfo) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
+                  );
+                },
                 groups: groups,
                 expandedGroups: _expandedGroups,
                 onGroupAdded: (groupInfo) {
@@ -223,12 +234,18 @@ class StudentScreenState extends State<StudentScreen> {
                   showAppSnackBar(context, '학생이 삭제되었습니다.');
                   print('[DEBUG][StudentScreen] 스낵바 호출 완료');
                 },
-                onStudentUpdated: (updatedStudentWithInfo) async {
-                  await DataManager.instance.updateStudent(
-                    updatedStudentWithInfo.student,
-                    updatedStudentWithInfo.basicInfo
+                onStudentUpdated: (studentWithInfo) async {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => StudentRegistrationDialog(
+                      student: studentWithInfo.student,
+                      onSave: (updatedStudent, basicInfo) async {
+                        await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                        showAppSnackBar(context, '학생 정보가 수정되었습니다.');
+                      },
+                      groups: DataManager.instance.groups,
+                    ),
                   );
-                  showAppSnackBar(context, '학생 정보가 수정되었습니다.');
                 },
               );
             }
@@ -238,52 +255,52 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
-  void _showStudentDetails(StudentWithInfo studentWithInfo) {
-    final student = studentWithInfo.student;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: Text(
-          student.name,
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '학교:  [33m${student.school} [0m',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '과정:  [33m${getEducationLevelName(student.educationLevel)} [0m',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '학년:  [33m${student.grade}학년 [0m',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            if (student.groupInfo != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                '그룹:  [33m${student.groupInfo!.name} [0m',
-                style: TextStyle(color: student.groupInfo!.color),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('닫기'),
-          ),
-        ],
-      ),
-    );
-  }
+  // void _showStudentDetails(StudentWithInfo studentWithInfo) {
+  //   final student = studentWithInfo.student;
+  //   showDialog(
+  //     context: context,
+  //     builder: (context) => AlertDialog(
+  //       backgroundColor: const Color(0xFF2A2A2A),
+  //       title: Text(
+  //         student.name,
+  //         style: const TextStyle(color: Colors.white),
+  //       ),
+  //       content: Column(
+  //         mainAxisSize: MainAxisSize.min,
+  //         crossAxisAlignment: CrossAxisAlignment.start,
+  //         children: [
+  //           Text(
+  //             '학교:  [33m${student.school} [0m',
+  //             style: const TextStyle(color: Colors.white70),
+  //           ),
+  //           const SizedBox(height: 8),
+  //           Text(
+  //             '과정:  [33m${getEducationLevelName(student.educationLevel)} [0m',
+  //             style: const TextStyle(color: Colors.white70),
+  //           ),
+  //           const SizedBox(height: 8),
+  //           Text(
+  //             '학년:  [33m${student.grade}학년 [0m',
+  //             style: const TextStyle(color: Colors.white70),
+  //           ),
+  //           if (student.groupInfo != null) ...[
+  //             const SizedBox(height: 8),
+  //             Text(
+  //               '그룹:  [33m${student.groupInfo!.name} [0m',
+  //               style: TextStyle(color: student.groupInfo!.color),
+  //             ),
+  //           ],
+  //         ],
+  //       ),
+  //       actions: [
+  //         TextButton(
+  //           onPressed: () => Navigator.of(context).pop(),
+  //           child: const Text('닫기'),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
 
   void showClassRegistrationDialog() {
     showDialog(

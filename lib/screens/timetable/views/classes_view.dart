@@ -20,7 +20,7 @@ class ClassesView extends StatefulWidget {
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
-  final Student? selectedStudent; // 추가
+  final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
 
   const ClassesView({
@@ -33,7 +33,7 @@ class ClassesView extends StatefulWidget {
     this.onCellStudentsSelected,
     required this.scrollController,
     this.filteredStudentIds, // 추가
-    this.selectedStudent, // 추가
+    this.selectedStudentWithInfo, // 변경
     this.onSelectModeChanged, // 추가
   });
 
@@ -102,10 +102,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       dragDayIdx = null;
     });
     // 팩토리+DB 저장 로직 호출
-    if (widget.isRegistrationMode && widget.selectedStudent != null && widget.onCellStudentsSelected != null) {
+    if (widget.isRegistrationMode && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
       final timeBlocks = _generateTimeBlocks();
       final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
-      widget.onCellStudentsSelected!(dayIdx, startTimes, [StudentWithInfo(student: widget.selectedStudent!, basicInfo: StudentBasicInfo(studentId: widget.selectedStudent!.id, registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now()))]);
+      widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
     }
   }
 
@@ -119,7 +119,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, selectedStudent=${widget.selectedStudent}');
+    print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=${widget.selectedStudentWithInfo}');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
     return Stack(
@@ -293,24 +293,19 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   child: GestureDetector(
                                     onTap: () async {
                                       final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-                                      final selectedStudent = widget.selectedStudent;
-                                      final studentId = selectedStudent?.id;
-                                      print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudent=$selectedStudent');
+                                      final selectedStudentWithInfo = widget.selectedStudentWithInfo;
+                                      final studentId = selectedStudentWithInfo?.student.id;
+                                      print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
                                         showAppSnackBar(context, '이미 등록된 시간입니다');
                                         return;
                                       }
-                                      if (widget.isRegistrationMode && widget.onCellStudentsSelected != null) {
+                                      if (widget.isRegistrationMode && widget.onCellStudentsSelected != null && selectedStudentWithInfo != null) {
+                                        print('[DEBUG][등록시도] studentId=${selectedStudentWithInfo.student.id}, dayIdx=$dayIdx, startTime=${timeBlocks[blockIdx].startTime}');
                                         widget.onCellStudentsSelected!(
                                           dayIdx,
                                           [timeBlocks[blockIdx].startTime],
-                                          [StudentWithInfo(
-                                            student: widget.selectedStudent!,
-                                            basicInfo: StudentBasicInfo(
-                                              studentId: widget.selectedStudent!.id,
-                                              registrationDate: widget.selectedStudent!.registrationDate ?? DateTime.now(),
-                                            ),
-                                          )],
+                                          [selectedStudentWithInfo],
                                         );
                                       } else if (widget.onTimeSelected != null) {
                                         widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
@@ -413,9 +408,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       final blockStart = block.startTime.hour * 60 + block.startTime.minute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+        print('[DEBUG][_isStudentTimeOverlap] 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
         return true;
       }
     }
+    print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime');
     return false;
   }
 

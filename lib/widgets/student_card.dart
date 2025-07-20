@@ -263,7 +263,9 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                 tooltip: '',
                 onSelected: (value) async {
                   if (value == 'edit') {
-                    await widget.onShowDetails(widget.studentWithInfo);
+                    if (widget.onUpdate != null) {
+                      widget.onUpdate!(widget.studentWithInfo);
+                    }
                   } else if (value == 'delete') {
                     if (widget.onDelete != null) widget.onDelete!(widget.studentWithInfo);
                   } else if (value == 'details') {

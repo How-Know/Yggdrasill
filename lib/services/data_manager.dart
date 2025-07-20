@@ -290,6 +290,9 @@ class DataManager {
     // 학생의 모든 수업시간 블록도 함께 삭제
     await AcademyDbService.instance.deleteStudentTimeBlocksByStudentId(id);
     print('[DEBUG][deleteStudent] StudentTimeBlock 삭제 완료: id=$id');
+    // 학생의 부가 정보도 함께 삭제
+    await AcademyDbService.instance.deleteStudentBasicInfo(id);
+    print('[DEBUG][deleteStudent] StudentBasicInfo 삭제 완료: id=$id');
     await AcademyDbService.instance.deleteStudent(id);
     print('[DEBUG][deleteStudent] DB 삭제 완료: id=$id');
     await loadStudents();

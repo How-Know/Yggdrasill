@@ -603,8 +603,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         opacity: 0.85,
                         child: StudentCard(
                           studentWithInfo: student,
-                          onShowDetails: (_) {},
-                          onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
+                          onShowDetails: widget.onShowDetails, // 연결 복구
+                          onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
                         ),
                       ),
@@ -613,15 +613,15 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       opacity: 0.3,
                       child: StudentCard(
                         studentWithInfo: student,
-                        onShowDetails: (_) {},
-                        onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
+                        onShowDetails: widget.onShowDetails, // 연결 복구
+                        onDelete: widget.onDeleteStudent,
                         onUpdate: widget.onStudentUpdated,
                       ),
                     ),
                     child: StudentCard(
                       studentWithInfo: student,
-                      onShowDetails: (_) {},
-                      onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
+                      onShowDetails: widget.onShowDetails, // 연결 복구
+                      onDelete: widget.onDeleteStudent,
                       onUpdate: widget.onStudentUpdated,
                     ),
                   )
@@ -719,7 +719,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     runSpacing: 8,
                     children: gradeStudents.map((studentWithInfo) => StudentCard(
                       studentWithInfo: studentWithInfo,
-                      onShowDetails: (_) {},
+                      onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                       onUpdate: widget.onStudentUpdated,
                     )).toList(),

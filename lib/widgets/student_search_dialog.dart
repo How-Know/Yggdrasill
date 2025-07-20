@@ -33,13 +33,16 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
         .where((studentWithInfo) => !widget.excludedStudentIds.contains(studentWithInfo.student.id))
         .toList();
     if (widget.onlyShowIncompleteStudents) {
-      // 학생별로 등록된 수업시간 개수와 weeklyClassCount 비교
+      // 학생별로 등록된 수업시간 setId 개수와 weeklyClassCount 비교
       final timeBlocks = DataManager.instance.studentTimeBlocks;
       _students = allStudents.where((studentWithInfo) {
-        final count = timeBlocks.where((b) => b.studentId == studentWithInfo.student.id).length;
+        // setId가 null인 블록은 제외 (혹은 개별적으로 1개로 취급)
+        final studentBlocks = timeBlocks.where((b) => b.studentId == studentWithInfo.student.id);
+        final setIds = studentBlocks.map((b) => b.setId).where((id) => id != null).toSet();
+        final count = setIds.length;
         final required = studentWithInfo.basicInfo.weeklyClassCount;
         final include = count < required;
-        print('[학생리스트필터] name=${studentWithInfo.student.name}, id=${studentWithInfo.student.id}, weeklyClassCount=$required, 등록된블록개수=$count, 리스트포함=$include');
+        print('[학생리스트필터] name= [33m${studentWithInfo.student.name} [0m, id=${studentWithInfo.student.id}, weeklyClassCount=$required, 등록된setId개수=$count, 리스트포함=$include');
         return include;
       }).toList();
     } else {
