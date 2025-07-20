@@ -15,6 +15,7 @@ class TimetableHeader extends StatefulWidget {
   final bool isFilterActive; // 추가
   final void Function(bool selecting)? onSelectModeChanged;
   final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
+  final VoidCallback? onSelectAllStudents; // 추가: 모두 선택 콜백
 
   const TimetableHeader({
     Key? key,
@@ -27,6 +28,7 @@ class TimetableHeader extends StatefulWidget {
     this.isFilterActive = false, // 추가
     this.onSelectModeChanged,
     this.isSelectMode = false, // 추가
+    this.onSelectAllStudents, // 추가
   }) : super(key: key);
 
   @override
@@ -108,6 +110,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
             _SelectButtonAnimated(
               onSelectModeChanged: widget.onSelectModeChanged,
               isSelectMode: widget.isSelectMode,
+              onSelectAllStudents: widget.onSelectAllStudents,
             ),
             SizedBox(width: 12),
             // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
@@ -222,7 +225,8 @@ class _TimetableHeaderState extends State<TimetableHeader> {
 class _SelectButtonAnimated extends StatefulWidget {
   final void Function(bool selecting)? onSelectModeChanged;
   final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
-  const _SelectButtonAnimated({this.onSelectModeChanged, this.isSelectMode = false});
+  final VoidCallback? onSelectAllStudents; // 추가: 모두 선택 콜백
+  const _SelectButtonAnimated({this.onSelectModeChanged, this.isSelectMode = false, this.onSelectAllStudents});
   @override
   State<_SelectButtonAnimated> createState() => _SelectButtonAnimatedState();
 }
@@ -267,7 +271,8 @@ class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with Singl
   }
 
   void _onSelectAllPressed() {
-    // TODO: 전체 선택 로직 연결
+    // 모두 선택 콜백 호출
+    widget.onSelectAllStudents?.call();
   }
 
   @override

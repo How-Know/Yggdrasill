@@ -656,6 +656,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     });
                   },
                   isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
+                  onSelectAllStudents: () {
+                    // 현재 셀의 학생만 모두 체크
+                    if (_selectedCellStudents != null && _selectedCellStudents!.isNotEmpty) {
+                      setState(() {
+                        _selectedStudentIds = _selectedCellStudents!.map((s) => s.student.id).toSet();
+                      });
+                    }
+                  },
                 ),
                 if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
                   Padding(
