@@ -380,7 +380,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       else
                         const Expanded(
                           child: Center(
-                            child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                              ],
+                            ),
                           ),
                         ),
                   // 삭제 드롭존
@@ -736,7 +742,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // Map<(dayIdx, startTime), List<StudentWithInfo>>
     final Map<String, List<StudentWithInfo>> grouped = {};
     for (final student in students) {
-      final studentBlocks = blocks.where((b) => b.studentId == student.student.id).toList();
+      // number==1인 블록만 필터링
+      final studentBlocks = blocks.where((b) => b.studentId == student.student.id && (b.number == null || b.number == 1)).toList();
       for (final block in studentBlocks) {
         final key = '${block.dayIndex}-${block.startTime.hour}:${block.startTime.minute.toString().padLeft(2, '0')}';
         grouped.putIfAbsent(key, () => []);
@@ -815,6 +822,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
         return nameMatch || schoolMatch || gradeMatch;
       }).toList();
     });
+  }
+
+  // --- 셀 클릭 시 검색 내역 초기화 ---
+  @override
+  void didUpdateWidget(covariant TimetableContentView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 셀 선택이 바뀌면 검색 내역 초기화
+    if ((widget.selectedCellDayIndex != oldWidget.selectedCellDayIndex) || (widget.selectedCellStartTime != oldWidget.selectedCellStartTime)) {
+      clearSearch();
+    }
   }
 }
 
