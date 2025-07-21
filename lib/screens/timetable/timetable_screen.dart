@@ -18,6 +18,7 @@ import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
 import '../../widgets/app_snackbar.dart';
 import 'package:flutter/services.dart';
+import 'components/self_study_registration_view.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -81,6 +82,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 선택 모드 및 선택 학생 상태 추가
   bool _isSelectMode = false;
   Set<String> _selectedStudentIds = {};
+  // 자습 등록 모드 상태
+  bool _isSelfStudyRegistrationMode = false;
+  StudentWithInfo? _selectedSelfStudyStudent;
 
   @override
   void initState() {
@@ -694,7 +698,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   child: ClassesView(
                     operatingHours: _operatingHours,
                     breakTimeColor: const Color(0xFF424242),
-                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode || _isSelfStudyRegistrationMode,
+                    registrationModeType: _isStudentRegistrationMode ? 'student' : (_isSelfStudyRegistrationMode ? 'selfStudy' : null),
                     selectedDayIndex: _selectedDayIndex,
                     onTimeSelected: (dayIdx, startTime) {
                       print('[DEBUG][onTimeSelected] 호출: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
@@ -805,10 +810,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onRegisterPressed: () {
             if (_splitButtonSelected == '학생') {
               _handleRegistrationButton();
-            } else if (_splitButtonSelected == '그룹') {
-              setState(() {
-                _isClassRegistrationMode = true;
-              });
+            } else if (_splitButtonSelected == '보강') {
+              // TODO: 보강 등록 모드 구현
+            } else if (_splitButtonSelected == '자습') {
+              showSelfStudyRegistrationDialog();
             }
           },
           splitButtonSelected: _splitButtonSelected,
@@ -1193,6 +1198,107 @@ class _TimetableScreenState extends State<TimetableScreen> {
         ),
       )
     ).toList();
+  }
+
+  void showSelfStudyRegistrationDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => SelfStudyRegistrationDialog(
+        onStudentSelected: (student) {
+          setState(() {
+            _isSelfStudyRegistrationMode = true;
+            _selectedSelfStudyStudent = student;
+          });
+        },
+      ),
+    );
+  }
+}
+
+class SelfStudyRegistrationDialog extends StatefulWidget {
+  final ValueChanged<StudentWithInfo> onStudentSelected;
+  const SelfStudyRegistrationDialog({Key? key, required this.onStudentSelected}) : super(key: key);
+
+  @override
+  State<SelfStudyRegistrationDialog> createState() => _SelfStudyRegistrationDialogState();
+}
+
+class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialog> {
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  List<StudentWithInfo> get _searchResults {
+    if (_searchQuery.isEmpty) return [];
+    return DataManager.instance.students.where((student) {
+      final nameMatch = student.student.name.toLowerCase().contains(_searchQuery.toLowerCase());
+      final schoolMatch = student.student.school.toLowerCase().contains(_searchQuery.toLowerCase());
+      final gradeMatch = student.student.grade.toString().contains(_searchQuery);
+      return nameMatch || schoolMatch || gradeMatch;
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      title: const Text('자습 등록', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _searchController,
+              style: const TextStyle(color: Colors.white),
+              onChanged: (value) => setState(() => _searchQuery = value),
+              decoration: InputDecoration(
+                labelText: '학생 이름 또는 학교 검색',
+                labelStyle: const TextStyle(color: Colors.white70),
+                prefixIcon: const Icon(Icons.search, color: Colors.white70),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              height: 120,
+              child: _searchQuery.isEmpty
+                  ? const Center(child: Text('학생을 검색하세요.', style: TextStyle(color: Colors.white38, fontSize: 15)))
+                  : _searchResults.isEmpty
+                      ? const Center(child: Text('검색 결과가 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 15)))
+                      : Scrollbar(
+                          thumbVisibility: true,
+                          child: ListView.separated(
+                            itemCount: _searchResults.length,
+                            separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                            itemBuilder: (context, idx) {
+                              final info = _searchResults[idx];
+                              return ListTile(
+                                title: Text(info.student.name, style: const TextStyle(color: Colors.white)),
+                                subtitle: Text('${info.student.school} / ${info.student.grade}학년', style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                                onTap: () {
+                                  widget.onStudentSelected(info);
+                                  Navigator.of(context).pop();
+                                },
+                              );
+                            },
+                          ),
+                        ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+        ),
+      ],
+    );
   }
 }
 

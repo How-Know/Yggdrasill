@@ -80,7 +80,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                ...['학생', '그룹', '보강', '자습'].map((label) => _DropdownMenuHoverItem(
+                ...['학생', '보강', '자습'].map((label) => _DropdownMenuHoverItem(
                   label: label,
                   selected: widget.splitButtonSelected == label,
                   onTap: () {

@@ -11,29 +11,36 @@ import '../../../widgets/app_snackbar.dart';
 import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
 
+/// registrationModeType: 'student' | 'selfStudy' | null
+typedef RegistrationModeType = String?;
+
 class ClassesView extends StatefulWidget {
   final List<OperatingHours> operatingHours;
   final Color breakTimeColor;
-  final bool isRegistrationMode;
+  final bool isRegistrationMode; // deprecated
+  final RegistrationModeType registrationModeType;
   final int? selectedDayIndex;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
   final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
+  final StudentWithInfo? selectedSelfStudyStudent;
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
 
   const ClassesView({
     super.key,
     required this.operatingHours,
     this.breakTimeColor = const Color(0xFF424242),
-    this.isRegistrationMode = false,
+    this.isRegistrationMode = false, // deprecated
+    this.registrationModeType,
     this.selectedDayIndex,
     this.onTimeSelected,
     this.onCellStudentsSelected,
     required this.scrollController,
     this.filteredStudentIds, // 추가
     this.selectedStudentWithInfo, // 변경
+    this.selectedSelfStudyStudent,
     this.onSelectModeChanged, // 추가
   });
 
@@ -102,10 +109,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       dragDayIdx = null;
     });
     // 팩토리+DB 저장 로직 호출
-    if (widget.isRegistrationMode && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
-      final timeBlocks = _generateTimeBlocks();
-      final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+    final mode = widget.registrationModeType;
+    final timeBlocks = _generateTimeBlocks();
+    final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+    if (mode == 'student' && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
       widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+    } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null && widget.onCellStudentsSelected != null) {
+      widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
     }
   }
 
