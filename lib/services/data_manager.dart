@@ -519,4 +519,36 @@ class DataManager {
     teachersNotifier.value = List.unmodifiable(_teachers);
     saveTeachers();
   }
+
+  /// 학생별 수업블록(setId 기준) 개수 반환
+  int getStudentLessonSetCount(String studentId) {
+    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null).toList();
+    final setCount = blocks.map((b) => b.setId).toSet().length;
+    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = $setCount');
+    return setCount;
+  }
+
+  /// 수업 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 > 0)
+  List<StudentWithInfo> getLessonEligibleStudents() {
+    final eligible = students.where((s) {
+      final setCount = getStudentLessonSetCount(s.student.id);
+      final remain = (s.basicInfo.weeklyClassCount) - setCount;
+      print('[DEBUG][DataManager] getLessonEligibleStudents: ${s.student.name}, remain=$remain');
+      return remain > 0;
+    }).toList();
+    print('[DEBUG][DataManager] getLessonEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    return eligible;
+  }
+
+  /// 자습 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 <= 0)
+  List<StudentWithInfo> getSelfStudyEligibleStudents() {
+    final eligible = students.where((s) {
+      final setCount = getStudentLessonSetCount(s.student.id);
+      final remain = (s.basicInfo.weeklyClassCount) - setCount;
+      print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
+      return remain <= 0;
+    }).toList();
+    print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    return eligible;
+  }
 } 

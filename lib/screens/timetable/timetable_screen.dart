@@ -271,7 +271,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final selectedStudent = await showDialog<Student>(
         context: context,
         barrierDismissible: true,
-        builder: (context) => StudentSearchDialog(onlyShowIncompleteStudents: true),
+        builder: (context) => StudentSearchDialog(isSelfStudyMode: false),
       );
       StudentWithInfo? studentWithInfo;
       if (selectedStudent != null) {
@@ -1226,14 +1226,17 @@ class SelfStudyRegistrationDialog extends StatefulWidget {
 class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialog> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  List<StudentWithInfo> get _eligibleStudents => DataManager.instance.getSelfStudyEligibleStudents();
   List<StudentWithInfo> get _searchResults {
     if (_searchQuery.isEmpty) return [];
-    return DataManager.instance.students.where((student) {
+    final results = _eligibleStudents.where((student) {
       final nameMatch = student.student.name.toLowerCase().contains(_searchQuery.toLowerCase());
       final schoolMatch = student.student.school.toLowerCase().contains(_searchQuery.toLowerCase());
       final gradeMatch = student.student.grade.toString().contains(_searchQuery);
       return nameMatch || schoolMatch || gradeMatch;
     }).toList();
+    print('[DEBUG][SelfStudyRegistrationDialog] 자습 등록 가능 학생 검색 결과: ' + results.map((s) => s.student.name).toList().toString());
+    return results;
   }
 
   @override

@@ -4,12 +4,12 @@ import '../services/data_manager.dart';
 
 class StudentSearchDialog extends StatefulWidget {
   final Set<String> excludedStudentIds;
-  final bool onlyShowIncompleteStudents;
+  final bool isSelfStudyMode;
   
   const StudentSearchDialog({
     Key? key,
     this.excludedStudentIds = const {},
-    this.onlyShowIncompleteStudents = false,
+    this.isSelfStudyMode = false,
   }) : super(key: key);
 
   @override
@@ -28,27 +28,28 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     DataManager.instance.studentTimeBlocksNotifier.addListener(_refreshStudentList); // 시간표 변경 시 자동 새로고침
   }
 
+  /// 자습 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 <= 0)
+  List<StudentWithInfo> getSelfStudyEligibleStudents() {
+    final eligible = DataManager.instance.students.where((s) {
+      final setCount = DataManager.instance.getStudentLessonSetCount(s.student.id);
+      final remain = (s.basicInfo.weeklyClassCount) - setCount;
+      print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
+      return remain <= 0;
+    }).toList();
+    print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    return eligible;
+  }
+
   void _refreshStudentList() {
-    final allStudents = DataManager.instance.students
-        .where((studentWithInfo) => !widget.excludedStudentIds.contains(studentWithInfo.student.id))
-        .toList();
-    if (widget.onlyShowIncompleteStudents) {
-      // 학생별로 등록된 수업시간 setId 개수와 weeklyClassCount 비교
-      final timeBlocks = DataManager.instance.studentTimeBlocks;
-      _students = allStudents.where((studentWithInfo) {
-        // setId가 null인 블록은 제외 (혹은 개별적으로 1개로 취급)
-        final studentBlocks = timeBlocks.where((b) => b.studentId == studentWithInfo.student.id);
-        final setIds = studentBlocks.map((b) => b.setId).where((id) => id != null).toSet();
-        final count = setIds.length;
-        final required = studentWithInfo.basicInfo.weeklyClassCount;
-        final include = count < required;
-        print('[학생리스트필터] name= [33m${studentWithInfo.student.name} [0m, id=${studentWithInfo.student.id}, weeklyClassCount=$required, 등록된setId개수=$count, 리스트포함=$include');
-        return include;
-      }).toList();
+    if (widget.isSelfStudyMode) {
+      _students = DataManager.instance.getSelfStudyEligibleStudents();
+      print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     } else {
-      _students = allStudents;
+      _students = DataManager.instance.getLessonEligibleStudents();
+      print('[DEBUG][StudentSearchDialog] 수업 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     }
     _filteredStudents = _students;
+    setState(() {});
   }
 
   @override
