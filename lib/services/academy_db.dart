@@ -425,4 +425,26 @@ class AcademyDbService {
     final dbClient = await db;
     await dbClient.delete('student_time_blocks', where: 'student_id = ?', whereArgs: [studentId]);
   }
+
+  Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      for (final block in blocks) {
+        await txn.insert(
+          'student_time_blocks',
+          block.toJson(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      for (final id in blockIds) {
+        await txn.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
+      }
+    });
+  }
 } 

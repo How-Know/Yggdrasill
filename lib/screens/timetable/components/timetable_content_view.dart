@@ -13,7 +13,6 @@ class TimetableContentView extends StatefulWidget {
   final bool isDropdownOpen;
   final ValueChanged<bool> onDropdownOpenChanged;
   final ValueChanged<String> onDropdownSelected;
-  final List<StudentWithInfo>? selectedCellStudents;
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellStudentsChanged;
@@ -31,7 +30,6 @@ class TimetableContentView extends StatefulWidget {
     required this.isDropdownOpen,
     required this.onDropdownOpenChanged,
     required this.onDropdownSelected,
-    this.selectedCellStudents,
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
     this.onCellStudentsChanged,
@@ -350,15 +348,33 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             child: _buildGroupedStudentCardsByDayTime(_searchResults),
                           ),
                         )
-                      else if (widget.selectedCellStudents != null && widget.selectedCellStudents!.isNotEmpty)
+                      else if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
                         Expanded(
-                          child: SingleChildScrollView(
-                            child: _buildStudentCardList(
-                              widget.selectedCellStudents!,
-                              dayTimeLabel: widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null
-                                ? _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime)
-                                : null,
-                            ),
+                          child: ValueListenableBuilder<List<StudentTimeBlock>>(
+                            valueListenable: DataManager.instance.studentTimeBlocksNotifier,
+                            builder: (context, studentTimeBlocks, _) {
+                              final blocks = studentTimeBlocks.where((b) =>
+                                b.dayIndex == widget.selectedCellDayIndex &&
+                                b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                                b.startTime.minute == widget.selectedCellStartTime!.minute
+                              ).toList();
+                              final students = DataManager.instance.students;
+                              final cellStudents = blocks.map((b) =>
+                                students.firstWhere(
+                                  (s) => s.student.id == b.studentId,
+                                  orElse: () => StudentWithInfo(
+                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                  ),
+                                )
+                              ).toList();
+                              return SingleChildScrollView(
+                                child: _buildStudentCardList(
+                                  cellStudents,
+                                  dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                ),
+                              );
+                            },
                           ),
                         )
                       else
@@ -510,14 +526,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
-  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime}) {
+  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents}) {
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
     );
     final isSelected = widget.selectedStudentIds.contains(info.student.id);
     // 선택된 학생 리스트
-    final selectedStudents = widget.selectedCellStudents?.where((s) => widget.selectedStudentIds.contains(s.student.id)).toList() ?? [];
+    final selectedStudents = cellStudents?.where((s) => widget.selectedStudentIds.contains(s.student.id)).toList() ?? [];
     final selectedCount = selectedStudents.length;
     return Draggable<Map<String, dynamic>>(
       data: {
@@ -705,7 +721,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             spacing: 8,
             runSpacing: 8,
             children: students.map((info) =>
-              _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime)
+              _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: students)
             ).toList(),
           ),
         ),

@@ -70,7 +70,8 @@ class TimetableCell extends StatelessWidget {
         final students = (data['students'] as List<StudentWithInfo>?) ?? [];
         final oldDayIndex = data['oldDayIndex'] as int?;
         final oldStartTime = data['oldStartTime'] as DateTime?;
-        List<Future> futures = [];
+        List<StudentTimeBlock> toRemove = [];
+        List<StudentTimeBlock> toAdd = [];
         for (final studentWithInfo in students) {
           if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
           final studentId = studentWithInfo.student.id;
@@ -87,8 +88,8 @@ class TimetableCell extends StatelessWidget {
             final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startTime.hour == oldStartTime.hour && b.startTime.minute == oldStartTime.minute);
             if (block != null) {
               final newBlock = block.copyWith(dayIndex: dayIdx, startTime: startTime);
-              futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
-              futures.add(DataManager.instance.addStudentTimeBlock(newBlock));
+              toRemove.add(block);
+              toAdd.add(newBlock);
             }
             continue;
           }
@@ -105,15 +106,23 @@ class TimetableCell extends StatelessWidget {
             final diff = block.number! - baseNumber;
             final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
             final newBlock = block.copyWith(dayIndex: dayIdx, startTime: newTime);
-            futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
-            futures.add(DataManager.instance.addStudentTimeBlock(newBlock));
+            toRemove.add(block);
+            toAdd.add(newBlock);
           }
         }
-        await Future.wait(futures);
-        // 이동 후 데이터 일괄 새로고침
-        await DataManager.instance.loadStudentTimeBlocks();
-        await DataManager.instance.loadStudents();
-        // 반드시 이동 후의 셀(dayIdx, startTime) 기준으로 학생카드 리스트 갱신
+        // 1. 메모리상의 studentTimeBlocks를 즉시 갱신 (UI 즉시 반영)
+        final newBlocks = List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
+        newBlocks.removeWhere((b) => toRemove.any((r) => r.id == b.id));
+        newBlocks.addAll(toAdd);
+        DataManager.instance.studentTimeBlocks = newBlocks;
+        DataManager.instance.studentTimeBlocksNotifier.value = List.unmodifiable(newBlocks);
+        // 2. DB 동기화는 트랜잭션으로 처리 (await하지 않음)
+        DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
+        DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
+        // 3. 학생/블록 전체 동기화는 백그라운드에서
+        DataManager.instance.loadStudentTimeBlocks();
+        DataManager.instance.loadStudents();
+        // 4. 반드시 이동 후의 셀(dayIdx, startTime) 기준으로 학생카드 리스트 갱신
         final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
         if (timetableContentViewState != null) {
           timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);

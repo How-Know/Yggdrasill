@@ -56,6 +56,9 @@ class DataManager {
   final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
 
   List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
+  set studentTimeBlocks(List<StudentTimeBlock> value) {
+    _studentTimeBlocks = value;
+  }
   List<GroupSchedule> get groupSchedules => List.unmodifiable(_groupSchedules);
 
   List<Teacher> _teachers = [];
@@ -372,6 +375,19 @@ class DataManager {
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.deleteStudentTimeBlock(id);
     await loadStudentTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
+  }
+
+  Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
+    _studentTimeBlocks.addAll(blocks);
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
+  }
+
+  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds) async {
+    _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(blockIds);
+    await loadStudentTimeBlocks();
   }
 
   // GroupSchedule 관련 메서드들
