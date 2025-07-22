@@ -50,6 +50,10 @@ class DataManager {
   AcademySettings get academySettings => _academySettings;
   PaymentType get paymentType => _paymentType;
 
+  set paymentType(PaymentType type) {
+    _paymentType = type;
+  }
+
   List<StudentTimeBlock> _studentTimeBlocks = [];
   final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
   
@@ -192,7 +196,7 @@ class DataManager {
     try {
       final dbData = await AcademyDbService.instance.getAcademySettings();
       if (dbData != null) {
-        print('[DataManager] loadAcademySettings: logo type=[33m${dbData['logo']?.runtimeType}[0m, length=[33m${(dbData['logo'] as Uint8List?)?.length}[0m, isNull=[33m${dbData['logo'] == null}[0m');
+        print('[DataManager] loadAcademySettings: logo type=\x1B[33m${dbData['logo']?.runtimeType}\x1B[0m, length=\x1B[33m${(dbData['logo'] as Uint8List?)?.length}\x1B[0m, isNull=\x1B[33m${dbData['logo'] == null}\x1B[0m');
         _academySettings = AcademySettings(
           name: dbData['name'] as String? ?? '',
           slogan: dbData['slogan'] as String? ?? '',
@@ -203,21 +207,23 @@ class DataManager {
               : dbData['logo'] is List<int>
                   ? Uint8List.fromList(List<int>.from(dbData['logo']))
                   : null,
+          sessionCycle: dbData['session_cycle'] as int? ?? 1, // [추가]
         );
       } else {
-        _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
+        _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
       }
     } catch (e) {
       print('Error loading settings: $e');
-      _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
+      _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
     }
   }
 
   Future<void> saveAcademySettings(AcademySettings settings) async {
     try {
-      print('[DataManager] saveAcademySettings: logo type=[32m${settings.logo?.runtimeType}[0m, length=[32m${settings.logo?.length}[0m, isNull=[32m${settings.logo == null}[0m');
+      print('[DataManager] saveAcademySettings: logo type=\x1B[32m${settings.logo?.runtimeType}\x1B[0m, length=\x1B[32m${settings.logo?.length}\x1B[0m, isNull=\x1B[32m${settings.logo == null}\x1B[0m');
+      print('[DataManager] saveAcademySettings: _paymentType = $_paymentType');
       _academySettings = settings;
-      await AcademyDbService.instance.saveAcademySettings(settings, _paymentType == PaymentType.monthly ? 'monthly' : 'perClass');
+      await AcademyDbService.instance.saveAcademySettings(settings, _paymentType == PaymentType.monthly ? 'monthly' : 'session');
     } catch (e) {
       print('Error saving settings: $e');
       throw Exception('Failed to save academy settings');

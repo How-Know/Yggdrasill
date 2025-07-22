@@ -74,6 +74,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _sloganController = TextEditingController();
   final TextEditingController _capacityController = TextEditingController(text: '30');
   final TextEditingController _lessonDurationController = TextEditingController(text: '50');
+  // [추가] 수강 횟수 컨트롤러
+  final TextEditingController _courseCountController = TextEditingController();
   
   final Map<DayOfWeek, TimeRange?> _operatingHours = {
     DayOfWeek.monday: null,
@@ -130,6 +132,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _sloganController.dispose();
     _capacityController.dispose();
     _lessonDurationController.dispose();
+    _courseCountController.dispose(); // [추가]
     super.dispose();
   }
 
@@ -864,38 +867,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      SizedBox(
-                        width: 290,
-                        child: DropdownButtonFormField<PaymentType>(
-                          value: _paymentType,
-                          decoration: InputDecoration(
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                            ),
-                            focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      // [수정] 지불 방식과 수강 횟수를 한 줄(Row)로 배치
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 290,
+                            child: DropdownButtonFormField<PaymentType>(
+                              value: _paymentType,
+                              decoration: InputDecoration(
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                ),
+                              ),
+                              dropdownColor: const Color(0xFF1F1F1F),
+                              style: const TextStyle(color: Colors.white, fontSize: 16),
+                              items: [
+                                DropdownMenuItem(
+                                  value: PaymentType.monthly,
+                                  child: Text('월 결제'),
+                                ),
+                                DropdownMenuItem(
+                                  value: PaymentType.perClass,
+                                  child: Text('회당 결제'),
+                                ),
+                              ],
+                              onChanged: (PaymentType? value) {
+                                if (value != null) {
+                                  setState(() {
+                                    _paymentType = value;
+                                  });
+                                }
+                              },
                             ),
                           ),
-                          dropdownColor: const Color(0xFF1F1F1F),
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
-                          items: [
-                            DropdownMenuItem(
-                              value: PaymentType.monthly,
-                              child: Text('월 결제'),
+                          const SizedBox(width: 20),
+                          SizedBox(
+                            width: 290,
+                            child: TextFormField(
+                              controller: _courseCountController,
+                              style: const TextStyle(color: Colors.white),
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: '수강 횟수',
+                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                ),
+                              ),
                             ),
-                            DropdownMenuItem(
-                              value: PaymentType.perClass,
-                              child: Text('회당 결제'),
-                            ),
-                          ],
-                          onChanged: (PaymentType? value) {
-                            if (value != null) {
-                              setState(() {
-                                _paymentType = value;
-                              });
-                            }
-                          },
-                        ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 30),
                       Row(
@@ -963,6 +990,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: () async {
                   try {
                     ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                    print('저장 시 _paymentType:  [36m [1m [4m$_paymentType [0m');
                     print('[DEBUG] 저장 버튼 클릭: _academyLogo type= [36m${_academyLogo.runtimeType} [0m, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
                     final academySettings = AcademySettings(
                       name: _academyNameController.text.trim(),
@@ -970,7 +998,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       defaultCapacity: int.tryParse(_capacityController.text.trim()) ?? 30,
                       lessonDuration: int.tryParse(_lessonDurationController.text.trim()) ?? 50,
                       logo: _academyLogo,
+                      sessionCycle: int.tryParse(_courseCountController.text.trim()) ?? 1, // [추가]
                     );
+                    DataManager.instance.paymentType = _paymentType; // [수정] public setter 사용
                     await DataManager.instance.saveAcademySettings(academySettings);
                     await DataManager.instance.savePaymentType(_paymentType);
                     // 운영시간/휴식시간도 함께 저장

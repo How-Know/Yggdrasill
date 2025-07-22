@@ -28,7 +28,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -38,7 +38,8 @@ class AcademyDbService {
             default_capacity INTEGER,
             lesson_duration INTEGER,
             payment_type TEXT,
-            logo BLOB
+            logo BLOB,
+            session_cycle INTEGER DEFAULT 1 -- [추가] 수강 횟수
           )
         ''');
         await db.execute('''
@@ -157,6 +158,14 @@ class AcademyDbService {
             )
           ''');
         }
+        if (oldVersion < 5) {
+          // [추가] session_cycle 컬럼이 없으면 추가
+          final columns = await db.rawQuery("PRAGMA table_info(academy_settings)");
+          final hasSessionCycle = columns.any((col) => col['name'] == 'session_cycle');
+          if (!hasSessionCycle) {
+            await db.execute("ALTER TABLE academy_settings ADD COLUMN session_cycle INTEGER DEFAULT 1");
+          }
+        }
         final columns = await db.rawQuery("PRAGMA table_info(students)");
         final hasGroupId = columns.any((col) => col['name'] == 'group_id');
         if (!hasGroupId) {
@@ -189,7 +198,11 @@ class AcademyDbService {
   Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {
     try {
       final dbClient = await db;
-      print('[DB] saveAcademySettings: $settings, paymentType: $paymentType');
+      // paymentType 문자열 변환
+      String paymentTypeStr = paymentType;
+      if (paymentType == 'perClass' || paymentType == 'session') paymentTypeStr = 'session';
+      if (paymentType == 'monthly') paymentTypeStr = 'monthly';
+      print('[DB] saveAcademySettings: $settings, paymentType: $paymentTypeStr');
       await dbClient.insert(
         'academy_settings',
         {
@@ -198,8 +211,9 @@ class AcademyDbService {
           'slogan': settings.slogan,
           'default_capacity': settings.defaultCapacity,
           'lesson_duration': settings.lessonDuration,
-          'payment_type': paymentType,
+          'payment_type': paymentTypeStr,
           'logo': settings.logo,
+          'session_cycle': settings.sessionCycle, // [추가]
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
