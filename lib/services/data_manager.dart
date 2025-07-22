@@ -7,6 +7,7 @@ import '../models/education_level.dart';
 import '../models/student_time_block.dart';
 import '../models/group_schedule.dart';
 import '../models/teacher.dart';
+import '../models/self_study_time_block.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
@@ -65,6 +66,26 @@ class DataManager {
   final ValueNotifier<List<Teacher>> teachersNotifier = ValueNotifier<List<Teacher>>([]);
   List<Teacher> get teachers => List.unmodifiable(_teachers);
 
+  List<SelfStudyTimeBlock> _selfStudyTimeBlocks = [];
+  final ValueNotifier<List<SelfStudyTimeBlock>> selfStudyTimeBlocksNotifier = ValueNotifier<List<SelfStudyTimeBlock>>([]);
+
+  List<SelfStudyTimeBlock> get selfStudyTimeBlocks => List.unmodifiable(_selfStudyTimeBlocks);
+  set selfStudyTimeBlocks(List<SelfStudyTimeBlock> value) {
+    _selfStudyTimeBlocks = value;
+    selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+  }
+
+  Future<void> addSelfStudyTimeBlock(SelfStudyTimeBlock block) async {
+    _selfStudyTimeBlocks.add(block);
+    selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+    await AcademyDbService.instance.addSelfStudyTimeBlock(block);
+  }
+
+  void removeSelfStudyTimeBlock(String id) {
+    _selfStudyTimeBlocks.removeWhere((b) => b.id == id);
+    selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+  }
+
   Future<void> initialize() async {
     if (_isInitialized) {
       return;
@@ -77,6 +98,7 @@ class DataManager {
       await loadPaymentType();
       await _loadOperatingHours();
       await loadStudentTimeBlocks();
+      await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
       await loadTeachers();
       _isInitialized = true;
@@ -208,6 +230,7 @@ class DataManager {
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     groupSchedulesNotifier.value = List.unmodifiable(_groupSchedules);
     teachersNotifier.value = List.unmodifiable(_teachers);
+    selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
   }
 
   void addGroup(GroupInfo groupInfo) {
@@ -550,5 +573,17 @@ class DataManager {
     }).toList();
     print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
     return eligible;
+  }
+
+  // 자습 블록을 DB에서 불러오는 메서드 추가
+  Future<void> loadSelfStudyTimeBlocks() async {
+    try {
+      _selfStudyTimeBlocks = await AcademyDbService.instance.getSelfStudyTimeBlocks();
+      selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+    } catch (e) {
+      print('Error loading self study time blocks: $e');
+      _selfStudyTimeBlocks = [];
+      selfStudyTimeBlocksNotifier.value = [];
+    }
   }
 } 

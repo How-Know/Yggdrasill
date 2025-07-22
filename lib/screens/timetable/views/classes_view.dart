@@ -10,6 +10,7 @@ import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
 import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
+import '../../../models/self_study_time_block.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -93,6 +94,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   void _onCellPanEnd(int dayIdx) async {
+    print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, registrationModeType=${widget.registrationModeType}, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
     if (!isDragging || dragDayIdx != dayIdx || dragStartIdx == null || dragEndIdx == null) {
       setState(() { isDragging = false; });
       return;
@@ -112,10 +114,15 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final mode = widget.registrationModeType;
     final timeBlocks = _generateTimeBlocks();
     final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+    print('[DEBUG][_onCellPanEnd] mode=$mode, startTimes=$startTimes, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
     if (mode == 'student' && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
+      print('[DEBUG][_onCellPanEnd] 수업 등록 분기 진입');
       widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
     } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null && widget.onCellStudentsSelected != null) {
+      print('[DEBUG][_onCellPanEnd] 자습 등록 분기 진입');
       widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
+    } else {
+      print('[DEBUG][_onCellPanEnd] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
     }
   }
 
@@ -129,7 +136,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=${widget.selectedStudentWithInfo}');
+    print('[DEBUG][ClassesView.build] isRegistrationMode= [33m${widget.isRegistrationMode} [0m, registrationModeType= [33m${widget.registrationModeType} [0m, selectedStudentWithInfo= [33m${widget.selectedStudentWithInfo} [0m, selectedSelfStudyStudent= [33m${widget.selectedSelfStudyStudent} [0m');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
     return Stack(
@@ -139,13 +146,32 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
           child: ValueListenableBuilder<List<StudentTimeBlock>>(
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
-              print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length=${studentTimeBlocks.length}');
+              final selfStudyTimeBlocks = DataManager.instance.selfStudyTimeBlocks;
+              // 정원수 카운트 등에는 전체 studentTimeBlocks + selfStudyTimeBlocks를 합친 allBlocks 사용
+              final allBlocks = <dynamic>[
+                ...DataManager.instance.studentTimeBlocks,
+                ...DataManager.instance.selfStudyTimeBlocks,
+              ];
+              // 학생 리스트 필터 등에는 기존 filteredStudentIds/filteredStudentBlocks 사용
+              final filteredStudentBlocks = widget.filteredStudentIds == null
+                  ? studentTimeBlocks
+                  : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              final filteredSelfStudyBlocks = widget.filteredStudentIds == null
+                  ? selfStudyTimeBlocks
+                  : selfStudyTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length= [33m${studentTimeBlocks.length} [0m, selfStudyTimeBlocks.length= [33m${selfStudyTimeBlocks.length} [0m, allBlocks.length= [33m${allBlocks.length} [0m');
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              // 인원수 카운트 등 공통 필드만 쓸 때 allBlocks 사용, StudentTimeBlock만 필요한 곳에는 filteredStudentBlocks만 넘김
               final filteredBlocks = widget.filteredStudentIds == null
-                  ? studentTimeBlocks
-                  : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+                  ? allBlocks
+                  : allBlocks.where((b) {
+                      if (b is StudentTimeBlock || b is SelfStudyTimeBlock) {
+                        return widget.filteredStudentIds!.contains(b.studentId);
+                      }
+                      return false;
+                    }).toList();
               print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
               return Listener(
                 onPointerDown: (event) {
@@ -227,7 +253,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               final cellKey = '$dayIdx-$blockIdx';
                               _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
                               final activeBlocks = _getActiveStudentBlocks(
-                                filteredBlocks,
+                                filteredStudentBlocks, // 반드시 StudentTimeBlock만!
                                 dayIdx,
                                 timeBlocks[blockIdx].startTime,
                                 lessonDuration,
@@ -266,7 +292,18 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   }
                                 }
                               }
-                              final activeStudentCount = activeBlocks.length;
+                              // 시:분만 비교하는 함수
+                              bool isSameTime(DateTime a, DateTime b) => a.hour == b.hour && a.minute == b.minute;
+                              // 학생별 중복 없이, 요일+시:분이 같은 학생만 카운트
+                              final activeStudentIds = allBlocks
+                                .where((b) =>
+                                  (b is StudentTimeBlock || b is SelfStudyTimeBlock) &&
+                                  b.dayIndex == dayIdx &&
+                                  isSameTime(b.startTime, timeBlocks[blockIdx].startTime)
+                                )
+                                .map((b) => b.studentId)
+                                .toSet();
+                              final activeStudentCount = activeStudentIds.length;
                               Color? countColor;
                               if (activeStudentCount > 0) {
                                 if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.8) {

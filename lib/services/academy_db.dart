@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../models/student_time_block.dart';
+import '../models/self_study_time_block.dart';
 
 class AcademyDbService {
   static final AcademyDbService instance = AcademyDbService._internal();
@@ -99,6 +100,16 @@ class AcademyDbService {
             created_at TEXT
           )
         ''');
+        await db.execute('''
+          CREATE TABLE self_study_time_blocks (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            day_index INTEGER,
+            start_time TEXT,
+            duration INTEGER,
+            created_at TEXT
+          )
+        ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -159,6 +170,16 @@ class AcademyDbService {
             contact TEXT,
             email TEXT,
             description TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS self_study_time_blocks (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            day_index INTEGER,
+            start_time TEXT,
+            duration INTEGER,
+            created_at TEXT
           )
         ''');
       },
@@ -444,6 +465,71 @@ class AcademyDbService {
     await dbClient.transaction((txn) async {
       for (final id in blockIds) {
         await txn.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
+      }
+    });
+  }
+
+  Future<void> addSelfStudyTimeBlock(SelfStudyTimeBlock block) async {
+    final dbClient = await db;
+    await dbClient.insert('self_study_time_blocks', block.toDb());
+  }
+
+  Future<List<SelfStudyTimeBlock>> getSelfStudyTimeBlocks() async {
+    final dbClient = await db;
+    final result = await dbClient.query('self_study_time_blocks');
+    return result.map((row) => SelfStudyTimeBlock(
+      id: row['id'] as String,
+      studentId: row['student_id'] as String,
+      dayIndex: row['day_index'] as int,
+      startTime: DateTime.parse(row['start_time'] as String),
+      duration: Duration(minutes: row['duration'] as int),
+      createdAt: DateTime.parse(row['created_at'] as String),
+    )).toList();
+  }
+
+  Future<void> saveSelfStudyTimeBlocks(List<SelfStudyTimeBlock> blocks) async {
+    final dbClient = await db;
+    await dbClient.delete('self_study_time_blocks');
+    for (final block in blocks) {
+      await dbClient.insert('self_study_time_blocks', {
+        'id': block.id,
+        'student_id': block.studentId,
+        'day_index': block.dayIndex,
+        'start_time': block.startTime.toIso8601String(),
+        'duration': block.duration.inMinutes,
+        'created_at': block.createdAt.toIso8601String(),
+      });
+    }
+  }
+
+  Future<void> deleteSelfStudyTimeBlock(String id) async {
+    final dbClient = await db;
+    await dbClient.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteSelfStudyTimeBlocksByStudentId(String studentId) async {
+    final dbClient = await db;
+    await dbClient.delete('self_study_time_blocks', where: 'student_id = ?', whereArgs: [studentId]);
+  }
+
+  Future<void> bulkAddSelfStudyTimeBlocks(List<SelfStudyTimeBlock> blocks) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      for (final block in blocks) {
+        await txn.insert(
+          'self_study_time_blocks',
+          block.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<void> bulkDeleteSelfStudyTimeBlocks(List<String> blockIds) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      for (final id in blockIds) {
+        await txn.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
       }
     });
   }

@@ -5,6 +5,7 @@ import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import '../../../main.dart'; // rootScaffoldMessengerKey import
 import '../../../models/student_time_block.dart';
+import '../../../models/self_study_time_block.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -353,26 +354,68 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           child: ValueListenableBuilder<List<StudentTimeBlock>>(
                             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
                             builder: (context, studentTimeBlocks, _) {
-                              final blocks = studentTimeBlocks.where((b) =>
-                                b.dayIndex == widget.selectedCellDayIndex &&
-                                b.startTime.hour == widget.selectedCellStartTime!.hour &&
-                                b.startTime.minute == widget.selectedCellStartTime!.minute
-                              ).toList();
-                              final students = DataManager.instance.students;
-                              final cellStudents = blocks.map((b) =>
-                                students.firstWhere(
-                                  (s) => s.student.id == b.studentId,
-                                  orElse: () => StudentWithInfo(
-                                    student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                                    basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
-                                  ),
-                                )
-                              ).toList();
-                              return SingleChildScrollView(
-                                child: _buildStudentCardList(
-                                  cellStudents,
-                                  dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
-                                ),
+                              return ValueListenableBuilder<List<SelfStudyTimeBlock>>(
+                                valueListenable: DataManager.instance.selfStudyTimeBlocksNotifier,
+                                builder: (context, selfStudyTimeBlocksRaw, __) {
+                                  final selfStudyTimeBlocks = selfStudyTimeBlocksRaw.cast<SelfStudyTimeBlock>();
+                                  final blocks = studentTimeBlocks.where((b) =>
+                                    b.dayIndex == widget.selectedCellDayIndex &&
+                                    b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                                    b.startTime.minute == widget.selectedCellStartTime!.minute
+                                  ).toList();
+                                  final students = DataManager.instance.students;
+                                  final cellStudents = blocks.map((b) =>
+                                    students.firstWhere(
+                                      (s) => s.student.id == b.studentId,
+                                      orElse: () => StudentWithInfo(
+                                        student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                                        basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                      ),
+                                    )
+                                  ).toList();
+                                  // 자습 블록 필터링
+                                  final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) =>
+                                    b.dayIndex == widget.selectedCellDayIndex &&
+                                    b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                                    b.startTime.minute == widget.selectedCellStartTime!.minute
+                                  ).cast<SelfStudyTimeBlock>().toList();
+                                  final cellSelfStudyStudents = cellSelfStudyBlocks.map((b) =>
+                                    students.firstWhere(
+                                      (s) => s.student.id == b.studentId,
+                                      orElse: () => StudentWithInfo(
+                                        student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+                                        basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                      ),
+                                    )
+                                  ).toList();
+                                  return SingleChildScrollView(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        _buildStudentCardList(
+                                          cellStudents,
+                                          dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                        ),
+                                        if (cellSelfStudyStudents.isNotEmpty) ...[
+                                          const Padding(
+                                            padding: EdgeInsets.only(top: 18.0, left: 8.0, bottom: 4.0),
+                                            child: Text('자습', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, fontSize: 15)),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 4.0),
+                                            child: Wrap(
+                                              spacing: 8,
+                                              runSpacing: 8,
+                                              children: cellSelfStudyStudents.map<Widget>((info) =>
+                                                _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents)
+                                              ).toList(),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  );
+                                },
                               );
                             },
                           ),

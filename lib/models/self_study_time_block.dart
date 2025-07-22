@@ -46,6 +46,15 @@ class SelfStudyTimeBlock {
     'number': number,
   };
 
+  Map<String, dynamic> toDb() => {
+    'id': id,
+    'student_id': studentId,
+    'day_index': dayIndex,
+    'start_time': startTime.toIso8601String(),
+    'duration': duration.inMinutes,
+    'created_at': createdAt.toIso8601String(),
+  };
+
   SelfStudyTimeBlock copyWith({
     String? id,
     String? studentId,

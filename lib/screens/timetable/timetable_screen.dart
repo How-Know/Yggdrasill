@@ -19,6 +19,7 @@ import 'components/timetable_content_view.dart';
 import '../../widgets/app_snackbar.dart';
 import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
+import '../../models/self_study_time_block.dart';
 
 enum TimetableViewType {
   classes,    // 수업
@@ -699,7 +700,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     operatingHours: _operatingHours,
                     breakTimeColor: const Color(0xFF424242),
                     isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode || _isSelfStudyRegistrationMode,
-                    registrationModeType: _isStudentRegistrationMode ? 'student' : (_isSelfStudyRegistrationMode ? 'selfStudy' : null),
+                    registrationModeType: _isSelfStudyRegistrationMode ? 'selfStudy' : (_isStudentRegistrationMode ? 'student' : null),
                     selectedDayIndex: _selectedDayIndex,
                     onTimeSelected: (dayIdx, startTime) {
                       print('[DEBUG][onTimeSelected] 호출: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
@@ -710,12 +711,43 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       });
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
-                      print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
+                      print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+                      // 셀 클릭 시 검색 리셋
+                      _contentViewKey.currentState?.clearSearch();
+                      setState(() {
+                        _selectedCellDayIndex = dayIdx;
+                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                      });
+                      // 자습 등록 모드 처리
+                      if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
+                        print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
+                        for (final startTime in startTimes) {
+                          final block = SelfStudyTimeBlock(
+                            id: Uuid().v4(),
+                            studentId: _selectedSelfStudyStudent!.student.id,
+                            dayIndex: dayIdx,
+                            startTime: startTime,
+                            duration: Duration(minutes: 30), // 자습 블록 길이(분) 필요시 조정
+                            createdAt: DateTime.now(),
+                            setId: Uuid().v4(),
+                            number: 1,
+                          );
+                          print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: ${block.toJson()}');
+                          DataManager.instance.addSelfStudyTimeBlock(block);
+                        }
+                        setState(() {
+                          _isSelfStudyRegistrationMode = false;
+                          _selectedSelfStudyStudent = null;
+                        });
+                        showAppSnackBar(context, '자습 시간이 등록되었습니다.', useRoot: true);
+                        return;
+                      }
                       // 학생 등록 모드에서만 동작
                       if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
+                        print('[DEBUG][onCellStudentsSelected] 수업 등록 분기 진입');
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final student = studentWithInfo.student;
-                        print('[DEBUG][onCellStudentsSelected] 등록모드 진입: student=${student.id}, name=${student.name}');
+                        print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
                         final blockMinutes = 30; // 한 블록 30분 기준
                         List<DateTime> actualStartTimes = startTimes;
                         // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
@@ -723,71 +755,47 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                           final blockCount = (lessonDuration / blockMinutes).ceil();
                           actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
-                          print('[DEBUG][onCellStudentsSelected] 단일 셀 클릭: lessonDuration=$lessonDuration, blockCount=$blockCount, actualStartTimes=$actualStartTimes');
                         }
+                        print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
                         final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                           studentIds: [student.id],
                           dayIndex: dayIdx,
                           startTimes: actualStartTimes,
                           duration: Duration(minutes: blockMinutes),
                         );
-                        print('[DEBUG][onCellStudentsSelected] 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
-                        // 1. UI 상태를 먼저 갱신 (선택모드 해제 등)
+                        print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
+                        for (final block in blocks) {
+                          print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
+                          await DataManager.instance.addStudentTimeBlock(block);
+                        }
+                        print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                        await DataManager.instance.loadStudentTimeBlocks();
+                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocks.map((b) => b.toJson()).toList()}');
+                        final setIds = allBlocks.map((b) => b.setId).toSet();
+                        int usedCount = setIds.length;
+                        print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                        final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                          (s) => s.student.id == student.id,
+                          orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                        );
+                        final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                        print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
                         setState(() {
-                          _selectedCellDayIndex = dayIdx;
-                          _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
-                          // _selectedCellStudents는 아래에서 갱신
-                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                            (s) => s.student.id == student.id,
-                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
-                          );
-                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                          final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                          final allBlocksSetIds = allBlocks.map((b) => b.setId).toSet();
-                          int usedCount = allBlocksSetIds.length + blocks.length; // 미리 반영
                           _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                          print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
                           if (_remainingRegisterCount == 0) {
+                            print('[DEBUG][onCellStudentsSelected] 등록모드 종료');
                             _isStudentRegistrationMode = false;
                             _selectedStudentWithInfo = null;
                             _selectedDayIndex = null;
                             _selectedStartTime = null;
                           }
                         });
-                        // 2. 데이터 갱신은 병렬 처리
-                        await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
-                        // loadStudentTimeBlocks()는 await하지 않고, 백그라운드에서 동기화
-                        DataManager.instance.loadStudentTimeBlocks();
-                        // 3. 학생 리스트 갱신
-                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                          b.dayIndex == dayIdx &&
-                          b.startTime.hour == (startTimes.isNotEmpty ? startTimes.first.hour : 0) &&
-                          b.startTime.minute == (startTimes.isNotEmpty ? startTimes.first.minute : 0)
-                        ).toList();
-                        final allStudents = DataManager.instance.students;
-                        // 학생 리스트는 timetable_content_view.dart에서 계산
-                        setState(() {
-                          // _selectedCellStudents = updatedCellStudents; // 제거
-                        });
-                        // 4. 스낵바 호출 (UI 갱신 후)
                         if (_remainingRegisterCount == 0 && mounted) {
                           showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                         }
-                        return;
                       }
-                      // 학생 등록 모드가 아닐 때는 기존 동작 유지
-                      // 등록 후 셀의 전체 학생 리스트로 갱신
-                      final allBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                        b.dayIndex == dayIdx &&
-                        b.startTime.hour == (startTimes.isNotEmpty ? startTimes.first.hour : 0) &&
-                        b.startTime.minute == (startTimes.isNotEmpty ? startTimes.first.minute : 0)
-                      ).toList();
-                      final allStudents = DataManager.instance.students;
-                      // 학생 리스트는 timetable_content_view.dart에서 계산
-                      setState(() {
-                        _selectedCellDayIndex = dayIdx;
-                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
-                        // _selectedCellStudents = updatedCellStudents; // 제거
-                      });
                     },
                     scrollController: _timetableScrollController,
                     // filteredStudentIds 정의 추가
@@ -795,6 +803,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       ? null
                       : _filteredStudents.map((s) => s.student.id).toSet(),
                     selectedStudentWithInfo: _selectedStudentWithInfo,
+                    selectedSelfStudyStudent: _selectedSelfStudyStudent,
                     onSelectModeChanged: (selecting) {
                       setState(() {
                         _isSelectMode = selecting;
@@ -813,7 +822,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             } else if (_splitButtonSelected == '보강') {
               // TODO: 보강 등록 모드 구현
             } else if (_splitButtonSelected == '자습') {
-              showSelfStudyRegistrationDialog();
+              _handleSelfStudyRegistration();
             }
           },
           splitButtonSelected: _splitButtonSelected,
@@ -925,6 +934,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               });
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
+              print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
               // 셀 클릭 시 검색 리셋
               _contentViewKey.currentState?.clearSearch();
               setState(() {
@@ -1200,7 +1210,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     ).toList();
   }
 
-  void showSelfStudyRegistrationDialog() {
+  void _handleSelfStudyRegistration() {
     showDialog(
       context: context,
       builder: (context) => SelfStudyRegistrationDialog(
@@ -1208,10 +1218,19 @@ class _TimetableScreenState extends State<TimetableScreen> {
           setState(() {
             _isSelfStudyRegistrationMode = true;
             _selectedSelfStudyStudent = student;
+            print('[DEBUG][setState] _selectedSelfStudyStudent:  [33m$_selectedSelfStudyStudent [0m');
           });
         },
       ),
-    );
+    ).then((value) {
+      if (value != null) {
+        setState(() {
+          _isSelfStudyRegistrationMode = true;
+          _selectedSelfStudyStudent = value;
+          print('[DEBUG][TimetableScreen] showDialog 반환값:  [33m$value [0m');
+        });
+      }
+    });
   }
 }
 
@@ -1284,8 +1303,8 @@ class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialo
                                 title: Text(info.student.name, style: const TextStyle(color: Colors.white)),
                                 subtitle: Text('${info.student.school} / ${info.student.grade}학년', style: const TextStyle(color: Colors.white70, fontSize: 14)),
                                 onTap: () {
-                                  widget.onStudentSelected(info);
-                                  Navigator.of(context).pop();
+                                  print('[DEBUG][SelfStudyRegistrationDialog] 학생 선택:  [33m${info.student.name} [0m');
+                                  Navigator.of(context).pop(info); // 반드시 StudentWithInfo 반환
                                 },
                               );
                             },
