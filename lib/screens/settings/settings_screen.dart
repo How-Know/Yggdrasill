@@ -157,7 +157,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _sloganController.text = DataManager.instance.academySettings.slogan;
         _capacityController.text = DataManager.instance.academySettings.defaultCapacity.toString();
         _lessonDurationController.text = DataManager.instance.academySettings.lessonDuration.toString();
-        _paymentType = DataManager.instance.paymentType;
+        _courseCountController.text = DataManager.instance.academySettings.sessionCycle.toString(); // [추가] 수강 횟수 불러오기
+        _paymentType = DataManager.instance.paymentType; // [보완] 결제 방식 불러오기
         final logo = DataManager.instance.academySettings.logo;
         _academyLogo = (logo is Uint8List && logo.isNotEmpty) ? logo : null;
         print('[DEBUG] _loadSettings: 불러온 logo type=${logo?.runtimeType}, length=${logo?.length}, isNull=${logo == null}');

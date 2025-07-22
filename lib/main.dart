@@ -37,9 +37,12 @@ class MyApp extends StatelessWidget {
         await windowManager.maximize();
         await windowManager.focus();
       } else {
-        await windowManager.setSize(const Size(1920, 1350));
+        await windowManager.setMinimumSize(const Size(1600, 900));
+        await windowManager.setSize(const Size(1600, 900));
         await windowManager.center();
         await windowManager.focus();
+        final info = await windowManager.getBounds();
+        print('실제 창 크기:  [36m${info.width} x ${info.height} [0m');
       }
     });
     return RawKeyboardListener(

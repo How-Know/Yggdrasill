@@ -209,12 +209,21 @@ class DataManager {
                   : null,
           sessionCycle: dbData['session_cycle'] as int? ?? 1, // [추가]
         );
+        // [추가] payment_type을 enum으로 변환하여 _paymentType에 할당
+        final paymentTypeStr = dbData['payment_type'] as String? ?? 'monthly';
+        if (paymentTypeStr == 'session') {
+          _paymentType = PaymentType.perClass;
+        } else {
+          _paymentType = PaymentType.monthly;
+        }
       } else {
         _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
+        _paymentType = PaymentType.monthly;
       }
     } catch (e) {
       print('Error loading settings: $e');
       _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
+      _paymentType = PaymentType.monthly;
     }
   }
 
