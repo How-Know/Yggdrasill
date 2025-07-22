@@ -15,6 +15,7 @@ import '../../widgets/main_fab.dart';
 import '../../widgets/teacher_registration_dialog.dart';
 import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 enum SettingType {
   academy,
@@ -119,11 +120,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
 
   bool _isTabAnimating = false;
+  bool _fullscreenEnabled = false; // [추가] 전체화면 스위치 상태
+  ThemeMode _selectedThemeMode = ThemeMode.dark; // [추가] 테마 선택 상태
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _loadFullscreenSetting();
+  }
+
+  void _loadFullscreenSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _fullscreenEnabled = prefs.getBool('fullscreen_enabled') ?? false;
+    });
   }
 
   @override
@@ -223,19 +234,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       label: Text('다크'),
                     ),
                   ],
-                  selected: {ThemeMode.dark},
+                  selected: {_selectedThemeMode},
                   onSelectionChanged: (Set<ThemeMode> newSelection) {
-                    // TODO: 테마 변경 기능 구현
+                    setState(() {
+                      _selectedThemeMode = newSelection.first;
+                    });
                   },
                   style: ButtonStyle(
-                    backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                      (Set<MaterialState> states) {
-                        if (states.contains(MaterialState.selected)) {
-                          return const Color(0xFF78909C);
-                        }
-                        return Colors.transparent;
-                      },
-                    ),
+                    backgroundColor: MaterialStateProperty.all(Colors.transparent),
                     foregroundColor: MaterialStateProperty.resolveWith<Color>(
                       (Set<MaterialState> states) {
                         if (states.contains(MaterialState.selected)) {
@@ -243,6 +249,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                         return Colors.white70;
                       },
+                    ),
+                    textStyle: MaterialStateProperty.all(
+                      const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                     ),
                   ),
                 ),
@@ -345,6 +354,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: true,
                   onChanged: (bool value) {
                     // TODO: 백업 설정 기능 구현
+                  },
+                  activeColor: const Color(0xFF1976D2),
+                ),
+                // [추가] 실행/전체화면 설정
+                const SizedBox(height: 40),
+                const Text(
+                  '실행',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SwitchListTile(
+                  title: const Text(
+                    '전체 화면',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                  subtitle: const Text(
+                    '프로그램 시작시 전체화면으로 시작합니다.',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  value: _fullscreenEnabled,
+                  onChanged: (bool value) async {
+                    setState(() {
+                      _fullscreenEnabled = value;
+                    });
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('fullscreen_enabled', value);
                   },
                   activeColor: const Color(0xFF1976D2),
                 ),
