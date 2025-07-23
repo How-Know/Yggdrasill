@@ -732,19 +732,48 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       // 자습 등록 모드 처리
                       if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
                         print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
-                        for (final startTime in startTimes) {
-                          final block = SelfStudyTimeBlock(
-                            id: Uuid().v4(),
-                            studentId: _selectedSelfStudyStudent!.student.id,
-                            dayIndex: dayIdx,
-                            startTime: startTime,
-                            duration: Duration(minutes: 30), // 자습 블록 길이(분) 필요시 조정
-                            createdAt: DateTime.now(),
-                            setId: Uuid().v4(),
-                            number: 1,
-                          );
-                          print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: ${block.toJson()}');
-                          DataManager.instance.addSelfStudyTimeBlock(block);
+                        final studentId = _selectedSelfStudyStudent!.student.id;
+                        final blockMinutes = 30; // 자습 블록 길이(분)
+                        List<DateTime> actualStartTimes = startTimes;
+                        // 클릭(단일 셀) 시에는 30분 블록 1개 생성
+                        if (startTimes.length == 1) {
+                          actualStartTimes = [startTimes.first];
+                        }
+                        
+                        // 수업 블록과의 중복 체크
+                        bool hasConflict = false;
+                        for (final startTime in actualStartTimes) {
+                          final conflictingBlocks = DataManager.instance.studentTimeBlocks.where((b) {
+                            if (b.studentId != studentId || b.dayIndex != dayIdx) return false;
+                            final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+                            final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
+                            final checkStartMinutes = startTime.hour * 60 + startTime.minute;
+                            final checkEndMinutes = checkStartMinutes + blockMinutes;
+                            return checkStartMinutes < blockEndMinutes && checkEndMinutes > blockStartMinutes;
+                          }).toList();
+                          
+                          if (conflictingBlocks.isNotEmpty) {
+                            hasConflict = true;
+                            break;
+                          }
+                        }
+                        
+                        if (hasConflict) {
+                          showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.', useRoot: true);
+                          return;
+                        }
+                        
+                        print('[DEBUG][onCellStudentsSelected] 생성할 자습 블록 actualStartTimes: $actualStartTimes');
+                        final blocks = SelfStudyTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                          studentId: studentId,
+                          dayIndex: dayIdx,
+                          startTimes: actualStartTimes,
+                          duration: Duration(minutes: blockMinutes),
+                        );
+                        print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
+                        for (final block in blocks) {
+                          print('[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: ${block.toJson()}');
+                          await DataManager.instance.addSelfStudyTimeBlock(block);
                         }
                         setState(() {
                           _isSelfStudyRegistrationMode = false;

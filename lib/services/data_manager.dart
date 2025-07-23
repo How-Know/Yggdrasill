@@ -85,9 +85,11 @@ class DataManager {
     await AcademyDbService.instance.addSelfStudyTimeBlock(block);
   }
 
-  void removeSelfStudyTimeBlock(String id) {
+  Future<void> removeSelfStudyTimeBlock(String id) async {
     _selfStudyTimeBlocks.removeWhere((b) => b.id == id);
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+    await AcademyDbService.instance.deleteSelfStudyTimeBlock(id);
+    await loadSelfStudyTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
   }
 
   Future<void> initialize() async {

@@ -120,6 +120,23 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
     } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null && widget.onCellStudentsSelected != null) {
       print('[DEBUG][_onCellPanEnd] 자습 등록 분기 진입');
+      // 자습 블록 등록 전 중복 체크
+      final studentId = widget.selectedSelfStudyStudent!.student.id;
+      final blockMinutes = 30; // 자습 블록 길이
+      bool hasConflict = false;
+      
+      for (final startTime in startTimes) {
+        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, blockMinutes)) {
+          hasConflict = true;
+          break;
+        }
+      }
+      
+      if (hasConflict) {
+        showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.');
+        return;
+      }
+      
       widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
     } else {
       print('[DEBUG][_onCellPanEnd] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
@@ -448,17 +465,33 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   // 학생의 기존 시간표와 (요일, 시작시간, 수업시간) 겹침 여부 체크
   bool _isStudentTimeOverlap(String studentId, int dayIndex, DateTime startTime, int lessonDurationMinutes) {
-    final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    // 수업 블록과 자습 블록 모두 체크
+    final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) => b.studentId == studentId).toList();
+    
     final newStart = startTime.hour * 60 + startTime.minute;
     final newEnd = newStart + lessonDurationMinutes;
-    for (final block in allBlocks) {
+    
+    // 수업 블록 체크
+    for (final block in studentBlocks) {
       final blockStart = block.startTime.hour * 60 + block.startTime.minute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
-        print('[DEBUG][_isStudentTimeOverlap] 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
+        print('[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
         return true;
       }
     }
+    
+    // 자습 블록 체크
+    for (final block in selfStudyBlocks) {
+      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockEnd = blockStart + block.duration.inMinutes;
+      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+        print('[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
+        return true;
+      }
+    }
+    
     print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime');
     return false;
   }

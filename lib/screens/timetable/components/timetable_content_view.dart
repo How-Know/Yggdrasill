@@ -420,7 +420,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                               spacing: 8,
                                               runSpacing: 8,
                                               children: cellSelfStudyStudents.map<Widget>((info) =>
-                                                _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents)
+                                                _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents, isSelfStudy: true)
                                               ).toList(),
                                             ),
                                           ),
@@ -455,65 +455,115 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           final students = (data['students'] as List<StudentWithInfo>?) ?? [];
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
-                          print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+                          final isSelfStudy = data['isSelfStudy'] as bool? ?? false;
+                          print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime, isSelfStudy=$isSelfStudy');
                           List<Future> futures = [];
-                          for (final student in students) {
-                            // 기존 단일 삭제 로직 재사용
-                            // setId 진단 로그 추가
-                            print('[삭제드롭존][진단] studentId=${student.student.id}');
-                            print('[삭제드롭존][진단] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
-                            // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
-                            final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
-                              (b) =>
+                          
+                          if (isSelfStudy) {
+                            // 자습 블록 삭제 로직
+                            for (final student in students) {
+                              print('[삭제드롭존][자습] studentId=${student.student.id}');
+                              // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                              final targetBlock = DataManager.instance.selfStudyTimeBlocks.firstWhere(
+                                (b) =>
+                                  b.studentId == student.student.id &&
+                                  b.dayIndex == oldDayIndex &&
+                                  b.startTime.hour == oldStartTime?.hour &&
+                                  b.startTime.minute == oldStartTime?.minute,
+                                orElse: () => SelfStudyTimeBlock(
+                                  id: '',
+                                  studentId: '',
+                                  dayIndex: -1,
+                                  startTime: DateTime(0),
+                                  duration: Duration.zero,
+                                  createdAt: DateTime(0),
+                                  setId: null,
+                                  number: null,
+                                ),
+                              );
+                              if (targetBlock != null && targetBlock.setId != null) {
+                                // setId+studentId로 모든 블록 삭제 (일괄 삭제)
+                                final allBlocks = DataManager.instance.selfStudyTimeBlocks;
+                                final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
+                                for (final b in toDelete) {
+                                  print('[삭제드롭존][자습] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
+                                  futures.add(DataManager.instance.removeSelfStudyTimeBlock(b.id));
+                                }
+                              }
+                              // setId가 없는 경우 단일 블록 삭제
+                              final blocks = DataManager.instance.selfStudyTimeBlocks.where((b) =>
                                 b.studentId == student.student.id &&
                                 b.dayIndex == oldDayIndex &&
                                 b.startTime.hour == oldStartTime?.hour &&
-                                b.startTime.minute == oldStartTime?.minute,
-                              orElse: () => StudentTimeBlock(
-                                id: '',
-                                studentId: '',
-                                dayIndex: -1,
-                                startTime: DateTime(0),
-                                duration: Duration.zero,
-                                createdAt: DateTime(0),
-                                setId: null,
-                                number: null,
-                              ),
-                            );
-                            if (targetBlock != null && targetBlock.setId != null) {
-                              // setId+studentId로 모든 블록 삭제 (일괄 삭제)
-                              final allBlocks = DataManager.instance.studentTimeBlocks;
-                              final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
-                              for (final b in toDelete) {
-                                print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
-                                futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
+                                b.startTime.minute == oldStartTime?.minute
+                              ).toList();
+                              for (final block in blocks) {
+                                print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
+                                futures.add(DataManager.instance.removeSelfStudyTimeBlock(block.id));
                               }
                             }
-                            // setId가 없는 경우 단일 블록 삭제
-                            final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                              b.studentId == student.student.id &&
-                              b.dayIndex == oldDayIndex &&
-                              b.startTime.hour == oldStartTime?.hour &&
-                              b.startTime.minute == oldStartTime?.minute
-                            ).toList();
-                            for (final block in blocks) {
-                              print('[삭제드롭존] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
-                              futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
+                          } else {
+                            // 기존 수업 블록 삭제 로직
+                            for (final student in students) {
+                              print('[삭제드롭존][수업] studentId=${student.student.id}');
+                              print('[삭제드롭존][수업] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
+                              // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                              final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
+                                (b) =>
+                                  b.studentId == student.student.id &&
+                                  b.dayIndex == oldDayIndex &&
+                                  b.startTime.hour == oldStartTime?.hour &&
+                                  b.startTime.minute == oldStartTime?.minute,
+                                orElse: () => StudentTimeBlock(
+                                  id: '',
+                                  studentId: '',
+                                  dayIndex: -1,
+                                  startTime: DateTime(0),
+                                  duration: Duration.zero,
+                                  createdAt: DateTime(0),
+                                  setId: null,
+                                  number: null,
+                                ),
+                              );
+                              if (targetBlock != null && targetBlock.setId != null) {
+                                // setId+studentId로 모든 블록 삭제 (일괄 삭제)
+                                final allBlocks = DataManager.instance.studentTimeBlocks;
+                                final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
+                                for (final b in toDelete) {
+                                  print('[삭제드롭존][수업] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
+                                  futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
+                                }
+                              }
+                              // setId가 없는 경우 단일 블록 삭제
+                              final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                                b.studentId == student.student.id &&
+                                b.dayIndex == oldDayIndex &&
+                                b.startTime.hour == oldStartTime?.hour &&
+                                b.startTime.minute == oldStartTime?.minute
+                              ).toList();
+                              for (final block in blocks) {
+                                print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
+                                futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
+                              }
                             }
                           }
+                          
                           await Future.wait(futures);
                           await DataManager.instance.loadStudents();
                           await DataManager.instance.loadStudentTimeBlocks();
+                          await DataManager.instance.loadSelfStudyTimeBlocks();
                           setState(() {
                             _showDeleteZone = false;
                           });
                           print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
+                          print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (mounted) {
+                                final blockType = isSelfStudy ? '자습시간' : '수업시간';
                                 rootScaffoldMessengerKey.currentState?.showSnackBar(
                                   SnackBar(
-                                    content: Text('${students.length}명 학생의 수업시간이 삭제되었습니다.'),
+                                    content: Text('${students.length}명 학생의 $blockType이 삭제되었습니다.'),
                                     backgroundColor: const Color(0xFF1976D2),
                                     behavior: SnackBarBehavior.floating,
                                     margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
@@ -588,7 +638,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
-  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents}) {
+  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents, bool isSelfStudy = false}) {
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
@@ -602,6 +652,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         'students': isSelected && selectedCount > 1 ? selectedStudents : [info],
         'oldDayIndex': dayIndex,
         'oldStartTime': startTime,
+        'isSelfStudy': isSelfStudy,
       },
       onDragStarted: () => setState(() => _showDeleteZone = true),
       onDragEnd: (_) => setState(() => _showDeleteZone = false),

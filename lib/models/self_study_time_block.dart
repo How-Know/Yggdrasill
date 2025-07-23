@@ -53,6 +53,8 @@ class SelfStudyTimeBlock {
     'start_time': startTime.toIso8601String(),
     'duration': duration.inMinutes,
     'created_at': createdAt.toIso8601String(),
+    'set_id': setId,
+    'number': number,
   };
 
   SelfStudyTimeBlock copyWith({
@@ -76,4 +78,32 @@ class SelfStudyTimeBlock {
       number: number ?? this.number,
     );
   }
-} 
+}
+
+/// 여러 SelfStudyTimeBlock을 setId, number와 함께 일관성 있게 생성하는 헬퍼
+class SelfStudyTimeBlockFactory {
+  /// 여러 시간에 대해 한 번에 자습 블록을 생성 (setId, number 자동 부여)
+  static List<SelfStudyTimeBlock> createBlocksWithSetIdAndNumber({
+    required String studentId,
+    required int dayIndex,
+    required List<DateTime> startTimes,
+    required Duration duration,
+  }) {
+    final uuid = Uuid();
+    final setId = uuid.v4();
+    // 시간순 정렬
+    final sortedTimes = List<DateTime>.from(startTimes)..sort();
+    return List.generate(sortedTimes.length, (i) {
+      return SelfStudyTimeBlock(
+        id: uuid.v4(),
+        studentId: studentId,
+        dayIndex: dayIndex,
+        startTime: sortedTimes[i],
+        duration: duration,
+        createdAt: DateTime.now(),
+        setId: setId,
+        number: i + 1,
+      );
+    });
+  }
+}
