@@ -773,6 +773,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
                         for (final block in blocks) {
                           print('[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: ${block.toJson()}');
+                          print('[DEBUG][onCellStudentsSelected] block.setId=${block.setId}, block.number=${block.number}');
                           await DataManager.instance.addSelfStudyTimeBlock(block);
                         }
                         setState(() {
@@ -884,6 +885,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _selectedCellDayIndex = dayIdx;
               _selectedCellStartTime = startTime;
               // 학생 리스트는 timetable_content_view.dart에서 계산
+            });
+          },
+          onCellSelfStudyStudentsChanged: (dayIdx, startTime, students) {
+            setState(() {
+              _selectedCellDayIndex = dayIdx;
+              _selectedCellStartTime = startTime;
+              // 자습 학생 리스트는 timetable_content_view.dart에서 계산
             });
           },
           clearSearch: () => _contentViewKey.currentState?.clearSearch(), // 추가: 검색 리셋 콜백 전달
@@ -1039,6 +1047,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
             },
             filteredStudentIds: filteredStudentIds, // 추가: 필터 적용
             selectedStudentWithInfo: _selectedStudentWithInfo, // 추가
+            onCellSelfStudyStudentsChanged: (dayIdx, startTime, students) {
+              // 자습 블록 수정 로직은 TimetableContentView에서 처리
+            },
           ),
         ),
       ],

@@ -12,6 +12,7 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:mneme_flutter/models/student_time_block.dart';
 import 'package:mneme_flutter/models/student.dart';
+import 'package:mneme_flutter/models/self_study_time_block.dart';
 import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/widgets/app_snackbar.dart';
@@ -67,9 +68,91 @@ class TimetableCell extends StatelessWidget {
         return data != null && data.containsKey('students') && data.containsKey('oldDayIndex') && data.containsKey('oldStartTime');
       },
       onAccept: (data) async {
+        print('[DEBUG][TimetableCell][onAccept] 드롭 데이터: $data');
         final students = (data['students'] as List<StudentWithInfo>?) ?? [];
         final oldDayIndex = data['oldDayIndex'] as int?;
         final oldStartTime = data['oldStartTime'] as DateTime?;
+        final isSelfStudy = data['isSelfStudy'] as bool? ?? false;
+        print('[DEBUG][TimetableCell][onAccept] students=${students.map((s) => s.student.name).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime, isSelfStudy=$isSelfStudy');
+        if (isSelfStudy) {
+          print('[DEBUG][TimetableCell][onAccept] 자습 블록 이동 처리');
+          // 자습 블록 이동 처리
+          for (final studentWithInfo in students) {
+            if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
+            final studentId = studentWithInfo.student.id;
+            print('[DEBUG][TimetableCell][onAccept] 자습 블록 이동: studentId=$studentId, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+            
+            // 자습 블록 찾기 (setId 기반으로 모든 블록 찾기)
+            final targetBlock = DataManager.instance.selfStudyTimeBlocks.firstWhere(
+              (b) => b.studentId == studentId && 
+                     b.dayIndex == oldDayIndex && 
+                     b.startTime.hour == oldStartTime.hour && 
+                     b.startTime.minute == oldStartTime.minute,
+              orElse: () => SelfStudyTimeBlock(
+                id: '', studentId: '', dayIndex: -1, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
+              ),
+            );
+            
+            print('[DEBUG][TimetableCell][onAccept] 타겟 자습 블록: setId=${targetBlock.setId}, number=${targetBlock.number}');
+            
+            if (targetBlock.setId != null && targetBlock.number != null) {
+              // setId+studentId로 모든 블록 찾기
+              final setId = targetBlock.setId;
+              final baseNumber = targetBlock.number!;
+              final toMove = DataManager.instance.selfStudyTimeBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
+              
+              // number 기준 정렬
+              toMove.sort((a, b) => a.number!.compareTo(b.number!));
+              
+              print('[DEBUG][TimetableCell][onAccept] setId 기반 이동할 자습 블록: ${toMove.length}개');
+              
+              // 드롭된 셀의 시간(=number==baseNumber가 이동할 시간)
+              final baseTime = startTime;
+              final duration = targetBlock.duration;
+              
+              for (final block in toMove) {
+                final diff = block.number! - baseNumber;
+                final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
+                final newBlock = block.copyWith(
+                  dayIndex: dayIdx,
+                  startTime: newTime,
+                );
+                print('[DEBUG][TimetableCell][onAccept] 자습 블록 이동: ${block.id} (number=${block.number}) -> dayIndex=$dayIdx, startTime=$newTime');
+                await DataManager.instance.updateSelfStudyTimeBlock(block.id, newBlock);
+              }
+            } else {
+              // setId가 없는 경우 단일 블록만 이동
+              final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) =>
+                b.studentId == studentId && 
+                b.dayIndex == oldDayIndex && 
+                b.startTime.hour == oldStartTime.hour && 
+                b.startTime.minute == oldStartTime.minute
+              ).toList();
+              
+              print('[DEBUG][TimetableCell][onAccept] setId 없는 경우 단일 자습 블록 이동: ${selfStudyBlocks.length}개');
+              
+              for (final block in selfStudyBlocks) {
+                final newBlock = block.copyWith(
+                  dayIndex: dayIdx,
+                  startTime: startTime,
+                );
+                print('[DEBUG][TimetableCell][onAccept] 단일 자습 블록 이동: ${block.id} -> dayIndex=$dayIdx, startTime=$startTime');
+                await DataManager.instance.updateSelfStudyTimeBlock(block.id, newBlock);
+              }
+            }
+          }
+          
+          // 자습 블록 이동 후 UI 갱신
+          final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
+          if (timetableContentViewState != null) {
+            print('[DEBUG][TimetableCell][onAccept] 자습 블록 이동 후 UI 갱신');
+            timetableContentViewState.exitSelectModeIfNeeded();
+          }
+          return;
+        }
+        
+        // 수업 블록 이동 처리 (기존 로직)
+        print('[DEBUG][TimetableCell][onAccept] 수업 블록 이동 처리');
         List<StudentTimeBlock> toRemove = [];
         List<StudentTimeBlock> toAdd = [];
         for (final studentWithInfo in students) {

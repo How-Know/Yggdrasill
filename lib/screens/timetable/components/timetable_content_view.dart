@@ -6,6 +6,7 @@ import '../../../models/education_level.dart';
 import '../../../main.dart'; // rootScaffoldMessengerKey import
 import '../../../models/student_time_block.dart';
 import '../../../models/self_study_time_block.dart';
+import '../../../widgets/app_snackbar.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -17,6 +18,7 @@ class TimetableContentView extends StatefulWidget {
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellStudentsChanged;
+  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellSelfStudyStudentsChanged;
   final VoidCallback? clearSearch; // 추가: 외부에서 검색 리셋 요청
   final bool isSelectMode;
   final Set<String> selectedStudentIds;
@@ -34,6 +36,7 @@ class TimetableContentView extends StatefulWidget {
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
     this.onCellStudentsChanged,
+    this.onCellSelfStudyStudentsChanged,
     this.clearSearch, // 추가
     this.isSelectMode = false,
     this.selectedStudentIds = const {},
@@ -141,6 +144,108 @@ class TimetableContentViewState extends State<TimetableContentView> {
     if (widget.onCellStudentsChanged != null) {
       widget.onCellStudentsChanged!(dayIdx, startTime, updatedCellStudents);
     }
+  }
+
+  // 자습 블록 수정 (셀 위에 드롭)
+  void _onSelfStudyBlockMoved(int dayIdx, DateTime startTime, List<StudentWithInfo> students) async {
+    print('[DEBUG][_onSelfStudyBlockMoved] 호출: dayIdx=$dayIdx, startTime=$startTime, students=${students.map((s) => s.student.name).toList()}');
+    
+    // 이동할 자습 블록들 찾기 (현재 선택된 셀의 자습 블록들)
+    final currentSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
+      if (b.dayIndex != widget.selectedCellDayIndex || widget.selectedCellStartTime == null) return false;
+      final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+      final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
+      final checkMinutes = widget.selectedCellStartTime!.hour * 60 + widget.selectedCellStartTime!.minute;
+      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
+    }).toList();
+    
+    if (currentSelfStudyBlocks.isEmpty) {
+      print('[DEBUG][_onSelfStudyBlockMoved] 이동할 자습 블록이 없음');
+      return;
+    }
+    
+    // 중복 체크
+    final blockMinutes = 30; // 자습 블록 길이
+    bool hasConflict = false;
+    for (final student in students) {
+      for (final block in currentSelfStudyBlocks) {
+        if (_isSelfStudyTimeOverlap(student.student.id, dayIdx, startTime, blockMinutes)) {
+          hasConflict = true;
+          break;
+        }
+      }
+      if (hasConflict) break;
+    }
+    
+    if (hasConflict) {
+      showAppSnackBar(context, '이미 등록된 시간과 겹칩니다. 자습시간을 이동할 수 없습니다.', useRoot: true);
+      return;
+    }
+    
+    // 자습 블록 이동
+    for (final block in currentSelfStudyBlocks) {
+      final newBlock = block.copyWith(
+        dayIndex: dayIdx,
+        startTime: startTime,
+      );
+      await DataManager.instance.updateSelfStudyTimeBlock(block.id, newBlock);
+    }
+    
+    // UI 업데이트
+    final updatedSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
+      if (b.dayIndex != dayIdx) return false;
+      final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+      final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
+      final checkMinutes = startTime.hour * 60 + startTime.minute;
+      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
+    }).toList();
+    
+    final updatedStudents = DataManager.instance.students;
+    final updatedCellStudents = updatedSelfStudyBlocks.map((b) =>
+      updatedStudents.firstWhere(
+        (s) => s.student.id == b.studentId,
+        orElse: () => StudentWithInfo(
+          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+        ),
+      )
+    ).toList();
+    
+    if (widget.onCellSelfStudyStudentsChanged != null) {
+      widget.onCellSelfStudyStudentsChanged!(dayIdx, startTime, updatedCellStudents);
+    }
+    
+    // 자습 블록 수정 로직 호출
+    _onSelfStudyBlockMoved(dayIdx, startTime, students);
+  }
+  
+  // 자습 블록 시간 중복 체크
+  bool _isSelfStudyTimeOverlap(String studentId, int dayIndex, DateTime startTime, int lessonDurationMinutes) {
+    final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) => b.studentId == studentId).toList();
+    
+    final newStart = startTime.hour * 60 + startTime.minute;
+    final newEnd = newStart + lessonDurationMinutes;
+    
+    // 수업 블록 체크
+    for (final block in studentBlocks) {
+      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockEnd = blockStart + block.duration.inMinutes;
+      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+        return true;
+      }
+    }
+    
+    // 자습 블록 체크 (자신 제외)
+    for (final block in selfStudyBlocks) {
+      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockEnd = blockStart + block.duration.inMinutes;
+      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   // 다중 이동/수정 후
@@ -374,11 +479,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     )
                                   ).toList();
                                   // 자습 블록 필터링
-                                  final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) =>
-                                    b.dayIndex == widget.selectedCellDayIndex &&
-                                    b.startTime.hour == widget.selectedCellStartTime!.hour &&
-                                    b.startTime.minute == widget.selectedCellStartTime!.minute
-                                  ).cast<SelfStudyTimeBlock>().toList();
+                                  print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
+                                  print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
+                                  final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) {
+                                    final matches = b.dayIndex == widget.selectedCellDayIndex &&
+                                        b.startTime.hour == widget.selectedCellStartTime!.hour &&
+                                        b.startTime.minute == widget.selectedCellStartTime!.minute;
+                                    if (matches) {
+                                      print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startTime}');
+                                    }
+                                    return matches;
+                                  }).cast<SelfStudyTimeBlock>().toList();
+                                  print('[DEBUG][자습블록필터링] 필터링된 자습 블록: ${cellSelfStudyBlocks.length}개');
                                   final cellSelfStudyStudents = cellSelfStudyBlocks.map((b) =>
                                     students.firstWhere(
                                       (s) => s.student.id == b.studentId,
@@ -419,9 +531,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                             child: Wrap(
                                               spacing: 8,
                                               runSpacing: 8,
-                                              children: cellSelfStudyStudents.map<Widget>((info) =>
-                                                _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents, isSelfStudy: true)
-                                              ).toList(),
+                                              children: cellSelfStudyStudents.map<Widget>((info) {
+                                                print('[DEBUG][자습카드렌더링] 자습 카드 생성: student=${info.student.name}, dayIndex=${widget.selectedCellDayIndex}, startTime=${widget.selectedCellStartTime}');
+                                                return _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents, isSelfStudy: true);
+                                              }).toList(),
                                             ),
                                           ),
                                         ],
@@ -639,6 +752,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
   Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents, bool isSelfStudy = false}) {
+    print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, isSelfStudy=$isSelfStudy, dayIndex=$dayIndex, startTime=$startTime');
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
@@ -654,7 +768,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
         'oldStartTime': startTime,
         'isSelfStudy': isSelfStudy,
       },
-      onDragStarted: () => setState(() => _showDeleteZone = true),
+      onDragStarted: () {
+        print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student=${info.student.name}, isSelfStudy=$isSelfStudy');
+        setState(() => _showDeleteZone = true);
+      },
       onDragEnd: (_) => setState(() => _showDeleteZone = false),
       feedback: _buildDragFeedback(selectedStudents, info),
       childWhenDragging: Opacity(

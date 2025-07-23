@@ -504,6 +504,8 @@ class AcademyDbService {
       startTime: DateTime.parse(row['start_time'] as String),
       duration: Duration(minutes: row['duration'] as int),
       createdAt: DateTime.parse(row['created_at'] as String),
+      setId: row['set_id'] as String?,
+      number: row['number'] as int?,
     )).toList();
   }
 
@@ -525,6 +527,16 @@ class AcademyDbService {
   Future<void> deleteSelfStudyTimeBlock(String id) async {
     final dbClient = await db;
     await dbClient.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> updateSelfStudyTimeBlock(String id, SelfStudyTimeBlock newBlock) async {
+    final dbClient = await db;
+    await dbClient.update(
+      'self_study_time_blocks',
+      newBlock.toDb(),
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> deleteSelfStudyTimeBlocksByStudentId(String studentId) async {

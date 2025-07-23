@@ -92,6 +92,16 @@ class DataManager {
     await loadSelfStudyTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
   }
 
+  Future<void> updateSelfStudyTimeBlock(String id, SelfStudyTimeBlock newBlock) async {
+    final index = _selfStudyTimeBlocks.indexWhere((b) => b.id == id);
+    if (index != -1) {
+      _selfStudyTimeBlocks[index] = newBlock;
+      selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+      await AcademyDbService.instance.updateSelfStudyTimeBlock(id, newBlock);
+      await loadSelfStudyTimeBlocks(); // DB 업데이트 후 메모리/상태 최신화
+    }
+  }
+
   Future<void> initialize() async {
     if (_isInitialized) {
       return;

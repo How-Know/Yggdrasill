@@ -23,6 +23,7 @@ class ClassesView extends StatefulWidget {
   final int? selectedDayIndex;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
+  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
   final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
@@ -38,6 +39,7 @@ class ClassesView extends StatefulWidget {
     this.selectedDayIndex,
     this.onTimeSelected,
     this.onCellStudentsSelected,
+    this.onCellSelfStudyStudentsChanged,
     required this.scrollController,
     this.filteredStudentIds, // 추가
     this.selectedStudentWithInfo, // 변경
@@ -372,6 +374,24 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                           [selectedStudentWithInfo],
                                         );
                                       } else if (widget.onTimeSelected != null) {
+                                        // 자습 블록이 있는 경우 자습 블록 수정 콜백 호출
+                                        final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((block) {
+                                          if (block.dayIndex != dayIdx) return false;
+                                          final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
+                                          final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
+                                          final checkMinutes = timeBlocks[blockIdx].startTime.hour * 60 + timeBlocks[blockIdx].startTime.minute;
+                                          return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
+                                        }).toList();
+                                        
+                                        if (selfStudyBlocks.isNotEmpty && widget.onCellSelfStudyStudentsChanged != null) {
+                                          final studentsWithInfo = DataManager.instance.students;
+                                          final cellSelfStudyStudentWithInfos = selfStudyBlocks.map((b) => studentsWithInfo.firstWhere(
+                                            (s) => s.student.id == b.studentId,
+                                            orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())),
+                                          )).toList();
+                                          widget.onCellSelfStudyStudentsChanged!(dayIdx, timeBlocks[blockIdx].startTime, cellSelfStudyStudentWithInfos);
+                                        }
+                                        
                                         widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
                                       }
                                       // 선택모드 해제: 셀 클릭 시 onSelectModeChanged(false) 호출
