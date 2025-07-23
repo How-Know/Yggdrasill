@@ -211,6 +211,35 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
     }
   }
 
+  Future<void> _handleDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
+        content: const Text('정말로 이 학생을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text('삭제', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await DataManager.instance.deleteStudent(widget.studentWithInfo.student.id);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
@@ -267,7 +296,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                       widget.onUpdate!(widget.studentWithInfo);
                     }
                   } else if (value == 'delete') {
-                    if (widget.onDelete != null) widget.onDelete!(widget.studentWithInfo);
+                    await _handleDelete(context);
                   } else if (value == 'details') {
                     widget.onShowDetails(widget.studentWithInfo);
                   }

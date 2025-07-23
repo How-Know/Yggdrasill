@@ -28,7 +28,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -69,6 +69,8 @@ class AcademyDbService {
             registration_date TEXT,
             weekly_class_count INTEGER,
             group_id TEXT,
+            student_payment_type TEXT,
+            student_session_cycle INTEGER,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -165,6 +167,10 @@ class AcademyDbService {
           if (!hasSessionCycle) {
             await db.execute("ALTER TABLE academy_settings ADD COLUMN session_cycle INTEGER DEFAULT 1");
           }
+        }
+        if (oldVersion < 6) {
+          await db.execute("ALTER TABLE students_basic_info ADD COLUMN student_payment_type TEXT;");
+          await db.execute("ALTER TABLE students_basic_info ADD COLUMN student_session_cycle INTEGER;");
         }
         final columns = await db.rawQuery("PRAGMA table_info(students)");
         final hasGroupId = columns.any((col) => col['name'] == 'group_id');

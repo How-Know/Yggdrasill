@@ -96,6 +96,8 @@ class StudentBasicInfo {
   final DateTime registrationDate;
   final int weeklyClassCount;
   final String? groupId;
+  final String? studentPaymentType;
+  final int? studentSessionCycle;
 
   StudentBasicInfo({
     required this.studentId,
@@ -104,6 +106,8 @@ class StudentBasicInfo {
     required this.registrationDate,
     this.weeklyClassCount = 1,
     this.groupId,
+    this.studentPaymentType,
+    this.studentSessionCycle,
   });
 
   StudentBasicInfo copyWith({
@@ -112,6 +116,8 @@ class StudentBasicInfo {
     DateTime? registrationDate,
     int? weeklyClassCount,
     String? groupId,
+    String? studentPaymentType,
+    int? studentSessionCycle,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
@@ -119,7 +125,9 @@ class StudentBasicInfo {
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       registrationDate: registrationDate ?? this.registrationDate,
       weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
-      groupId: groupId,
+      groupId: groupId ?? this.groupId,
+      studentPaymentType: studentPaymentType ?? this.studentPaymentType,
+      studentSessionCycle: studentSessionCycle ?? this.studentSessionCycle,
     );
   }
 
@@ -131,6 +139,8 @@ class StudentBasicInfo {
       registrationDate: DateTime.parse(row['registration_date'] as String),
       weeklyClassCount: row['weekly_class_count'] as int? ?? 1,
       groupId: row['group_id'] as String?,
+      studentPaymentType: row['student_payment_type'] as String?,
+      studentSessionCycle: row['student_session_cycle'] as int?,
     );
   }
 
@@ -142,6 +152,8 @@ class StudentBasicInfo {
       'registration_date': registrationDate.toIso8601String(),
       'weekly_class_count': weeklyClassCount,
       'group_id': groupId,
+      'student_payment_type': studentPaymentType,
+      'student_session_cycle': studentSessionCycle,
     };
   }
 

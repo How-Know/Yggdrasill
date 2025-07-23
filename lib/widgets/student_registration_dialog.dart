@@ -32,6 +32,9 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late EducationLevel _educationLevel;
   late Grade? _grade;
   GroupInfo? _selectedGroup;
+  // [지불 방식 관련 상태 변수 및 컨트롤러 추가]
+  String _paymentType = 'monthly'; // 'monthly' 또는 'session'
+  final TextEditingController _paymentCycleController = TextEditingController();
 
   @override
   void initState() {
@@ -54,6 +57,9 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _registrationDate = basicInfo?.registrationDate ?? student?.registrationDate ?? DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
     _weeklyClassCountController = TextEditingController(text: (basicInfo?.weeklyClassCount ?? student?.weeklyClassCount ?? 1).toString());
+    // [지불 방식 데이터 초기화 추가]
+    _paymentType = basicInfo?.studentPaymentType ?? 'monthly';
+    _paymentCycleController.text = (basicInfo?.studentSessionCycle ?? 1).toString();
     if (student != null) {
       final grades = gradesByLevel[student.educationLevel] ?? [];
       _grade = grades.firstWhere(
@@ -74,6 +80,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _phoneController.dispose();
     _parentPhoneController.dispose();
     _weeklyClassCountController.dispose();
+    _paymentCycleController.dispose();
     super.dispose();
   }
 
@@ -156,6 +163,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       registrationDate: _registrationDate,
       weeklyClassCount: weeklyClassCount,
       groupId: _selectedGroup?.id,
+      studentPaymentType: _paymentType,
+      studentSessionCycle: _paymentType == 'session' ? int.tryParse(_paymentCycleController.text) : null,
     );
     widget.onSave(student, basicInfo);
     Navigator.of(context).pop(student);
@@ -170,7 +179,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
         style: const TextStyle(color: Colors.white),
       ),
       content: SizedBox(
-        width: 500,
+        width: 540,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -367,6 +376,65 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _paymentType,
+                    style: const TextStyle(color: Colors.white),
+                    dropdownColor: const Color(0xFF2A2A2A),
+                    decoration: InputDecoration(
+                      labelText: '지불 방식',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'monthly',
+                        child: Text('월 결제', style: TextStyle(color: Colors.white)),
+                      ),
+                      DropdownMenuItem(
+                        value: 'session',
+                        child: Text('횟수제', style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _paymentType = value;
+                        });
+                      }
+                    },
+                  ),
+                ),
+                if (_paymentType == 'session') ...[
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextField(
+                      controller: _paymentCycleController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: '결제 주기',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF1976D2)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),
@@ -380,7 +448,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
           style: FilledButton.styleFrom(
             backgroundColor: const Color(0xFF1976D2),
           ),
-          child: const Text('등록', style: TextStyle(color: Colors.white)),
+          child: Text(
+            widget.student == null ? '등록' : '수정',
+            style: const TextStyle(color: Colors.white)
+          ),
         ),
       ],
     );
