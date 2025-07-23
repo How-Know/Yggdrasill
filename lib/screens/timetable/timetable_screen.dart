@@ -23,14 +23,17 @@ import '../../models/self_study_time_block.dart';
 
 enum TimetableViewType {
   classes,    // 수업
-  schedule;   // 스케줄
+  schedule,   // 일정
+  attendance; // 출석
 
   String get name {
     switch (this) {
       case TimetableViewType.classes:
         return '수업';
       case TimetableViewType.schedule:
-        return '스케줄';
+        return '일정';
+      case TimetableViewType.attendance:
+        return '출석';
     }
   }
 }
@@ -66,6 +69,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   int? _remainingRegisterCount;
   final ScrollController _timetableScrollController = ScrollController();
   bool _hasScrolledToCurrentTime = false;
+  bool _hasScrolledOnTabClick = false; // 탭 클릭 시 스크롤 플래그 추가
   // 셀 선택 시 학생 리스트 상태 추가
   // 학생 리스트는 timetable_content_view.dart에서 계산
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
@@ -620,6 +624,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     setState(() {
                       _viewType = TimetableViewType.values[i];
                     });
+                    
+                    // 수업 탭 클릭 시에만 스크롤
+                    if (TimetableViewType.values[i] == TimetableViewType.classes && 
+                        !_hasScrolledOnTabClick) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+                      _hasScrolledOnTabClick = true;
+                    }
                   },
                 ),
                 const SizedBox(height: 24),
@@ -863,6 +874,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
+      case TimetableViewType.attendance:
+        return Container(); // TODO: Implement AttendanceView
     }
   }
 

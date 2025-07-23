@@ -388,18 +388,31 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       ),
                                     )
                                   ).toList();
+                                  
+                                  // 학생이 없는 경우 기본 메시지 표시
+                                  if (cellStudents.isEmpty && cellSelfStudyStudents.isEmpty) {
+                                    return Container(
+                                      alignment: Alignment.center,
+                                      child: const Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                    );
+                                  }
+                                  
                                   return SingleChildScrollView(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        _buildStudentCardList(
-                                          cellStudents,
-                                          dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
-                                        ),
+                                        if (cellStudents.isNotEmpty)
+                                          _buildStudentCardList(
+                                            cellStudents,
+                                            dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                          ),
                                         if (cellSelfStudyStudents.isNotEmpty) ...[
-                                          const Padding(
-                                            padding: EdgeInsets.only(top: 18.0, left: 8.0, bottom: 4.0),
-                                            child: Text('자습', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, fontSize: 15)),
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
+                                            child: Text(
+                                              '자습',
+                                              style: const TextStyle(color: Colors.white70, fontSize: 20),
+                                            ),
                                           ),
                                           Padding(
                                             padding: const EdgeInsets.only(top: 4.0),
