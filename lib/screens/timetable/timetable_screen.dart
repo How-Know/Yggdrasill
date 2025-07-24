@@ -317,6 +317,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
         });
         print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
+    } else if (_splitButtonSelected == '자습') {
+      // 자습 등록 모드 진입 막기: 아무 동작도 하지 않음
+      return;
     } else if (_selectedGroup != null) {
       // 클래스 등록 모드
       _showGroupScheduleDialog();
