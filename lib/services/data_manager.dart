@@ -8,6 +8,7 @@ import '../models/student_time_block.dart';
 import '../models/group_schedule.dart';
 import '../models/teacher.dart';
 import '../models/self_study_time_block.dart';
+import '../models/class_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
@@ -440,6 +441,16 @@ class DataManager {
     await loadStudentTimeBlocks();
   }
 
+  Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+    final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
+    if (index != -1) {
+      _studentTimeBlocks[index] = newBlock;
+      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      await AcademyDbService.instance.updateStudentTimeBlock(id, newBlock);
+      await loadStudentTimeBlocks(); // DB 업데이트 후 메모리/상태 최신화
+    }
+  }
+
   // GroupSchedule 관련 메서드들
   Future<void> loadGroupSchedules() async {
     // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
@@ -612,5 +623,53 @@ class DataManager {
       _selfStudyTimeBlocks = [];
       selfStudyTimeBlocksNotifier.value = [];
     }
+  }
+
+  List<ClassInfo> _classes = [];
+  final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
+  List<ClassInfo> get classes => List.unmodifiable(_classes);
+
+  Future<void> loadClasses() async {
+    _classes = await AcademyDbService.instance.getClasses();
+    classesNotifier.value = List.unmodifiable(_classes);
+  }
+  Future<void> saveClasses() async {
+    for (final c in _classes) {
+      await AcademyDbService.instance.addClass(c);
+    }
+    classesNotifier.value = List.unmodifiable(_classes);
+  }
+  Future<void> addClass(ClassInfo c) async {
+    _classes.add(c);
+    await AcademyDbService.instance.addClass(c);
+    classesNotifier.value = List.unmodifiable(_classes);
+  }
+  Future<void> updateClass(ClassInfo c) async {
+    final idx = _classes.indexWhere((e) => e.id == c.id);
+    if (idx != -1) _classes[idx] = c;
+    await AcademyDbService.instance.updateClass(c);
+    classesNotifier.value = List.unmodifiable(_classes);
+  }
+  Future<void> deleteClass(String id) async {
+    _classes.removeWhere((c) => c.id == id);
+    await AcademyDbService.instance.deleteClass(id);
+    classesNotifier.value = List.unmodifiable(_classes);
+  }
+
+  Future<void> saveClassesOrder(List<ClassInfo> newOrder) async {
+    print('[DEBUG][DataManager.saveClassesOrder] 시작: ${newOrder.map((c) => c.name).toList()}');
+    _classes = List<ClassInfo>.from(newOrder);
+    print('[DEBUG][DataManager.saveClassesOrder] _classes 업데이트: ${_classes.map((c) => c.name).toList()}');
+    
+    await AcademyDbService.instance.deleteAllClasses();
+    print('[DEBUG][DataManager.saveClassesOrder] deleteAllClasses 완료');
+    
+    for (final c in _classes) {
+      await AcademyDbService.instance.addClass(c);
+    }
+    print('[DEBUG][DataManager.saveClassesOrder] 모든 클래스 재저장 완료');
+    
+    classesNotifier.value = List.unmodifiable(_classes);
+    print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
   }
 } 

@@ -11,6 +11,7 @@ class StudentTimeBlock {
   final DateTime createdAt;
   final String? setId; // 같은 셋에 속한 블록끼리 공유
   final int? number;   // 1, 2, 3... 넘버링
+  final String? sessionTypeId; // 수업카드 드롭시 등록되는 수업명(또는 고유값)
 
   StudentTimeBlock({
     required this.id,
@@ -22,6 +23,7 @@ class StudentTimeBlock {
     required this.createdAt,
     this.setId,
     this.number,
+    this.sessionTypeId,
   });
 
   factory StudentTimeBlock.fromJson(Map<String, dynamic> json) {
@@ -35,6 +37,7 @@ class StudentTimeBlock {
       createdAt: DateTime.parse(json['created_at'] as String? ?? json['createdAt'] as String),
       setId: json['set_id'] as String? ?? json['setId'] as String?,
       number: json['number'] as int?,
+      sessionTypeId: json['session_type_id'] as String?,
     );
   }
 
@@ -47,6 +50,7 @@ class StudentTimeBlock {
     'created_at': createdAt.toIso8601String(),
     'set_id': setId,
     'number': number,
+    'session_type_id': sessionTypeId,
   };
 
   StudentTimeBlock copyWith({
@@ -59,6 +63,7 @@ class StudentTimeBlock {
     DateTime? createdAt,
     String? setId,
     int? number,
+    String? sessionTypeId,
   }) {
     return StudentTimeBlock(
       id: id ?? this.id,
@@ -70,6 +75,7 @@ class StudentTimeBlock {
       createdAt: createdAt ?? this.createdAt,
       setId: setId ?? this.setId,
       number: number ?? this.number,
+      sessionTypeId: sessionTypeId ?? this.sessionTypeId,
     );
   }
 }

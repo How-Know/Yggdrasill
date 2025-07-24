@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../models/student_time_block.dart';
 import '../models/self_study_time_block.dart';
+import '../models/class_info.dart';
 
 class AcademyDbService {
   static final AcademyDbService instance = AcademyDbService._internal();
@@ -28,7 +29,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabase(
       path,
-      version: 6,
+      version: 8,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -97,10 +98,14 @@ class AcademyDbService {
           CREATE TABLE student_time_blocks (
             id TEXT PRIMARY KEY,
             student_id TEXT,
+            group_id TEXT,
             day_index INTEGER,
             start_time TEXT,
             duration INTEGER,
-            created_at TEXT
+            created_at TEXT,
+            set_id TEXT,
+            number INTEGER,
+            session_type_id TEXT
           )
         ''');
         await db.execute('''
@@ -111,6 +116,15 @@ class AcademyDbService {
             start_time TEXT,
             duration INTEGER,
             created_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE classes (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            capacity INTEGER,
+            description TEXT,
+            color INTEGER
           )
         ''');
       },
@@ -197,6 +211,23 @@ class AcademyDbService {
             created_at TEXT
           )
         ''');
+        if (oldVersion < 7) {
+          // v7: student_time_blocks에 session_type_id 컬럼 추가
+          await db.execute('''
+            ALTER TABLE student_time_blocks ADD COLUMN session_type_id TEXT
+          ''');
+        }
+        if (oldVersion < 8) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS classes (
+              id TEXT PRIMARY KEY,
+              name TEXT,
+              capacity INTEGER,
+              description TEXT,
+              color INTEGER
+            )
+          ''');
+        }
       },
     );
   }
@@ -564,5 +595,38 @@ class AcademyDbService {
         await txn.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
       }
     });
+  }
+
+  Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+    final dbClient = await db;
+    await dbClient.update(
+      'student_time_blocks',
+      newBlock.toJson(),
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // ClassInfo CRUD
+  Future<void> addClass(ClassInfo c) async {
+    final dbClient = await db;
+    await dbClient.insert('classes', c.toJson(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+  Future<void> updateClass(ClassInfo c) async {
+    final dbClient = await db;
+    await dbClient.update('classes', c.toJson(), where: 'id = ?', whereArgs: [c.id]);
+  }
+  Future<void> deleteClass(String id) async {
+    final dbClient = await db;
+    await dbClient.delete('classes', where: 'id = ?', whereArgs: [id]);
+  }
+  Future<List<ClassInfo>> getClasses() async {
+    final dbClient = await db;
+    final result = await dbClient.query('classes');
+    return result.map((row) => ClassInfo.fromJson(row)).toList();
+  }
+  Future<void> deleteAllClasses() async {
+    final dbClient = await db;
+    await dbClient.delete('classes');
   }
 } 

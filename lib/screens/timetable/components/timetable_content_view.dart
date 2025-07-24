@@ -7,16 +7,7 @@ import '../../../main.dart'; // rootScaffoldMessengerKey import
 import '../../../models/student_time_block.dart';
 import '../../../models/self_study_time_block.dart';
 import '../../../widgets/app_snackbar.dart';
-
-// 1. 임시 수업 모델 및 상태 추가
-class ClassInfo {
-  final String id;
-  final String name;
-  final int? capacity;
-  final String description;
-  final Color? color;
-  ClassInfo({required this.id, required this.name, this.capacity, required this.description, this.color});
-}
+import '../../../models/class_info.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -66,8 +57,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
   List<StudentWithInfo> _searchResults = [];
   final TextEditingController _searchController = TextEditingController();
 
-  // 수업 리스트 상태
-  List<ClassInfo> _classes = [];
+  @override
+  void initState() {
+    super.initState();
+    DataManager.instance.loadClasses();
+  }
 
   void _showDropdownMenu() {
     final RenderBox buttonRenderBox = _dropdownButtonKey.currentContext!.findRenderObject() as RenderBox;
@@ -281,25 +275,42 @@ class TimetableContentViewState extends State<TimetableContentView> {
       builder: (context) => _ClassRegistrationDialog(editTarget: editTarget),
     );
     if (result != null) {
-      setState(() {
-        if (editTarget != null && editIndex != null) {
-          _classes[editIndex] = result;
-        } else {
-          _classes.add(result);
-        }
-      });
+      if (editTarget != null && editIndex != null) {
+        // 수정: sessionTypeId 일괄 변경
+        await updateSessionTypeIdForClass(editTarget.id, result.id);
+        await DataManager.instance.updateClass(result);
+      } else {
+        await DataManager.instance.addClass(result);
+      }
     }
   }
 
-  void _onReorder(int oldIndex, int newIndex) {
-    setState(() {
-      if (oldIndex < newIndex) newIndex--;
-      final item = _classes.removeAt(oldIndex);
-      _classes.insert(newIndex, item);
+  void _onReorder(int oldIndex, int newIndex) async {
+    print('[DEBUG][_onReorder] 시작: oldIndex=$oldIndex, newIndex=$newIndex');
+    final classes = List<ClassInfo>.from(DataManager.instance.classesNotifier.value);
+    print('[DEBUG][_onReorder] 원본 순서: ${classes.map((c) => c.name).toList()}');
+    
+    if (oldIndex < newIndex) newIndex--;
+    final item = classes.removeAt(oldIndex);
+    classes.insert(newIndex, item);
+    print('[DEBUG][_onReorder] 변경 후 순서: ${classes.map((c) => c.name).toList()}');
+    
+    // 즉시 UI 업데이트 (깜빡임 방지)
+    DataManager.instance.classesNotifier.value = List.unmodifiable(classes);
+    print('[DEBUG][_onReorder] 즉시 UI 업데이트 완료');
+    
+    // 백그라운드에서 DB 저장
+    DataManager.instance.saveClassesOrder(classes).then((_) {
+      print('[DEBUG][_onReorder] 백그라운드 DB 저장 완료');
+    }).catchError((error) {
+      print('[ERROR][_onReorder] DB 저장 실패: $error');
+      // DB 저장 실패 시 원래 순서로 복구
+      DataManager.instance.loadClasses();
     });
   }
 
   void _deleteClass(int idx) async {
+    final classes = DataManager.instance.classesNotifier.value;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -321,9 +332,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       ),
     );
     if (confirmed == true) {
-      setState(() {
-        _classes.removeAt(idx);
-      });
+      final classId = classes[idx].id;
+      await clearSessionTypeIdForClass(classId);
+      await DataManager.instance.deleteClass(classId);
     }
   }
 
@@ -374,6 +385,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.max,
                         children: [
+                          // 수업 등록 버튼
                           SizedBox(
                             width: 113,
                             height: 44,
@@ -392,12 +404,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   topRight: Radius.circular(6),
                                   bottomRight: Radius.circular(6),
                                 ),
-                                onTap: widget.onRegisterPressed,
+                                onTap: _showClassRegistrationDialog,
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   mainAxisSize: MainAxisSize.max,
                                   children: const [
-                                    Icon(Icons.edit, color: Colors.white, size: 20),
+                                    Icon(Icons.add, color: Colors.white, size: 20),
                                     SizedBox(width: 8),
                                     Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                                   ],
@@ -839,34 +851,39 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       const SizedBox(height: 18),
                       // 수업 카드 리스트
                       Expanded(
-                        child: _classes.isEmpty
-                          ? const Center(
-                              child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                            )
-                          : ReorderableListView.builder(
-                              itemCount: _classes.length,
-                              buildDefaultDragHandles: false,
-                              onReorder: _onReorder,
-                              proxyDecorator: (child, index, animation) {
-                                return Material(
-                                  color: Colors.transparent,
-                                  child: Container(
-                                    margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-                                    child: child,
-                                  ),
+                        child: ValueListenableBuilder<List<ClassInfo>>(
+                          valueListenable: DataManager.instance.classesNotifier,
+                          builder: (context, classes, _) {
+                            return classes.isEmpty
+                              ? const Center(
+                                  child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                )
+                              : ReorderableListView.builder(
+                                  itemCount: classes.length,
+                                  buildDefaultDragHandles: false,
+                                  onReorder: _onReorder,
+                                  proxyDecorator: (child, index, animation) {
+                                    return Material(
+                                      color: Colors.transparent,
+                                      child: Container(
+                                        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+                                        child: child,
+                                      ),
+                                    );
+                                  },
+                                  itemBuilder: (context, idx) {
+                                    final c = classes[idx];
+                                    return _ClassCard(
+                                      key: ValueKey(c.id),
+                                      classInfo: c,
+                                      onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
+                                      onDelete: () => _deleteClass(idx),
+                                      reorderIndex: idx,
+                                    );
+                                  },
                                 );
-                              },
-                              itemBuilder: (context, idx) {
-                                final c = _classes[idx];
-                                return _ClassCard(
-                                  key: ValueKey(c.id),
-                                  classInfo: c,
-                                  onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
-                                  onDelete: () => _deleteClass(idx),
-                                  reorderIndex: idx,
-                                );
-                              },
-                            ),
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -1415,91 +1432,153 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
 }
 
 // 수업카드 위젯 (그룹카드 스타일 참고)
-class _ClassCard extends StatelessWidget {
+class _ClassCard extends StatefulWidget {
   final ClassInfo classInfo;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final int reorderIndex;
   const _ClassCard({Key? key, required this.classInfo, required this.onEdit, required this.onDelete, required this.reorderIndex}) : super(key: key);
   @override
+  State<_ClassCard> createState() => _ClassCardState();
+}
+
+class _ClassCardState extends State<_ClassCard> {
+  bool _isHovering = false;
+
+  Future<void> _handleStudentDrop(StudentWithInfo studentWithInfo) async {
+    // studentWithInfo.basicInfo.setId가 아니라, 실제 StudentTimeBlock에서 setId를 추출
+    final blocks = DataManager.instance.studentTimeBlocks
+      .where((b) => b.studentId == studentWithInfo.student.id)
+      .toList();
+    if (blocks.isEmpty) return;
+    final setId = blocks.first.setId;
+    if (setId == null) return;
+    // set_id가 같은 모든 StudentTimeBlock을 찾아 session_type_id를 이 수업카드의 id로 저장
+    final targetBlocks = blocks.where((b) => b.setId == setId).toList();
+    for (final block in targetBlocks) {
+      final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
+      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    }
+    // TODO: 상태 갱신/스낵바 등 필요시 추가
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // TODO: 실제 학생수 연동 시 아래 값 수정
-    final int studentCount = 0;
-    return Card(
-      key: key,
-      color: const Color(0xFF1F1F1F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  margin: const EdgeInsets.only(right: 14),
-                  decoration: BoxDecoration(
-                    color: classInfo.color ?? const Color(0xFF1F1F1F),
-                    shape: BoxShape.rectangle,
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: Colors.white24, width: 1.4),
-                  ),
-                  child: classInfo.color == null
-                    ? const Center(child: Icon(Icons.close_rounded, color: Colors.white54, size: 14))
-                    : null,
-                ),
-                Expanded(
-                  child: Text(
-                    classInfo.name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
-                  onPressed: onEdit,
-                  tooltip: '수정',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.white70, size: 20),
-                  onPressed: onDelete,
-                  tooltip: '삭제',
-                ),
-                const SizedBox(width: 4),
-                ReorderableDragStartListener(
-                  index: reorderIndex,
-                  child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
+    final c = widget.classInfo;
+    final int studentCount = 0; // TODO: 실제 학생수 연동
+    return DragTarget<StudentWithInfo>(
+      onWillAccept: (data) => true,
+      onAccept: (studentWithInfo) async {
+        setState(() => _isHovering = false);
+        await _handleStudentDrop(studentWithInfo);
+      },
+      onMove: (_) => setState(() => _isHovering = true),
+      onLeave: (_) => setState(() => _isHovering = false),
+      builder: (context, candidateData, rejectedData) {
+        return Card(
+          key: widget.key,
+          color: const Color(0xFF1F1F1F),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: _isHovering && c.color != null
+              ? BorderSide(color: c.color!, width: 2.5)
+              : const BorderSide(color: Colors.transparent, width: 1.2),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    classInfo.description.isEmpty ? '-' : classInfo.description,
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 20,
+                      height: 20,
+                      margin: const EdgeInsets.only(right: 14),
+                      decoration: BoxDecoration(
+                        color: c.color ?? const Color(0xFF1F1F1F),
+                        shape: BoxShape.rectangle,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: Colors.white24, width: 1.4),
+                      ),
+                      // 색상이 없을 때 X 아이콘을 표시하지 않음
+                      // child: c.color == null
+                      //   ? const Center(child: Icon(Icons.close_rounded, color: Colors.white54, size: 14))
+                      //   : null,
+                    ),
+                    Expanded(
+                      child: Text(
+                        c.name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
+                      onPressed: widget.onEdit,
+                      tooltip: '수정',
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete, color: Colors.white70, size: 20),
+                      onPressed: widget.onDelete,
+                      tooltip: '삭제',
+                    ),
+                    const SizedBox(width: 4),
+                    ReorderableDragStartListener(
+                      index: widget.reorderIndex,
+                      child: const Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  classInfo.capacity == null
-                    ? '$studentCount/제한없음'
-                    : '$studentCount/${classInfo.capacity}명',
-                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.description.isEmpty ? '-' : c.description,
+                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      c.capacity == null
+                        ? '$studentCount/제한없음'
+                        : '$studentCount/${c.capacity}명',
+                      style: const TextStyle(color: Colors.white54, fontSize: 13),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 } 
+
+// TimetableContentViewState 내부에 아래 메서드 추가
+// (적절한 위치에 삽입)
+
+  // 수업카드 수정 시 관련 StudentTimeBlock의 session_type_id 일괄 수정
+  Future<void> updateSessionTypeIdForClass(String oldClassId, String newClassId) async {
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == oldClassId).toList();
+    for (final block in blocks) {
+      final updated = block.copyWith(sessionTypeId: newClassId);
+      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    }
+  }
+
+  // 수업카드 삭제 시 관련 StudentTimeBlock의 session_type_id를 null로 초기화
+  Future<void> clearSessionTypeIdForClass(String classId) async {
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
+    for (final block in blocks) {
+      final updated = block.copyWith(sessionTypeId: null);
+      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    }
+  } 
