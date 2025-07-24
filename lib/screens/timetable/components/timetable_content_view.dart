@@ -286,7 +286,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Column(
             children: [
               Expanded(
-                flex: 3, // 3:5 비율로 수정
+                flex: 1, // 1:1 비율로 수정
                 child: Container(
                   margin: const EdgeInsets.only(bottom: 16, top: 8, left: 4, right: 4),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -720,7 +720,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 ),
               ),
               Expanded(
-                flex: 5, // 3:5 비율로 수정
+                flex: 1, // 1:1 비율로 수정
                 child: Container(
                   margin: const EdgeInsets.only(top: 16, left: 4, right: 4, bottom: 8),
                   padding: const EdgeInsets.all(18),
