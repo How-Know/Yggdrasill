@@ -79,8 +79,7 @@ class TimetableCell extends StatelessWidget {
         print('[DEBUG][TimetableCell][onAccept] students= [36m${students.map((s) => s.student.name).toList()} [0m, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
         List<StudentTimeBlock> toRemove = [];
         List<StudentTimeBlock> toAdd = [];
-        bool hasConflict = false;
-        String? conflictLog;
+        List<StudentWithInfo> failedStudents = [];
         for (final studentWithInfo in students) {
           if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
           final studentId = studentWithInfo.student.id;
@@ -91,58 +90,57 @@ class TimetableCell extends StatelessWidget {
               id: '', studentId: '', dayIndex: -1, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
             ),
           );
+          bool studentHasConflict = false;
           if (targetBlock.setId == null || targetBlock.number == null) {
-            // setId/number 없는 경우 단일 블록만 이동/삭제
             final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startTime.hour == oldStartTime.hour && b.startTime.minute == oldStartTime.minute);
             if (block != null) {
-              // 중복 체크: 이동하려는 위치에 이미 같은 studentId/setId의 블록이 있으면 예외 허용(같은 setId), 아니면 막음
               final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute);
               if (conflictBlock != null) {
-                // setId가 둘 다 null이거나 같으면 예외 허용
                 if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
-                  hasConflict = true;
-                  conflictLog = '[CONFLICT] 단일 블록: studentId=$studentId, setId=${block.setId}, dayIdx=$dayIdx, startTime=$startTime';
+                  studentHasConflict = true;
+                }
+              }
+              if (!studentHasConflict) {
+                final newBlock = block.copyWith(dayIndex: dayIdx, startTime: startTime);
+                toRemove.add(block);
+                toAdd.add(newBlock);
+              }
+            } else {
+              studentHasConflict = true;
+            }
+          } else {
+            final setId = targetBlock.setId;
+            final baseNumber = targetBlock.number!;
+            final toMove = allBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
+            toMove.sort((a, b) => a.number!.compareTo(b.number!));
+            final baseTime = startTime;
+            final duration = targetBlock.duration;
+            final newBlocks = <StudentTimeBlock>[];
+            for (final block in toMove) {
+              final diff = block.number! - baseNumber;
+              final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
+              final newBlock = block.copyWith(dayIndex: dayIdx, startTime: newTime);
+              newBlocks.add(newBlock);
+            }
+            for (final newBlock in newBlocks) {
+              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == newBlock.startTime.hour && b.startTime.minute == newBlock.startTime.minute);
+              if (conflictBlock != null) {
+                if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
+                  studentHasConflict = true;
                   break;
                 }
               }
-              final newBlock = block.copyWith(dayIndex: dayIdx, startTime: startTime);
-              toRemove.add(block);
-              toAdd.add(newBlock);
             }
-            continue;
-          }
-          // setId+studentId로 모든 블록 찾기 (다중 이동/삭제)
-          final setId = targetBlock.setId;
-          final baseNumber = targetBlock.number!;
-          final toMove = allBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
-          toMove.sort((a, b) => a.number!.compareTo(b.number!));
-          final baseTime = startTime;
-          final duration = targetBlock.duration;
-          final newBlocks = <StudentTimeBlock>[];
-          for (final block in toMove) {
-            final diff = block.number! - baseNumber;
-            final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
-            final newBlock = block.copyWith(dayIndex: dayIdx, startTime: newTime);
-            newBlocks.add(newBlock);
-          }
-          // 중복 체크: 이동하려는 위치에 이미 같은 studentId/setId의 블록이 있는지 검사
-          for (final newBlock in newBlocks) {
-            final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == newBlock.startTime.hour && b.startTime.minute == newBlock.startTime.minute);
-            if (conflictBlock != null) {
-              // setId가 둘 다 있고 같으면 예외 허용
-              if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
-                hasConflict = true;
-                conflictLog = '[CONFLICT] 다중 블록: studentId=$studentId, setId=$setId, dayIdx=$dayIdx, startTime=${newBlock.startTime}';
-                break;
-              }
+            if (!studentHasConflict) {
+              toRemove.addAll(toMove);
+              toAdd.addAll(newBlocks);
             }
           }
-          if (hasConflict) break;
-          toRemove.addAll(toMove);
-          toAdd.addAll(newBlocks);
+          if (studentHasConflict) {
+            failedStudents.add(studentWithInfo);
+          }
         }
-        if (hasConflict) {
-          print('[DEBUG][TimetableCell][onAccept] $conflictLog');
+        if (toAdd.isEmpty) {
           showAppSnackBar(context, '이미 등록된 시간입니다.');
           return;
         }
@@ -157,6 +155,38 @@ class TimetableCell extends StatelessWidget {
         DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
         DataManager.instance.loadStudentTimeBlocks();
         DataManager.instance.loadStudents();
+        if (failedStudents.isNotEmpty) {
+          await showDialog(
+            context: context,
+            builder: (context) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF1F1F1F),
+                title: const Text('이동 실패 학생', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                content: SizedBox(
+                  width: 320,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('다음 학생은 이미 등록된 시간과 겹쳐 이동할 수 없습니다.', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 15)),
+                      const SizedBox(height: 12),
+                      ...failedStudents.map((s) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(s.student.name, style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 16)),
+                      )),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('확인', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              );
+            },
+          );
+        }
         final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
         if (timetableContentViewState != null) {
           timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
