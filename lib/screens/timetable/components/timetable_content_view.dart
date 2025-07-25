@@ -1119,6 +1119,36 @@ class TimetableContentViewState extends State<TimetableContentView> {
         child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
       );
     }
+    // 1. 학생별로 해당 시간에 속한 StudentTimeBlock을 찾아 sessionTypeId로 분류
+    final studentBlocks = DataManager.instance.studentTimeBlocks;
+    final selectedDayIdx = widget.selectedCellDayIndex;
+    final selectedStartTime = widget.selectedCellStartTime;
+    final Map<String, String?> studentSessionTypeMap = {
+      for (var s in students)
+        s.student.id: (() {
+          final block = studentBlocks.firstWhere(
+            (b) => b.studentId == s.student.id && b.dayIndex == selectedDayIdx && b.startTime.hour == selectedStartTime?.hour && b.startTime.minute == selectedStartTime?.minute,
+            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+          );
+          return block.id.isEmpty ? null : block.sessionTypeId;
+        })()
+    };
+    final noSession = <StudentWithInfo>[];
+    final sessionMap = <String, List<StudentWithInfo>>{};
+    for (final s in students) {
+      final sessionId = studentSessionTypeMap[s.student.id];
+      if (sessionId == null || sessionId.isEmpty) {
+        noSession.add(s);
+      } else {
+        sessionMap.putIfAbsent(sessionId, () => []).add(s);
+      }
+    }
+    noSession.sort((a, b) => a.student.name.compareTo(b.student.name));
+    final classCards = DataManager.instance.classes;
+    final sessionOrder = classCards.map((c) => c.id).toList();
+    final orderedSessionIds = sessionOrder.where((id) => sessionMap.containsKey(id)).toList();
+    final unorderedSessionIds = sessionMap.keys.where((id) => !sessionOrder.contains(id)).toList();
+    final allSessionIds = [...orderedSessionIds, ...unorderedSessionIds];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1130,16 +1160,50 @@ class TimetableContentViewState extends State<TimetableContentView> {
               style: const TextStyle(color: Colors.white70, fontSize: 20),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(top: 16.0), // 상단 여백을 16으로 늘림
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: students.map((info) =>
-              _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: students)
-            ).toList(),
+        if (noSession.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 16.0),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: noSession.map((info) =>
+                _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: students)
+              ).toList(),
+            ),
           ),
-        ),
+        for (final sessionId in allSessionIds)
+          if (sessionMap[sessionId] != null && sessionMap[sessionId]!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 18.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8.0),
+                    child: Text(
+                      (() {
+                        final c = classCards.firstWhere(
+                          (c) => c.id == sessionId,
+                          orElse: () => ClassInfo(id: '', name: '', color: null, description: '', capacity: null),
+                        );
+                        return c.id.isEmpty ? '수업' : c.name;
+                      })(),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: (() {
+                      final sessionStudents = sessionMap[sessionId]!;
+                      sessionStudents.sort((a, b) => a.student.name.compareTo(b.student.name));
+                      return sessionStudents.map((info) => _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: students)).toList();
+                    })(),
+                  ),
+                ],
+              ),
+            ),
       ],
     );
   }
