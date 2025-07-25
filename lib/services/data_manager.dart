@@ -416,6 +416,16 @@ class DataManager {
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
+    // 중복 체크: 같은 학생, 같은 요일, 같은 시작시간, 같은 duration 블록이 이미 있으면 등록 금지
+    final exists = _studentTimeBlocks.any((b) =>
+      b.studentId == block.studentId &&
+      b.dayIndex == block.dayIndex &&
+      b.startTime == block.startTime &&
+      b.duration == block.duration
+    );
+    if (exists) {
+      throw Exception('이미 등록된 시간입니다.');
+    }
     _studentTimeBlocks.add(block);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.addStudentTimeBlock(block);
@@ -429,6 +439,19 @@ class DataManager {
   }
 
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
+    // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
+    for (final newBlock in blocks) {
+      final overlap = _studentTimeBlocks.any((b) =>
+        b.studentId == newBlock.studentId &&
+        b.dayIndex == newBlock.dayIndex &&
+        // 시간 겹침 검사
+        newBlock.startTime.isBefore(b.startTime.add(b.duration)) &&
+        b.startTime.isBefore(newBlock.startTime.add(newBlock.duration))
+      );
+      if (overlap) {
+        throw Exception('이미 등록된 시간과 겹칩니다.');
+      }
+    }
     _studentTimeBlocks.addAll(blocks);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
@@ -611,6 +634,16 @@ class DataManager {
     }).toList();
     print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
     return eligible;
+  }
+
+  /// 특정 수업에 등록된 학생 수 반환
+  int getStudentCountForClass(String classId) {
+    print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
+    final blocks = _studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
+    print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
+    final studentIds = blocks.map((b) => b.studentId).toSet();
+    print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
+    return studentIds.length;
   }
 
   // 자습 블록을 DB에서 불러오는 메서드 추가

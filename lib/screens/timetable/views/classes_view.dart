@@ -135,7 +135,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       }
       
       if (hasConflict) {
-        showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.');
+        // showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.'); // 중복 메시지 제거
         return;
       }
       
@@ -155,6 +155,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.isRegistrationMode && _hoveredCellKey != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() { _hoveredCellKey = null; });
+      });
+    }
     print('[DEBUG][ClassesView.build] isRegistrationMode= [33m${widget.isRegistrationMode} [0m, registrationModeType= [33m${widget.registrationModeType} [0m, selectedStudentWithInfo= [33m${widget.selectedStudentWithInfo} [0m, selectedSelfStudyStudent= [33m${widget.selectedSelfStudyStudent} [0m');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
@@ -363,7 +368,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       final studentId = selectedStudentWithInfo?.student.id;
                                       print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
-                                        showAppSnackBar(context, '이미 등록된 시간입니다');
                                         return;
                                       }
                                       if (widget.isRegistrationMode && widget.onCellStudentsSelected != null && selectedStudentWithInfo != null) {
@@ -415,6 +419,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       cellStudentWithInfos: cellStudentWithInfos,
                                       groups: groups,
                                       cellWidth: 0, // 필요시 전달
+                                      registrationModeType: widget.registrationModeType,
                                     ),
                                   ),
                                 ),

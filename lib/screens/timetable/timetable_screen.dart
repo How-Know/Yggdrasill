@@ -20,6 +20,7 @@ import '../../widgets/app_snackbar.dart';
 import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
+import 'package:collection/collection.dart'; // Added for firstWhereOrNull
 
 enum TimetableViewType {
   classes,    // 수업
@@ -583,13 +584,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
       focusNode: _focusNode,
       autofocus: true,
       onKey: (event) {
-        if ((event.logicalKey == LogicalKeyboardKey.escape) && (_isStudentRegistrationMode || _isClassRegistrationMode)) {
-          setState(() {
-            _isStudentRegistrationMode = false;
-            _isClassRegistrationMode = false;
-            _selectedStudentWithInfo = null;
-            _remainingRegisterCount = null;
-          });
+        if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+          if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+            setState(() {
+              _isStudentRegistrationMode = false;
+              _isClassRegistrationMode = false;
+              _selectedStudentWithInfo = null;
+              _selectedDayIndex = null;
+              _selectedStartTime = null;
+            });
+          }
         }
       },
       child: GestureDetector(
@@ -654,7 +658,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
       case TimetableViewType.classes:
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
-          // key: ValueKey(_isStudentRegistrationMode), // 강제 리빌드 제거
           timetableChild: Container(
             width: double.infinity,
             // margin: EdgeInsets.zero, // margin 제거
@@ -801,6 +804,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
                         }
                         print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                        // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
+                        final allBlocks = DataManager.instance.studentTimeBlocks;
+                        bool hasConflict = false;
+                        for (final startTime in actualStartTimes) {
+                          final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute);
+                          if (conflictBlock != null) {
+                            hasConflict = true;
+                            break;
+                          }
+                        }
+                        if (hasConflict) {
+                          showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+                          return;
+                        }
+                        // --- 기존 로직 ---
                         final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                           studentIds: [student.id],
                           dayIndex: dayIdx,
@@ -814,9 +832,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         }
                         print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
                         await DataManager.instance.loadStudentTimeBlocks();
-                        final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocks.map((b) => b.toJson()).toList()}');
-                        final setIds = allBlocks.map((b) => b.setId).toSet();
+                        final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
+                        final setIds = allBlocksAfter.map((b) => b.setId).toSet();
                         int usedCount = setIds.length;
                         print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
                         final foundStudentWithInfo = DataManager.instance.students.firstWhere(

@@ -25,6 +25,7 @@ class TimetableContentView extends StatefulWidget {
   final Set<String> selectedStudentIds;
   final void Function(String studentId, bool selected)? onStudentSelectChanged;
   final VoidCallback? onExitSelectMode; // 추가: 다중모드 종료 콜백
+  final String? registrationModeType;
 
   const TimetableContentView({
     Key? key,
@@ -43,6 +44,7 @@ class TimetableContentView extends StatefulWidget {
     this.selectedStudentIds = const {},
     this.onStudentSelectChanged,
     this.onExitSelectMode,
+    this.registrationModeType,
   }) : super(key: key);
 
   @override
@@ -56,6 +58,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
   String _searchQuery = '';
   List<StudentWithInfo> _searchResults = [];
   final TextEditingController _searchController = TextEditingController();
+  bool isClassRegisterMode = false;
 
   @override
   void initState() {
@@ -404,7 +407,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   topRight: Radius.circular(6),
                                   bottomRight: Radius.circular(6),
                                 ),
-                                onTap: _showClassRegistrationDialog,
+                                onTap: widget.onRegisterPressed,
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   mainAxisSize: MainAxisSize.max,
@@ -818,12 +821,25 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       // 상단 타이틀 + 버튼 Row
                       Row(
                         children: [
-                          const Text(
-                            '수업',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
+                          // 수업 타이틀 + 스위치
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12, right: 8),
+                            child: Row(
+                              children: [
+                                Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                                SizedBox(width: 6),
+                                Tooltip(
+                                  message: '수업 등록 모드',
+                                  child: Switch(
+                                    value: isClassRegisterMode,
+                                    onChanged: (val) => setState(() => isClassRegisterMode = val),
+                                    activeColor: const Color(0xFF1976D2),
+                                    inactiveThumbColor: Colors.white,
+                                    inactiveTrackColor: Colors.white24,
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           const Spacer(),
@@ -879,6 +895,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
                                       onDelete: () => _deleteClass(idx),
                                       reorderIndex: idx,
+                                      registrationModeType: widget.registrationModeType,
                                     );
                                   },
                                 );
@@ -908,46 +925,67 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 선택된 학생 리스트
     final selectedStudents = cellStudents?.where((s) => widget.selectedStudentIds.contains(s.student.id)).toList() ?? [];
     final selectedCount = selectedStudents.length;
-    return Draggable<Map<String, dynamic>>(
-      data: {
-        'students': isSelected && selectedCount > 1 ? selectedStudents : [info],
-        'oldDayIndex': dayIndex,
-        'oldStartTime': startTime,
-        'isSelfStudy': isSelfStudy,
-      },
-      onDragStarted: () {
-        print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student=${info.student.name}, isSelfStudy=$isSelfStudy');
-        setState(() => _showDeleteZone = true);
-      },
-      onDragEnd: (_) => setState(() => _showDeleteZone = false),
-      feedback: _buildDragFeedback(selectedStudents, info),
-      childWhenDragging: Opacity(
-        opacity: 0.3,
-        child: StudentCard(
-          key: cardKey,
-          studentWithInfo: info,
-          onShowDetails: (info) {},
-          showCheckbox: widget.isSelectMode,
-          checked: widget.selectedStudentIds.contains(info.student.id),
-          onCheckboxChanged: (checked) {
-            if (widget.onStudentSelectChanged != null && checked != null) {
-              widget.onStudentSelectChanged!(info.student.id, checked);
-            }
+    return Stack(
+      children: [
+        Draggable<Map<String, dynamic>>(
+          data: {
+            'type': isClassRegisterMode ? 'register' : 'move',
+            'students': isSelected && selectedCount > 1 ? selectedStudents : [info],
+            'student': info,
+            'oldDayIndex': dayIndex,
+            'oldStartTime': startTime,
+            'isSelfStudy': isSelfStudy,
           },
+          onDragStarted: () {
+            print('[DEBUG][Draggable] onDragStarted: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
+            print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student= [36m${info.student.name} [0m, isSelfStudy=$isSelfStudy');
+            setState(() => _showDeleteZone = true);
+          },
+          onDragEnd: (_) {
+            print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
+            setState(() => _showDeleteZone = false);
+          },
+          feedback: _buildDragFeedback(selectedStudents, info),
+          childWhenDragging: Opacity(
+            opacity: 0.3,
+            child: StudentCard(
+              key: cardKey,
+              studentWithInfo: info,
+              onShowDetails: (info) {},
+              showCheckbox: widget.isSelectMode,
+              checked: widget.selectedStudentIds.contains(info.student.id),
+              onCheckboxChanged: (checked) {
+                if (widget.onStudentSelectChanged != null && checked != null) {
+                  widget.onStudentSelectChanged!(info.student.id, checked);
+                }
+              },
+            ),
+          ),
+          child: StudentCard(
+            key: cardKey,
+            studentWithInfo: info,
+            onShowDetails: (info) {},
+            showCheckbox: widget.isSelectMode,
+            checked: widget.selectedStudentIds.contains(info.student.id),
+            onCheckboxChanged: (checked) {
+              if (widget.onStudentSelectChanged != null && checked != null) {
+                widget.onStudentSelectChanged!(info.student.id, checked);
+              }
+            },
+          ),
         ),
-      ),
-      child: StudentCard(
-        key: cardKey,
-        studentWithInfo: info,
-        onShowDetails: (info) {},
-        showCheckbox: widget.isSelectMode,
-        checked: widget.selectedStudentIds.contains(info.student.id),
-        onCheckboxChanged: (checked) {
-          if (widget.onStudentSelectChanged != null && checked != null) {
-            widget.onStudentSelectChanged!(info.student.id, checked);
-          }
-        },
-      ),
+        Positioned.fill(
+          child: Draggable<Map<String, dynamic>>(
+            data: {
+              'type': 'register',
+              'student': info,
+            },
+            feedback: _buildDragFeedback(selectedStudents, info),
+            childWhenDragging: const SizedBox.shrink(),
+            child: Container(), // 투명 오버레이(실제 UI는 아래 StudentCard)
+          ),
+        ),
+      ],
     );
   }
 
@@ -1437,7 +1475,8 @@ class _ClassCard extends StatefulWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final int reorderIndex;
-  const _ClassCard({Key? key, required this.classInfo, required this.onEdit, required this.onDelete, required this.reorderIndex}) : super(key: key);
+  final String? registrationModeType;
+  const _ClassCard({Key? key, required this.classInfo, required this.onEdit, required this.onDelete, required this.reorderIndex, this.registrationModeType}) : super(key: key);
   @override
   State<_ClassCard> createState() => _ClassCardState();
 }
@@ -1446,42 +1485,70 @@ class _ClassCardState extends State<_ClassCard> {
   bool _isHovering = false;
 
   Future<void> _handleStudentDrop(StudentWithInfo studentWithInfo) async {
-    // studentWithInfo.basicInfo.setId가 아니라, 실제 StudentTimeBlock에서 setId를 추출
     final blocks = DataManager.instance.studentTimeBlocks
       .where((b) => b.studentId == studentWithInfo.student.id)
       .toList();
     if (blocks.isEmpty) return;
     final setId = blocks.first.setId;
     if (setId == null) return;
-    // set_id가 같은 모든 StudentTimeBlock을 찾아 session_type_id를 이 수업카드의 id로 저장
-    final targetBlocks = blocks.where((b) => b.setId == setId).toList();
+    final targetBlocks = blocks.where((b) => b.setId == setId && b.studentId == studentWithInfo.student.id).toList();
     for (final block in targetBlocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
+      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
-    // TODO: 상태 갱신/스낵바 등 필요시 추가
+    // 드롭 후 최신화
+    await DataManager.instance.loadStudentTimeBlocks();
+    print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
   }
 
   @override
   Widget build(BuildContext context) {
     final c = widget.classInfo;
-    final int studentCount = 0; // TODO: 실제 학생수 연동
-    return DragTarget<StudentWithInfo>(
-      onWillAccept: (data) => true,
-      onAccept: (studentWithInfo) async {
-        setState(() => _isHovering = false);
-        await _handleStudentDrop(studentWithInfo);
+    final int studentCount = DataManager.instance.getStudentCountForClass(widget.classInfo.id);
+    print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
+    return DragTarget<Map<String, dynamic>>(
+      onWillAccept: (data) {
+        print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
+        // registrationModeType이 null(등록모드 아님)일 때만 허용 + type이 'register'일 때만 허용
+        if (widget.registrationModeType != null) return false;
+        if (data == null || data['type'] != 'register') return false;
+        final max = widget.classInfo.capacity;
+        final current = DataManager.instance.getStudentCountForClass(widget.classInfo.id);
+        final isFull = max != null && current >= max;
+        if (isFull) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('정원이 가득 찼습니다.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red, duration: Duration(seconds: 1)),
+          );
+          return false;
+        }
+        return true;
       },
-      onMove: (_) => setState(() => _isHovering = true),
-      onLeave: (_) => setState(() => _isHovering = false),
+      onAccept: (data) async {
+        print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
+        setState(() => _isHovering = false);
+        final studentWithInfo = data['student'] as StudentWithInfo?;
+        if (studentWithInfo != null) {
+          await _handleStudentDrop(studentWithInfo);
+        }
+      },
+      onMove: (_) {
+        print('[DEBUG][DragTarget] onMove');
+        setState(() => _isHovering = true);
+      },
+      onLeave: (_) {
+        print('[DEBUG][DragTarget] onLeave');
+        setState(() => _isHovering = false);
+      },
       builder: (context, candidateData, rejectedData) {
+        print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
         return Card(
           key: widget.key,
           color: const Color(0xFF1F1F1F),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: _isHovering && c.color != null
-              ? BorderSide(color: c.color!, width: 2.5)
+            side: _isHovering
+              ? BorderSide(color: c.color ?? const Color(0xFFB0B0B0), width: 2.5)
               : const BorderSide(color: Colors.transparent, width: 1.2),
           ),
           child: Padding(

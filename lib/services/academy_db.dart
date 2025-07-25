@@ -470,6 +470,7 @@ class AcademyDbService {
       createdAt: DateTime.parse(row['created_at'] as String),
       setId: row['set_id'] as String?, // 추가
       number: row['number'] as int?,   // 추가
+      sessionTypeId: row['session_type_id'] as String?, // ★ 추가
     )).toList();
   }
 
@@ -599,12 +600,14 @@ class AcademyDbService {
 
   Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
     final dbClient = await db;
-    await dbClient.update(
+    print('[DEBUG][AcademyDbService.updateStudentTimeBlock] id=$id, newBlock=${newBlock.toJson()}');
+    final result = await dbClient.update(
       'student_time_blocks',
       newBlock.toJson(),
       where: 'id = ?',
       whereArgs: [id],
     );
+    print('[DEBUG][AcademyDbService.updateStudentTimeBlock] update result: $result');
   }
 
   // ClassInfo CRUD
