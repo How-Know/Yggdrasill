@@ -925,6 +925,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 선택된 학생 리스트
     final selectedStudents = cellStudents?.where((s) => widget.selectedStudentIds.contains(s.student.id)).toList() ?? [];
     final selectedCount = selectedStudents.length;
+    // 해당 학생+시간의 StudentTimeBlock에서 setId 추출
+    String? setId;
+    if (dayIndex != null && startTime != null) {
+      final block = DataManager.instance.studentTimeBlocks.firstWhere(
+        (b) => b.studentId == info.student.id && b.dayIndex == dayIndex && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute,
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+      );
+      setId = block.id.isEmpty ? null : block.setId;
+    }
     return Stack(
       children: [
         Draggable<Map<String, dynamic>>(
@@ -934,6 +943,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'student': info,
             'oldDayIndex': dayIndex,
             'oldStartTime': startTime,
+            'setId': setId,
+            'dayIndex': dayIndex,
+            'startTime': startTime,
             'isSelfStudy': isSelfStudy,
           },
           onDragStarted: () {
@@ -1252,6 +1264,22 @@ class TimetableContentViewState extends State<TimetableContentView> {
           final min = int.parse(timeStr.split(':')[1]);
           final dayTimeLabel = _getDayTimeString(dayIdx, DateTime(0, 1, 1, hour, min));
           final students = grouped[key]!;
+          // 검색 결과는 모두 같은 student_id만 포함하므로 첫 학생 기준으로 수업명 추출
+          String className = '';
+          if (students.isNotEmpty) {
+            final studentId = students.first.student.id;
+            final block = blocks.firstWhere(
+              (b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == hour && b.startTime.minute == min,
+              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+            );
+            if (block.id.isNotEmpty && block.sessionTypeId != null && block.sessionTypeId!.isNotEmpty) {
+              final classInfo = DataManager.instance.classes.firstWhere(
+                (c) => c.id == block.sessionTypeId,
+                orElse: () => ClassInfo(id: '', name: '', color: null, description: '', capacity: null),
+              );
+              className = classInfo.id.isEmpty ? '' : classInfo.name;
+            }
+          }
           return Padding(
             padding: const EdgeInsets.only(bottom: 12.0),
             child: Row(
@@ -1265,6 +1293,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
                   ),
                 ),
+                if (className.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: Text(
+                      className,
+                      style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
+                  ),
                 Expanded(
                   child: Wrap(
                     spacing: 0,
@@ -1548,20 +1584,24 @@ class _ClassCard extends StatefulWidget {
 class _ClassCardState extends State<_ClassCard> {
   bool _isHovering = false;
 
-  Future<void> _handleStudentDrop(StudentWithInfo studentWithInfo) async {
+  Future<void> _handleStudentDrop(Map<String, dynamic> data) async {
+    final studentWithInfo = data['student'] as StudentWithInfo?;
+    final setId = data['setId'] as String?;
+    final dayIndex = data['dayIndex'] as int?;
+    final startTime = data['startTime'] as DateTime?;
+    if (studentWithInfo == null || setId == null || dayIndex == null || startTime == null) {
+      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo=$studentWithInfo, setId=$setId, dayIndex=$dayIndex, startTime=$startTime');
+      return;
+    }
     final blocks = DataManager.instance.studentTimeBlocks
-      .where((b) => b.studentId == studentWithInfo.student.id)
+      .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId && b.dayIndex == dayIndex && b.startTime == startTime)
       .toList();
-    if (blocks.isEmpty) return;
-    final setId = blocks.first.setId;
-    if (setId == null) return;
-    final targetBlocks = blocks.where((b) => b.setId == setId && b.studentId == studentWithInfo.student.id).toList();
-    for (final block in targetBlocks) {
+    print('[DEBUG][_handleStudentDrop] setId=$setId, dayIndex=$dayIndex, startTime=$startTime, 변경 대상 블록 개수=${blocks.length}');
+    for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
       print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
-    // 드롭 후 최신화
     await DataManager.instance.loadStudentTimeBlocks();
     print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
   }
@@ -1591,10 +1631,7 @@ class _ClassCardState extends State<_ClassCard> {
       onAccept: (data) async {
         print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
         setState(() => _isHovering = false);
-        final studentWithInfo = data['student'] as StudentWithInfo?;
-        if (studentWithInfo != null) {
-          await _handleStudentDrop(studentWithInfo);
-        }
+        await _handleStudentDrop(data);
       },
       onMove: (_) {
         print('[DEBUG][DragTarget] onMove');
