@@ -95,14 +95,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
-  void _showTooltip(Offset cardOffset, Size cardSize, String text) {
-    print('[DEBUG] _showTooltip called: cardOffset=$cardOffset, cardSize=$cardSize, text=$text');
+  void _showTooltip(Offset position, String text) {
+    print('[DEBUG] _showTooltip called: position= [38;5;246m$position [0m, text=$text');
     _removeTooltip();
     final overlay = Overlay.of(context);
     _tooltipOverlay = OverlayEntry(
       builder: (context) => Positioned(
-        left: cardOffset.dx + cardSize.width / 2 - 80, // 툴팁 가로폭 160 기준 중앙 정렬
-        top: cardOffset.dy + cardSize.height + 8, // 카드 하단 + 8px 아래
+        left: position.dx + 12, // 마우스 오른쪽 약간 띄움
+        top: position.dy + 12,  // 마우스 아래 약간 띄움
         child: Material(
           color: Colors.transparent,
           child: Container(
@@ -431,26 +431,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           _attendTimes[t.setId] = DateTime.now();
                                                         });
                                                       },
-                                                      child: AnimatedContainer(
-                                                        duration: const Duration(milliseconds: 200),
-                                                        margin: EdgeInsets.zero,
-                                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.transparent,
-                                                          border: Border.all(color: Colors.grey, width: 2),
-                                                          borderRadius: BorderRadius.circular(25),
-                                                        ),
-                                                        child: MouseRegion(
-                                                          onEnter: (event) {
-                                                            String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
-                                                            final renderBox = context.findRenderObject() as RenderBox?;
-                                                            if (renderBox != null) {
-                                                              final cardSize = renderBox.size;
-                                                              final cardOffset = renderBox.localToGlobal(Offset.zero);
-                                                              _showTooltip(cardOffset, cardSize, tooltip);
-                                                            }
-                                                          },
-                                                          onExit: (_) => _removeTooltip(),
+                                                      child: MouseRegion(
+                                                        onEnter: (event) {
+                                                          final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+                                                          final offset = overlay.globalToLocal(event.position);
+                                                          String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
+                                                          _showTooltip(offset, tooltip);
+                                                        },
+                                                        onExit: (_) => _removeTooltip(),
+                                                        child: AnimatedContainer(
+                                                          duration: const Duration(milliseconds: 200),
+                                                          margin: EdgeInsets.zero,
+                                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.transparent,
+                                                            border: Border.all(color: Colors.grey, width: 2),
+                                                            borderRadius: BorderRadius.circular(25),
+                                                          ),
                                                           child: Text(
                                                             t.student.name,
                                                             style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
@@ -527,8 +524,35 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
         );
         break;
+      case 'leaved':
+        borderColor = Colors.grey.shade700;
+        textColor = Colors.white70;
+        child = MouseRegion(
+          onEnter: (event) {
+            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+            final offset = overlay.globalToLocal(event.position);
+            // 등원/하원 시간 표시
+            final attendTime = _attendTimes[t.setId];
+            final leaveTime = _leaveTimes[t.setId];
+            String tooltip = '';
+            if (attendTime != null) {
+              tooltip += '등원: ' + _formatTime(attendTime) + '\n';
+            }
+            if (leaveTime != null) {
+              tooltip += '하원: ' + _formatTime(leaveTime);
+            }
+            if (tooltip.isEmpty) tooltip = '시간 정보 없음';
+            _showTooltip(offset, tooltip);
+          },
+          onExit: (_) => _removeTooltip(),
+          child: Text(
+            t.student.name,
+            style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
+          ),
+        );
+        break;
       default:
-        borderColor = status == 'leaved' ? Colors.grey.shade700 : Colors.grey;
+        borderColor = Colors.grey;
         textColor = Colors.white70;
         child = Text(
           t.student.name,
