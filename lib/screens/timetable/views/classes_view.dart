@@ -330,15 +330,15 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               final activeStudentCount = activeStudentIds.length;
                               Color? countColor;
                               if (activeStudentCount > 0) {
-                                if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.8) {
-                                  countColor = Colors.green;
+                                if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.7) {
+                                  countColor = const Color(0xFF0C3A69);
                                 } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
-                                  countColor = Colors.red;
+                                  countColor = const Color(0xFFFB8C00);
                                 } else {
-                                  countColor = Colors.grey;
+                                  countColor = const Color(0xFF212A31);
                                 }
                               } else {
-                                countColor = Colors.green;
+                                countColor = const Color(0xFF0C3A69);
                               }
                               if (isDragHighlight) {
                                 print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
@@ -699,103 +699,6 @@ class _StudentTimeBlockCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class CapacityCardWidget extends StatelessWidget {
-  final int count;
-  final Color? color;
-  final double cellHeight;
-  const CapacityCardWidget({
-    required this.count,
-    this.color,
-    this.cellHeight = 90.0,
-    Key? key,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 색상 인디케이터(막대) - 셀 전체 높이, 둥근 직사각형
-        Container(
-          width: 11, // 기존 8에서 20% 증가
-          height: cellHeight,
-          margin: EdgeInsets.zero,
-          decoration: BoxDecoration(
-            color: color ?? Colors.blue,
-            borderRadius: BorderRadius.circular(5), // 둥근 직사각형
-          ),
-        ),
-        // 인원수 바 (셀 전체 너비, 배경색)
-        Expanded(
-          child: Container(
-            height: 28,
-            width: double.infinity,
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-            decoration: BoxDecoration(
-              color: Colors.transparent, // 배경색 완전 투명
-              borderRadius: const BorderRadius.only(
-                topRight: Radius.circular(8),
-                bottomRight: Radius.circular(8),
-              ),
-            ),
-            child: Text(
-              '$count', // 숫자만 표시
-              style: const TextStyle(
-                fontSize: 22, // 기존 15에서 2포인트 증가
-                fontWeight: FontWeight.w600,
-                color: Colors.white70, // 요일 row와 동일한 회색
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class CapacityCountWidget extends StatelessWidget {
-  final int count;
-  final Color? color;
-  const CapacityCountWidget({
-    required this.count,
-    this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: 110,
-        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-        padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-        constraints: const BoxConstraints(minHeight: 35, maxHeight: 35),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: color ?? Colors.grey,
-            width: 2,
-          ),
-        ),
-        child: count > 0
-            ? Center(
-                child: Text(
-                  '$count명',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: color ?? Colors.black87,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              )
-            : null,
       ),
     );
   }

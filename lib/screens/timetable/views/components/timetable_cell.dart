@@ -228,12 +228,28 @@ class TimetableCell extends StatelessWidget {
                 Positioned(
                   top: 0,
                   left: 0,
-                  right: 0,
+                  bottom: 0,
                   child: Container(
-                    height: 28,
-                    color: countColor ?? Colors.green,
-                    child: Center(
-                      child: Text('$activeStudentCount명', style: TextStyle(color: Colors.white)),
+                    width: 23,
+                    height: double.infinity,
+                    margin: const EdgeInsets.symmetric(vertical: 0.5), // 셀 높이보다 1px 작게
+                    decoration: BoxDecoration(
+                      color: countColor ?? Colors.green,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Text(
+                          '$activeStudentCount',
+                          style: TextStyle(
+                            color: Colors.black45, // 상단앱바 타이틀 색상(회색)
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),

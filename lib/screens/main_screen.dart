@@ -386,8 +386,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
                                             for (int i = 0; i < attended.length; i++) ...[
-                                              // status는 'attended'로 고정, 파란네모 안은 툴팁 없음
-                                              _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
+                                              // status는 'attended'로 고정, 파란네모 안도 AnimatedSwitcher 적용
+                                              AnimatedSwitcher(
+                                                duration: const Duration(milliseconds: 350),
+                                                switchInCurve: Curves.elasticOut,
+                                                switchOutCurve: Curves.easeOut,
+                                                child: _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
+                                              ),
                                               if (i != attended.length - 1) SizedBox(height: 8),
                                             ]
                                           ],
