@@ -280,13 +280,13 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                 student.name,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 15,
+                  fontSize: 16,
                   fontWeight: FontWeight.w500,
                 ),
               ),
               const Spacer(),
               PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, color: Colors.white54),
+                icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
                 color: const Color(0xFF2A2A2A),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 tooltip: '',
