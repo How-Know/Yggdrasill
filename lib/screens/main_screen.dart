@@ -13,6 +13,7 @@ import '../widgets/main_fab.dart';
 import '../models/class_info.dart';
 import '../models/student_time_block.dart';
 import 'dart:collection';
+import '../models/education_level.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -94,16 +95,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
-  void _showTooltip(BuildContext context, Offset position, String text) {
+  void _showTooltip(Offset cardOffset, Size cardSize, String text) {
+    print('[DEBUG] _showTooltip called: cardOffset=$cardOffset, cardSize=$cardSize, text=$text');
     _removeTooltip();
     final overlay = Overlay.of(context);
     _tooltipOverlay = OverlayEntry(
       builder: (context) => Positioned(
-        left: position.dx + 12,
-        top: position.dy + 12,
+        left: cardOffset.dx + cardSize.width / 2 - 80, // 툴팁 가로폭 160 기준 중앙 정렬
+        top: cardOffset.dy + cardSize.height + 8, // 카드 하단 + 8px 아래
         child: Material(
           color: Colors.transparent,
           child: Container(
+            constraints: const BoxConstraints(maxWidth: 160),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             decoration: BoxDecoration(
               color: const Color(0xFF232326),
@@ -126,10 +129,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       ),
     );
     overlay.insert(_tooltipOverlay!);
+    print('[DEBUG] _showTooltip OverlayEntry inserted');
   }
   void _removeTooltip() {
+    print('[DEBUG] _removeTooltip called');
     _tooltipOverlay?.remove();
     _tooltipOverlay = null;
+  }
+
+  // 카드 레이아웃 상수 (클래스 필드로 이동)
+  static const double _cardHeight = 42.0;
+  static const double _cardMargin = 4.0;
+  static const double _cardSpacing = 8.0;
+  static const double _attendedRunSpacing = 16.0;
+  static const int _leavedMaxLines = 3;
+  static const int _attendedMaxLines = 15;
+  static double get _cardActualHeight => _cardHeight;
+
+  static String _educationLevelToKorean(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary:
+        return '초등';
+      case EducationLevel.middle:
+        return '중등';
+      case EducationLevel.high:
+        return '고등';
+    }
+    return '';
   }
 
   @override
@@ -280,16 +306,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 child: _sideSheetAnimation.value > 0
                     ? Column(
                         children: [
-                          // 위쪽(하원 리스트)
-                          Flexible(
-                            flex: 2,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 24.0, left: 24.0, right: 24.0, bottom: 8.0),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: ClipRect(
-                                  child: _ellipsisWrap(
-                                    leaved
+                          // 날짜/요일 표시
+                          Padding(
+                            padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+                            child: Center(
+                              child: Text(
+                                _getTodayDateString(),
+                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ),
+                          // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
+                          Container(
+                            constraints: BoxConstraints(
+                              minHeight: _cardActualHeight,
+                              maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1),
+                            ),
+                            margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
+                            child: Scrollbar(
+                              thumbVisibility: true,
+                              child: SingleChildScrollView(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Wrap(
+                                    spacing: _cardSpacing,
+                                    runSpacing: _cardSpacing,
+                                    verticalDirection: VerticalDirection.down,
+                                    children: leaved
                                         .map((t) => AnimatedSwitcher(
                                               duration: const Duration(milliseconds: 350),
                                               switchInCurve: Curves.elasticOut,
@@ -297,92 +340,134 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                               child: _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')),
                                             ))
                                         .toList(),
-                                    maxLines: 2,
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                          // 파란 네모(출석 박스) - 항상 가운데
+                          // 파란 네모(출석 박스) - 최대 15줄, 스크롤
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 24.0),
                             child: Container(
                               margin: const EdgeInsets.symmetric(vertical: 16),
                               width: double.infinity,
                               decoration: BoxDecoration(
-                                color: Colors.transparent,
-                                border: Border.all(color: Color(0xFF0F467D), width: 2),
+                                color: Color(0xFF1E252E),
+                                border: Border.all(color: Color(0xFF1E252E), width: 2),
                                 borderRadius: BorderRadius.circular(18),
                               ),
+                              constraints: BoxConstraints(
+                                minHeight: _cardActualHeight,
+                                maxHeight: _cardActualHeight * _attendedMaxLines + _attendedRunSpacing * (_attendedMaxLines - 1),
+                              ),
                               padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (attended.isEmpty)
-                                    Center(
-                                      child: Text(
-                                        DataManager.instance.academySettings.name.isNotEmpty
-                                            ? DataManager.instance.academySettings.name
-                                            : '학원명',
-                                        style: const TextStyle(
-                                          color: Color(0xFF0F467D),
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.bold,
+                              child: Scrollbar(
+                                thumbVisibility: true,
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (attended.isEmpty)
+                                        Center(
+                                          child: Text(
+                                            DataManager.instance.academySettings.name.isNotEmpty
+                                                ? DataManager.instance.academySettings.name
+                                                : '학원명',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F467D),
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                  if (attended.isNotEmpty)
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: attended
-                                          .map((t) => AnimatedSwitcher(
-                                                duration: const Duration(milliseconds: 350),
-                                                switchInCurve: Curves.elasticOut,
-                                                switchOutCurve: Curves.easeOut,
-                                                child: _buildAttendanceCard(t, status: 'attended', key: ValueKey('attended_${t.setId}')),
-                                              ))
-                                          .toList(),
-                                    ),
-                                ],
+                                      if (attended.isNotEmpty)
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            for (int i = 0; i < attended.length; i++) ...[
+                                              // status는 'attended'로 고정, 파란네모 안은 툴팁 없음
+                                              _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
+                                              if (i != attended.length - 1) SizedBox(height: 8),
+                                            ]
+                                          ],
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                          // 아래쪽(출석 전 학생 리스트)
-                          Flexible(
-                            flex: 2,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  for (final entry in waitingByTime.entries) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.only(bottom: 4.0),
-                                      child: Text(
-                                        _formatTime(entry.key),
-                                        style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                    ClipRect(
-                                      child: _ellipsisWrap(
-                                        entry.value
-                                            .map((t) => AnimatedSwitcher(
-                                                  duration: const Duration(milliseconds: 350),
-                                                  switchInCurve: Curves.elasticOut,
-                                                  switchOutCurve: Curves.easeOut,
-                                                  child: _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}')),
-                                                ))
-                                            .toList(),
-                                        maxLines: 2,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                  ],
-                                ],
+                          // 출석 전 학생 리스트(가운데 정렬, 스크롤)
+                          if (waitingByTime.isNotEmpty)
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                                child: Scrollbar(
+                                  thumbVisibility: true,
+                                  child: ListView(
+                                    padding: EdgeInsets.zero,
+                                    children: [
+                                      for (final entry in waitingByTime.entries) ...[
+                                        Padding(
+                                          padding: const EdgeInsets.only(bottom: 4.0),
+                                          child: Center(
+                                            child: Text(
+                                              _formatTime(entry.key),
+                                              style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                            ),
+                                          ),
+                                        ),
+                                        Center(
+                                          child: Wrap(
+                                            alignment: WrapAlignment.center,
+                                            spacing: _cardSpacing,
+                                            runSpacing: _cardSpacing,
+                                            children: entry.value
+                                                .map((t) => GestureDetector(
+                                                      onTap: () {
+                                                        setState(() {
+                                                          _attendedSetIds.add(t.setId);
+                                                          _attendTimes[t.setId] = DateTime.now();
+                                                        });
+                                                      },
+                                                      child: AnimatedContainer(
+                                                        duration: const Duration(milliseconds: 200),
+                                                        margin: EdgeInsets.zero,
+                                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.transparent,
+                                                          border: Border.all(color: Colors.grey, width: 2),
+                                                          borderRadius: BorderRadius.circular(25),
+                                                        ),
+                                                        child: MouseRegion(
+                                                          onEnter: (event) {
+                                                            String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
+                                                            final renderBox = context.findRenderObject() as RenderBox?;
+                                                            if (renderBox != null) {
+                                                              final cardSize = renderBox.size;
+                                                              final cardOffset = renderBox.localToGlobal(Offset.zero);
+                                                              _showTooltip(cardOffset, cardSize, tooltip);
+                                                            }
+                                                          },
+                                                          onExit: (_) => _removeTooltip(),
+                                                          child: Text(
+                                                            t.student.name,
+                                                            style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                      ],
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
                         ],
                       )
                     : const SizedBox(),
@@ -424,7 +509,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     });
   }
 
-  // 출석/하원 카드 위젯
+  // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
   Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key}) {
     Color borderColor;
     Color textColor = Colors.white70;
@@ -432,7 +517,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     switch (status) {
       case 'attended':
         borderColor = t.classInfo?.color ?? const Color(0xFF0F467D);
-        textColor = Colors.white70; // 항상 회색
+        textColor = Colors.white; // 파란네모 안은 흰색
         child = Text(
           t.student.name,
           style: TextStyle(
@@ -442,56 +527,37 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
         );
         break;
-      case 'leaved':
-        borderColor = Colors.grey.shade700;
-        textColor = Colors.white70;
-        child = _TooltipHoverArea(
-          main: t.student.name,
-          tooltip: '등원: ${_attendTimes[t.setId] != null ? _formatTime(_attendTimes[t.setId]!) : '-'}\n하원: ${_leaveTimes[t.setId] != null ? _formatTime(_leaveTimes[t.setId]!) : '-'}',
-          showTooltip: _showTooltip,
-          hideTooltip: _removeTooltip,
-          textColor: textColor,
-        );
-        break;
       default:
-        borderColor = Colors.grey;
+        borderColor = status == 'leaved' ? Colors.grey.shade700 : Colors.grey;
         textColor = Colors.white70;
-        child = _TooltipHoverArea(
-          main: t.student.name,
-          tooltip: '${t.student.school}\n${t.student.educationLevel.name} / ${t.student.grade}학년',
-          showTooltip: _showTooltip,
-          hideTooltip: _removeTooltip,
-          textColor: textColor,
+        child = Text(
+          t.student.name,
+          style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
         );
     }
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 350),
-      switchInCurve: Curves.elasticOut,
-      switchOutCurve: Curves.easeOut,
-      child: GestureDetector(
-        key: key,
-        onTap: () {
-          setState(() {
-            if (status == 'waiting') {
-              _attendedSetIds.add(t.setId);
-              _attendTimes[t.setId] = DateTime.now();
-            } else if (status == 'attended') {
-              _leavedSetIds.add(t.setId);
-              _leaveTimes[t.setId] = DateTime.now();
-            }
-          });
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            border: Border.all(color: borderColor, width: 2),
-            borderRadius: BorderRadius.circular(30),
-          ),
-          child: child,
+    return GestureDetector(
+      key: key,
+      onTap: () {
+        setState(() {
+          if (status == 'waiting') {
+            _attendedSetIds.add(t.setId);
+            _attendTimes[t.setId] = DateTime.now();
+          } else if (status == 'attended') {
+            _leavedSetIds.add(t.setId);
+            _leaveTimes[t.setId] = DateTime.now();
+          }
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: EdgeInsets.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          border: Border.all(color: borderColor, width: 2),
+          borderRadius: BorderRadius.circular(25),
         ),
+        child: child,
       ),
     );
   }
@@ -537,4 +603,11 @@ class _TooltipHoverAreaState extends State<_TooltipHoverArea> {
 
 String _formatTime(DateTime dt) {
   return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+} 
+
+// 날짜/요일 포맷 함수 추가
+String _getTodayDateString() {
+  final now = DateTime.now();
+  final week = ['월', '화', '수', '목', '금', '토', '일'];
+  return '${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
 } 
