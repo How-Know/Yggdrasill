@@ -1587,19 +1587,18 @@ class _ClassCardState extends State<_ClassCard> {
   Future<void> _handleStudentDrop(Map<String, dynamic> data) async {
     final studentWithInfo = data['student'] as StudentWithInfo?;
     final setId = data['setId'] as String?;
-    final dayIndex = data['dayIndex'] as int?;
-    final startTime = data['startTime'] as DateTime?;
-    if (studentWithInfo == null || setId == null || dayIndex == null || startTime == null) {
-      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo=$studentWithInfo, setId=$setId, dayIndex=$dayIndex, startTime=$startTime');
+    if (studentWithInfo == null || setId == null) {
+      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo=$studentWithInfo, setId=$setId');
       return;
     }
+    // setId, studentId가 일치하는 모든 블록을 찾아 sessionTypeId 일괄 변경
     final blocks = DataManager.instance.studentTimeBlocks
-      .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId && b.dayIndex == dayIndex && b.startTime == startTime)
+      .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
       .toList();
-    print('[DEBUG][_handleStudentDrop] setId=$setId, dayIndex=$dayIndex, startTime=$startTime, 변경 대상 블록 개수=${blocks.length}');
+    print('[DEBUG][_handleStudentDrop] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
     for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
-      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, sessionTypeId=${widget.classInfo.id}');
+      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startTime}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
     await DataManager.instance.loadStudentTimeBlocks();
