@@ -30,10 +30,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   morphable_shape: ^2.0.0 # morphable_shape 2.x 사용 (네모↔원 변형 AnimatedMorphContainer 등)
   dimension: 0.2.0 # morphable_shape와 함께 사용되는 길이 단위 변환 패키지
   shared_preferences: ^2.0.15
-  intl: ^0.19.0
+  intl: ^0.20.2
   uuid: ^4.3.3
   flutter_colorpicker: ^1.0.3
   provider: ^6.1.1

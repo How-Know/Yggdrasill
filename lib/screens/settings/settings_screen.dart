@@ -16,6 +16,7 @@ import '../../widgets/teacher_registration_dialog.dart';
 import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 enum SettingType {
   academy,
@@ -429,8 +430,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     margin: const EdgeInsets.only(right: 4.0),
                     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2A2A2A),
+                      color: const Color(0xFF18181A), // 컨테이너와 동일하게
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Color(0xFF1F1F1F), width: 3), // 아웃라인 카드 스타일(배경색)
                     ),
                     child: Center(
                       child: Text(
@@ -438,7 +440,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: const TextStyle(
                           fontSize: 15, // 기존 14 → 15 (1pt 크게)
                           fontWeight: FontWeight.w500,
-                          color: Colors.white,
+                          color: Colors.grey, // 흰색 유지
                         ),
                       ),
                     ),
@@ -448,16 +450,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             Wrap(
+              alignment: WrapAlignment.center,
               spacing: 4,
               runSpacing: 8,
               children: DayOfWeek.values.map((day) {
                 int dayIndex = day.index;
                 final hasOperatingHours = _operatingHours[day] != null;
+                // 마지막 30분(휴무) 요일 판별
+                bool isLastThirty = false;
+                if (_operatingHours[day] != null) {
+                  // 전체 요일 중 가장 늦은 endTime 찾기
+                  TimeOfDay? latestEnd;
+                  for (var v in _operatingHours.values) {
+                    if (v != null) {
+                      if (latestEnd == null || v.end.hour > latestEnd.hour || (v.end.hour == latestEnd.hour && v.end.minute > latestEnd.minute)) {
+                        latestEnd = v.end;
+                      }
+                    }
+                  }
+                  // 30분 전 시간 계산
+                  TimeOfDay? latestStart;
+                  if (latestEnd != null) {
+                    int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+                    int startMinutes = endMinutes - 30;
+                    latestStart = TimeOfDay(hour: startMinutes ~/ 60, minute: startMinutes % 60);
+                  }
+                  final range = _operatingHours[day]!;
+                  if (latestStart != null && latestEnd != null &&
+                      range.start.hour == latestStart.hour && range.start.minute == latestStart.minute &&
+                      range.end.hour == latestEnd.hour && range.end.minute == latestEnd.minute) {
+                    isLastThirty = true;
+                  }
+                }
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // 운영시간 카드
-                    hasOperatingHours
+                    hasOperatingHours && !isLastThirty
                         ? MouseRegion(
                             cursor: SystemMouseCursors.click,
                             onEnter: (_) => setState(() => _hoveredOperatingHourCards.add(dayIndex)),
@@ -612,16 +641,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : Container(
                             width: blockWidth,
                             height: 32,
+                            margin: const EdgeInsets.only(bottom: 0),
                             padding: EdgeInsets.zero,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF18181A),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
                             child: Center(
-                              child: IconButton(
-                                icon: const Icon(Icons.add, color: Color(0xFF1976D2), size: 20),
-                                tooltip: '운영시간 등록',
+                              child: TextButton(
                                 onPressed: () => _selectOperatingHours(context, day),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Color(0xFF1976D2),
+                                  textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                  padding: EdgeInsets.zero,
+                                ),
+                                child: const Text('휴무'),
                               ),
                             ),
                           ),
@@ -697,7 +727,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       );
                     }).toList()),
                     // +휴식 버튼 (TextButton)
-                    if (hasOperatingHours)
+                    if (hasOperatingHours && !isLastThirty)
                       TextButton.icon(
                         icon: const Icon(Icons.add, color: Color(0xFF1976D2), size: 15), // 기존 14 → 15
                         label: const Text('휴식', style: TextStyle(color: Color(0xFF1976D2), fontSize: 12)), // 기존 11 → 12
@@ -1028,6 +1058,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Center(
               child: ElevatedButton(
                 onPressed: () async {
+                  // 모든 요일이 휴무(운영시간 없음)일 경우 저장 제한
+                  if (_operatingHours.values.where((v) => v != null).isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('하나 이상의 운영시간이 등록되어야 합니다.', style: TextStyle(color: Colors.white)),
+                        backgroundColor: Color(0xFF1976D2),
+                      ),
+                    );
+                    return;
+                  }
                   try {
                     ScaffoldMessenger.of(context).hideCurrentSnackBar();
                     print('저장 시 _paymentType:  [36m [1m [4m$_paymentType [0m');
@@ -1044,19 +1084,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await DataManager.instance.saveAcademySettings(academySettings);
                     await DataManager.instance.savePaymentType(_paymentType);
                     // 운영시간/휴식시간도 함께 저장
-                    final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
-                      final range = e.value!;
-                      final breaks = _breakTimes[e.key] ?? [];
-                      return OperatingHours(
-                        startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
-                        endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
-                        breakTimes: breaks.map((b) => BreakTime(
-                          startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
-                          endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
-                        )).toList(),
-                        dayOfWeek: e.key.index,
-                      );
-                    }).toList();
+                    // 1. 운영시간이 있는 요일 중 가장 마지막 endTime 찾기
+                    TimeOfDay? latestEnd;
+                    for (var v in _operatingHours.values) {
+                      if (v != null) {
+                        if (latestEnd == null || v.end.hour > latestEnd.hour || (v.end.hour == latestEnd.hour && v.end.minute > latestEnd.minute)) {
+                          latestEnd = v.end;
+                        }
+                      }
+                    }
+                    // 2. 30분 전 시간 계산
+                    TimeOfDay? latestStart;
+                    if (latestEnd != null) {
+                      int endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+                      int startMinutes = endMinutes - 30;
+                      latestStart = TimeOfDay(hour: startMinutes ~/ 60, minute: startMinutes % 60);
+                    }
+                    // 3. hoursList 생성 (휴무 요일은 latestStart~latestEnd로 저장)
+                    final List<OperatingHours> hoursList = DayOfWeek.values.map((day) {
+                      final range = _operatingHours[day];
+                      final breaks = _breakTimes[day] ?? [];
+                      print('[UI] hoursList entry: day=$day, range=$range');
+                      if (range != null) {
+                        return OperatingHours(
+                          startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
+                          endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
+                          breakTimes: breaks.map((b) => BreakTime(
+                            startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
+                            endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
+                          )).toList(),
+                          dayOfWeek: day.index,
+                        );
+                      } else if (latestStart != null && latestEnd != null) {
+                        // 휴무 요일 처리: 가장 늦은 시간 30분 블록 저장
+                        return OperatingHours(
+                          startTime: DateTime(2020, 1, 1, latestStart.hour, latestStart.minute),
+                          endTime: DateTime(2020, 1, 1, latestEnd.hour, latestEnd.minute),
+                          breakTimes: [],
+                          dayOfWeek: day.index,
+                        );
+                      } else {
+                        // 완전 초기(모든 요일 휴무) 방어
+                        return null;
+                      }
+                    }).whereType<OperatingHours>().toList();
                     print('[DEBUG] 저장 버튼에서 hoursList: ${hoursList.length}개, breaks: ' + hoursList.map((h) => h.breakTimes.length).toList().toString());
                     await DataManager.instance.saveOperatingHours(hoursList);
                     await DataManager.instance.loadAcademySettings();
@@ -1267,14 +1338,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (BuildContext context, Widget? child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
+            colorScheme: const ColorScheme(
+              brightness: Brightness.dark,
               primary: Color(0xFF1976D2),
               onPrimary: Colors.white,
-              surface: Color(0xFF1F1F1F),
+              secondary: Color(0xFF1976D2),
+              onSecondary: Colors.white,
+              error: Color(0xFFB00020),
+              onError: Colors.white,
+              background: Color(0xFF18181A),
+              onBackground: Colors.white,
+              surface: Color(0xFF18181A), // 프로그램 배경색
               onSurface: Colors.white,
             ),
+            dialogBackgroundColor: const Color(0xFF18181A),
+            timePickerTheme: const TimePickerThemeData(
+              backgroundColor: Color(0xFF18181A), // 프로그램 배경색
+              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteTextColor: Colors.white,
+              dialHandColor: Color(0xFF1976D2),
+              dialBackgroundColor: Color(0xFF18181A),
+              entryModeIconColor: Color(0xFF1976D2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+              helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              dayPeriodTextColor: Colors.white,
+              dayPeriodColor: Color(0xFF1976D2),
+            ),
           ),
-          child: child!,
+          child: Localizations.override(
+            context: context,
+            locale: const Locale('ko'),
+            delegates: [
+              ...GlobalMaterialLocalizations.delegates,
+            ],
+            child: Builder(
+              builder: (context) {
+                return MediaQuery(
+                  data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                  child: child!,
+                );
+              },
+            ),
+          ),
         );
       },
     );
@@ -1285,14 +1390,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (BuildContext context, Widget? child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
+            colorScheme: const ColorScheme(
+              brightness: Brightness.dark,
               primary: Color(0xFF1976D2),
               onPrimary: Colors.white,
-              surface: Color(0xFF1F1F1F),
+              secondary: Color(0xFF1976D2),
+              onSecondary: Colors.white,
+              error: Color(0xFFB00020),
+              onError: Colors.white,
+              background: Color(0xFF18181A),
+              onBackground: Colors.white,
+              surface: Color(0xFF18181A), // 프로그램 배경색
               onSurface: Colors.white,
             ),
+            dialogBackgroundColor: const Color(0xFF18181A),
+            timePickerTheme: const TimePickerThemeData(
+              backgroundColor: Color(0xFF18181A), // 프로그램 배경색
+              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteTextColor: Colors.white,
+              dialHandColor: Color(0xFF1976D2),
+              dialBackgroundColor: Color(0xFF18181A),
+              entryModeIconColor: Color(0xFF1976D2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+              helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              dayPeriodTextColor: Colors.white,
+              dayPeriodColor: Color(0xFF1976D2),
+            ),
           ),
-          child: child!,
+          child: Localizations.override(
+            context: context,
+            locale: const Locale('ko'),
+            delegates: [
+              ...GlobalMaterialLocalizations.delegates,
+            ],
+            child: Builder(
+              builder: (context) {
+                return MediaQuery(
+                  data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                  child: child!,
+                );
+              },
+            ),
+          ),
         );
       },
     );
@@ -1306,7 +1445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
       final range = e.value!;
       final breaks = _breakTimes[e.key] ?? [];
-      print('[UI] hoursList entry: day=${e.key}, range=$range');
+      print('[UI] hoursList entry: day=$day, range=$range');
       return OperatingHours(
         startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
         endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
