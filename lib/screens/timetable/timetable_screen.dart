@@ -53,7 +53,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   List<OperatingHours> _operatingHours = [];
   final MenuController _menuController = MenuController();
   int? _selectedDayIndex = null;
-  DateTime? _selectedStartTime;
+  int? _selectedStartTimeHour;
+  int? _selectedStartTimeMinute;
   bool _isStudentRegistrationMode = false;
   bool _isClassRegistrationMode = false;
   String _registrationButtonText = '등록';
@@ -74,7 +75,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 셀 선택 시 학생 리스트 상태 추가
   // 학생 리스트는 timetable_content_view.dart에서 계산
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
-  DateTime? _selectedCellStartTime; // 셀 선택시 시작 시간
+  int? _selectedCellStartHour; // 셀 선택시 시작 시
+  int? _selectedCellStartMinute; // 셀 선택시 시작 분
   final FocusNode _focusNode = FocusNode();
   // 필터 chips 상태
   Set<String> _selectedEducationLevels = {};
@@ -115,7 +117,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     print('[DEBUG][_scrollToCurrentTime] timeBlocks.length: ' + timeBlocks.length.toString());
     for (int i = 0; i < timeBlocks.length; i++) {
       final block = timeBlocks[i];
-      print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + block.startTime.toString() + ' ~ ' + block.endTime.toString());
+      print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + TimeOfDay(hour: block.startTime.hour, minute: block.startTime.minute).format(context) + ' ~ ' + block.endTime.toString());
     }
     // 대한민국 표준시(KST)로 현재 시간 계산
     final nowKst = DateTime.now().toUtc().add(const Duration(hours: 9));
@@ -167,13 +169,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final now = DateTime.now();
       int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
       for (final hours in _operatingHours) {
-        if (hours.startTime.hour < minHour || (hours.startTime.hour == minHour && hours.startTime.minute < minMinute)) {
-          minHour = hours.startTime.hour;
-          minMinute = hours.startTime.minute;
+        if (hours.startHour < minHour || (hours.startHour == minHour && hours.startMinute < minMinute)) {
+          minHour = hours.startHour;
+          minMinute = hours.startMinute;
         }
-        if (hours.endTime.hour > maxHour || (hours.endTime.hour == maxHour && hours.endTime.minute > maxMinute)) {
-          maxHour = hours.endTime.hour;
-          maxMinute = hours.endTime.minute;
+        if (hours.endHour > maxHour || (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
+          maxHour = hours.endHour;
+          maxMinute = hours.endMinute;
         }
       }
       var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
@@ -212,13 +214,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final allHours = hours;
     final toRemove = <StudentTimeBlock>[];
     for (final block in DataManager.instance.studentTimeBlocks) {
-      final dayIdx = block.dayIndex;
-      if (dayIdx >= allHours.length) continue;
-      final op = allHours[dayIdx];
-      final blockMinutes = block.startTime.hour * 60 + block.startTime.minute;
-      final startMinutes = op.startTime.hour * 60 + op.startTime.minute;
-      final endMinutes = op.endTime.hour * 60 + op.endTime.minute;
-      if (blockMinutes < startMinutes || blockMinutes >= endMinutes) {
+      final op = allHours.firstWhereOrNull((o) => o.dayOfWeek == block.dayIndex);
+      if (op == null) {
+        toRemove.add(block);
+        continue;
+      }
+      final blockMinutes = block.startHour * 60 + block.startMinute;
+      final startMinutes = op.startHour * 60 + op.startMinute;
+      final endMinutes = op.endHour * 60 + op.endMinute;
+      if (blockMinutes < startMinutes || blockMinutes > endMinutes) {
         toRemove.add(block);
       }
     }
@@ -591,7 +595,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _isClassRegistrationMode = false;
               _selectedStudentWithInfo = null;
               _selectedDayIndex = null;
-              _selectedStartTime = null;
+              _selectedStartTimeHour = null;
+              _selectedStartTimeMinute = null;
             });
           }
         }
@@ -686,9 +691,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
                   onSelectAllStudents: () {
                     // 현재 셀의 학생만 모두 체크
-                    if (_selectedCellDayIndex != null && _selectedCellStartTime != null) {
+                    if (_selectedCellDayIndex != null && _selectedCellStartHour != null && _selectedCellStartMinute != null) {
                       setState(() {
-                        _selectedStudentIds = _getCellStudents(_selectedCellDayIndex!, _selectedCellStartTime!).map((s) => s.student.id).toSet();
+                        _selectedStudentIds = _getCellStudents(_selectedCellDayIndex!, _selectedCellStartHour!, _selectedCellStartMinute!).map((s) => s.student.id).toSet();
                       });
                     }
                   },
@@ -723,7 +728,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       print('[DEBUG][onTimeSelected] 호출: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
-                        _selectedCellStartTime = startTime;
+                        _selectedStartTimeHour = startTime.hour;
+                        _selectedStartTimeMinute = startTime.minute;
                         // 학생 리스트는 timetable_content_view.dart에서 계산
                       });
                     },
@@ -733,7 +739,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       _contentViewKey.currentState?.clearSearch();
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
-                        _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                        _selectedCellStartHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
+                        _selectedCellStartMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
                       });
                       // 자습 등록 모드 처리
                       if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
@@ -751,7 +758,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         for (final startTime in actualStartTimes) {
                           final conflictingBlocks = DataManager.instance.studentTimeBlocks.where((b) {
                             if (b.studentId != studentId || b.dayIndex != dayIdx) return false;
-                            final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+                            final blockStartMinutes = b.startHour * 60 + b.startMinute;
                             final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
                             final checkStartMinutes = startTime.hour * 60 + startTime.minute;
                             final checkEndMinutes = checkStartMinutes + blockMinutes;
@@ -808,7 +815,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         final allBlocks = DataManager.instance.studentTimeBlocks;
                         bool hasConflict = false;
                         for (final startTime in actualStartTimes) {
-                          final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute);
+                          final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
                           if (conflictBlock != null) {
                             hasConflict = true;
                             break;
@@ -851,7 +858,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             _isStudentRegistrationMode = false;
                             _selectedStudentWithInfo = null;
                             _selectedDayIndex = null;
-                            _selectedStartTime = null;
+                            _selectedStartTimeHour = null;
+                            _selectedStartTimeMinute = null;
                           }
                         });
                         if (_remainingRegisterCount == 0 && mounted) {
@@ -900,18 +908,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
           },
           selectedCellDayIndex: _selectedCellDayIndex,
-          selectedCellStartTime: _selectedCellStartTime,
+          selectedCellStartTime: _selectedStartTimeHour != null && _selectedStartTimeMinute != null ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!) : null,
           onCellStudentsChanged: (dayIdx, startTime, students) {
             setState(() {
               _selectedCellDayIndex = dayIdx;
-              _selectedCellStartTime = startTime;
+              _selectedStartTimeHour = startTime.hour;
+              _selectedStartTimeMinute = startTime.minute;
               // 학생 리스트는 timetable_content_view.dart에서 계산
             });
           },
           onCellSelfStudyStudentsChanged: (dayIdx, startTime, students) {
             setState(() {
               _selectedCellDayIndex = dayIdx;
-              _selectedCellStartTime = startTime;
+              _selectedStartTimeHour = startTime.hour;
+              _selectedStartTimeMinute = startTime.minute;
               // 자습 학생 리스트는 timetable_content_view.dart에서 계산
             });
           },
@@ -990,7 +1000,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               final studentsWithInfo = DataManager.instance.students;
               final cellBlocks = studentTimeBlocks.where((block) {
                 if (block.dayIndex != dayIdx) return false;
-                final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
+                final blockStartMinutes = block.startHour * 60 + block.startMinute;
                 final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
                 final checkMinutes = startTime.hour * 60 + startTime.minute;
                 return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
@@ -1001,7 +1011,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               )).toList();
               setState(() {
                 _selectedCellDayIndex = dayIdx;
-                _selectedCellStartTime = startTime;
+                _selectedStartTimeHour = startTime.hour;
+                _selectedStartTimeMinute = startTime.minute;
               });
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
@@ -1010,7 +1021,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _contentViewKey.currentState?.clearSearch();
               setState(() {
                 _selectedCellDayIndex = dayIdx;
-                _selectedCellStartTime = startTimes.isNotEmpty ? startTimes.first : null;
+                _selectedCellStartHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
+                _selectedCellStartMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
               });
               // 학생 등록 모드에서만 동작
               if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
@@ -1058,7 +1070,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     _isStudentRegistrationMode = false;
                     _selectedStudentWithInfo = null;
                     _selectedDayIndex = null;
-                    _selectedStartTime = null;
+                    _selectedStartTimeHour = null;
+                    _selectedStartTimeMinute = null;
                   }
                 });
                 if (_remainingRegisterCount == 0 && mounted) {
@@ -1083,8 +1096,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       // 요일별 운영시간 체크
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
-        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
-        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
+        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startHour, operatingHours.startMinute);
+        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endHour, operatingHours.endMinute);
         if (startTime.isBefore(start) || !startTime.isBefore(end)) {
           print('[DEBUG] 시간 범위 벗어남: start=$start, end=$end');
           await showDialog(
@@ -1150,7 +1163,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           _isStudentRegistrationMode = false;
           _selectedStudentWithInfo = null;
           _selectedDayIndex = null;
-          _selectedStartTime = null;
+          _selectedStartTimeHour = null;
+          _selectedStartTimeMinute = null;
           _remainingRegisterCount = null;
         }
       });
@@ -1167,8 +1181,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       // 기존 클래스 등록 로직은 유지
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
-        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startTime.hour, operatingHours.startTime.minute);
-        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endTime.hour, operatingHours.endTime.minute);
+        final start = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.startHour, operatingHours.startMinute);
+        final end = DateTime(startTime.year, startTime.month, startTime.day, operatingHours.endHour, operatingHours.endMinute);
         if (startTime.isBefore(start) || !startTime.isBefore(end)) {
           print('[DEBUG] 클래스 시간 범위 벗어남: start=$start, end=$end');
           await showDialog(
@@ -1205,7 +1219,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         _isClassRegistrationMode = false;
         _currentGroupSchedule = null;
         _selectedDayIndex = null;
-        _selectedStartTime = null;
+        _selectedStartTimeHour = null;
+        _selectedStartTimeMinute = null;
       });
       if (mounted) {
         print('[DEBUG] 클래스 스낵바 출력');
@@ -1266,11 +1281,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   // dayIdx, startTime에 해당하는 학생 리스트 반환
-  List<StudentWithInfo> _getCellStudents(int dayIdx, DateTime startTime) {
+  List<StudentWithInfo> _getCellStudents(int dayIdx, int startHour, int startMinute) {
     final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
       b.dayIndex == dayIdx &&
-      b.startTime.hour == startTime.hour &&
-      b.startTime.minute == startTime.minute
+      b.startHour == startHour &&
+      b.startMinute == startMinute
     ).toList();
     final students = DataManager.instance.students;
     return blocks.map((b) =>

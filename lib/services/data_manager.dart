@@ -384,8 +384,8 @@ class DataManager {
       // 0=월, 1=화, ..., 6=일로 정렬/매핑
       List<OperatingHours?> weekHours = List.filled(7, null);
       for (final h in raw) {
-        if (h.dayOfWeek >= 1 && h.dayOfWeek <= 7) {
-          weekHours[h.dayOfWeek - 1] = h;
+        if (h.dayOfWeek >= 0 && h.dayOfWeek <= 6) {
+          weekHours[h.dayOfWeek] = h;
         }
       }
       _operatingHours = weekHours.whereType<OperatingHours>().toList();
@@ -428,8 +428,8 @@ class DataManager {
     final exists = _studentTimeBlocks.any((b) =>
       b.studentId == block.studentId &&
       b.dayIndex == block.dayIndex &&
-      b.startTime == block.startTime &&
-      b.duration == block.duration
+      b.startHour == block.startHour &&
+      b.startMinute == block.startMinute
     );
     if (exists) {
       throw Exception('이미 등록된 시간입니다.');
@@ -453,8 +453,8 @@ class DataManager {
         b.studentId == newBlock.studentId &&
         b.dayIndex == newBlock.dayIndex &&
         // 시간 겹침 검사
-        newBlock.startTime.isBefore(b.startTime.add(b.duration)) &&
-        b.startTime.isBefore(newBlock.startTime.add(newBlock.duration))
+        (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
+        (b.startHour * 60 + b.startMinute) < (newBlock.startHour * 60 + newBlock.startMinute + newBlock.duration.inMinutes)
       );
       if (overlap) {
         throw Exception('이미 등록된 시간과 겹칩니다.');
@@ -529,7 +529,8 @@ class DataManager {
         id: '${DateTime.now().millisecondsSinceEpoch}_${si.student.id}',
         studentId: si.student.id,
         dayIndex: schedule.dayIndex,
-        startTime: schedule.startTime,
+        startHour: schedule.startTime.hour,
+        startMinute: schedule.startTime.minute,
         duration: schedule.duration,
         createdAt: DateTime.now(),
       );

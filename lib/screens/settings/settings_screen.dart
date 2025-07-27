@@ -52,11 +52,13 @@ enum DayOfWeek {
   }
 }
 
+// TimeRange도 int 기반으로 변경
 class TimeRange {
-  final TimeOfDay start;
-  final TimeOfDay end;
-
-  const TimeRange({required this.start, required this.end});
+  final int startHour;
+  final int startMinute;
+  final int endHour;
+  final int endMinute;
+  const TimeRange({required this.startHour, required this.startMinute, required this.endHour, required this.endMinute});
 }
 
 class SettingsScreen extends StatefulWidget {
@@ -167,6 +169,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       // 운영 시간 로드
       final hours = await DataManager.instance.getOperatingHours();
+      print('[DEBUG][LOAD] DB에서 불러온 hours:');
+      for (final h in hours) {
+        print('  dayOfWeek= [36m${h.dayOfWeek} [0m start=${h.startHour}:${h.startMinute} end=${h.endHour}:${h.endMinute}');
+      }
       setState(() {
         for (var d in DayOfWeek.values) {
           _operatingHours[d] = null;
@@ -174,17 +180,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         for (var hour in hours) {
           final d = DayOfWeek.values[hour.dayOfWeek];
+          print('[DEBUG][MAPPING] hour.dayOfWeek=${hour.dayOfWeek} → DayOfWeek.${d.name}');
           _operatingHours[d] = TimeRange(
-            start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
-            end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+            startHour: hour.startHour,
+            startMinute: hour.startMinute,
+            endHour: hour.endHour,
+            endMinute: hour.endMinute,
           );
           _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
-            start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
-            end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+            startHour: breakTime.startHour,
+            startMinute: breakTime.startMinute,
+            endHour: breakTime.endHour,
+            endMinute: breakTime.endMinute,
           )).toList();
         }
-        print('[UI] _operatingHours after DB load:');
-        _operatingHours.forEach((k, v) => print('  $k: $v'));
+        print('[DEBUG][MAPPING] 최종 _operatingHours:');
+        _operatingHours.forEach((k, v) => print('  ${k.name}: $v'));
       });
     } catch (e) {
       print('Error loading settings: $e');
@@ -463,8 +474,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   TimeOfDay? latestEnd;
                   for (var v in _operatingHours.values) {
                     if (v != null) {
-                      if (latestEnd == null || v.end.hour > latestEnd.hour || (v.end.hour == latestEnd.hour && v.end.minute > latestEnd.minute)) {
-                        latestEnd = v.end;
+                      if (latestEnd == null || v.endHour > latestEnd.hour || (v.endHour == latestEnd.hour && v.endMinute > latestEnd.minute)) {
+                        latestEnd = TimeOfDay(hour: v.endHour, minute: v.endMinute);
                       }
                     }
                   }
@@ -477,11 +488,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   }
                   final range = _operatingHours[day]!;
                   if (latestStart != null && latestEnd != null &&
-                      range.start.hour == latestStart.hour && range.start.minute == latestStart.minute &&
-                      range.end.hour == latestEnd.hour && range.end.minute == latestEnd.minute) {
+                      range.startHour == latestStart.hour && range.startMinute == latestStart.minute &&
+                      range.endHour == latestEnd.hour && range.endMinute == latestEnd.minute) {
                     isLastThirty = true;
                   }
                 }
+                print('[DEBUG][UI] 렌더링 day=${day.name} index=$dayIndex hasOperatingHours=$hasOperatingHours isLastThirty=$isLastThirty range=${_operatingHours[day]}');
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -523,7 +535,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   final currentRange = _operatingHours[day]!;
                                   final TimeOfDay? newStart = await showTimePicker(
                                     context: context,
-                                    initialTime: currentRange.start,
+                                    initialTime: TimeOfDay(hour: currentRange.startHour, minute: currentRange.startMinute),
                                     builder: (context, child) {
                                       return Theme(
                                         data: Theme.of(context).copyWith(
@@ -541,7 +553,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   if (newStart == null) return;
                                   final TimeOfDay? newEnd = await showTimePicker(
                                     context: context,
-                                    initialTime: currentRange.end,
+                                    initialTime: TimeOfDay(hour: currentRange.endHour, minute: currentRange.endMinute),
                                     builder: (context, child) {
                                       return Theme(
                                         data: Theme.of(context).copyWith(
@@ -558,20 +570,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   );
                                   if (newEnd == null) return;
                                   setState(() {
-                                    _operatingHours[day] = TimeRange(start: newStart, end: newEnd);
+                                    _operatingHours[day] = TimeRange(
+                                      startHour: newStart.hour,
+                                      startMinute: newStart.minute,
+                                      endHour: newEnd.hour,
+                                      endMinute: newEnd.minute,
+                                    );
                                   });
                                   // DB 저장
                                   final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
                                     final range = e.value!;
                                     final breaks = _breakTimes[e.key] ?? [];
                                     return OperatingHours(
-                                      startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
-                                      endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
-                                      breakTimes: breaks.map((b) => BreakTime(
-                                        startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
-                                        endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
-                                      )).toList(),
                                       dayOfWeek: e.key.index,
+                                      startHour: range.startHour,
+                                      startMinute: range.startMinute,
+                                      endHour: range.endHour,
+                                      endMinute: range.endMinute,
+                                      breakTimes: breaks.map((b) => BreakTime(
+                                        startHour: b.startHour,
+                                        startMinute: b.startMinute,
+                                        endHour: b.endHour,
+                                        endMinute: b.endMinute,
+                                      )).toList(),
                                     );
                                   }).toList();
                                   await DataManager.instance.saveOperatingHours(hoursList);
@@ -584,12 +605,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     for (var hour in hours) {
                                       final d = DayOfWeek.values[hour.dayOfWeek];
                                       _operatingHours[d] = TimeRange(
-                                        start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
-                                        end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+                                        startHour: hour.startHour,
+                                        startMinute: hour.startMinute,
+                                        endHour: hour.endHour,
+                                        endMinute: hour.endMinute,
                                       );
                                       _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
-                                        start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
-                                        end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+                                        startHour: breakTime.startHour,
+                                        startMinute: breakTime.startMinute,
+                                        endHour: breakTime.endHour,
+                                        endMinute: breakTime.endMinute,
                                       )).toList();
                                     }
                                   });
@@ -622,7 +647,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                                       child: Center(
                                         child: Text(
-                                          '${_formatTimeOfDay(_operatingHours[day]!.start)} - ${_formatTimeOfDay(_operatingHours[day]!.end)}',
+                                          '${_formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.startHour, minute: _operatingHours[day]!.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.endHour, minute: _operatingHours[day]!.endMinute))}',
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontSize: 13, // 기존 12 → 13
@@ -696,6 +721,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             } else if (selected == 'delete') {
                               setState(() {
                                 _breakTimes[day]?.remove(breakTime);
+                                print('[DEBUG][휴식삭제] day=$day, _breakTimes[day]=${_breakTimes[day]?.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
                               });
                             }
                           },
@@ -711,7 +737,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.fromLTRB(4, 0, 4, 3),
                               child: Center(
                                 child: Text(
-                                  '${_formatTimeOfDay(breakTime.start)} - ${_formatTimeOfDay(breakTime.end)}',
+                                  '${_formatTimeOfDay(TimeOfDay(hour: breakTime.startHour, minute: breakTime.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: breakTime.endHour, minute: breakTime.endMinute))}',
                                   style: const TextStyle(
                                     color: Color(0xFF1976D2),
                                     fontSize: 12, // 기존 11 → 12
@@ -795,7 +821,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (endTime != null) {
         setState(() {
           _breakTimes[day] ??= [];
-          _breakTimes[day]!.add(TimeRange(start: startTime, end: endTime));
+          _breakTimes[day]!.add(TimeRange(
+            startHour: startTime.hour,
+            startMinute: startTime.minute,
+            endHour: endTime.hour,
+            endMinute: endTime.minute,
+          ));
+          print('[DEBUG][휴식추가] day=$day, _breakTimes[day]=${_breakTimes[day]?.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
         });
       }
     }
@@ -1088,8 +1120,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     TimeOfDay? latestEnd;
                     for (var v in _operatingHours.values) {
                       if (v != null) {
-                        if (latestEnd == null || v.end.hour > latestEnd.hour || (v.end.hour == latestEnd.hour && v.end.minute > latestEnd.minute)) {
-                          latestEnd = v.end;
+                        if (latestEnd == null || v.endHour > latestEnd.hour || (v.endHour == latestEnd.hour && v.endMinute > latestEnd.minute)) {
+                          latestEnd = TimeOfDay(hour: v.endHour, minute: v.endMinute);
                         }
                       }
                     }
@@ -1104,31 +1136,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     final List<OperatingHours> hoursList = DayOfWeek.values.map((day) {
                       final range = _operatingHours[day];
                       final breaks = _breakTimes[day] ?? [];
-                      print('[UI] hoursList entry: day=$day, range=$range');
+                      print('[DEBUG][저장] day=$day, breaks=${breaks.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
                       if (range != null) {
                         return OperatingHours(
-                          startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
-                          endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
-                          breakTimes: breaks.map((b) => BreakTime(
-                            startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
-                            endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
-                          )).toList(),
                           dayOfWeek: day.index,
+                          startHour: range.startHour,
+                          startMinute: range.startMinute,
+                          endHour: range.endHour,
+                          endMinute: range.endMinute,
+                          breakTimes: breaks.map((b) => BreakTime(
+                            startHour: b.startHour,
+                            startMinute: b.startMinute,
+                            endHour: b.endHour,
+                            endMinute: b.endMinute,
+                          )).toList(),
                         );
                       } else if (latestStart != null && latestEnd != null) {
                         // 휴무 요일 처리: 가장 늦은 시간 30분 블록 저장
                         return OperatingHours(
-                          startTime: DateTime(2020, 1, 1, latestStart.hour, latestStart.minute),
-                          endTime: DateTime(2020, 1, 1, latestEnd.hour, latestEnd.minute),
-                          breakTimes: [],
                           dayOfWeek: day.index,
+                          startHour: latestStart.hour,
+                          startMinute: latestStart.minute,
+                          endHour: latestEnd.hour,
+                          endMinute: latestEnd.minute,
                         );
                       } else {
                         // 완전 초기(모든 요일 휴무) 방어
                         return null;
                       }
                     }).whereType<OperatingHours>().toList();
-                    print('[DEBUG] 저장 버튼에서 hoursList: ${hoursList.length}개, breaks: ' + hoursList.map((h) => h.breakTimes.length).toList().toString());
+                    print('[DEBUG][저장] hoursList.length=${hoursList.length}');
+                    for (final h in hoursList) {
+                      print('[DEBUG][저장] dayOfWeek=${h.dayOfWeek}, breakTimes.length=${h.breakTimes.length}, breakTimes=${h.breakTimes.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
+                    }
                     await DataManager.instance.saveOperatingHours(hoursList);
                     await DataManager.instance.loadAcademySettings();
                     print('[DEBUG] 저장 후 불러온 logo: type=${DataManager.instance.academySettings.logo?.runtimeType}, length=${DataManager.instance.academySettings.logo?.length}, isNull=${DataManager.instance.academySettings.logo == null}');
@@ -1437,7 +1477,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (endTime == null) return;
     setState(() {
-      _operatingHours[day] = TimeRange(start: startTime, end: endTime);
+      _operatingHours[day] = TimeRange(
+        startHour: startTime.hour,
+        startMinute: startTime.minute,
+        endHour: endTime.hour,
+        endMinute: endTime.minute,
+      );
       print('[UI] _operatingHours after set:');
       _operatingHours.forEach((k, v) => print('  $k: $v'));
     });
@@ -1447,13 +1492,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final breaks = _breakTimes[e.key] ?? [];
       print('[UI] hoursList entry: day=$day, range=$range');
       return OperatingHours(
-        startTime: DateTime(2020, 1, 1, range.start.hour, range.start.minute),
-        endTime: DateTime(2020, 1, 1, range.end.hour, range.end.minute),
-        breakTimes: breaks.map((b) => BreakTime(
-          startTime: DateTime(2020, 1, 1, b.start.hour, b.start.minute),
-          endTime: DateTime(2020, 1, 1, b.end.hour, b.end.minute),
-        )).toList(),
         dayOfWeek: e.key.index,
+        startHour: range.startHour,
+        startMinute: range.startMinute,
+        endHour: range.endHour,
+        endMinute: range.endMinute,
+        breakTimes: breaks.map((b) => BreakTime(
+          startHour: b.startHour,
+          startMinute: b.startMinute,
+          endHour: b.endHour,
+          endMinute: b.endMinute,
+        )).toList(),
       );
     }).toList();
     print('[UI] hoursList to save: ${hoursList.length}개');
@@ -1461,7 +1510,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hours = await DataManager.instance.getOperatingHours();
     print('[UI] hours loaded from DB: ${hours.length}개');
     for (var h in hours) {
-      print('  start=${h.startTime}, end=${h.endTime}');
+      print('  start= [36m${h.startHour}:${h.startMinute} [0m, end=${h.endHour}:${h.endMinute}');
     }
     setState(() {
       for (var d in DayOfWeek.values) {
@@ -1471,12 +1520,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       for (var hour in hours) {
         final d = DayOfWeek.values[hour.dayOfWeek];
         _operatingHours[d] = TimeRange(
-          start: TimeOfDay(hour: hour.startTime.hour, minute: hour.startTime.minute),
-          end: TimeOfDay(hour: hour.endTime.hour, minute: hour.endTime.minute),
+          startHour: hour.startHour,
+          startMinute: hour.startMinute,
+          endHour: hour.endHour,
+          endMinute: hour.endMinute,
         );
         _breakTimes[d] = hour.breakTimes.map((breakTime) => TimeRange(
-          start: TimeOfDay(hour: breakTime.startTime.hour, minute: breakTime.startTime.minute),
-          end: TimeOfDay(hour: breakTime.endTime.hour, minute: breakTime.endTime.minute),
+          startHour: breakTime.startHour,
+          startMinute: breakTime.startMinute,
+          endHour: breakTime.endHour,
+          endMinute: breakTime.endMinute,
         )).toList();
       }
       print('[UI] _operatingHours after DB load:');

@@ -6,7 +6,8 @@ class StudentTimeBlock {
   final String studentId;
   final String? groupId;
   final int dayIndex; // 0: 월요일 ~ 6: 일요일
-  final DateTime startTime;
+  final int startHour;
+  final int startMinute;
   final Duration duration;
   final DateTime createdAt;
   final String? setId; // 같은 셋에 속한 블록끼리 공유
@@ -18,7 +19,8 @@ class StudentTimeBlock {
     required this.studentId,
     this.groupId,
     required this.dayIndex,
-    required this.startTime,
+    required this.startHour,
+    required this.startMinute,
     required this.duration,
     required this.createdAt,
     this.setId,
@@ -32,7 +34,8 @@ class StudentTimeBlock {
       studentId: json['student_id'] as String? ?? json['studentId'] as String,
       groupId: json['group_id'] as String? ?? json['groupId'] as String?,
       dayIndex: json['day_index'] as int? ?? json['dayIndex'] as int,
-      startTime: DateTime.parse(json['start_time'] as String? ?? json['startTime'] as String),
+      startHour: json['start_hour'] as int,
+      startMinute: json['start_minute'] as int,
       duration: Duration(minutes: json['duration'] as int),
       createdAt: DateTime.parse(json['created_at'] as String? ?? json['createdAt'] as String),
       setId: json['set_id'] as String? ?? json['setId'] as String?,
@@ -45,7 +48,8 @@ class StudentTimeBlock {
     'id': id,
     'student_id': studentId,
     'day_index': dayIndex,
-    'start_time': startTime.toIso8601String(),
+    'start_hour': startHour,
+    'start_minute': startMinute,
     'duration': duration.inMinutes,
     'created_at': createdAt.toIso8601String(),
     'set_id': setId,
@@ -58,7 +62,8 @@ class StudentTimeBlock {
     String? studentId,
     String? groupId,
     int? dayIndex,
-    DateTime? startTime,
+    int? startHour,
+    int? startMinute,
     Duration? duration,
     DateTime? createdAt,
     String? setId,
@@ -70,7 +75,8 @@ class StudentTimeBlock {
       studentId: studentId ?? this.studentId,
       groupId: groupId ?? this.groupId,
       dayIndex: dayIndex ?? this.dayIndex,
-      startTime: startTime ?? this.startTime,
+      startHour: startHour ?? this.startHour,
+      startMinute: startMinute ?? this.startMinute,
       duration: duration ?? this.duration,
       createdAt: createdAt ?? this.createdAt,
       setId: setId ?? this.setId,
@@ -98,7 +104,8 @@ class StudentTimeBlockFactory {
         id: uuid.v4(),
         studentId: studentIds[0], // 단일 학생 등록 기준
         dayIndex: dayIndex,
-        startTime: sortedTimes[i],
+        startHour: sortedTimes[i].hour,
+        startMinute: sortedTimes[i].minute,
         duration: duration,
         createdAt: DateTime.now(),
         setId: setId,

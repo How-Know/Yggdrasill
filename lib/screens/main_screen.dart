@@ -80,7 +80,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           setId: entry.key,
           student: student.student,
           classInfo: classInfo,
-          startTime: block.startTime,
+          startHour: block.startHour,
+          startMinute: block.startMinute,
         ));
       }
     }
@@ -597,8 +598,11 @@ class _AttendanceTarget {
   final String setId;
   final Student student;
   final ClassInfo? classInfo;
-  final DateTime startTime;
-  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startTime});
+  final int startHour;
+  final int startMinute;
+  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute});
+
+  DateTime get startTime => DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, startHour, startMinute);
 }
 
 // OverlayEntry 툴팁을 띄우는 호버 영역 위젯

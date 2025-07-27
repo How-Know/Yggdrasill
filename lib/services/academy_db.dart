@@ -27,7 +27,7 @@ class AcademyDbService {
   Future<Database> _initDb() async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, 'academy.db');
-    return await openDatabase(
+    return await openDatabaseWithLog(
       path,
       version: 8,
       onCreate: (Database db, int version) async {
@@ -232,6 +232,11 @@ class AcademyDbService {
     );
   }
 
+  Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade}) async {
+    print('[DB][경로] 실제 사용 DB 파일 경로: $path');
+    return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade);
+  }
+
   Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {
     try {
       final dbClient = await db;
@@ -351,41 +356,56 @@ class AcademyDbService {
     await dbClient.delete('groups', where: 'id = ?', whereArgs: [groupId]);
   }
 
-  Future<void> saveOperatingHours(List<OperatingHours> hours) async {
-    try {
-      final dbClient = await db;
-      print('[DB] saveOperatingHours: ${hours.length}개');
-      await dbClient.delete('operating_hours');
-      for (final h in hours) {
-        final breakTimesJson = h.breakTimes.isNotEmpty ? jsonEncode(h.breakTimes.map((b) => b.toJson()).toList()) : '[]';
-        print('[DB] insert operating hour: day=${h.dayOfWeek}, start=${h.startTime}, end=${h.endTime}, breakTimes=$breakTimesJson');
-        await dbClient.insert('operating_hours', {
-          'day_of_week': h.dayOfWeek,
-          'start_time': h.startTime.toIso8601String(),
-          'end_time': h.endTime.toIso8601String(),
-          'break_times': breakTimesJson,
+  Future<void> saveOperatingHours(List<OperatingHours> hoursList) async {
+    final dbClient = await db;
+    await dbClient.delete('operating_hours');
+    await dbClient.delete('break_times');
+    for (final h in hoursList) {
+      // operating_hours 저장
+      final opId = await dbClient.insert('operating_hours', {
+        'day_of_week': h.dayOfWeek,
+        'start_hour': h.startHour,
+        'start_minute': h.startMinute,
+        'end_hour': h.endHour,
+        'end_minute': h.endMinute,
+      });
+      // break_times 저장
+      for (final b in h.breakTimes) {
+        await dbClient.insert('break_times', {
+          'operating_hour_id': opId,
+          'start_hour': b.startHour,
+          'start_minute': b.startMinute,
+          'end_hour': b.endHour,
+          'end_minute': b.endMinute,
         });
       }
-    } catch (e, st) {
-      print('[DB][ERROR] saveOperatingHours: $e\n$st');
-      rethrow;
     }
   }
 
   Future<List<OperatingHours>> getOperatingHours() async {
     final dbClient = await db;
-    final result = await dbClient.query('operating_hours');
-    print('[DB] getOperatingHours: ${result.length}개');
-    for (final row in result) {
-      print('[DB] row: $row');
+    final opRows = await dbClient.query('operating_hours');
+    List<OperatingHours> result = [];
+    for (final row in opRows) {
+      final opId = row['id'] as int;
+      final breakRows = await dbClient.query('break_times', where: 'operating_hour_id = ?', whereArgs: [opId]);
+      final breakTimes = breakRows.map((b) => BreakTime(
+        startHour: b['start_hour'] as int,
+        startMinute: b['start_minute'] as int,
+        endHour: b['end_hour'] as int,
+        endMinute: b['end_minute'] as int,
+      )).toList();
+      result.add(OperatingHours(
+        id: opId,
+        dayOfWeek: row['day_of_week'] as int,
+        startHour: row['start_hour'] as int,
+        startMinute: row['start_minute'] as int,
+        endHour: row['end_hour'] as int,
+        endMinute: row['end_minute'] as int,
+        breakTimes: breakTimes,
+      ));
     }
-    return result.map((row) => OperatingHours(
-      startTime: DateTime.parse(row['start_time'] as String),
-      endTime: DateTime.parse(row['end_time'] as String),
-      breakTimes: (jsonDecode(row['break_times'] as String) as List)
-        .map((b) => BreakTime.fromJson(b)).toList(),
-      dayOfWeek: row['day_of_week'] as int,
-    )).toList();
+    return result;
   }
 
   Future<void> addStudent(Student student) async {
@@ -453,7 +473,19 @@ class AcademyDbService {
     print('[DB] addStudentTimeBlock: ${block.toJson()}');
     await dbClient.insert(
       'student_time_blocks',
-      block.toJson(),
+      {
+        'id': block.id,
+        'student_id': block.studentId,
+        'group_id': block.groupId,
+        'day_index': block.dayIndex,
+        'start_hour': block.startHour,
+        'start_minute': block.startMinute,
+        'duration': block.duration.inMinutes,
+        'created_at': block.createdAt.toIso8601String(),
+        'set_id': block.setId,
+        'number': block.number,
+        'session_type_id': block.sessionTypeId,
+      },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
@@ -464,13 +496,15 @@ class AcademyDbService {
     return result.map((row) => StudentTimeBlock(
       id: row['id'] as String,
       studentId: row['student_id'] as String,
-      dayIndex: row['day_index'] as int,
-      startTime: DateTime.parse(row['start_time'] as String),
-      duration: Duration(minutes: row['duration'] as int),
+      groupId: row['group_id'] as String?,
+      dayIndex: row['day_index'] as int? ?? 0,
+      startHour: row['start_hour'] as int? ?? 0,
+      startMinute: row['start_minute'] as int? ?? 0,
+      duration: Duration(minutes: row['duration'] as int? ?? 0),
       createdAt: DateTime.parse(row['created_at'] as String),
-      setId: row['set_id'] as String?, // 추가
-      number: row['number'] as int?,   // 추가
-      sessionTypeId: row['session_type_id'] as String?, // ★ 추가
+      setId: row['set_id'] as String?,
+      number: row['number'] as int?,
+      sessionTypeId: row['session_type_id'] as String?,
     )).toList();
   }
 
@@ -481,10 +515,15 @@ class AcademyDbService {
       await dbClient.insert('student_time_blocks', {
         'id': block.id,
         'student_id': block.studentId,
+        'group_id': block.groupId,
         'day_index': block.dayIndex,
-        'start_time': block.startTime.toIso8601String(),
+        'start_hour': block.startHour,
+        'start_minute': block.startMinute,
         'duration': block.duration.inMinutes,
         'created_at': block.createdAt.toIso8601String(),
+        'set_id': block.setId,
+        'number': block.number,
+        'session_type_id': block.sessionTypeId,
       });
     }
   }
@@ -505,7 +544,19 @@ class AcademyDbService {
       for (final block in blocks) {
         await txn.insert(
           'student_time_blocks',
-          block.toJson(),
+          {
+            'id': block.id,
+            'student_id': block.studentId,
+            'group_id': block.groupId,
+            'day_index': block.dayIndex,
+            'start_hour': block.startHour,
+            'start_minute': block.startMinute,
+            'duration': block.duration.inMinutes,
+            'created_at': block.createdAt.toIso8601String(),
+            'set_id': block.setId,
+            'number': block.number,
+            'session_type_id': block.sessionTypeId,
+          },
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       }
@@ -523,7 +574,17 @@ class AcademyDbService {
 
   Future<void> addSelfStudyTimeBlock(SelfStudyTimeBlock block) async {
     final dbClient = await db;
-    await dbClient.insert('self_study_time_blocks', block.toDb());
+    await dbClient.insert('self_study_time_blocks', {
+      'id': block.id,
+      'student_id': block.studentId,
+      'day_index': block.dayIndex,
+      'start_hour': block.startHour,
+      'start_minute': block.startMinute,
+      'duration': block.duration.inMinutes,
+      'created_at': block.createdAt.toIso8601String(),
+      'set_id': block.setId,
+      'number': block.number,
+    });
   }
 
   Future<List<SelfStudyTimeBlock>> getSelfStudyTimeBlocks() async {
@@ -533,7 +594,8 @@ class AcademyDbService {
       id: row['id'] as String,
       studentId: row['student_id'] as String,
       dayIndex: row['day_index'] as int,
-      startTime: DateTime.parse(row['start_time'] as String),
+      startHour: row['start_hour'] as int,
+      startMinute: row['start_minute'] as int,
       duration: Duration(minutes: row['duration'] as int),
       createdAt: DateTime.parse(row['created_at'] as String),
       setId: row['set_id'] as String?,
@@ -549,9 +611,12 @@ class AcademyDbService {
         'id': block.id,
         'student_id': block.studentId,
         'day_index': block.dayIndex,
-        'start_time': block.startTime.toIso8601String(),
+        'start_hour': block.startHour,
+        'start_minute': block.startMinute,
         'duration': block.duration.inMinutes,
         'created_at': block.createdAt.toIso8601String(),
+        'set_id': block.setId,
+        'number': block.number,
       });
     }
   }
@@ -582,8 +647,17 @@ class AcademyDbService {
       for (final block in blocks) {
         await txn.insert(
           'self_study_time_blocks',
-          block.toDb(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
+          {
+            'id': block.id,
+            'student_id': block.studentId,
+            'day_index': block.dayIndex,
+            'start_hour': block.startHour,
+            'start_minute': block.startMinute,
+            'duration': block.duration.inMinutes,
+            'created_at': block.createdAt.toIso8601String(),
+            'set_id': block.setId,
+            'number': block.number,
+          },
         );
       }
     });

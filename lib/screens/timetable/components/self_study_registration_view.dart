@@ -48,7 +48,7 @@ class _SelfStudyRegistrationViewState extends State<SelfStudyRegistrationView> {
               final opHour = widget.operatingHours[dayIdx];
               // 예시: 각 요일의 시작시간 기준으로 12블록 생성 (실제 로직은 운영시간에 맞게 조정 필요)
               final blockIdx = idx ~/ widget.operatingHours.length;
-              final hour = opHour.startTime.hour + blockIdx; // OperatingHours.startTime 기준
+              final hour = opHour.startHour + blockIdx; // OperatingHours.startHour 기준
               final startTime = DateTime(0, 1, 1, hour, 0);
               return DragTarget(
                 onWillAccept: (data) => true,

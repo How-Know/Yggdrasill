@@ -1,57 +1,77 @@
 class OperatingHours {
-  final DateTime startTime;
-  final DateTime endTime;
-  final List<BreakTime> breakTimes;
+  final int? id;
   final int dayOfWeek;
+  final int startHour;
+  final int startMinute;
+  final int endHour;
+  final int endMinute;
+  final List<BreakTime> breakTimes;
 
   OperatingHours({
-    required this.startTime,
-    required this.endTime,
-    this.breakTimes = const [],
+    this.id,
     required this.dayOfWeek,
+    required this.startHour,
+    required this.startMinute,
+    required this.endHour,
+    required this.endMinute,
+    this.breakTimes = const [],
   });
 
   Map<String, dynamic> toJson() {
     return {
-      'startTime': startTime.toIso8601String(),
-      'endTime': endTime.toIso8601String(),
-      'breakTimes': breakTimes.map((breakTime) => breakTime.toJson()).toList(),
+      'id': id,
       'dayOfWeek': dayOfWeek,
+      'startHour': startHour,
+      'startMinute': startMinute,
+      'endHour': endHour,
+      'endMinute': endMinute,
+      'breakTimes': breakTimes.map((breakTime) => breakTime.toJson()).toList(),
     };
   }
 
   factory OperatingHours.fromJson(Map<String, dynamic> json) {
     return OperatingHours(
-      startTime: DateTime.parse(json['startTime']),
-      endTime: DateTime.parse(json['endTime']),
+      id: json['id'] as int?,
+      dayOfWeek: json['dayOfWeek'] as int,
+      startHour: json['startHour'] as int,
+      startMinute: json['startMinute'] as int,
+      endHour: json['endHour'] as int,
+      endMinute: json['endMinute'] as int,
       breakTimes: (json['breakTimes'] as List)
           .map((breakTime) => BreakTime.fromJson(breakTime))
           .toList(),
-      dayOfWeek: json['dayOfWeek'] as int,
     );
   }
 }
 
 class BreakTime {
-  final DateTime startTime;
-  final DateTime endTime;
+  final int startHour;
+  final int startMinute;
+  final int endHour;
+  final int endMinute;
 
   BreakTime({
-    required this.startTime,
-    required this.endTime,
+    required this.startHour,
+    required this.startMinute,
+    required this.endHour,
+    required this.endMinute,
   });
 
   Map<String, dynamic> toJson() {
     return {
-      'startTime': startTime.toIso8601String(),
-      'endTime': endTime.toIso8601String(),
+      'startHour': startHour,
+      'startMinute': startMinute,
+      'endHour': endHour,
+      'endMinute': endMinute,
     };
   }
 
   factory BreakTime.fromJson(Map<String, dynamic> json) {
     return BreakTime(
-      startTime: DateTime.parse(json['startTime']),
-      endTime: DateTime.parse(json['endTime']),
+      startHour: json['startHour'] as int,
+      startMinute: json['startMinute'] as int,
+      endHour: json['endHour'] as int,
+      endMinute: json['endMinute'] as int,
     );
   }
 } 

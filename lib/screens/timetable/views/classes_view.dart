@@ -67,6 +67,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   int? dragEndIdx;
   int? dragDayIdx;
   bool isDragging = false;
+  Offset? _pointerDownPosition;
+  DateTime? _pointerDownTime;
 
   Set<String> get dragHighlightKeys {
     if (!isDragging || dragDayIdx == null || dragStartIdx == null || dragEndIdx == null) return {};
@@ -83,8 +85,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   void _onCellPanStart(int dayIdx, int blockIdx) {
     final timeBlocks = _generateTimeBlocks();
     final blockTime = timeBlocks[blockIdx].startTime;
+    print('[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
     if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
-      showAppSnackBar(context, '이미 등록된 시간입니다.');
       return;
     }
     setState(() {
@@ -93,24 +95,29 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       dragDayIdx = dayIdx;
       isDragging = true;
     });
+    print('[DEBUG][_onCellPanStart] dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx, dragDayIdx=$dragDayIdx, isDragging=$isDragging');
   }
 
   void _onCellPanUpdate(int dayIdx, int blockIdx) {
     final timeBlocks = _generateTimeBlocks();
     final blockTime = timeBlocks[blockIdx].startTime;
+    print('[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
     if (!isDragging || dragDayIdx != dayIdx) return;
     if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
-      showAppSnackBar(context, '이미 등록된 시간입니다.');
       return;
     }
-    setState(() {
-      dragEndIdx = blockIdx;
-    });
+    if (dragEndIdx != blockIdx) {
+      setState(() {
+        dragEndIdx = blockIdx;
+      });
+      print('[DEBUG][_onCellPanUpdate] dragEndIdx updated: $dragEndIdx');
+    }
   }
 
   void _onCellPanEnd(int dayIdx) async {
-    print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, registrationModeType=${widget.registrationModeType}, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
+    print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
     if (!isDragging || dragDayIdx != dayIdx || dragStartIdx == null || dragEndIdx == null) {
+      print('[DEBUG][_onCellPanEnd] 드래그 종료 조건 미달, 드래그 상태 해제');
       setState(() { isDragging = false; });
       return;
     }
@@ -119,23 +126,27 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final selectedIdxs = start <= end
         ? [for (int i = start; i <= end; i++) i]
         : [for (int i = end; i <= start; i++) i];
+    print('[DEBUG][_onCellPanEnd] selectedIdxs=$selectedIdxs');
     setState(() {
       isDragging = false;
       dragStartIdx = null;
       dragEndIdx = null;
       dragDayIdx = null;
     });
-    // 팩토리+DB 저장 로직 호출
     final mode = widget.registrationModeType;
     final timeBlocks = _generateTimeBlocks();
-    final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
-
-    // [추가] 운영시간/휴식시간 체크 (콜백 호출 전에 반드시 return)
-    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, startTimes)) {
-      showAppSnackBar(context, '이미 등록된 시간입니다.');
+    List<DateTime> startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+    print('[DEBUG][_onCellPanEnd] startTimes=$startTimes');
+    // [수정] 운영시간/휴식시간 체크: 한 셀이라도 불가하면 전체 등록 막기, 스낵바 1회만 출력
+    final validStartTimes = startTimes.where((t) => _areAllTimesWithinOperatingAndBreak(dayIdx, [t])).toList();
+    if (validStartTimes.length < startTimes.length) {
+      if (mounted) {
+        showAppSnackBar(context, '운영시간 또는 휴식시간에는 수업을 등록할 수 없습니다.');
+        if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+      }
       return;
     }
-
+    startTimes = validStartTimes;
     // [추가] 이미 등록된 시간(겹침) 체크 (학생/자습 모두)
     bool hasConflict = false;
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
@@ -158,33 +169,26 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       }
     }
     if (hasConflict) {
-      showAppSnackBar(context, '이미 등록된 시간입니다.');
+      print('[DEBUG][_onCellPanEnd] 중복 체크 return');
       return;
     }
-    print('[DEBUG][_onCellPanEnd] mode=$mode, startTimes=$startTimes, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
-    if (mode == 'student' && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
-      print('[DEBUG][_onCellPanEnd] 수업 등록 분기 진입');
-      widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
-    } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null && widget.onCellStudentsSelected != null) {
-      print('[DEBUG][_onCellPanEnd] 자습 등록 분기 진입');
-      // 자습 블록 등록 전 중복 체크
-      final studentId = widget.selectedSelfStudyStudent!.student.id;
-      final blockMinutes = 30; // 자습 블록 길이
-      bool hasConflict = false;
-      
-      for (final startTime in startTimes) {
-        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, blockMinutes)) {
-          hasConflict = true;
-          break;
-        }
+    print('[DEBUG][_onCellPanEnd] onCellStudentsSelected 호출');
+    if (mode == 'student' && widget.selectedStudentWithInfo != null) {
+      if (widget.onCellStudentsSelected != null) {
+        print('[DEBUG][_onCellPanEnd] 외부 콜백 호출');
+        widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+      } else {
+        print('[DEBUG][_onCellPanEnd] 내부 핸들러 호출');
+        await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
       }
-      
-      if (hasConflict) {
-        // showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.'); // 중복 메시지 제거
-        return;
+    } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null) {
+      if (widget.onCellStudentsSelected != null) {
+        print('[DEBUG][_onCellPanEnd] 외부 콜백 호출(자습)');
+        widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
+      } else {
+        print('[DEBUG][_onCellPanEnd] 내부 핸들러 호출(자습)');
+        await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
       }
-      
-      widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
     } else {
       print('[DEBUG][_onCellPanEnd] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
     }
@@ -243,35 +247,59 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                     }).toList();
               print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
               return Listener(
+                behavior: HitTestBehavior.translucent,
                 onPointerDown: (event) {
-                  print('[DEBUG][Listener] onPointerDown: isRegistrationMode=${widget.isRegistrationMode}, isDragging=$isDragging');
                   if (!widget.isRegistrationMode) return;
-                  final box = context.findRenderObject() as RenderBox;
-                  final local = box.globalToLocal(event.position);
-                  final blockIdx = (local.dy / blockHeight).floor();
-                  final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
-                  print('[DEBUG][Listener] blockIdx=$blockIdx, dayIdx=$dayIdx');
-                  if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx >= 0 && dayIdx < 7) {
-                    _onCellPanStart(dayIdx, blockIdx);
-                  }
+                  _pointerDownPosition = event.position;
+                  _pointerDownTime = DateTime.now();
+                  setState(() {
+                    isDragging = false;
+                    dragStartIdx = null;
+                    dragEndIdx = null;
+                    dragDayIdx = null;
+                  });
                 },
                 onPointerMove: (event) {
-                  if (!widget.isRegistrationMode || !isDragging) return;
-                  final box = context.findRenderObject() as RenderBox;
-                  final local = box.globalToLocal(event.position);
-                  final blockIdx = (local.dy / blockHeight).floor();
-                  final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
-                  print('[DEBUG][Listener] onPointerMove: blockIdx=$blockIdx, dayIdx=$dayIdx, dragDayIdx=$dragDayIdx');
-                  if (blockIdx >= 0 && blockIdx < timeBlocks.length && dayIdx == dragDayIdx) {
+                  if (!widget.isRegistrationMode) return;
+                  if (_pointerDownPosition == null) return;
+                  final moveDistance = (event.position - _pointerDownPosition!).distance;
+                  if (!isDragging && moveDistance > 10) {
+                    // 드래그 시작! 단 한 번만
+                    final box = context.findRenderObject() as RenderBox;
+                    final local = box.globalToLocal(_pointerDownPosition!);
+                    final blockIdx = (local.dy / blockHeight).floor();
+                    final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
+                    setState(() {
+                      isDragging = true;
+                      dragStartIdx = blockIdx;
+                      dragEndIdx = blockIdx;
+                      dragDayIdx = dayIdx;
+                    });
+                    print('[DEBUG][onPointerMove] 드래그 시작: dayIdx=$dayIdx, blockIdx=$blockIdx');
+                  } else if (isDragging) {
+                    final box = context.findRenderObject() as RenderBox;
+                    final local = box.globalToLocal(event.position);
+                    final blockIdx = (local.dy / blockHeight).floor();
+                    final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
                     _onCellPanUpdate(dayIdx, blockIdx);
                   }
                 },
                 onPointerUp: (event) {
-                  print('[DEBUG][Listener] onPointerUp: isDragging=$isDragging, dragDayIdx=$dragDayIdx');
-                  if (!widget.isRegistrationMode || !isDragging) return;
-                  if (dragDayIdx != null) {
-                    _onCellPanEnd(dragDayIdx!);
+                  print('[DEBUG][onPointerUp] isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+                  if (!widget.isRegistrationMode) return;
+                  // 드래그 시작 후라면 무조건 _onCellPanEnd 호출
+                  if (isDragging && dragStartIdx != null && dragEndIdx != null) {
+                    print('[DEBUG][onPointerUp] _onCellPanEnd 호출');
+                    _onCellPanEnd(dragDayIdx ?? 0); // dragDayIdx가 null이어도 0으로 호출
                   }
+                  setState(() {
+                    isDragging = false;
+                    dragStartIdx = null;
+                    dragEndIdx = null;
+                    dragDayIdx = null;
+                  });
+                  _pointerDownPosition = null;
+                  _pointerDownTime = null;
                 },
                 child: Column(
                   children: [
@@ -337,38 +365,39 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
                               bool isBreakTime = false;
-                              if (widget.operatingHours.length > dayIdx) {
-                                final hours = widget.operatingHours[dayIdx];
-                                for (final breakTime in hours.breakTimes) {
-                                  final breakStart = DateTime(
-                                    timeBlocks[blockIdx].startTime.year,
-                                    timeBlocks[blockIdx].startTime.month,
-                                    timeBlocks[blockIdx].startTime.day,
-                                    breakTime.startTime.hour,
-                                    breakTime.startTime.minute,
-                                  );
-                                  final breakEnd = DateTime(
-                                    timeBlocks[blockIdx].startTime.year,
-                                    timeBlocks[blockIdx].startTime.month,
-                                    timeBlocks[blockIdx].startTime.day,
-                                    breakTime.endTime.hour,
-                                    breakTime.endTime.minute,
-                                  );
-                                  if ((timeBlocks[blockIdx].startTime.isAfter(breakStart) || timeBlocks[blockIdx].startTime.isAtSameMomentAs(breakStart)) &&
-                                      timeBlocks[blockIdx].startTime.isBefore(breakEnd)) {
+                              // 휴식시간 표시 로직 (dayIdx == dayOfWeek로 정확히 매핑)
+                              final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
+                              if (op != null) {
+                                for (final breakTime in op.breakTimes) {
+                                  final blockHour = timeBlocks[blockIdx].startTime.hour;
+                                  final blockMinute = timeBlocks[blockIdx].startTime.minute;
+                                  final breakStartHour = breakTime.startHour;
+                                  final breakStartMinute = breakTime.startMinute;
+                                  final breakEndHour = breakTime.endHour;
+                                  final breakEndMinute = breakTime.endMinute;
+                                  final blockMinutes = blockHour * 60 + blockMinute;
+                                  final breakStartMinutes = breakStartHour * 60 + breakStartMinute;
+                                  final breakEndMinutes = breakEndHour * 60 + breakEndMinute;
+                                  if (blockMinutes >= breakStartMinutes && blockMinutes < breakEndMinutes) {
                                     isBreakTime = true;
                                     break;
                                   }
                                 }
                               }
                               // 시:분만 비교하는 함수
-                              bool isSameTime(DateTime a, DateTime b) => a.hour == b.hour && a.minute == b.minute;
+                              bool isSameTime(dynamic block, DateTime gridTime) {
+                                // block: StudentTimeBlock 또는 SelfStudyTimeBlock
+                                if (block is StudentTimeBlock || block is SelfStudyTimeBlock) {
+                                  return block.startHour == gridTime.hour && block.startMinute == gridTime.minute;
+                                }
+                                return false;
+                              }
                               // 학생별 중복 없이, 요일+시:분이 같은 학생만 카운트
                               final activeStudentIds = allBlocks
                                 .where((b) =>
                                   (b is StudentTimeBlock || b is SelfStudyTimeBlock) &&
                                   b.dayIndex == dayIdx &&
-                                  isSameTime(b.startTime, timeBlocks[blockIdx].startTime)
+                                  isSameTime(b, timeBlocks[blockIdx].startTime)
                                 )
                                 .map((b) => b.studentId)
                                 .toSet();
@@ -408,10 +437,24 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   },
                                   child: GestureDetector(
                                     onTap: () async {
+                                      // 기존 클릭 등록 로직
                                       final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                                       final selectedStudentWithInfo = widget.selectedStudentWithInfo;
                                       final studentId = selectedStudentWithInfo?.student.id;
                                       print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
+                                      // 클릭한 셀의 시작 시간
+                                      final startTime = timeBlocks[blockIdx].startTime;
+                                      // lessonDuration만큼 생성될 모든 블록의 startTime 리스트 생성
+                                      final blockCount = (lessonDuration / 30).ceil();
+                                      final allStartTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: 30 * i)));
+                                      // 하나라도 운영/휴식시간에 걸리면 전체 등록 막기
+                                      if (allStartTimes.any((t) => !_areAllTimesWithinOperatingAndBreak(dayIdx, [t]))) {
+                                        if (mounted) {
+                                          showAppSnackBar(context, '운영시간 또는 휴식시간에는 수업을 등록할 수 없습니다.');
+                                          if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+                                        }
+                                        return;
+                                      }
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
                                         return;
                                       }
@@ -426,7 +469,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                         // 자습 블록이 있는 경우 자습 블록 수정 콜백 호출
                                         final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((block) {
                                           if (block.dayIndex != dayIdx) return false;
-                                          final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
+                                          final blockStartMinutes = block.startHour * 60 + block.startMinute;
                                           final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
                                           final checkMinutes = timeBlocks[blockIdx].startTime.hour * 60 + timeBlocks[blockIdx].startTime.minute;
                                           return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
@@ -490,13 +533,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       // 모든 요일의 운영시간에서 가장 이른 startTime, 가장 늦은 endTime 찾기
       int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
       for (final hours in widget.operatingHours) {
-        if (hours.startTime.hour < minHour || (hours.startTime.hour == minHour && hours.startTime.minute < minMinute)) {
-          minHour = hours.startTime.hour;
-          minMinute = hours.startTime.minute;
+        if (hours.startHour < minHour || (hours.startHour == minHour && hours.startMinute < minMinute)) {
+          minHour = hours.startHour;
+          minMinute = hours.startMinute;
         }
-        if (hours.endTime.hour > maxHour || (hours.endTime.hour == maxHour && hours.endTime.minute > maxMinute)) {
-          maxHour = hours.endTime.hour;
-          maxMinute = hours.endTime.minute;
+        if (hours.endHour > maxHour || (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
+          maxHour = hours.endHour;
+          maxMinute = hours.endMinute;
         }
       }
       var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
@@ -526,10 +569,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     return allBlocks.where((block) {
       if (block.dayIndex != dayIndex) return false;
       // 날짜 무시, 요일+시:분+duration만 비교
-      final blockStartMinutes = block.startTime.hour * 60 + block.startTime.minute;
-      final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
+      final blockStart = block.startHour * 60 + block.startMinute;
+      final blockEnd = blockStart + block.duration.inMinutes;
       final checkMinutes = checkTime.hour * 60 + checkTime.minute;
-      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
+      return checkMinutes >= blockStart && checkMinutes < blockEnd;
     }).toList();
   }
 
@@ -544,7 +587,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     
     // 수업 블록 체크
     for (final block in studentBlocks) {
-      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
         print('[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
@@ -554,7 +597,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     
     // 자습 블록 체크
     for (final block in selfStudyBlocks) {
-      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
         print('[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
@@ -567,19 +610,19 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   // [추가] 운영시간/휴식시간 체크 함수
+  // dayIdx: 0(월)~6(일), op.dayOfWeek: 0(월)~6(일)로 가정
   bool _areAllTimesWithinOperatingAndBreak(int dayIdx, List<DateTime> times) {
-    final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx + 1);
+    final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
     if (op == null) return false;
     for (final t in times) {
-      // 운영시간 내인지
       final tMinutes = t.hour * 60 + t.minute;
-      final opStart = op.startTime.hour * 60 + op.startTime.minute;
-      final opEnd = op.endTime.hour * 60 + op.endTime.minute;
-      if (tMinutes < opStart || tMinutes >= opEnd) return false;
-      // 휴식시간과 겹치는지
+      final opStart = op.startHour * 60 + op.startMinute;
+      final opEnd = op.endHour * 60 + op.endMinute;
+      // 운영 종료 시간(opEnd)도 포함되도록 수정
+      if (tMinutes < opStart || tMinutes > opEnd) return false;
       for (final br in op.breakTimes) {
-        final brStart = br.startTime.hour * 60 + br.startTime.minute;
-        final brEnd = br.endTime.hour * 60 + br.endTime.minute;
+        final brStart = br.startHour * 60 + br.startMinute;
+        final brEnd = br.endHour * 60 + br.endMinute;
         if (tMinutes >= brStart && tMinutes < brEnd) return false;
       }
     }
@@ -695,7 +738,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                           print('[삭제드롭존][진단] 전체 블록 studentId 목록: ' + allBlocks.map((b) => b.studentId).toList().toString());
                           print('[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
                           for (final b in toDelete) {
-                            print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startTime=${b.startTime}');
+                            print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startHour=${b.startHour}, block.startMinute=${b.startMinute}');
                             await DataManager.instance.removeStudentTimeBlock(b.id);
                           }
                         } else {
@@ -717,6 +760,49 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         ),
       ),
     );
+  }
+
+  // 기존 timetable_screen.dart의 onCellStudentsSelected와 동일하게 구현
+  Future<void> _handleCellStudentsSelected(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
+    if (students.isEmpty) return;
+    final student = students.first.student;
+    final blockMinutes = 30; // 한 블록 30분 기준
+    List<DateTime> actualStartTimes = startTimes;
+    // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
+    if (startTimes.length == 1) {
+      final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+      final blockCount = (lessonDuration / blockMinutes).ceil();
+      actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
+    }
+    // 중복 방어: 하나라도 겹치면 전체 등록 불가
+    final allBlocks = DataManager.instance.studentTimeBlocks;
+    bool hasConflict = false;
+    for (final startTime in actualStartTimes) {
+      final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+      if (conflictBlock != null) {
+        showAppSnackBar(context, '이미 등록된 시간입니다.');
+        hasConflict = true;
+        break;
+      }
+    }
+    if (hasConflict) return;
+    final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+      studentIds: [student.id],
+      dayIndex: dayIdx,
+      startTimes: actualStartTimes,
+      duration: Duration(minutes: blockMinutes),
+    );
+    for (final block in blocks) {
+      await DataManager.instance.addStudentTimeBlock(block);
+    }
+    await DataManager.instance.loadStudentTimeBlocks();
+    setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // 더 이상 setter 할당 없이, 콜백 분기만 사용
   }
 }
 

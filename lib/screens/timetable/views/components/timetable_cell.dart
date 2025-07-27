@@ -85,23 +85,23 @@ class TimetableCell extends StatelessWidget {
           final studentId = studentWithInfo.student.id;
           final allBlocks = DataManager.instance.studentTimeBlocks;
           final targetBlock = allBlocks.firstWhere(
-            (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startTime.hour == oldStartTime.hour && b.startTime.minute == oldStartTime.minute,
+            (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
             orElse: () => StudentTimeBlock(
-              id: '', studentId: '', dayIndex: -1, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
+              id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
             ),
           );
           bool studentHasConflict = false;
           if (targetBlock.setId == null || targetBlock.number == null) {
-            final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startTime.hour == oldStartTime.hour && b.startTime.minute == oldStartTime.minute);
+            final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
             if (block != null) {
-              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute);
+              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
               if (conflictBlock != null) {
                 if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
                   studentHasConflict = true;
                 }
               }
               if (!studentHasConflict) {
-                final newBlock = block.copyWith(dayIndex: dayIdx, startTime: startTime);
+                final newBlock = block.copyWith(dayIndex: dayIdx, startHour: startTime.hour, startMinute: startTime.minute);
                 toRemove.add(block);
                 toAdd.add(newBlock);
               }
@@ -119,11 +119,11 @@ class TimetableCell extends StatelessWidget {
             for (final block in toMove) {
               final diff = block.number! - baseNumber;
               final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
-              final newBlock = block.copyWith(dayIndex: dayIdx, startTime: newTime);
+              final newBlock = block.copyWith(dayIndex: dayIdx, startHour: newTime.hour, startMinute: newTime.minute);
               newBlocks.add(newBlock);
             }
             for (final newBlock in newBlocks) {
-              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == newBlock.startTime.hour && b.startTime.minute == newBlock.startTime.minute);
+              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
               if (conflictBlock != null) {
                 if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
                   studentHasConflict = true;

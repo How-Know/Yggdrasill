@@ -138,8 +138,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   void updateCellStudentsAfterMove(int dayIdx, DateTime startTime) {
     final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
       b.dayIndex == dayIdx &&
-      b.startTime.hour == startTime.hour &&
-      b.startTime.minute == startTime.minute
+      b.startHour == startTime.hour &&
+      b.startMinute == startTime.minute
     ).toList();
     final updatedStudents = DataManager.instance.students;
     final updatedCellStudents = updatedBlocks.map((b) =>
@@ -163,7 +163,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 이동할 자습 블록들 찾기 (현재 선택된 셀의 자습 블록들)
     final currentSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
       if (b.dayIndex != widget.selectedCellDayIndex || widget.selectedCellStartTime == null) return false;
-      final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+      final blockStartMinutes = b.startHour * 60 + b.startMinute;
       final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
       final checkMinutes = widget.selectedCellStartTime!.hour * 60 + widget.selectedCellStartTime!.minute;
       return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
@@ -196,7 +196,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     for (final block in currentSelfStudyBlocks) {
       final newBlock = block.copyWith(
         dayIndex: dayIdx,
-        startTime: startTime,
+        startHour: startTime.hour,
+        startMinute: startTime.minute,
       );
       await DataManager.instance.updateSelfStudyTimeBlock(block.id, newBlock);
     }
@@ -204,7 +205,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // UI 업데이트
     final updatedSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
       if (b.dayIndex != dayIdx) return false;
-      final blockStartMinutes = b.startTime.hour * 60 + b.startTime.minute;
+      final blockStartMinutes = b.startHour * 60 + b.startMinute;
       final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
       final checkMinutes = startTime.hour * 60 + startTime.minute;
       return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
@@ -239,7 +240,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     
     // 수업 블록 체크
     for (final block in studentBlocks) {
-      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
         return true;
@@ -248,7 +249,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     
     // 자습 블록 체크 (자신 제외)
     for (final block in selfStudyBlocks) {
-      final blockStart = block.startTime.hour * 60 + block.startTime.minute;
+      final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
         return true;
@@ -545,8 +546,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   final selfStudyTimeBlocks = selfStudyTimeBlocksRaw.cast<SelfStudyTimeBlock>();
                                   final blocks = studentTimeBlocks.where((b) =>
                                     b.dayIndex == widget.selectedCellDayIndex &&
-                                    b.startTime.hour == widget.selectedCellStartTime!.hour &&
-                                    b.startTime.minute == widget.selectedCellStartTime!.minute
+                                    b.startHour == widget.selectedCellStartTime!.hour &&
+                                    b.startMinute == widget.selectedCellStartTime!.minute
                                   ).toList();
                                   final students = DataManager.instance.students;
                                   final cellStudents = blocks.map((b) =>
@@ -563,10 +564,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
                                   final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) {
                                     final matches = b.dayIndex == widget.selectedCellDayIndex &&
-                                        b.startTime.hour == widget.selectedCellStartTime!.hour &&
-                                        b.startTime.minute == widget.selectedCellStartTime!.minute;
+                                        b.startHour == widget.selectedCellStartTime!.hour &&
+                                        b.startMinute == widget.selectedCellStartTime!.minute;
                                     if (matches) {
-                                      print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startTime}');
+                                      print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startHour}:${b.startMinute}');
                                     }
                                     return matches;
                                   }).cast<SelfStudyTimeBlock>().toList();
@@ -661,13 +662,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 (b) =>
                                   b.studentId == student.student.id &&
                                   b.dayIndex == oldDayIndex &&
-                                  b.startTime.hour == oldStartTime?.hour &&
-                                  b.startTime.minute == oldStartTime?.minute,
+                                  b.startHour == oldStartTime?.hour &&
+                                  b.startMinute == oldStartTime?.minute,
                                 orElse: () => SelfStudyTimeBlock(
                                   id: '',
                                   studentId: '',
                                   dayIndex: -1,
-                                  startTime: DateTime(0),
+                                  startHour: 0,
+                                  startMinute: 0,
                                   duration: Duration.zero,
                                   createdAt: DateTime(0),
                                   setId: null,
@@ -687,11 +689,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               final blocks = DataManager.instance.selfStudyTimeBlocks.where((b) =>
                                 b.studentId == student.student.id &&
                                 b.dayIndex == oldDayIndex &&
-                                b.startTime.hour == oldStartTime?.hour &&
-                                b.startTime.minute == oldStartTime?.minute
+                                b.startHour == oldStartTime?.hour &&
+                                b.startMinute == oldStartTime?.minute
                               ).toList();
                               for (final block in blocks) {
-                                print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
+                                print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
                                 futures.add(DataManager.instance.removeSelfStudyTimeBlock(block.id));
                               }
                             }
@@ -705,13 +707,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 (b) =>
                                   b.studentId == student.student.id &&
                                   b.dayIndex == oldDayIndex &&
-                                  b.startTime.hour == oldStartTime?.hour &&
-                                  b.startTime.minute == oldStartTime?.minute,
+                                  b.startHour == oldStartTime?.hour &&
+                                  b.startMinute == oldStartTime?.minute,
                                 orElse: () => StudentTimeBlock(
                                   id: '',
                                   studentId: '',
                                   dayIndex: -1,
-                                  startTime: DateTime(0),
+                                  startHour: 0,
+                                  startMinute: 0,
                                   duration: Duration.zero,
                                   createdAt: DateTime(0),
                                   setId: null,
@@ -731,11 +734,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
                                 b.studentId == student.student.id &&
                                 b.dayIndex == oldDayIndex &&
-                                b.startTime.hour == oldStartTime?.hour &&
-                                b.startTime.minute == oldStartTime?.minute
+                                b.startHour == oldStartTime?.hour &&
+                                b.startMinute == oldStartTime?.minute
                               ).toList();
                               for (final block in blocks) {
-                                print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startTime}');
+                                print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
                                 futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
                               }
                             }
@@ -929,8 +932,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     String? setId;
     if (dayIndex != null && startTime != null) {
       final block = DataManager.instance.studentTimeBlocks.firstWhere(
-        (b) => b.studentId == info.student.id && b.dayIndex == dayIndex && b.startTime.hour == startTime.hour && b.startTime.minute == startTime.minute,
-        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+        (b) => b.studentId == info.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
       );
       setId = block.id.isEmpty ? null : block.setId;
     }
@@ -1139,8 +1142,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       for (var s in students)
         s.student.id: (() {
           final block = studentBlocks.firstWhere(
-            (b) => b.studentId == s.student.id && b.dayIndex == selectedDayIdx && b.startTime.hour == selectedStartTime?.hour && b.startTime.minute == selectedStartTime?.minute,
-            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+            (b) => b.studentId == s.student.id && b.dayIndex == selectedDayIdx && b.startHour == selectedStartTime?.hour && b.startMinute == selectedStartTime?.minute,
+            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
           );
           return block.id.isEmpty ? null : block.sessionTypeId;
         })()
@@ -1230,7 +1233,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       // number==1인 블록만 필터링
       final studentBlocks = blocks.where((b) => b.studentId == student.student.id && (b.number == null || b.number == 1)).toList();
       for (final block in studentBlocks) {
-        final key = '${block.dayIndex}-${block.startTime.hour}:${block.startTime.minute.toString().padLeft(2, '0')}';
+        final key = '${block.dayIndex}-${block.startHour}:${block.startMinute.toString().padLeft(2, '0')}';
         grouped.putIfAbsent(key, () => []);
         grouped[key]!.add(student);
       }
@@ -1269,8 +1272,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           if (students.isNotEmpty) {
             final studentId = students.first.student.id;
             final block = blocks.firstWhere(
-              (b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startTime.hour == hour && b.startTime.minute == min,
-              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startTime: DateTime(0), duration: Duration.zero, createdAt: DateTime(0)),
+              (b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == hour && b.startMinute == min,
+              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
             );
             if (block.id.isNotEmpty && block.sessionTypeId != null && block.sessionTypeId!.isNotEmpty) {
               final classInfo = DataManager.instance.classes.firstWhere(
@@ -1598,7 +1601,7 @@ class _ClassCardState extends State<_ClassCard> {
     print('[DEBUG][_handleStudentDrop] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
     for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
-      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startTime}, sessionTypeId=${widget.classInfo.id}');
+      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
     await DataManager.instance.loadStudentTimeBlocks();

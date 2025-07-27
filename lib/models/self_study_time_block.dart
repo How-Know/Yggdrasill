@@ -5,7 +5,8 @@ class SelfStudyTimeBlock {
   final String id;
   final String studentId;
   final int dayIndex;
-  final DateTime startTime;
+  final int startHour;
+  final int startMinute;
   final Duration duration;
   final DateTime createdAt;
   final String? setId;
@@ -15,7 +16,8 @@ class SelfStudyTimeBlock {
     required this.id,
     required this.studentId,
     required this.dayIndex,
-    required this.startTime,
+    required this.startHour,
+    required this.startMinute,
     required this.duration,
     required this.createdAt,
     this.setId,
@@ -27,7 +29,8 @@ class SelfStudyTimeBlock {
       id: json['id'] as String,
       studentId: json['student_id'] as String? ?? json['studentId'] as String,
       dayIndex: json['day_index'] as int? ?? json['dayIndex'] as int,
-      startTime: DateTime.parse(json['start_time'] as String? ?? json['startTime'] as String),
+      startHour: json['start_hour'] as int,
+      startMinute: json['start_minute'] as int,
       duration: Duration(minutes: json['duration'] as int),
       createdAt: DateTime.parse(json['created_at'] as String? ?? json['createdAt'] as String),
       setId: json['set_id'] as String? ?? json['setId'] as String?,
@@ -39,29 +42,22 @@ class SelfStudyTimeBlock {
     'id': id,
     'student_id': studentId,
     'day_index': dayIndex,
-    'start_time': startTime.toIso8601String(),
+    'start_hour': startHour,
+    'start_minute': startMinute,
     'duration': duration.inMinutes,
     'created_at': createdAt.toIso8601String(),
     'set_id': setId,
     'number': number,
   };
 
-  Map<String, dynamic> toDb() => {
-    'id': id,
-    'student_id': studentId,
-    'day_index': dayIndex,
-    'start_time': startTime.toIso8601String(),
-    'duration': duration.inMinutes,
-    'created_at': createdAt.toIso8601String(),
-    'set_id': setId,
-    'number': number,
-  };
+  Map<String, dynamic> toDb() => toJson();
 
   SelfStudyTimeBlock copyWith({
     String? id,
     String? studentId,
     int? dayIndex,
-    DateTime? startTime,
+    int? startHour,
+    int? startMinute,
     Duration? duration,
     DateTime? createdAt,
     String? setId,
@@ -71,7 +67,8 @@ class SelfStudyTimeBlock {
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
       dayIndex: dayIndex ?? this.dayIndex,
-      startTime: startTime ?? this.startTime,
+      startHour: startHour ?? this.startHour,
+      startMinute: startMinute ?? this.startMinute,
       duration: duration ?? this.duration,
       createdAt: createdAt ?? this.createdAt,
       setId: setId ?? this.setId,
@@ -98,7 +95,8 @@ class SelfStudyTimeBlockFactory {
         id: uuid.v4(),
         studentId: studentId,
         dayIndex: dayIndex,
-        startTime: sortedTimes[i],
+        startHour: sortedTimes[i].hour,
+        startMinute: sortedTimes[i].minute,
         duration: duration,
         createdAt: DateTime.now(),
         setId: setId,
