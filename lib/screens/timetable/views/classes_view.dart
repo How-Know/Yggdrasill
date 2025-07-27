@@ -11,6 +11,7 @@ import '../../../widgets/app_snackbar.dart';
 import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
 import '../../../models/self_study_time_block.dart';
+import 'package:collection/collection.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -80,6 +81,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   void _onCellPanStart(int dayIdx, int blockIdx) {
+    final timeBlocks = _generateTimeBlocks();
+    final blockTime = timeBlocks[blockIdx].startTime;
+    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
+      showAppSnackBar(context, '이미 등록된 시간입니다.');
+      return;
+    }
     setState(() {
       dragStartIdx = blockIdx;
       dragEndIdx = blockIdx;
@@ -89,7 +96,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   void _onCellPanUpdate(int dayIdx, int blockIdx) {
+    final timeBlocks = _generateTimeBlocks();
+    final blockTime = timeBlocks[blockIdx].startTime;
     if (!isDragging || dragDayIdx != dayIdx) return;
+    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
+      showAppSnackBar(context, '이미 등록된 시간입니다.');
+      return;
+    }
     setState(() {
       dragEndIdx = blockIdx;
     });
@@ -116,6 +129,38 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final mode = widget.registrationModeType;
     final timeBlocks = _generateTimeBlocks();
     final startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+
+    // [추가] 운영시간/휴식시간 체크 (콜백 호출 전에 반드시 return)
+    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, startTimes)) {
+      showAppSnackBar(context, '이미 등록된 시간입니다.');
+      return;
+    }
+
+    // [추가] 이미 등록된 시간(겹침) 체크 (학생/자습 모두)
+    bool hasConflict = false;
+    if (mode == 'student' && widget.selectedStudentWithInfo != null) {
+      final studentId = widget.selectedStudentWithInfo!.student.id;
+      final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+      for (final startTime in startTimes) {
+        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, lessonDuration)) {
+          hasConflict = true;
+          break;
+        }
+      }
+    } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null) {
+      final studentId = widget.selectedSelfStudyStudent!.student.id;
+      final blockMinutes = 30; // 자습 블록 길이
+      for (final startTime in startTimes) {
+        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, blockMinutes)) {
+          hasConflict = true;
+          break;
+        }
+      }
+    }
+    if (hasConflict) {
+      showAppSnackBar(context, '이미 등록된 시간입니다.');
+      return;
+    }
     print('[DEBUG][_onCellPanEnd] mode=$mode, startTimes=$startTimes, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
     if (mode == 'student' && widget.selectedStudentWithInfo != null && widget.onCellStudentsSelected != null) {
       print('[DEBUG][_onCellPanEnd] 수업 등록 분기 진입');
@@ -519,6 +564,26 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     
     print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime');
     return false;
+  }
+
+  // [추가] 운영시간/휴식시간 체크 함수
+  bool _areAllTimesWithinOperatingAndBreak(int dayIdx, List<DateTime> times) {
+    final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx + 1);
+    if (op == null) return false;
+    for (final t in times) {
+      // 운영시간 내인지
+      final tMinutes = t.hour * 60 + t.minute;
+      final opStart = op.startTime.hour * 60 + op.startTime.minute;
+      final opEnd = op.endTime.hour * 60 + op.endTime.minute;
+      if (tMinutes < opStart || tMinutes >= opEnd) return false;
+      // 휴식시간과 겹치는지
+      for (final br in op.breakTimes) {
+        final brStart = br.startTime.hour * 60 + br.startTime.minute;
+        final brEnd = br.endTime.hour * 60 + br.endTime.minute;
+        if (tMinutes >= brStart && tMinutes < brEnd) return false;
+      }
+    }
+    return true;
   }
 
   @override

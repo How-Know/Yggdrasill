@@ -194,7 +194,6 @@ class TimetableCell extends StatelessWidget {
         }
       },
       builder: (context, candidateData, rejectedData) {
-        print('[DEBUG][TimetableCell][builder] candidateData=$candidateData, rejectedData=$rejectedData');
         return GestureDetector(
           onTap: onTap,
           child: Stack(

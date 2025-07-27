@@ -380,7 +380,15 @@ class DataManager {
     }
 
     try {
-      _operatingHours = await AcademyDbService.instance.getOperatingHours();
+      final raw = await AcademyDbService.instance.getOperatingHours();
+      // 0=월, 1=화, ..., 6=일로 정렬/매핑
+      List<OperatingHours?> weekHours = List.filled(7, null);
+      for (final h in raw) {
+        if (h.dayOfWeek >= 1 && h.dayOfWeek <= 7) {
+          weekHours[h.dayOfWeek - 1] = h;
+        }
+      }
+      _operatingHours = weekHours.whereType<OperatingHours>().toList();
     } catch (e) {
       print('Error loading operating hours: $e');
       _operatingHours = [];
