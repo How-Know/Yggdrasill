@@ -170,6 +170,16 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
     if (hasConflict) {
       print('[DEBUG][_onCellPanEnd] 중복 체크 return');
+      print('[DEBUG][클릭 중복] showAppSnackBar 호출');
+      if (mounted) {
+        Future.microtask(() {
+          try {
+            showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+          } catch (e, st) {
+            print('[DEBUG][showAppSnackBar 예외] $e\n$st');
+          }
+        });
+      }
       return;
     }
     print('[DEBUG][_onCellPanEnd] onCellStudentsSelected 호출');
@@ -456,6 +466,14 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                         return;
                                       }
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
+                                        print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');
+                                        Future.microtask(() {
+                                          try {
+                                            showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+                                          } catch (e, st) {
+                                            print('[DEBUG][showAppSnackBar 예외] $e\n$st');
+                                          }
+                                        });
                                         return;
                                       }
                                       if (widget.isRegistrationMode && widget.onCellStudentsSelected != null && selectedStudentWithInfo != null) {

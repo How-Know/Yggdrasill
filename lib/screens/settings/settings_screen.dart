@@ -536,17 +536,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   final TimeOfDay? newStart = await showTimePicker(
                                     context: context,
                                     initialTime: TimeOfDay(hour: currentRange.startHour, minute: currentRange.startMinute),
-                                    builder: (context, child) {
+                                    builder: (BuildContext context, Widget? child) {
                                       return Theme(
                                         data: Theme.of(context).copyWith(
-                                          colorScheme: const ColorScheme.dark(
+                                          colorScheme: const ColorScheme(
+                                            brightness: Brightness.dark,
                                             primary: Color(0xFF1976D2),
                                             onPrimary: Colors.white,
-                                            surface: Color(0xFF1F1F1F),
+                                            secondary: Color(0xFF1976D2),
+                                            onSecondary: Colors.white,
+                                            error: Color(0xFFB00020),
+                                            onError: Colors.white,
+                                            background: Color(0xFF18181A),
+                                            onBackground: Colors.white,
+                                            surface: Color(0xFF18181A),
                                             onSurface: Colors.white,
                                           ),
+                                          dialogBackgroundColor: const Color(0xFF18181A),
+                                          timePickerTheme: const TimePickerThemeData(
+                                            backgroundColor: Color(0xFF18181A),
+                                            hourMinuteColor: Color(0xFF1976D2),
+                                            hourMinuteTextColor: Colors.white,
+                                            dialHandColor: Color(0xFF1976D2),
+                                            dialBackgroundColor: Color(0xFF18181A),
+                                            entryModeIconColor: Color(0xFF1976D2),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                                            helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                            dayPeriodTextColor: Colors.white,
+                                            dayPeriodColor: Color(0xFF1976D2),
+                                          ),
                                         ),
+                                        child: Localizations.override(
+                                          context: context,
+                                          locale: const Locale('ko'),
+                                          delegates: [
+                                            ...GlobalMaterialLocalizations.delegates,
+                                          ],
+                                          child: Builder(
+                                            builder: (context) {
+                                              return MediaQuery(
+                                                data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
                                         child: child!,
+                                              );
+                                            },
+                                          ),
+                                        ),
                                       );
                                     },
                                   );
@@ -554,17 +588,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   final TimeOfDay? newEnd = await showTimePicker(
                                     context: context,
                                     initialTime: TimeOfDay(hour: currentRange.endHour, minute: currentRange.endMinute),
-                                    builder: (context, child) {
+                                    builder: (BuildContext context, Widget? child) {
                                       return Theme(
                                         data: Theme.of(context).copyWith(
-                                          colorScheme: const ColorScheme.dark(
+                                          colorScheme: const ColorScheme(
+                                            brightness: Brightness.dark,
                                             primary: Color(0xFF1976D2),
                                             onPrimary: Colors.white,
-                                            surface: Color(0xFF1F1F1F),
+                                            secondary: Color(0xFF1976D2),
+                                            onSecondary: Colors.white,
+                                            error: Color(0xFFB00020),
+                                            onError: Colors.white,
+                                            background: Color(0xFF18181A),
+                                            onBackground: Colors.white,
+                                            surface: Color(0xFF18181A),
                                             onSurface: Colors.white,
                                           ),
+                                          dialogBackgroundColor: const Color(0xFF18181A),
+                                          timePickerTheme: const TimePickerThemeData(
+                                            backgroundColor: Color(0xFF18181A),
+                                            hourMinuteColor: Color(0xFF1976D2),
+                                            hourMinuteTextColor: Colors.white,
+                                            dialHandColor: Color(0xFF1976D2),
+                                            dialBackgroundColor: Color(0xFF18181A),
+                                            entryModeIconColor: Color(0xFF1976D2),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                                            helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                            dayPeriodTextColor: Colors.white,
+                                            dayPeriodColor: Color(0xFF1976D2),
+                                          ),
                                         ),
+                                        child: Localizations.override(
+                                          context: context,
+                                          locale: const Locale('ko'),
+                                          delegates: [
+                                            ...GlobalMaterialLocalizations.delegates,
+                                          ],
+                                          child: Builder(
+                                            builder: (context) {
+                                              return MediaQuery(
+                                                data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
                                         child: child!,
+                                              );
+                                            },
+                                          ),
+                                        ),
                                       );
                                     },
                                   );
@@ -717,7 +785,141 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             );
                             if (selected == 'edit') {
-                              // TODO: 휴식시간 수정 다이얼로그 연결
+                              // 운영시간 등록과 동일한 스타일의 showTimePicker 2개 호출
+                              final TimeOfDay? newStart = await showTimePicker(
+                                context: context,
+                                initialTime: TimeOfDay(hour: breakTime.startHour, minute: breakTime.startMinute),
+                                builder: (BuildContext context, Widget? child) {
+                                  return Theme(
+                                    data: Theme.of(context).copyWith(
+                                      colorScheme: const ColorScheme(
+                                        brightness: Brightness.dark,
+                                        primary: Color(0xFF1976D2),
+                                        onPrimary: Colors.white,
+                                        secondary: Color(0xFF1976D2),
+                                        onSecondary: Colors.white,
+                                        error: Color(0xFFB00020),
+                                        onError: Colors.white,
+                                        background: Color(0xFF18181A),
+                                        onBackground: Colors.white,
+                                        surface: Color(0xFF18181A),
+                                        onSurface: Colors.white,
+                                      ),
+                                      dialogBackgroundColor: const Color(0xFF18181A),
+                                      timePickerTheme: const TimePickerThemeData(
+                                        backgroundColor: Color(0xFF18181A),
+                                        hourMinuteColor: Color(0xFF1976D2),
+                                        hourMinuteTextColor: Colors.white,
+                                        dialHandColor: Color(0xFF1976D2),
+                                        dialBackgroundColor: Color(0xFF18181A),
+                                        entryModeIconColor: Color(0xFF1976D2),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                                        helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                        dayPeriodTextColor: Colors.white,
+                                        dayPeriodColor: Color(0xFF1976D2),
+                                      ),
+                                    ),
+                                    child: Localizations.override(
+                                      context: context,
+                                      locale: const Locale('ko'),
+                                      delegates: [
+                                        ...GlobalMaterialLocalizations.delegates,
+                                      ],
+                                      child: Builder(
+                                        builder: (context) {
+                                          return MediaQuery(
+                                            data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                            child: child!,
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  );
+                                },
+                              );
+                              if (newStart == null) return;
+                              final TimeOfDay? newEnd = await showTimePicker(
+                                context: context,
+                                initialTime: TimeOfDay(hour: breakTime.endHour, minute: breakTime.endMinute),
+                                builder: (BuildContext context, Widget? child) {
+                                  return Theme(
+                                    data: Theme.of(context).copyWith(
+                                      colorScheme: const ColorScheme(
+                                        brightness: Brightness.dark,
+                                        primary: Color(0xFF1976D2),
+                                        onPrimary: Colors.white,
+                                        secondary: Color(0xFF1976D2),
+                                        onSecondary: Colors.white,
+                                        error: Color(0xFFB00020),
+                                        onError: Colors.white,
+                                        background: Color(0xFF18181A),
+                                        onBackground: Colors.white,
+                                        surface: Color(0xFF18181A),
+                                        onSurface: Colors.white,
+                                      ),
+                                      dialogBackgroundColor: const Color(0xFF18181A),
+                                      timePickerTheme: const TimePickerThemeData(
+                                        backgroundColor: Color(0xFF18181A),
+                                        hourMinuteColor: Color(0xFF1976D2),
+                                        hourMinuteTextColor: Colors.white,
+                                        dialHandColor: Color(0xFF1976D2),
+                                        dialBackgroundColor: Color(0xFF18181A),
+                                        entryModeIconColor: Color(0xFF1976D2),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                                        helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                        dayPeriodTextColor: Colors.white,
+                                        dayPeriodColor: Color(0xFF1976D2),
+                                      ),
+                                    ),
+                                    child: Localizations.override(
+                                      context: context,
+                                      locale: const Locale('ko'),
+                                      delegates: [
+                                        ...GlobalMaterialLocalizations.delegates,
+                                      ],
+                                      child: Builder(
+                                        builder: (context) {
+                                          return MediaQuery(
+                                            data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                                            child: child!,
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  );
+                                },
+                              );
+                              if (newEnd == null) return;
+                              setState(() {
+                                final idx = _breakTimes[day]?.indexOf(breakTime) ?? -1;
+                                if (idx != -1) {
+                                  _breakTimes[day]![idx] = TimeRange(
+                                    startHour: newStart.hour,
+                                    startMinute: newStart.minute,
+                                    endHour: newEnd.hour,
+                                    endMinute: newEnd.minute,
+                                  );
+                                }
+                              });
+                              // DB 저장
+                              final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
+                                final range = e.value!;
+                                final breaks = _breakTimes[e.key] ?? [];
+                                return OperatingHours(
+                                  dayOfWeek: e.key.index,
+                                  startHour: range.startHour,
+                                  startMinute: range.startMinute,
+                                  endHour: range.endHour,
+                                  endMinute: range.endMinute,
+                                  breakTimes: breaks.map((b) => BreakTime(
+                                    startHour: b.startHour,
+                                    startMinute: b.startMinute,
+                                    endHour: b.endHour,
+                                    endMinute: b.endMinute,
+                                  )).toList(),
+                                );
+                              }).toList();
+                              await DataManager.instance.saveOperatingHours(hoursList);
                             } else if (selected == 'delete') {
                               setState(() {
                                 _breakTimes[day]?.remove(breakTime);
@@ -787,18 +989,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (BuildContext context, Widget? child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
+            colorScheme: const ColorScheme(
+              brightness: Brightness.dark,
               primary: Color(0xFF1976D2),
               onPrimary: Colors.white,
-              surface: Color(0xFF1F1F1F),
+              secondary: Color(0xFF1976D2),
+              onSecondary: Colors.white,
+              error: Color(0xFFB00020),
+              onError: Colors.white,
+              background: Color(0xFF18181A),
+              onBackground: Colors.white,
+              surface: Color(0xFF18181A),
               onSurface: Colors.white,
             ),
+            dialogBackgroundColor: const Color(0xFF18181A),
+            timePickerTheme: const TimePickerThemeData(
+              backgroundColor: Color(0xFF18181A),
+              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteTextColor: Colors.white,
+              dialHandColor: Color(0xFF1976D2),
+              dialBackgroundColor: Color(0xFF18181A),
+              entryModeIconColor: Color(0xFF1976D2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+              helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              dayPeriodTextColor: Colors.white,
+              dayPeriodColor: Color(0xFF1976D2),
+            ),
           ),
-          child: child!,
+          child: Localizations.override(
+            context: context,
+            locale: const Locale('ko'),
+            delegates: [
+              ...GlobalMaterialLocalizations.delegates,
+            ],
+            child: Builder(
+              builder: (context) {
+                return MediaQuery(
+                  data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                  child: child!,
+                );
+              },
+            ),
+          ),
         );
       },
     );
-
     if (startTime != null) {
       final TimeOfDay? endTime = await showTimePicker(
         context: context,
@@ -806,18 +1041,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (BuildContext context, Widget? child) {
           return Theme(
             data: Theme.of(context).copyWith(
-              colorScheme: const ColorScheme.dark(
+              colorScheme: const ColorScheme(
+                brightness: Brightness.dark,
                 primary: Color(0xFF1976D2),
                 onPrimary: Colors.white,
-                surface: Color(0xFF1F1F1F),
+                secondary: Color(0xFF1976D2),
+                onSecondary: Colors.white,
+                error: Color(0xFFB00020),
+                onError: Colors.white,
+                background: Color(0xFF18181A),
+                onBackground: Colors.white,
+                surface: Color(0xFF18181A),
                 onSurface: Colors.white,
               ),
+              dialogBackgroundColor: const Color(0xFF18181A),
+              timePickerTheme: const TimePickerThemeData(
+                backgroundColor: Color(0xFF18181A),
+                hourMinuteColor: Color(0xFF1976D2),
+                hourMinuteTextColor: Colors.white,
+                dialHandColor: Color(0xFF1976D2),
+                dialBackgroundColor: Color(0xFF18181A),
+                entryModeIconColor: Color(0xFF1976D2),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                dayPeriodTextColor: Colors.white,
+                dayPeriodColor: Color(0xFF1976D2),
+              ),
             ),
-            child: child!,
+            child: Localizations.override(
+              context: context,
+              locale: const Locale('ko'),
+              delegates: [
+                ...GlobalMaterialLocalizations.delegates,
+              ],
+              child: Builder(
+                builder: (context) {
+                  return MediaQuery(
+                    data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                    child: child!,
+                  );
+                },
+              ),
+            ),
           );
         },
       );
-
       if (endTime != null) {
         setState(() {
           _breakTimes[day] ??= [];
@@ -829,6 +1097,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ));
           print('[DEBUG][휴식추가] day=$day, _breakTimes[day]=${_breakTimes[day]?.map((b) => '${b.startHour}:${b.startMinute}~${b.endHour}:${b.endMinute}').toList()}');
         });
+        // DB 저장
+        final List<OperatingHours> hoursList = _operatingHours.entries.where((e) => e.value != null).map((e) {
+          final range = e.value!;
+          final breaks = _breakTimes[e.key] ?? [];
+          return OperatingHours(
+            dayOfWeek: e.key.index,
+            startHour: range.startHour,
+            startMinute: range.startMinute,
+            endHour: range.endHour,
+            endMinute: range.endMinute,
+            breakTimes: breaks.map((b) => BreakTime(
+              startHour: b.startHour,
+              startMinute: b.startMinute,
+              endHour: b.endHour,
+              endMinute: b.endMinute,
+            )).toList(),
+          );
+        }).toList();
+        await DataManager.instance.saveOperatingHours(hoursList);
       }
     }
   }
@@ -993,7 +1280,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 DropdownMenuItem(
                                   value: PaymentType.perClass,
-                                  child: Text('회당 결제'),
+                                  child: Text('횟수제'),
                                 ),
                               ],
                               onChanged: (PaymentType? value) {
@@ -1006,24 +1293,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                           const SizedBox(width: 20),
-                          SizedBox(
-                            width: 290,
-                            child: TextFormField(
-                              controller: _courseCountController,
-                              style: const TextStyle(color: Colors.white),
-                              keyboardType: TextInputType.number,
-                              decoration: InputDecoration(
-                                labelText: '수강 횟수',
-                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                ),
-                                focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                          if (_paymentType == PaymentType.perClass)
+                            SizedBox(
+                              width: 290,
+                              child: TextFormField(
+                                controller: _courseCountController,
+                                style: const TextStyle(color: Colors.white),
+                                keyboardType: TextInputType.number,
+                                decoration: InputDecoration(
+                                  labelText: '기준 수강 횟수',
+                                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                  ),
+                                  focusedBorder: const OutlineInputBorder(
+                                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 30),
