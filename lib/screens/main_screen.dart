@@ -266,18 +266,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           AnimatedBuilder(
             animation: _sideSheetAnimation,
             builder: (context, child) {
+              final progress = _sideSheetAnimation.value;
               final attendanceTargets = getTodayAttendanceTargets();
               // 상태별 분류
               final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
               final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
               final waiting = attendanceTargets.where((t) => !_attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
-
               // 출석 전 학생카드: 시작시간별 그룹핑
               final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
               for (final t in waiting) {
                 waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
               }
-
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
               Widget _ellipsisWrap(List<Widget> cards, {int maxLines = 2, double spacing = 8, double runSpacing = 8}) {
                 // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
@@ -300,180 +299,179 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   children: lines,
                 );
               }
-
               return Container(
-                width: 450 * _sideSheetAnimation.value,
+                width: 450 * progress,
                 color: const Color(0xFF1F1F1F),
-                child: _sideSheetAnimation.value > 0
-                    ? Column(
-                        children: [
-                          // 날짜/요일 표시
-                          Padding(
-                            padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
-                            child: Center(
-                              child: Text(
-                                _getTodayDateString(),
-                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                child: progress > 0.7
+                  ? Column(
+                      children: [
+                        // 날짜/요일 표시
+                        Padding(
+                          padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+                          child: Center(
+                            child: Text(
+                              _getTodayDateString(),
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                        // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
+                        Container(
+                          constraints: BoxConstraints(
+                            minHeight: _cardActualHeight,
+                            maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1),
+                          ),
+                          margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
+                          child: Scrollbar(
+                            thumbVisibility: true,
+                            child: SingleChildScrollView(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Wrap(
+                                  spacing: _cardSpacing,
+                                  runSpacing: _cardSpacing,
+                                  verticalDirection: VerticalDirection.down,
+                                  children: leaved
+                                      .map((t) => AnimatedSwitcher(
+                                            duration: const Duration(milliseconds: 350),
+                                            switchInCurve: Curves.elasticOut,
+                                            switchOutCurve: Curves.easeOut,
+                                            child: _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')),
+                                          ))
+                                      .toList(),
+                                ),
                               ),
                             ),
                           ),
-                          // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
-                          Container(
+                        ),
+                        // 파란 네모(출석 박스) - 최대 15줄, 스크롤
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 16),
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: Color(0xFF1E252E),
+                              border: Border.all(color: Color(0xFF1E252E), width: 2),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
                             constraints: BoxConstraints(
                               minHeight: _cardActualHeight,
-                              maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1),
+                              maxHeight: _cardActualHeight * _attendedMaxLines + _attendedRunSpacing * (_attendedMaxLines - 1),
                             ),
-                            margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
+                            padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
                             child: Scrollbar(
                               thumbVisibility: true,
                               child: SingleChildScrollView(
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Wrap(
-                                    spacing: _cardSpacing,
-                                    runSpacing: _cardSpacing,
-                                    verticalDirection: VerticalDirection.down,
-                                    children: leaved
-                                        .map((t) => AnimatedSwitcher(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (attended.isEmpty)
+                                      Center(
+                                        child: Text(
+                                          DataManager.instance.academySettings.name.isNotEmpty
+                                              ? DataManager.instance.academySettings.name
+                                              : '학원명',
+                                          style: const TextStyle(
+                                            color: Color(0xFF0F467D),
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    if (attended.isNotEmpty)
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          for (int i = 0; i < attended.length; i++) ...[
+                                            // status는 'attended'로 고정, 파란네모 안도 AnimatedSwitcher 적용
+                                            AnimatedSwitcher(
                                               duration: const Duration(milliseconds: 350),
                                               switchInCurve: Curves.elasticOut,
                                               switchOutCurve: Curves.easeOut,
-                                              child: _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')),
-                                            ))
-                                        .toList(),
-                                  ),
+                                              child: _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
+                                            ),
+                                            if (i != attended.length - 1) SizedBox(height: 8),
+                                          ]
+                                        ],
+                                      ),
+                                  ],
                                 ),
                               ),
                             ),
                           ),
-                          // 파란 네모(출석 박스) - 최대 15줄, 스크롤
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 16),
-                              width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: Color(0xFF1E252E),
-                                border: Border.all(color: Color(0xFF1E252E), width: 2),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              constraints: BoxConstraints(
-                                minHeight: _cardActualHeight,
-                                maxHeight: _cardActualHeight * _attendedMaxLines + _attendedRunSpacing * (_attendedMaxLines - 1),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+                        ),
+                        // 출석 전 학생 리스트(가운데 정렬, 스크롤)
+                        if (waitingByTime.isNotEmpty)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
                               child: Scrollbar(
                                 thumbVisibility: true,
-                                child: SingleChildScrollView(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      if (attended.isEmpty)
-                                        Center(
+                                child: ListView(
+                                  padding: EdgeInsets.zero,
+                                  children: [
+                                    for (final entry in waitingByTime.entries) ...[
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 4.0),
+                                        child: Center(
                                           child: Text(
-                                            DataManager.instance.academySettings.name.isNotEmpty
-                                                ? DataManager.instance.academySettings.name
-                                                : '학원명',
-                                            style: const TextStyle(
-                                              color: Color(0xFF0F467D),
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.bold,
-                                            ),
+                                            _formatTime(entry.key),
+                                            style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
                                           ),
                                         ),
-                                      if (attended.isNotEmpty)
-                                        Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < attended.length; i++) ...[
-                                              // status는 'attended'로 고정, 파란네모 안도 AnimatedSwitcher 적용
-                                              AnimatedSwitcher(
-                                                duration: const Duration(milliseconds: 350),
-                                                switchInCurve: Curves.elasticOut,
-                                                switchOutCurve: Curves.easeOut,
-                                                child: _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
-                                              ),
-                                              if (i != attended.length - 1) SizedBox(height: 8),
-                                            ]
-                                          ],
+                                      ),
+                                      Center(
+                                        child: Wrap(
+                                          alignment: WrapAlignment.center,
+                                          spacing: _cardSpacing,
+                                          runSpacing: _cardSpacing,
+                                          children: entry.value
+                                              .map((t) => GestureDetector(
+                                                    onTap: () {
+                                                      setState(() {
+                                                        _attendedSetIds.add(t.setId);
+                                                        _attendTimes[t.setId] = DateTime.now();
+                                                      });
+                                                    },
+                                                    child: MouseRegion(
+                                                      onEnter: (event) {
+                                                        final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+                                                        final offset = overlay.globalToLocal(event.position);
+                                                        String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
+                                                        _showTooltip(offset, tooltip);
+                                                      },
+                                                      onExit: (_) => _removeTooltip(),
+                                                      child: AnimatedContainer(
+                                                        duration: const Duration(milliseconds: 200),
+                                                        margin: EdgeInsets.zero,
+                                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.transparent,
+                                                          border: Border.all(color: Colors.grey, width: 2),
+                                                          borderRadius: BorderRadius.circular(25),
+                                                        ),
+                                                        child: Text(
+                                                          t.student.name,
+                                                          style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ))
+                                              .toList(),
                                         ),
+                                      ),
+                                      const SizedBox(height: 8),
                                     ],
-                                  ),
+                                  ],
                                 ),
                               ),
                             ),
                           ),
-                          // 출석 전 학생 리스트(가운데 정렬, 스크롤)
-                          if (waitingByTime.isNotEmpty)
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
-                                child: Scrollbar(
-                                  thumbVisibility: true,
-                                  child: ListView(
-                                    padding: EdgeInsets.zero,
-                                    children: [
-                                      for (final entry in waitingByTime.entries) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.only(bottom: 4.0),
-                                          child: Center(
-                                            child: Text(
-                                              _formatTime(entry.key),
-                                              style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
-                                            ),
-                                          ),
-                                        ),
-                                        Center(
-                                          child: Wrap(
-                                            alignment: WrapAlignment.center,
-                                            spacing: _cardSpacing,
-                                            runSpacing: _cardSpacing,
-                                            children: entry.value
-                                                .map((t) => GestureDetector(
-                                                      onTap: () {
-                                                        setState(() {
-                                                          _attendedSetIds.add(t.setId);
-                                                          _attendTimes[t.setId] = DateTime.now();
-                                                        });
-                                                      },
-                                                      child: MouseRegion(
-                                                        onEnter: (event) {
-                                                          final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-                                                          final offset = overlay.globalToLocal(event.position);
-                                                          String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
-                                                          _showTooltip(offset, tooltip);
-                                                        },
-                                                        onExit: (_) => _removeTooltip(),
-                                                        child: AnimatedContainer(
-                                                          duration: const Duration(milliseconds: 200),
-                                                          margin: EdgeInsets.zero,
-                                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.transparent,
-                                                            border: Border.all(color: Colors.grey, width: 2),
-                                                            borderRadius: BorderRadius.circular(25),
-                                                          ),
-                                                          child: Text(
-                                                            t.student.name,
-                                                            style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ))
-                                                .toList(),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      )
-                    : const SizedBox(),
+                      ],
+                    )
+                  : const SizedBox(),
               );
             },
           ),

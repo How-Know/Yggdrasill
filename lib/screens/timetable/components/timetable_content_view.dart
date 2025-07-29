@@ -1678,7 +1678,7 @@ class _ClassCardState extends State<_ClassCard> {
                         color: c.color ?? const Color(0xFF1F1F1F),
                         shape: BoxShape.rectangle,
                         borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: Colors.white24, width: 1.4),
+                        border: Border.all(color: Color(0xFF18181A), width: 1.4), // 카드 배경색과 동일하게
                       ),
                       // 색상이 없을 때 X 아이콘을 표시하지 않음
                       // child: c.color == null
