@@ -75,8 +75,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 셀 선택 시 학생 리스트 상태 추가
   // 학생 리스트는 timetable_content_view.dart에서 계산
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
-  int? _selectedCellStartHour; // 셀 선택시 시작 시
-  int? _selectedCellStartMinute; // 셀 선택시 시작 분
   final FocusNode _focusNode = FocusNode();
   // 필터 chips 상태
   Set<String> _selectedEducationLevels = {};
@@ -618,6 +616,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           if (_isSelectMode) {
             setState(() {
               _isSelectMode = false;
+              print('[DEBUG][TimetableScreen] 선택모드 해제(셀 클릭): _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
             });
           }
         },
@@ -685,15 +684,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     setState(() {
                       _isSelectMode = selecting;
                       if (!selecting) _selectedStudentIds.clear();
-                      print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                      print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
                     });
                   },
                   isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
                   onSelectAllStudents: () {
-                    // 현재 셀의 학생만 모두 체크
-                    if (_selectedCellDayIndex != null && _selectedCellStartHour != null && _selectedCellStartMinute != null) {
+                    print('[DEBUG][onSelectAllStudents] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+                    // studentTimeBlocks 전체 프린트
+                    print('[DEBUG][전체 studentTimeBlocks]');
+                    for (final b in DataManager.instance.studentTimeBlocks) {
+                      print('id=${b.id}, studentId=${b.studentId}, dayIndex=${b.dayIndex}, startHour=${b.startHour}, startMinute=${b.startMinute}');
+                    }
+                    if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
+                      print('[DEBUG][onSelectAllStudents] 비교값: dayIndex=$_selectedCellDayIndex, startHour=$_selectedStartTimeHour, startMinute=$_selectedStartTimeMinute');
+                      final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
+                      print('[DEBUG][onSelectAllStudents] cellStudents(모두버튼): ${cellStudents.map((s) => s.student.id).toList()}');
                       setState(() {
-                        _selectedStudentIds = _getCellStudents(_selectedCellDayIndex!, _selectedCellStartHour!, _selectedCellStartMinute!).map((s) => s.student.id).toSet();
+                        _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
                       });
                     }
                   },
@@ -725,12 +732,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     registrationModeType: _isSelfStudyRegistrationMode ? 'selfStudy' : (_isStudentRegistrationMode ? 'student' : null),
                     selectedDayIndex: _selectedDayIndex,
                     onTimeSelected: (dayIdx, startTime) {
-                      print('[DEBUG][onTimeSelected] 호출: dayIdx=$dayIdx, startTime=$startTime, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
+                      print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedStartTimeHour = startTime.hour;
                         _selectedStartTimeMinute = startTime.minute;
-                        // 학생 리스트는 timetable_content_view.dart에서 계산
+                        print('[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
                       });
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
@@ -739,8 +746,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       _contentViewKey.currentState?.clearSearch();
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
-                        _selectedCellStartHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
-                        _selectedCellStartMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
+                        _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
+                        _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
                       });
                       // 자습 등록 모드 처리
                       if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
@@ -995,24 +1002,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
             isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
             selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
             onTimeSelected: (int dayIdx, DateTime startTime) {
-              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-              final studentTimeBlocks = DataManager.instance.studentTimeBlocks;
-              final studentsWithInfo = DataManager.instance.students;
-              final cellBlocks = studentTimeBlocks.where((block) {
-                if (block.dayIndex != dayIdx) return false;
-                final blockStartMinutes = block.startHour * 60 + block.startMinute;
-                final blockEndMinutes = blockStartMinutes + block.duration.inMinutes;
-                final checkMinutes = startTime.hour * 60 + startTime.minute;
-                return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
-              }).toList();
-              final cellStudentWithInfos = cellBlocks.map((b) => studentsWithInfo.firstWhere(
-                (s) => s.student.id == b.studentId,
-                orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())),
-              )).toList();
+              print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
               setState(() {
                 _selectedCellDayIndex = dayIdx;
                 _selectedStartTimeHour = startTime.hour;
                 _selectedStartTimeMinute = startTime.minute;
+                print('[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
               });
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
@@ -1021,8 +1016,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _contentViewKey.currentState?.clearSearch();
               setState(() {
                 _selectedCellDayIndex = dayIdx;
-                _selectedCellStartHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
-                _selectedCellStartMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
+                _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
+                _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
               });
               // 학생 등록 모드에서만 동작
               if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
@@ -1282,13 +1277,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   // dayIdx, startTime에 해당하는 학생 리스트 반환
   List<StudentWithInfo> _getCellStudents(int dayIdx, int startHour, int startMinute) {
-    final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
-      b.dayIndex == dayIdx &&
-      b.startHour == startHour &&
-      b.startMinute == startMinute
-    ).toList();
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) {
+      print('[DEBUG][_getCellStudents] 비교: b.dayIndex=${b.dayIndex} == $dayIdx, b.startHour=${b.startHour} == $startHour, b.startMinute=${b.startMinute} == $startMinute, b.studentId=${b.studentId}');
+      return b.dayIndex == dayIdx && b.startHour == startHour && b.startMinute == startMinute;
+    }).toList();
     final students = DataManager.instance.students;
-    return blocks.map((b) =>
+    final result = blocks.map((b) =>
       students.firstWhere(
         (s) => s.student.id == b.studentId,
         orElse: () => StudentWithInfo(
@@ -1297,6 +1291,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         ),
       )
     ).toList();
+    print('[DEBUG][_getCellStudents] dayIdx=$dayIdx, startHour=$startHour, startMinute=$startMinute, blockCount=${blocks.length}, studentIds=${result.map((s) => s.student.id).toList()}');
+    return result;
   }
 
   void _handleSelfStudyRegistration() {
