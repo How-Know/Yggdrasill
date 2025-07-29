@@ -956,9 +956,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
             print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student= [36m${info.student.name} [0m, isSelfStudy=$isSelfStudy');
             setState(() => _showDeleteZone = true);
           },
-          onDragEnd: (_) {
-            print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
+          onDragEnd: (details) {
+            print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length= [36m${DataManager.instance.studentTimeBlocks.length} [0m');
             setState(() => _showDeleteZone = false);
+            if (!details.wasAccepted) {
+              // 드래그 취소(시간표 외부 드롭) 시 선택모드 해제
+              if (widget.onExitSelectMode != null) {
+                widget.onExitSelectMode!();
+              }
+            }
           },
           feedback: _buildDragFeedback(selectedStudents, info),
           childWhenDragging: Opacity(
@@ -1052,7 +1058,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         ),
       );
     } else {
-      // 4개 이상: 카드 쌓임 + 개수 표시(중앙, 검정 배경, 회색 글씨)
+      // 4개 이상: 카드 쌓임 + 개수 표시(중앙, 원형, 투명 배경, 흰색 아웃라인)
       return Material(
         color: Colors.transparent,
         child: SizedBox(
@@ -1080,23 +1086,25 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   ),
                 ),
               ),
+              // 숫자 원형 배지
               Positioned(
-                left: 48.0,
+                left: 48.0 + 25, // 카드 오른쪽에 겹치게
+                top: 8,
                 child: Container(
-                  width: 120,
-                  height: 50,
-                  alignment: Alignment.center,
+                  width: 34,
+                  height: 34,
                   decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.black26, width: 1.2),
+                    color: Colors.transparent,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.transparent, width: 2.2),
                   ),
+                  alignment: Alignment.center,
                   child: Text(
-                    '+${count}',
+                    '+$count',
                     style: const TextStyle(
-                      color: Color(0xFFB0B0B0),
+                      color: Colors.grey,
                       fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      fontSize: 22,
                     ),
                   ),
                 ),
