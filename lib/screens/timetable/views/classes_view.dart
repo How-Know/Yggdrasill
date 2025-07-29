@@ -137,6 +137,26 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final timeBlocks = _generateTimeBlocks();
     List<DateTime> startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
     print('[DEBUG][_onCellPanEnd] startTimes=$startTimes');
+    // [추가] 모든 블록의 30분 단위 시간이 운영시간/휴식시간과 겹치는지 체크
+    final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+    bool hasInvalidTime = false;
+    for (final t in startTimes) {
+      for (int i = 0; i < lessonDuration; i += 30) {
+        final checkTime = t.add(Duration(minutes: i));
+        if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [checkTime])) {
+          hasInvalidTime = true;
+          break;
+        }
+      }
+      if (hasInvalidTime) break;
+    }
+    if (hasInvalidTime) {
+      if (mounted) {
+        showAppSnackBar(context, '운영시간 외 또는 휴식시간에는 수업을 등록할 수 없습니다.', useRoot: true);
+        if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+      }
+      return;
+    }
     // [수정] 운영시간/휴식시간 체크: 한 셀이라도 불가하면 전체 등록 막기, 스낵바 1회만 출력
     final validStartTimes = startTimes.where((t) => _areAllTimesWithinOperatingAndBreak(dayIdx, [t])).toList();
     if (validStartTimes.length < startTimes.length) {
@@ -526,6 +546,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       groups: groups,
                                       cellWidth: 0, // 필요시 전달
                                       registrationModeType: widget.registrationModeType,
+                                      operatingHours: widget.operatingHours,
                                     ),
                                   ),
                                 ),

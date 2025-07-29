@@ -1026,12 +1026,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               builder: (context) {
                 return MediaQuery(
                   data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-                  child: child!,
-                );
-              },
+          child: child!,
+        );
+      },
             ),
           ),
-        );
+    );
       },
     );
     if (startTime != null) {
@@ -1078,12 +1078,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 builder: (context) {
                   return MediaQuery(
                     data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-                    child: child!,
-                  );
-                },
+            child: child!,
+          );
+        },
               ),
             ),
-          );
+      );
         },
       );
       if (endTime != null) {
@@ -1294,24 +1294,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(width: 20),
                           if (_paymentType == PaymentType.perClass)
-                            SizedBox(
-                              width: 290,
-                              child: TextFormField(
-                                controller: _courseCountController,
-                                style: const TextStyle(color: Colors.white),
-                                keyboardType: TextInputType.number,
-                                decoration: InputDecoration(
+                          SizedBox(
+                            width: 290,
+                            child: TextFormField(
+                              controller: _courseCountController,
+                              style: const TextStyle(color: Colors.white),
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
                                   labelText: '기준 수강 횟수',
-                                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: const OutlineInputBorder(
-                                    borderSide: BorderSide(color: Color(0xFF1976D2)),
-                                  ),
+                                labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+                                enabledBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                ),
+                                focusedBorder: const OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
                                 ),
                               ),
                             ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 30),
