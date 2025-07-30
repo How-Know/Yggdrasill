@@ -937,16 +937,30 @@ class TimetableContentViewState extends State<TimetableContentView> {
       );
       setId = block.id.isEmpty ? null : block.setId;
     }
+    // 다중 선택 시 각 학생의 setId도 포함해서 넘김
+    final studentsWithSetId = (isSelected && selectedCount > 1)
+        ? selectedStudents.map((s) {
+            String? sSetId;
+            if (dayIndex != null && startTime != null) {
+              final block = DataManager.instance.studentTimeBlocks.firstWhere(
+                (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
+                orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+              );
+              sSetId = block.id.isEmpty ? null : block.setId;
+            }
+            return {'student': s, 'setId': sSetId};
+          }).toList()
+        : [ {'student': info, 'setId': setId} ];
     return Stack(
       children: [
         Draggable<Map<String, dynamic>>(
           data: {
             'type': isClassRegisterMode ? 'register' : 'move',
-            'students': isSelected && selectedCount > 1 ? selectedStudents : [info],
+            'students': studentsWithSetId,
             'student': info,
+            'setId': setId,
             'oldDayIndex': dayIndex,
             'oldStartTime': startTime,
-            'setId': setId,
             'dayIndex': dayIndex,
             'startTime': startTime,
             'isSelfStudy': isSelfStudy,
@@ -1606,11 +1620,17 @@ class _ClassCardState extends State<_ClassCard> {
 
   Future<void> _handleStudentDrop(Map<String, dynamic> data) async {
     // 다중이동: students 리스트가 있으면 병렬 처리
-    final students = data['students'] as List<StudentWithInfo>?;
+    final students = data['students'] as List<dynamic>?;
     if (students != null && students.isNotEmpty) {
-      await Future.wait(students.map((studentWithInfo) => _registerSingleStudent(studentWithInfo)));
+      print('[DEBUG][_handleStudentDrop] 다중 등록 시도: ${students.map((e) => (e['student'] as StudentWithInfo).student.id + '|' + (e['setId'] ?? 'null')).toList()}');
+      await Future.wait(students.map((entry) {
+        final studentWithInfo = entry['student'] as StudentWithInfo?;
+        final setId = entry['setId'] as String?;
+        print('[DEBUG][_handleStudentDrop] 처리: studentId=${studentWithInfo?.student.id}, setId=$setId');
+        return studentWithInfo != null ? _registerSingleStudent(studentWithInfo, setId: setId) : Future.value();
+      }));
       await DataManager.instance.loadStudentTimeBlocks();
-      print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((s) => s.student.name).toList()}');
+      print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((e) => (e['student'] as StudentWithInfo).student.name + '|' + (e['setId'] ?? 'null')).toList()}');
       return;
     }
     // 기존 단일 등록 로직 (아래 함수로 분리)
@@ -1627,11 +1647,15 @@ class _ClassCardState extends State<_ClassCard> {
 
   // 단일 학생 등록 로직 분리
   Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
+    print('[DEBUG][_registerSingleStudent] 호출: studentId=${studentWithInfo.student.id}, setId=$setId');
     setId ??= DataManager.instance.studentTimeBlocks.firstWhere(
       (b) => b.studentId == studentWithInfo.student.id,
       orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
     ).setId;
-    if (setId == null) return;
+    if (setId == null) {
+      print('[DEBUG][_registerSingleStudent] setId가 null, 등록 스킵');
+      return;
+    }
     final blocks = DataManager.instance.studentTimeBlocks
         .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
         .toList();
@@ -1651,7 +1675,6 @@ class _ClassCardState extends State<_ClassCard> {
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
         print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
-        // registrationModeType이 null(등록모드 아님)일 때만 허용 + type이 'register'일 때만 허용
         if (widget.registrationModeType != null) return false;
         if (data == null || data['type'] != 'register') return false;
         final max = widget.classInfo.capacity;
@@ -1663,7 +1686,28 @@ class _ClassCardState extends State<_ClassCard> {
           );
           return false;
         }
-        return true;
+        final draggedStudents = data['students'] as List<dynamic>?;
+        if (draggedStudents != null && draggedStudents.isNotEmpty) {
+          final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+          for (final entry in draggedStudents) {
+            final student = entry['student'] as StudentWithInfo?;
+            final setId = entry['setId'] as String?;
+            print('[DEBUG][onWillAccept] studentId=${student?.student.id}, setId=$setId');
+            final alreadyRegistered = blocks.any((b) => b.studentId == student?.student.id && b.setId == setId);
+            print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
+            if (alreadyRegistered) return false;
+          }
+          return true;
+        } else {
+          final student = data['student'] as StudentWithInfo?;
+          final setId = data['setId'] as String?;
+          if (student == null || setId == null) return false;
+          final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+          final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
+          print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
+          if (alreadyRegistered) return false;
+          return true;
+        }
       },
       onAccept: (data) async {
         print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
