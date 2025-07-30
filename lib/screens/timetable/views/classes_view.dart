@@ -234,6 +234,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG][ClassesView] build 호출, filteredStudentIds= [33m${widget.filteredStudentIds} [0m');
     if (!widget.isRegistrationMode && _hoveredCellKey != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _hoveredCellKey = null; });
@@ -250,6 +251,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
               final selfStudyTimeBlocks = DataManager.instance.selfStudyTimeBlocks;
+              // 디버깅용 프린트 추가
+              print('[DEBUG][필터] filteredStudentIds=${widget.filteredStudentIds}');
+              print('[DEBUG][필터] studentTimeBlocks studentIds=${studentTimeBlocks.map((b) => b.studentId).toSet()}');
               // 정원수 카운트 등에는 전체 studentTimeBlocks + selfStudyTimeBlocks를 합친 allBlocks 사용
               final allBlocks = <dynamic>[
                 ...DataManager.instance.studentTimeBlocks,
@@ -259,9 +263,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               final filteredStudentBlocks = widget.filteredStudentIds == null
                   ? studentTimeBlocks
                   : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              print('[DEBUG][필터] filteredStudentBlocks.length=${filteredStudentBlocks.length}');
               final filteredSelfStudyBlocks = widget.filteredStudentIds == null
                   ? selfStudyTimeBlocks
                   : selfStudyTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              print('[DEBUG][필터] filteredSelfStudyBlocks.length=${filteredSelfStudyBlocks.length}');
               print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length= [33m${studentTimeBlocks.length} [0m, selfStudyTimeBlocks.length= [33m${selfStudyTimeBlocks.length} [0m, allBlocks.length= [33m${allBlocks.length} [0m');
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
@@ -392,6 +398,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
                                 ),
                               )).toList();
+                              // 디버깅용 프린트 추가
+                              print('[DEBUG][셀] blockIdx=$blockIdx, dayIdx=$dayIdx, activeBlocks=${activeBlocks.map((b) => b.studentId).toList()}');
+                              print('[DEBUG][셀] cellStudentWithInfos=${cellStudentWithInfos.map((s) => s.student.name).toList()}');
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
                               bool isBreakTime = false;
@@ -423,9 +432,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 return false;
                               }
                               // 학생별 중복 없이, 요일+시:분이 같은 학생만 카운트
-                              final activeStudentIds = allBlocks
+                              final activeStudentIds = filteredStudentBlocks
                                 .where((b) =>
-                                  (b is StudentTimeBlock || b is SelfStudyTimeBlock) &&
                                   b.dayIndex == dayIdx &&
                                   isSameTime(b, timeBlocks[blockIdx].startTime)
                                 )

@@ -315,6 +315,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             ),
                           ),
                         ),
+                        SizedBox(height: 24),
                         // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
                         Container(
                           constraints: BoxConstraints(

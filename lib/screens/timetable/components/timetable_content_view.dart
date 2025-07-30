@@ -1304,24 +1304,33 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
                   ),
                 ),
-                if (className.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: Text(
-                      className,
-                      style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
-                    ),
-                  ),
                 Expanded(
-                  child: Wrap(
-                    spacing: 0,
-                    runSpacing: 4,
-                    children: students.map((info) =>
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: _buildDraggableStudentCard(info, dayIndex: dayIdx, startTime: DateTime(0, 1, 1, hour, min)),
-                      )
-                    ).toList(),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // 학생카드
+                      Wrap(
+                        spacing: 0,
+                        runSpacing: 4,
+                        children: students.map((info) =>
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: _buildDraggableStudentCard(info, dayIndex: dayIdx, startTime: DateTime(0, 1, 1, hour, min)),
+                          )
+                        ).toList(),
+                      ),
+                      // 수업명: 학생카드 끝~Row 끝까지의 영역에서 가로 가운데 정렬
+                      if (className.isNotEmpty)
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.center,
+                            child: Text(
+                              className,
+                              style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
