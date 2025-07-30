@@ -140,15 +140,17 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     // [추가] 모든 블록의 30분 단위 시간이 운영시간/휴식시간과 겹치는지 체크
     final lessonDuration = DataManager.instance.academySettings.lessonDuration;
     bool hasInvalidTime = false;
-    for (final t in startTimes) {
-      for (int i = 0; i < lessonDuration; i += 30) {
-        final checkTime = t.add(Duration(minutes: i));
-        if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [checkTime])) {
-          hasInvalidTime = true;
-          break;
+    if (mode == 'student') {
+      for (final t in startTimes) {
+        for (int i = 0; i < lessonDuration; i += 30) {
+          final checkTime = t.add(Duration(minutes: i));
+          if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [checkTime])) {
+            hasInvalidTime = true;
+            break;
+          }
         }
+        if (hasInvalidTime) break;
       }
-      if (hasInvalidTime) break;
     }
     if (hasInvalidTime) {
       if (mounted) {
@@ -485,13 +487,15 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       // lessonDuration만큼 생성될 모든 블록의 startTime 리스트 생성
                                       final blockCount = (lessonDuration / 30).ceil();
                                       final allStartTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: 30 * i)));
-                                      // 하나라도 운영/휴식시간에 걸리면 전체 등록 막기
-                                      if (allStartTimes.any((t) => !_areAllTimesWithinOperatingAndBreak(dayIdx, [t]))) {
-                                        if (mounted) {
-                                          showAppSnackBar(context, '운영시간 또는 휴식시간에는 수업을 등록할 수 없습니다.');
-                                          if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+                                      // 셀 클릭 onTap 내부
+                                      if (widget.registrationModeType == 'student') {
+                                        if (allStartTimes.any((t) => !_areAllTimesWithinOperatingAndBreak(dayIdx, [t]))) {
+                                          if (mounted) {
+                                            showAppSnackBar(context, '운영시간 또는 휴식시간에는 수업을 등록할 수 없습니다.');
+                                            if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+                                          }
+                                          return;
                                         }
-                                        return;
                                       }
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
                                         print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');

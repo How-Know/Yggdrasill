@@ -94,7 +94,9 @@ class TimetableCell extends StatelessWidget {
       },
       onAccept: (data) async {
         print('[DEBUG][TimetableCell][onAccept] 호출: data= [32m$data [0m');
-        final students = (data['students'] as List<StudentWithInfo>?) ?? [];
+        final students = (data['students'] as List)
+            .map((e) => e is StudentWithInfo ? e : e['student'] as StudentWithInfo)
+            .toList();
         final oldDayIndex = data['oldDayIndex'] as int?;
         final oldStartTime = data['oldStartTime'] as DateTime?;
         print('[DEBUG][TimetableCell][onAccept] students= [36m${students.map((s) => s.student.name).toList()} [0m, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');

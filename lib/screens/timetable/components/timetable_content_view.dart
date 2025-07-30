@@ -646,7 +646,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       child: DragTarget<Map<String, dynamic>>(
                         onWillAccept: (data) => true,
                         onAccept: (data) async {
-                          final students = (data['students'] as List<StudentWithInfo>?) ?? [];
+                          final students = (data['students'] as List)
+                              .map((e) => e is StudentWithInfo ? e : e['student'] as StudentWithInfo)
+                              .toList();
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
                           final isSelfStudy = data['isSelfStudy'] as bool? ?? false;
