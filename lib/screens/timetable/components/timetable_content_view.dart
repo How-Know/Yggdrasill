@@ -1605,24 +1605,42 @@ class _ClassCardState extends State<_ClassCard> {
   bool _isHovering = false;
 
   Future<void> _handleStudentDrop(Map<String, dynamic> data) async {
+    // 다중이동: students 리스트가 있으면 병렬 처리
+    final students = data['students'] as List<StudentWithInfo>?;
+    if (students != null && students.isNotEmpty) {
+      await Future.wait(students.map((studentWithInfo) => _registerSingleStudent(studentWithInfo)));
+      await DataManager.instance.loadStudentTimeBlocks();
+      print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((s) => s.student.name).toList()}');
+      return;
+    }
+    // 기존 단일 등록 로직 (아래 함수로 분리)
     final studentWithInfo = data['student'] as StudentWithInfo?;
     final setId = data['setId'] as String?;
     if (studentWithInfo == null || setId == null) {
-      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo=$studentWithInfo, setId=$setId');
+      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo= [33m$studentWithInfo [0m, setId=$setId');
       return;
     }
-    // setId, studentId가 일치하는 모든 블록을 찾아 sessionTypeId 일괄 변경
+    await _registerSingleStudent(studentWithInfo, setId: setId);
+    await DataManager.instance.loadStudentTimeBlocks();
+    print('[DEBUG][_handleStudentDrop] 단일 등록 완료: ${studentWithInfo.student.name}');
+  }
+
+  // 단일 학생 등록 로직 분리
+  Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
+    setId ??= DataManager.instance.studentTimeBlocks.firstWhere(
+      (b) => b.studentId == studentWithInfo.student.id,
+      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+    ).setId;
+    if (setId == null) return;
     final blocks = DataManager.instance.studentTimeBlocks
-      .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
-      .toList();
-    print('[DEBUG][_handleStudentDrop] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
+        .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
+        .toList();
+    print('[DEBUG][_registerSingleStudent] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
     for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
-      print('[DEBUG][_handleStudentDrop] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
+      print('[DEBUG][_registerSingleStudent] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
-    await DataManager.instance.loadStudentTimeBlocks();
-    print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
   }
 
   @override
