@@ -254,8 +254,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             builder: (context, studentTimeBlocks, _) {
               final selfStudyTimeBlocks = DataManager.instance.selfStudyTimeBlocks;
               // 디버깅용 프린트 추가
-              print('[DEBUG][필터] filteredStudentIds=${widget.filteredStudentIds}');
-              print('[DEBUG][필터] studentTimeBlocks studentIds=${studentTimeBlocks.map((b) => b.studentId).toSet()}');
+              //print('[DEBUG][필터] filteredStudentIds=${widget.filteredStudentIds}');
+              //print('[DEBUG][필터] studentTimeBlocks studentIds=${studentTimeBlocks.map((b) => b.studentId).toSet()}');
               // 정원수 카운트 등에는 전체 studentTimeBlocks + selfStudyTimeBlocks를 합친 allBlocks 사용
               final allBlocks = <dynamic>[
                 ...DataManager.instance.studentTimeBlocks,
@@ -265,12 +265,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               final filteredStudentBlocks = widget.filteredStudentIds == null
                   ? studentTimeBlocks
                   : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
-              print('[DEBUG][필터] filteredStudentBlocks.length=${filteredStudentBlocks.length}');
+              //print('[DEBUG][필터] filteredStudentBlocks.length=${filteredStudentBlocks.length}');
               final filteredSelfStudyBlocks = widget.filteredStudentIds == null
                   ? selfStudyTimeBlocks
                   : selfStudyTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
-              print('[DEBUG][필터] filteredSelfStudyBlocks.length=${filteredSelfStudyBlocks.length}');
-              print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length= [33m${studentTimeBlocks.length} [0m, selfStudyTimeBlocks.length= [33m${selfStudyTimeBlocks.length} [0m, allBlocks.length= [33m${allBlocks.length} [0m');
+              //print('[DEBUG][필터] filteredSelfStudyBlocks.length=${filteredSelfStudyBlocks.length}');
+              //print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length= [33m${studentTimeBlocks.length} [0m, selfStudyTimeBlocks.length= [33m${selfStudyTimeBlocks.length} [0m, allBlocks.length= [33m${allBlocks.length} [0m');
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
@@ -283,7 +283,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                       }
                       return false;
                     }).toList();
-              print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
+              // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
               return Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (event) {
@@ -401,8 +401,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 ),
                               )).toList();
                               // 디버깅용 프린트 추가
-                              print('[DEBUG][셀] blockIdx=$blockIdx, dayIdx=$dayIdx, activeBlocks=${activeBlocks.map((b) => b.studentId).toList()}');
-                              print('[DEBUG][셀] cellStudentWithInfos=${cellStudentWithInfos.map((s) => s.student.name).toList()}');
+                              // print('[DEBUG][셀] blockIdx= [36m$blockIdx [0m, dayIdx=$dayIdx, activeBlocks=${activeBlocks.map((b) => b.studentId).toList()}');
+                              // print('[DEBUG][셀] cellStudentWithInfos=${cellStudentWithInfos.map((s) => s.student.name).toList()}');
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
                               bool isBreakTime = false;
@@ -843,10 +843,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       startTimes: actualStartTimes,
       duration: Duration(minutes: blockMinutes),
     );
-    for (final block in blocks) {
-      await DataManager.instance.addStudentTimeBlock(block);
-    }
-    await DataManager.instance.loadStudentTimeBlocks();
+    // 여러 블록을 한 번에 등록할 때, UI 갱신을 한 번만 하도록 개선
+    await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+    // await DataManager.instance.loadStudentTimeBlocks(); // bulkAdd에서 처리
     setState(() {});
   }
 

@@ -158,7 +158,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // 자습 블록 수정 (셀 위에 드롭)
   void _onSelfStudyBlockMoved(int dayIdx, DateTime startTime, List<StudentWithInfo> students) async {
-    print('[DEBUG][_onSelfStudyBlockMoved] 호출: dayIdx=$dayIdx, startTime=$startTime, students=${students.map((s) => s.student.name).toList()}');
+    // print('[DEBUG][_onSelfStudyBlockMoved] 호출: dayIdx=$dayIdx, startTime=$startTime, students=${students.map((s) => s.student.name).toList()}');
     
     // 이동할 자습 블록들 찾기 (현재 선택된 셀의 자습 블록들)
     final currentSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
@@ -170,7 +170,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }).toList();
     
     if (currentSelfStudyBlocks.isEmpty) {
-      print('[DEBUG][_onSelfStudyBlockMoved] 이동할 자습 블록이 없음');
+      // print('[DEBUG][_onSelfStudyBlockMoved] 이동할 자습 블록이 없음');
       return;
     }
     
@@ -290,24 +290,24 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   void _onReorder(int oldIndex, int newIndex) async {
-    print('[DEBUG][_onReorder] 시작: oldIndex=$oldIndex, newIndex=$newIndex');
+    // print('[DEBUG][_onReorder] 시작: oldIndex=$oldIndex, newIndex=$newIndex');
     final classes = List<ClassInfo>.from(DataManager.instance.classesNotifier.value);
-    print('[DEBUG][_onReorder] 원본 순서: ${classes.map((c) => c.name).toList()}');
+    // print('[DEBUG][_onReorder] 원본 순서: ${classes.map((c) => c.name).toList()}');
     
     if (oldIndex < newIndex) newIndex--;
     final item = classes.removeAt(oldIndex);
     classes.insert(newIndex, item);
-    print('[DEBUG][_onReorder] 변경 후 순서: ${classes.map((c) => c.name).toList()}');
+    // print('[DEBUG][_onReorder] 변경 후 순서: ${classes.map((c) => c.name).toList()}');
     
     // 즉시 UI 업데이트 (깜빡임 방지)
     DataManager.instance.classesNotifier.value = List.unmodifiable(classes);
-    print('[DEBUG][_onReorder] 즉시 UI 업데이트 완료');
+    // print('[DEBUG][_onReorder] 즉시 UI 업데이트 완료');
     
     // 백그라운드에서 DB 저장
     DataManager.instance.saveClassesOrder(classes).then((_) {
-      print('[DEBUG][_onReorder] 백그라운드 DB 저장 완료');
+      // print('[DEBUG][_onReorder] 백그라운드 DB 저장 완료');
     }).catchError((error) {
-      print('[ERROR][_onReorder] DB 저장 실패: $error');
+      // print('[ERROR][_onReorder] DB 저장 실패: $error');
       // DB 저장 실패 시 원래 순서로 복구
       DataManager.instance.loadClasses();
     });
@@ -560,18 +560,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     )
                                   ).toList();
                                   // 자습 블록 필터링
-                                  print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
-                                  print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
+                                  // print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
+                                  // print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
                                   final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) {
                                     final matches = b.dayIndex == widget.selectedCellDayIndex &&
                                         b.startHour == widget.selectedCellStartTime!.hour &&
                                         b.startMinute == widget.selectedCellStartTime!.minute;
                                     if (matches) {
-                                      print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startHour}:${b.startMinute}');
+                                      // print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startHour}:${b.startMinute}');
                                     }
                                     return matches;
                                   }).cast<SelfStudyTimeBlock>().toList();
-                                  print('[DEBUG][자습블록필터링] 필터링된 자습 블록: ${cellSelfStudyBlocks.length}개');
+                                  // print('[DEBUG][자습블록필터링] 필터링된 자습 블록: ${cellSelfStudyBlocks.length}개');
                                   final cellSelfStudyStudents = cellSelfStudyBlocks.map((b) =>
                                     students.firstWhere(
                                       (s) => s.student.id == b.studentId,
@@ -613,7 +613,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                               spacing: 8,
                                               runSpacing: 8,
                                               children: cellSelfStudyStudents.map<Widget>((info) {
-                                                print('[DEBUG][자습카드렌더링] 자습 카드 생성: student=${info.student.name}, dayIndex=${widget.selectedCellDayIndex}, startTime=${widget.selectedCellStartTime}');
+                                                // print('[DEBUG][자습카드렌더링] 자습 카드 생성: student=${info.student.name}, dayIndex=${widget.selectedCellDayIndex}, startTime=${widget.selectedCellStartTime}');
                                                 return _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents, isSelfStudy: true);
                                               }).toList(),
                                             ),
@@ -652,13 +652,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
                           final isSelfStudy = data['isSelfStudy'] as bool? ?? false;
-                          print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime, isSelfStudy=$isSelfStudy');
+                          // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime, isSelfStudy=$isSelfStudy');
                           List<Future> futures = [];
                           
                           if (isSelfStudy) {
                             // 자습 블록 삭제 로직
                             for (final student in students) {
-                              print('[삭제드롭존][자습] studentId=${student.student.id}');
+                              // print('[삭제드롭존][자습] studentId=${student.student.id}');
                               // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
                               final targetBlock = DataManager.instance.selfStudyTimeBlocks.firstWhere(
                                 (b) =>
@@ -683,7 +683,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 final allBlocks = DataManager.instance.selfStudyTimeBlocks;
                                 final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
                                 for (final b in toDelete) {
-                                  print('[삭제드롭존][자습] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
+                                  // print('[삭제드롭존][자습] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
                                   futures.add(DataManager.instance.removeSelfStudyTimeBlock(b.id));
                                 }
                               }
@@ -695,15 +695,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 b.startMinute == oldStartTime?.minute
                               ).toList();
                               for (final block in blocks) {
-                                print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
+                                // print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
                                 futures.add(DataManager.instance.removeSelfStudyTimeBlock(block.id));
                               }
                             }
                           } else {
                             // 기존 수업 블록 삭제 로직
                             for (final student in students) {
-                              print('[삭제드롭존][수업] studentId=${student.student.id}');
-                              print('[삭제드롭존][수업] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
+                              // print('[삭제드롭존][수업] studentId=${student.student.id}');
+                              // print('[삭제드롭존][수업] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
                               // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
                               final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
                                 (b) =>
@@ -728,7 +728,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 final allBlocks = DataManager.instance.studentTimeBlocks;
                                 final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
                                 for (final b in toDelete) {
-                                  print('[삭제드롭존][수업] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
+                                  // print('[삭제드롭존][수업] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
                                   futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
                                 }
                               }
@@ -740,7 +740,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 b.startMinute == oldStartTime?.minute
                               ).toList();
                               for (final block in blocks) {
-                                print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
+                                // print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
                                 futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
                               }
                             }
@@ -753,8 +753,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           setState(() {
                             _showDeleteZone = false;
                           });
-                          print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
-                          print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
+                          // print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
+                          // print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (mounted) {
@@ -921,7 +921,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
   Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents, bool isSelfStudy = false}) {
-    print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, isSelfStudy=$isSelfStudy, dayIndex=$dayIndex, startTime=$startTime');
+    // print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, isSelfStudy=$isSelfStudy, dayIndex=$dayIndex, startTime=$startTime');
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
@@ -968,12 +968,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'isSelfStudy': isSelfStudy,
           },
           onDragStarted: () {
-            print('[DEBUG][Draggable] onDragStarted: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
-            print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student= [36m${info.student.name} [0m, isSelfStudy=$isSelfStudy');
+            // print('[DEBUG][Draggable] onDragStarted: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
+            // print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student= [36m${info.student.name} [0m, isSelfStudy=$isSelfStudy');
             setState(() => _showDeleteZone = true);
           },
           onDragEnd: (details) {
-            print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length= [36m${DataManager.instance.studentTimeBlocks.length} [0m');
+            // print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length= [36m${DataManager.instance.studentTimeBlocks.length} [0m');
             setState(() => _showDeleteZone = false);
             if (!details.wasAccepted) {
               // 드래그 취소(시간표 외부 드롭) 시 선택모드 해제
@@ -1624,47 +1624,47 @@ class _ClassCardState extends State<_ClassCard> {
     // 다중이동: students 리스트가 있으면 병렬 처리
     final students = data['students'] as List<dynamic>?;
     if (students != null && students.isNotEmpty) {
-      print('[DEBUG][_handleStudentDrop] 다중 등록 시도: ${students.map((e) => (e['student'] as StudentWithInfo).student.id + '|' + (e['setId'] ?? 'null')).toList()}');
+      // print('[DEBUG][_handleStudentDrop] 다중 등록 시도: [36m${students.map((e) => (e['student'] as StudentWithInfo).student.id + '|' + (e['setId'] ?? 'null')).toList()}[0m');
       await Future.wait(students.map((entry) {
         final studentWithInfo = entry['student'] as StudentWithInfo?;
         final setId = entry['setId'] as String?;
-        print('[DEBUG][_handleStudentDrop] 처리: studentId=${studentWithInfo?.student.id}, setId=$setId');
+        // print('[DEBUG][_handleStudentDrop] 처리: studentId=${studentWithInfo?.student.id}, setId=$setId');
         return studentWithInfo != null ? _registerSingleStudent(studentWithInfo, setId: setId) : Future.value();
       }));
-      await DataManager.instance.loadStudentTimeBlocks();
-      print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((e) => (e['student'] as StudentWithInfo).student.name + '|' + (e['setId'] ?? 'null')).toList()}');
+      // await DataManager.instance.loadStudentTimeBlocks(); // 전체 reload 제거
+      // print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((e) => (e['student'] as StudentWithInfo).student.name + '|' + (e['setId'] ?? 'null')).toList()}');
       return;
     }
     // 기존 단일 등록 로직 (아래 함수로 분리)
     final studentWithInfo = data['student'] as StudentWithInfo?;
     final setId = data['setId'] as String?;
     if (studentWithInfo == null || setId == null) {
-      print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo= [33m$studentWithInfo [0m, setId=$setId');
+      // print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo= [33m$studentWithInfo [0m, setId=$setId');
       return;
     }
     await _registerSingleStudent(studentWithInfo, setId: setId);
-    await DataManager.instance.loadStudentTimeBlocks();
-    print('[DEBUG][_handleStudentDrop] 단일 등록 완료: ${studentWithInfo.student.name}');
+    // await DataManager.instance.loadStudentTimeBlocks(); // 전체 reload 제거
+    // print('[DEBUG][_handleStudentDrop] 단일 등록 완료: ${studentWithInfo.student.name}');
   }
 
   // 단일 학생 등록 로직 분리
   Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
-    print('[DEBUG][_registerSingleStudent] 호출: studentId=${studentWithInfo.student.id}, setId=$setId');
+    // print('[DEBUG][_registerSingleStudent] 호출: studentId=${studentWithInfo.student.id}, setId=$setId');
     setId ??= DataManager.instance.studentTimeBlocks.firstWhere(
       (b) => b.studentId == studentWithInfo.student.id,
       orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
     ).setId;
     if (setId == null) {
-      print('[DEBUG][_registerSingleStudent] setId가 null, 등록 스킵');
+      // print('[DEBUG][_registerSingleStudent] setId가 null, 등록 스킵');
       return;
     }
     final blocks = DataManager.instance.studentTimeBlocks
         .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
         .toList();
-    print('[DEBUG][_registerSingleStudent] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
+    // print('[DEBUG][_registerSingleStudent] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
     for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
-      print('[DEBUG][_registerSingleStudent] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
+      // print('[DEBUG][_registerSingleStudent] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
   }
@@ -1673,10 +1673,10 @@ class _ClassCardState extends State<_ClassCard> {
   Widget build(BuildContext context) {
     final c = widget.classInfo;
     final int studentCount = DataManager.instance.getStudentCountForClass(widget.classInfo.id);
-    print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
+    // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
-        print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
+        // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
         if (widget.registrationModeType != null) return false;
         if (data == null || data['type'] != 'register') return false;
         final max = widget.classInfo.capacity;
@@ -1694,9 +1694,9 @@ class _ClassCardState extends State<_ClassCard> {
           for (final entry in draggedStudents) {
             final student = entry['student'] as StudentWithInfo?;
             final setId = entry['setId'] as String?;
-            print('[DEBUG][onWillAccept] studentId=${student?.student.id}, setId=$setId');
+            // print('[DEBUG][onWillAccept] studentId=${student?.student.id}, setId=$setId');
             final alreadyRegistered = blocks.any((b) => b.studentId == student?.student.id && b.setId == setId);
-            print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
+            // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
             if (alreadyRegistered) return false;
           }
           return true;
@@ -1706,26 +1706,26 @@ class _ClassCardState extends State<_ClassCard> {
           if (student == null || setId == null) return false;
           final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
           final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
-          print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
+          // print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
           if (alreadyRegistered) return false;
           return true;
         }
       },
       onAccept: (data) async {
-        print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
+        // print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
         setState(() => _isHovering = false);
         await _handleStudentDrop(data);
       },
       onMove: (_) {
-        print('[DEBUG][DragTarget] onMove');
+        // print('[DEBUG][DragTarget] onMove');
         setState(() => _isHovering = true);
       },
       onLeave: (_) {
-        print('[DEBUG][DragTarget] onLeave');
+        // print('[DEBUG][DragTarget] onLeave');
         setState(() => _isHovering = false);
       },
       builder: (context, candidateData, rejectedData) {
-        print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
+        // print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
         return Card(
           key: widget.key,
           color: const Color(0xFF1F1F1F),

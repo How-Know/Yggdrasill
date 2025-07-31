@@ -412,8 +412,8 @@ class DataManager {
   Future<void> loadStudentTimeBlocks() async {
     final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
     for (final block in rawBlocks) {
-      print('[DEBUG][loadStudentTimeBlocks] block: $block');
-      print('[DEBUG][loadStudentTimeBlocks] setId: ${block.setId}, number: ${block.number}');
+      // print('[DEBUG][loadStudentTimeBlocks] block: $block');
+      // print('[DEBUG][loadStudentTimeBlocks] setId: ${block.setId}, number: ${block.number}');
     }
     _studentTimeBlocks = rawBlocks;
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
@@ -647,11 +647,11 @@ class DataManager {
 
   /// 특정 수업에 등록된 학생 수 반환
   int getStudentCountForClass(String classId) {
-    print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
+    // print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
     final blocks = _studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
-    print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
+    //print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
     final studentIds = blocks.map((b) => b.studentId).toSet();
-    print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
+    //print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
     return studentIds.length;
   }
 

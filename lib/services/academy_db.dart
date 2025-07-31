@@ -674,14 +674,14 @@ class AcademyDbService {
 
   Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
     final dbClient = await db;
-    print('[DEBUG][AcademyDbService.updateStudentTimeBlock] id=$id, newBlock=${newBlock.toJson()}');
+    // print('[DEBUG][AcademyDbService.updateStudentTimeBlock] id=$id, newBlock=${newBlock.toJson()}');
     final result = await dbClient.update(
       'student_time_blocks',
       newBlock.toJson(),
       where: 'id = ?',
       whereArgs: [id],
     );
-    print('[DEBUG][AcademyDbService.updateStudentTimeBlock] update result: $result');
+    // print('[DEBUG][AcademyDbService.updateStudentTimeBlock] update result: $result');
   }
 
   // ClassInfo CRUD

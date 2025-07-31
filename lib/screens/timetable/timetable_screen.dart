@@ -684,21 +684,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     setState(() {
                       _isSelectMode = selecting;
                       if (!selecting) _selectedStudentIds.clear();
-                      print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+                      // print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
                     });
                   },
                   isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
                   onSelectAllStudents: () {
                     print('[DEBUG][onSelectAllStudents] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
                     // studentTimeBlocks 전체 프린트
-                    print('[DEBUG][전체 studentTimeBlocks]');
+                    // print('[DEBUG][전체 studentTimeBlocks]');
                     for (final b in DataManager.instance.studentTimeBlocks) {
-                      print('id=${b.id}, studentId=${b.studentId}, dayIndex=${b.dayIndex}, startHour=${b.startHour}, startMinute=${b.startMinute}');
+                      // print('id=${b.id}, studentId=${b.studentId}, dayIndex=${b.dayIndex}, startHour=${b.startHour}, startMinute=${b.startMinute}');
                     }
                     if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
-                      print('[DEBUG][onSelectAllStudents] 비교값: dayIndex=$_selectedCellDayIndex, startHour=$_selectedStartTimeHour, startMinute=$_selectedStartTimeMinute');
+                      // print('[DEBUG][onSelectAllStudents] 비교값: dayIndex=$_selectedCellDayIndex, startHour=$_selectedStartTimeHour, startMinute=$_selectedStartTimeMinute');
                       final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
-                      print('[DEBUG][onSelectAllStudents] cellStudents(모두버튼): ${cellStudents.map((s) => s.student.id).toList()}');
+                      // print('[DEBUG][onSelectAllStudents] cellStudents(모두버튼): ${cellStudents.map((s) => s.student.id).toList()}');
                       setState(() {
                         _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
                       });
@@ -1278,7 +1278,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // dayIdx, startTime에 해당하는 학생 리스트 반환
   List<StudentWithInfo> _getCellStudents(int dayIdx, int startHour, int startMinute) {
     final blocks = DataManager.instance.studentTimeBlocks.where((b) {
-      print('[DEBUG][_getCellStudents] 비교: b.dayIndex=${b.dayIndex} == $dayIdx, b.startHour=${b.startHour} == $startHour, b.startMinute=${b.startMinute} == $startMinute, b.studentId=${b.studentId}');
+      //print('[DEBUG][_getCellStudents] 비교: b.dayIndex=${b.dayIndex} == $dayIdx, b.startHour=${b.startHour} == $startHour, b.startMinute=${b.startMinute} == $startMinute, b.studentId=${b.studentId}');
       return b.dayIndex == dayIdx && b.startHour == startHour && b.startMinute == startMinute;
     }).toList();
     final students = DataManager.instance.students;
@@ -1291,7 +1291,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         ),
       )
     ).toList();
-    print('[DEBUG][_getCellStudents] dayIdx=$dayIdx, startHour=$startHour, startMinute=$startMinute, blockCount=${blocks.length}, studentIds=${result.map((s) => s.student.id).toList()}');
+    //print('[DEBUG][_getCellStudents] dayIdx=$dayIdx, startHour=$startHour, startMinute=$startMinute, blockCount=${blocks.length}, studentIds=${result.map((s) => s.student.id).toList()}');
     return result;
   }
 
