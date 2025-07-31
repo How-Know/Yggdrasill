@@ -581,7 +581,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][TimetableScreen] build: _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
+    print('[DEBUG][TimetableScreen][${DateTime.now().toIso8601String()}] build: _isStudentRegistrationMode=$_isStudentRegistrationMode, _isClassRegistrationMode=$_isClassRegistrationMode, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
     return RawKeyboardListener(
       focusNode: _focusNode,
       autofocus: true,
@@ -741,7 +741,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       });
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
-                      print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
                       // 셀 클릭 시 검색 리셋
                       _contentViewKey.currentState?.clearSearch();
                       setState(() {
@@ -805,72 +805,119 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       }
                       // 학생 등록 모드에서만 동작
                       if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
-                        print('[DEBUG][onCellStudentsSelected] 수업 등록 분기 진입');
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final student = studentWithInfo.student;
-                        print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
-                        final blockMinutes = 30; // 한 블록 30분 기준
-                        List<DateTime> actualStartTimes = startTimes;
-                        // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
-                        if (startTimes.length == 1) {
+                        
+                        if (startTimes.length > 1) {
+                          // 드래그 등록 분기: 블록 생성/등록은 이미 완료됨, 상태만 갱신
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes.length=${startTimes.length}');
+                          print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
+                          
+                          // 저장된 블록들을 조회하여 set_id 개수 계산
+                          await DataManager.instance.loadStudentTimeBlocks();
+                          final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                          print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
+                          final setIds = allBlocksAfter.map((b) => b.setId).toSet();
+                          int usedCount = setIds.length;
+                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                          
+                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                            (s) => s.student.id == student.id,
+                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                          );
+                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
+                          
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          setState(() {
+                            _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                            print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
+                            if (_remainingRegisterCount == 0) {
+                              print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록모드 종료');
+                              _isStudentRegistrationMode = false;
+                              _selectedStudentWithInfo = null;
+                              _selectedDayIndex = null;
+                              _selectedStartTimeHour = null;
+                              _selectedStartTimeMinute = null;
+                            }
+                          });
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          
+                          if (_remainingRegisterCount == 0 && mounted) {
+                            showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                          }
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
+                          return;
+                        } else if (startTimes.length == 1) {
+                          // 클릭 등록 분기: 블록 생성/등록부터 수행
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes.length=${startTimes.length}');
+                          print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
+                          final blockMinutes = 30; // 한 블록 30분 기준
                           final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                           final blockCount = (lessonDuration / blockMinutes).ceil();
-                          actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
-                        }
-                        print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
-                        // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
-                        final allBlocks = DataManager.instance.studentTimeBlocks;
-                        bool hasConflict = false;
-                        for (final startTime in actualStartTimes) {
-                          final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
-                          if (conflictBlock != null) {
-                            hasConflict = true;
-                            break;
+                          List<DateTime> actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
+                          
+                          print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                          // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
+                          final allBlocks = DataManager.instance.studentTimeBlocks;
+                          bool hasConflict = false;
+                          for (final startTime in actualStartTimes) {
+                            final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+                            if (conflictBlock != null) {
+                              hasConflict = true;
+                              break;
+                            }
                           }
-                        }
-                        if (hasConflict) {
-                          showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
-                          return;
-                        }
-                        // --- 기존 로직 ---
-                        final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
-                          studentIds: [student.id],
-                          dayIndex: dayIdx,
-                          startTimes: actualStartTimes,
-                          duration: Duration(minutes: blockMinutes),
-                        );
-                        print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
-                        for (final block in blocks) {
-                          print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
-                          await DataManager.instance.addStudentTimeBlock(block);
-                        }
-                        print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
-                        await DataManager.instance.loadStudentTimeBlocks();
-                        final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                        print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
-                        final setIds = allBlocksAfter.map((b) => b.setId).toSet();
-                        int usedCount = setIds.length;
-                        print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
-                        final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                          (s) => s.student.id == student.id,
-                          orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
-                        );
-                        final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                        print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
-                        setState(() {
-                          _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                          print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
-                          if (_remainingRegisterCount == 0) {
-                            print('[DEBUG][onCellStudentsSelected] 등록모드 종료');
-                            _isStudentRegistrationMode = false;
-                            _selectedStudentWithInfo = null;
-                            _selectedDayIndex = null;
-                            _selectedStartTimeHour = null;
-                            _selectedStartTimeMinute = null;
+                          print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
+                          if (hasConflict) {
+                            showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+                            return;
                           }
-                        });
-                        if (_remainingRegisterCount == 0 && mounted) {
-                          showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                          // --- 기존 로직 ---
+                          final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                            studentIds: [student.id],
+                            dayIndex: dayIdx,
+                            startTimes: actualStartTimes,
+                            duration: Duration(minutes: blockMinutes),
+                          );
+                          print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
+                          for (final block in blocks) {
+                            print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
+                            await DataManager.instance.addStudentTimeBlock(block);
+                          }
+                          print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                          await DataManager.instance.loadStudentTimeBlocks();
+                          final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                          print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
+                          final setIds = allBlocksAfter.map((b) => b.setId).toSet();
+                          int usedCount = setIds.length;
+                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                            (s) => s.student.id == student.id,
+                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                          );
+                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
+                          
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          setState(() {
+                            _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                            print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
+                            if (_remainingRegisterCount == 0) {
+                              print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
+                              _isStudentRegistrationMode = false;
+                              _selectedStudentWithInfo = null;
+                              _selectedDayIndex = null;
+                              _selectedStartTimeHour = null;
+                              _selectedStartTimeMinute = null;
+                            }
+                          });
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          
+                          if (_remainingRegisterCount == 0 && mounted) {
+                            showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                          }
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
                         }
                       }
                     },
@@ -1011,7 +1058,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               });
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
-              print('[DEBUG][onCellStudentsSelected] 호출: dayIdx=$dayIdx, startTimes=$startTimes, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+              print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
               // 셀 클릭 시 검색 리셋
               _contentViewKey.currentState?.clearSearch();
               setState(() {
@@ -1023,54 +1070,102 @@ class _TimetableScreenState extends State<TimetableScreen> {
               if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
                 final studentWithInfo = _selectedStudentWithInfo!;
                 final student = studentWithInfo.student;
-                print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
-                final blockMinutes = 30; // 한 블록 30분 기준
+                final blockMinutes = 30;
                 List<DateTime> actualStartTimes = startTimes;
-                // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
+                if (startTimes.length > 1) {
+                  // 드래그 등록 분기: 블록 생성/등록/중복체크/스낵바 모두 건너뛰고 상태만 갱신
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
+                  final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                  final setIds = allBlocksAfter.map((b) => b.setId).toSet();
+                  int usedCount = setIds.length;
+                  final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                    (s) => s.student.id == student.id,
+                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                  );
+                  final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount, maxCount=$maxCount, _remainingRegisterCount=$_remainingRegisterCount');
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  setState(() {
+                    _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (_remainingRegisterCount == 0) {
+                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 등록모드 종료');
+                      _isStudentRegistrationMode = false;
+                      _selectedStudentWithInfo = null;
+                      _selectedDayIndex = null;
+                      _selectedStartTimeHour = null;
+                      _selectedStartTimeMinute = null;
+                    }
+                  });
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 return');
+                  return;
+                }
                 if (startTimes.length == 1) {
+                  // 클릭 등록 분기: 기존대로 블록 생성/중복체크/등록
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
+                  final studentWithInfo = _selectedStudentWithInfo!;
+                  final student = studentWithInfo.student;
+                  final blockMinutes = 30; // 한 블록 30분 기준
+                  List<DateTime> actualStartTimes = startTimes;
                   final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                   final blockCount = (lessonDuration / blockMinutes).ceil();
                   actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
-                }
-                print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
-                final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
-                  studentIds: [student.id],
-                  dayIndex: dayIdx,
-                  startTimes: actualStartTimes,
-                  duration: Duration(minutes: blockMinutes),
-                );
-                print('[DEBUG][onCellStudentsSelected] 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
-                for (final block in blocks) {
-                  print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
-                  await DataManager.instance.addStudentTimeBlock(block);
-                }
-                print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
-                await DataManager.instance.loadStudentTimeBlocks();
-                final allBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocks.map((b) => b.toJson()).toList()}');
-                final setIds = allBlocks.map((b) => b.setId).toSet();
-                int usedCount = setIds.length;
-                print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
-                final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                  (s) => s.student.id == student.id,
-                  orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
-                );
-                final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
-                setState(() {
-                  _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                  print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
-                  if (_remainingRegisterCount == 0) {
-                    print('[DEBUG][onCellStudentsSelected] 등록모드 종료');
-                    _isStudentRegistrationMode = false;
-                    _selectedStudentWithInfo = null;
-                    _selectedDayIndex = null;
-                    _selectedStartTimeHour = null;
-                    _selectedStartTimeMinute = null;
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성할 블록 actualStartTimes: $actualStartTimes');
+                  final allBlocks = DataManager.instance.studentTimeBlocks;
+                  bool hasConflict = false;
+                  for (final startTime in actualStartTimes) {
+                    final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+                    if (conflictBlock != null) {
+                      hasConflict = true;
+                      print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복 블록 발견: $conflictBlock');
+                      break;
+                    }
                   }
-                });
-                if (_remainingRegisterCount == 0 && mounted) {
-                  showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                  if (hasConflict) {
+                    print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복 SnackBar 발생');
+                    showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+                    return;
+                  }
+                  final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                    studentIds: [student.id],
+                    dayIndex: dayIdx,
+                    startTimes: actualStartTimes,
+                    duration: Duration(minutes: blockMinutes),
+                  );
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
+                  for (final block in blocks) {
+                    print('[DEBUG][onCellStudentsSelected] 클릭 등록 addStudentTimeBlock 호출: ${block.toJson()}');
+                    await DataManager.instance.addStudentTimeBlock(block);
+                  }
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 loadStudentTimeBlocks 호출');
+                  await DataManager.instance.loadStudentTimeBlocks();
+                  final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                  final setIds = allBlocksAfter.map((b) => b.setId).toSet();
+                  int usedCount = setIds.length;
+                  final foundStudentWithInfo = DataManager.instance.students.firstWhere(
+                    (s) => s.student.id == student.id,
+                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                  );
+                  final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount, maxCount=$maxCount, _remainingRegisterCount=$_remainingRegisterCount');
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  setState(() {
+                    _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
+                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (_remainingRegisterCount == 0) {
+                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 등록모드 종료');
+                      _isStudentRegistrationMode = false;
+                      _selectedStudentWithInfo = null;
+                      _selectedDayIndex = null;
+                      _selectedStartTimeHour = null;
+                      _selectedStartTimeMinute = null;
+                    }
+                  });
+                  if (_remainingRegisterCount == 0 && mounted) {
+                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 완료 스낵바');
+                    showAppSnackBar(context, '\x1b[33m${student.name}\x1b[0m 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                  }
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 return');
                 }
               }
             },
