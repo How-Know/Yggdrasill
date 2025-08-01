@@ -234,8 +234,10 @@ class TimetableCell extends StatelessWidget {
           );
         }
         final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
+        print('[DEBUG][TimetableCell] timetableContentViewState != null: ${timetableContentViewState != null}');
         if (timetableContentViewState != null) {
           timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
+          print('[DEBUG][TimetableCell] exitSelectModeIfNeeded 호출 시도');
           timetableContentViewState.exitSelectModeIfNeeded();
         }
       },

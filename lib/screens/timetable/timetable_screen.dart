@@ -573,10 +573,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void exitSelectMode() {
+    print('[DEBUG][TimetableScreen][exitSelectMode] 호출됨 - 선택 모드 종료, _isSelectMode: $_isSelectMode -> false, _selectedStudentIds: $_selectedStudentIds');
     setState(() {
       _isSelectMode = false;
       _selectedStudentIds.clear();
     });
+    print('[DEBUG][TimetableScreen][exitSelectMode] 완료 - _isSelectMode: $_isSelectMode, _selectedStudentIds: $_selectedStudentIds');
   }
 
   @override

@@ -261,7 +261,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // 다중 이동/수정 후
   void exitSelectModeIfNeeded() {
+    print('[DEBUG][exitSelectModeIfNeeded] 호출됨, onExitSelectMode != null: ${widget.onExitSelectMode != null}');
     if (widget.onExitSelectMode != null) {
+      print('[DEBUG][exitSelectModeIfNeeded] 선택 모드 종료 콜백 실행');
       widget.onExitSelectMode!();
     }
   }
@@ -759,14 +761,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (mounted) {
                                 final blockType = isSelfStudy ? '자습시간' : '수업시간';
-                                rootScaffoldMessengerKey.currentState?.showSnackBar(
-                                  SnackBar(
-                                    content: Text('${students.length}명 학생의 $blockType이 삭제되었습니다.'),
-                                    backgroundColor: const Color(0xFF1976D2),
-                                    behavior: SnackBarBehavior.floating,
-                                    margin: const EdgeInsets.only(bottom: 80, left: 20, right: 20),
-                                  ),
-                                );
+                                showAppSnackBar(context, '${students.length}명 학생의 $blockType이 삭제되었습니다.', useRoot: true);
                               }
                             });
                           });
@@ -974,9 +969,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
           },
           onDragEnd: (details) {
             // print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length= [36m${DataManager.instance.studentTimeBlocks.length} [0m');
+            print('[DEBUG][_buildDraggableStudentCard][onDragEnd] wasAccepted=${details.wasAccepted}, 선택된 학생 수=$selectedCount');
             setState(() => _showDeleteZone = false);
             if (!details.wasAccepted) {
               // 드래그 취소(시간표 외부 드롭) 시 선택모드 해제
+              print('[DEBUG][_buildDraggableStudentCard][onDragEnd] 드래그 취소 - 선택 모드 종료');
+              if (widget.onExitSelectMode != null) {
+                widget.onExitSelectMode!();
+              }
+            } else {
+              // 드래그 성공 시에도 선택모드 해제 (수업 등록 완료 후)
+              print('[DEBUG][_buildDraggableStudentCard][onDragEnd] 드래그 성공 - 선택 모드 종료');
               if (widget.onExitSelectMode != null) {
                 widget.onExitSelectMode!();
               }
