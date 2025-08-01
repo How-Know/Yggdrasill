@@ -881,10 +881,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       startTimes: actualStartTimes,
       duration: Duration(minutes: blockMinutes),
     );
-    // 여러 블록을 한 번에 등록할 때, UI 갱신을 한 번만 하도록 개선
+    // DataManager를 통해 일관된 UI 업데이트 처리
     await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
-    // await DataManager.instance.loadStudentTimeBlocks(); // bulkAdd에서 처리
-    setState(() {});
   }
 
   @override

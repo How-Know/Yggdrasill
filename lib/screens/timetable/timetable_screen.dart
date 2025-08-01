@@ -939,6 +939,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     },
                   ),
                 ),
+                SizedBox(height: 24), // 시간표 위젯 하단 내부 여백 추가
               ],
             ),
           ),

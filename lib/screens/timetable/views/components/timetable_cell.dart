@@ -192,14 +192,9 @@ class TimetableCell extends StatelessWidget {
         }
         print('[DEBUG][TimetableCell][onAccept] toRemove=${toRemove.map((b) => b.toJson()).toList()}');
         print('[DEBUG][TimetableCell][onAccept] toAdd=${toAdd.map((b) => b.toJson()).toList()}');
-        final newBlocksList = List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
-        newBlocksList.removeWhere((b) => toRemove.any((r) => r.id == b.id));
-        newBlocksList.addAll(toAdd);
-        DataManager.instance.studentTimeBlocks = newBlocksList;
-        DataManager.instance.studentTimeBlocksNotifier.value = List.unmodifiable(newBlocksList);
+        // 백엔드 처리 및 UI 업데이트를 DataManager를 통해 일관되게 처리
         DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
         DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
-        DataManager.instance.loadStudentTimeBlocks();
         DataManager.instance.loadStudents();
         if (failedStudents.isNotEmpty) {
           await showDialog(

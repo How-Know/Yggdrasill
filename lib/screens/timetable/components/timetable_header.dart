@@ -73,8 +73,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               ),
             ),
             Expanded(
-              child: Align(
-                alignment: Alignment.center,
+              child: Center( // Align 대신 Center 사용으로 완전 중앙 고정
                 child: SizedBox(
                   width: 220, // 기존 440에서 220으로 축소
                   child: SegmentedButton<int>(
@@ -106,43 +105,52 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 ),
               ),
             ),
-            // 선택 버튼 (filter 버튼 왼쪽)
-            _SelectButtonAnimated(
-              onSelectModeChanged: widget.onSelectModeChanged,
-              isSelectMode: widget.isSelectMode,
-              onSelectAllStudents: widget.onSelectAllStudents,
-            ),
-            SizedBox(width: 12),
-            // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
+            // 오른쪽 영역 고정 크기로 세그먼트 버튼 중앙 정렬 유지
             SizedBox(
-              height: 40,
-              width: 104, // 기존 80~90에서 30% 증가(80*1.3=104)
-              child: OutlinedButton(
-                style: ButtonStyle(
-                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                  shape: MaterialStateProperty.all(RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  )),
-                  side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
-                  padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
-                  foregroundColor: MaterialStateProperty.all(Colors.white70),
-                  textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                  overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
-                ),
-                onPressed: widget.onFilterPressed,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.max,
-                  children: [
-                    const Icon(Icons.filter_alt_outlined, size: 20),
-                    const SizedBox(width: 6),
-                    const Text('filter'),
-                    if (widget.isFilterActive) ...[
-                      const SizedBox(width: 6),
-                      Icon(Icons.close, size: 18, color: Colors.white70),
-                    ],
-                  ],
-                ),
+              width: 230, // 선택 버튼 + filter 버튼을 위한 고정 크기
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // 선택 버튼 (filter 버튼 왼쪽)
+                  _SelectButtonAnimated(
+                    onSelectModeChanged: widget.onSelectModeChanged,
+                    isSelectMode: widget.isSelectMode,
+                    onSelectAllStudents: widget.onSelectAllStudents,
+                  ),
+                  SizedBox(width: 12),
+                  // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
+                  SizedBox(
+                    height: 40,
+                    width: 104, // 기존 80~90에서 30% 증가(80*1.3=104)
+                    child: OutlinedButton(
+                      style: ButtonStyle(
+                        backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                        shape: MaterialStateProperty.all(RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        )),
+                        side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
+                        padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
+                        foregroundColor: MaterialStateProperty.all(Colors.white70),
+                        textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                        overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
+                      ),
+                      onPressed: widget.onFilterPressed,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.max,
+                        children: [
+                          const Icon(Icons.filter_alt_outlined, size: 20),
+                          const SizedBox(width: 6),
+                          const Text('filter'),
+                          if (widget.isFilterActive) ...[
+                            const SizedBox(width: 6),
+                            Icon(Icons.close, size: 18, color: Colors.white70),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

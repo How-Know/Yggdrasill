@@ -757,14 +757,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           });
                           // print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
                           // print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted) {
-                                final blockType = isSelfStudy ? '자습시간' : '수업시간';
-                                showAppSnackBar(context, '${students.length}명 학생의 $blockType이 삭제되었습니다.', useRoot: true);
-                              }
-                            });
-                          });
+                          // 스낵바 즉시 표시 (지연 제거)
+                          if (mounted) {
+                            final blockType = isSelfStudy ? '자습시간' : '수업시간';
+                            showAppSnackBar(context, '${students.length}명 학생의 $blockType이 삭제되었습니다.', useRoot: true);
+                          }
                           // 삭제 후 선택모드 종료 콜백 직접 호출
                           if (widget.onExitSelectMode != null) {
                             widget.onExitSelectMode!();
@@ -802,7 +799,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
               Expanded(
                 flex: 1, // 1:1 비율로 수정
                 child: Container(
-                  margin: const EdgeInsets.only(top: 16, left: 4, right: 4, bottom: 8),
+                  margin: const EdgeInsets.only(top: 16, left: 4, right: 4, bottom: 0),
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
                     color: const Color(0xFF18181A),

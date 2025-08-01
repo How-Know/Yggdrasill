@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/operating_hours.dart';
@@ -446,7 +447,9 @@ class DataManager {
     await loadStudentTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
   }
 
-  Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
+  Timer? _uiUpdateTimer;
+  
+  Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
     // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
     for (final newBlock in blocks) {
       final overlap = _studentTimeBlocks.any((b) =>
@@ -460,15 +463,37 @@ class DataManager {
         throw Exception('이미 등록된 시간과 겹칩니다.');
       }
     }
+    
+    // 백엔드 처리는 즉시 실행
     _studentTimeBlocks.addAll(blocks);
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
+    
+    if (immediate || blocks.length == 1) {
+      // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
+      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    } else {
+      // 다중 블록은 debouncing으로 지연 (150ms 후 한 번에 반영)
+      _uiUpdateTimer?.cancel();
+      _uiUpdateTimer = Timer(const Duration(milliseconds: 150), () {
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      });
+    }
   }
 
-  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds) async {
+  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
     _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(blockIds);
+    
+    if (immediate || blockIds.length == 1) {
+      // 단일 삭제나 즉시 반영 요청 시 바로 업데이트
+      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    } else {
+      // 다중 삭제는 debouncing으로 지연 (100ms 후 한 번에 반영)
+      _uiUpdateTimer?.cancel();
+      _uiUpdateTimer = Timer(const Duration(milliseconds: 100), () {
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      });
+    }
     await loadStudentTimeBlocks();
   }
 

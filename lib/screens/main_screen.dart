@@ -320,7 +320,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         Container(
                           constraints: BoxConstraints(
                             minHeight: _cardActualHeight,
-                            maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1),
+                            maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1) + 22, // 줄간격을 고려한 여유 공간
                           ),
                           margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
                           child: Scrollbar(
@@ -333,12 +333,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                   runSpacing: _cardSpacing,
                                   verticalDirection: VerticalDirection.down,
                                   children: leaved
-                                      .map((t) => AnimatedSwitcher(
-                                            duration: const Duration(milliseconds: 350),
-                                            switchInCurve: Curves.elasticOut,
-                                            switchOutCurve: Curves.easeOut,
-                                            child: _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')),
-                                          ))
+                                      .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')))
                                       .toList(),
                                 ),
                               ),
@@ -385,16 +380,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          for (int i = 0; i < attended.length; i++) ...[
-                                            // status는 'attended'로 고정, 파란네모 안도 AnimatedSwitcher 적용
-                                            AnimatedSwitcher(
-                                              duration: const Duration(milliseconds: 350),
-                                              switchInCurve: Curves.elasticOut,
-                                              switchOutCurve: Curves.easeOut,
-                                              child: _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
-                                            ),
-                                            if (i != attended.length - 1) SizedBox(height: 8),
-                                          ]
+                                                                    for (int i = 0; i < attended.length; i++) ...[
+                            // AnimatedSwitcher 제거로 겹침 현상 해결
+                            _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
+                            if (i != attended.length - 1) SizedBox(height: 8),
+                          ]
                                         ],
                                       ),
                                   ],
@@ -519,7 +509,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     switch (status) {
       case 'attended':
         borderColor = t.classInfo?.color ?? const Color(0xFF0F467D);
-        textColor = Colors.white; // 파란네모 안은 흰색
+        textColor = Colors.white.withOpacity(0.9); // 파란네모 안은 톤을 살짝 낮춘 흰색
         child = Text(
           t.student.name,
           style: TextStyle(

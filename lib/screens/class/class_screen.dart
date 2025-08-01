@@ -439,7 +439,7 @@ class _ClassScreenState extends State<ClassScreen> {
       height: double.infinity,
       child: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 65.0), // 하단 여백을 시간표와 정확히 맞춤
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
