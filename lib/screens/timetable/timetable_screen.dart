@@ -81,6 +81,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Set<String> _selectedGrades = {};
   Set<String> _selectedSchools = {};
   Set<String> _selectedGroups = {};
+  Set<String> _selectedClasses = {}; // 수업별 필터링 추가
   // 실제 적용된 필터 상태
   Map<String, Set<String>>? _activeFilter;
   // TimetableContentView의 검색 리셋 메서드에 접근하기 위한 key
@@ -354,6 +355,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   void _showFilterDialog() async {
     final students = DataManager.instance.students;
     final groups = DataManager.instance.groups;
+    final classes = DataManager.instance.classesNotifier.value; // 수업 데이터 추가
     // 학년 chips
     final educationLevels = ['초등', '중등', '고등'];
     final grades = [
@@ -365,6 +367,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final schools = students.map((s) => s.student.school).toSet().toList();
     // 그룹 chips (등록된 그룹명)
     final groupNames = groups.map((g) => g.name).toList();
+    // 수업 chips (등록된 수업명)
+    final classNames = classes.map((c) => c.name).toList();
     final chipBorderColor = const Color(0xFFB0B0B0);
     final chipSelectedBg = const Color(0xFF353545); // 진한 회색
     final chipUnselectedBg = const Color(0xFF1F1F1F); // 다이얼로그 배경색
@@ -375,6 +379,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     Set<String> tempSelectedGrades = Set.from(_selectedGrades);
     Set<String> tempSelectedSchools = Set.from(_selectedSchools);
     Set<String> tempSelectedGroups = Set.from(_selectedGroups);
+    Set<String> tempSelectedClasses = Set.from(_selectedClasses);
     final result = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -517,6 +522,40 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           )),
                         ],
                       ),
+                      const SizedBox(height: 18),
+                      // 수업 chips
+                      Row(
+                        children: [
+                          Icon(Icons.class_outlined, color: chipBorderColor, size: 20),
+                          const SizedBox(width: 6),
+                          Text('수업', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: [
+                          ...classNames.map((className) => FilterChip(
+                            label: Text(className, style: chipLabelStyle),
+                            selected: tempSelectedClasses.contains(className),
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  tempSelectedClasses.add(className);
+                                } else {
+                                  tempSelectedClasses.remove(className);
+                                }
+                              });
+                            },
+                            backgroundColor: chipUnselectedBg,
+                            selectedColor: chipSelectedBg,
+                            side: BorderSide(color: chipBorderColor, width: 1.2),
+                            shape: chipShape,
+                            showCheckmark: true,
+                            checkmarkColor: chipBorderColor,
+                          )),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -533,11 +572,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     _selectedGrades = Set.from(tempSelectedGrades);
                     _selectedSchools = Set.from(tempSelectedSchools);
                     _selectedGroups = Set.from(tempSelectedGroups);
+                    _selectedClasses = Set.from(tempSelectedClasses);
                     _activeFilter = {
                       'educationLevels': Set.from(tempSelectedEducationLevels),
                       'grades': Set.from(tempSelectedGrades),
                       'schools': Set.from(tempSelectedSchools),
                       'groups': Set.from(tempSelectedGroups),
+                      'classes': Set.from(tempSelectedClasses),
                     };
                     Navigator.of(context).pop(true);
                   },
@@ -563,6 +604,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       _selectedGrades.clear();
       _selectedSchools.clear();
       _selectedGroups.clear();
+      _selectedClasses.clear();
     });
   }
 
@@ -662,8 +704,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Widget _buildContent() {
     switch (_viewType) {
       case TimetableViewType.classes:
+        final Set<String>? filteredStudentIds = _activeFilter == null
+          ? null
+          : _filteredStudents.map((s) => s.student.id).toSet();
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
+          filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
           timetableChild: Container(
             width: double.infinity,
             // margin: EdgeInsets.zero, // margin 제거
@@ -1349,6 +1395,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
       }
       if (f['schools']!.isNotEmpty && !f['schools']!.contains(student.school)) return false;
       if (f['groups']!.isNotEmpty && (student.groupInfo == null || !f['groups']!.contains(student.groupInfo!.name))) return false;
+      
+      // 수업별 필터링 추가
+      if (f['classes']!.isNotEmpty) {
+        final classes = DataManager.instance.classesNotifier.value;
+        final selectedClassIds = f['classes']!.map((className) {
+          final classInfo = classes.firstWhereOrNull((c) => c.name == className);
+          return classInfo?.id;
+        }).where((id) => id != null).cast<String>().toSet();
+        
+        if (selectedClassIds.isNotEmpty) {
+          final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+          final hasMatchingClass = studentBlocks.any((block) => 
+            block.sessionTypeId != null && selectedClassIds.contains(block.sessionTypeId));
+          if (!hasMatchingClass) return false;
+        }
+      }
+      
       return true;
     }).toList();
     print('[DEBUG] 필터 적용 결과: ${filtered.map((s) => s.student.name).toList()}');

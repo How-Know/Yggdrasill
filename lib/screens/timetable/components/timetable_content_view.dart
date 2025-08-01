@@ -26,6 +26,7 @@ class TimetableContentView extends StatefulWidget {
   final void Function(String studentId, bool selected)? onStudentSelectChanged;
   final VoidCallback? onExitSelectMode; // 추가: 다중모드 종료 콜백
   final String? registrationModeType;
+  final Set<String>? filteredStudentIds; // 추가: 필터링된 학생 ID 목록
 
   const TimetableContentView({
     Key? key,
@@ -45,6 +46,7 @@ class TimetableContentView extends StatefulWidget {
     this.onStudentSelectChanged,
     this.onExitSelectMode,
     this.registrationModeType,
+    this.filteredStudentIds, // 추가
   }) : super(key: key);
 
   @override
@@ -491,7 +493,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 children: [
                                   SizedBox(width: 16),
                                   SizedBox(
-                                    width: 220,
+                                    width: 170,
                                     height: 48,
                                     child: SearchBar(
                                       controller: _searchController,
@@ -551,7 +553,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     b.startHour == widget.selectedCellStartTime!.hour &&
                                     b.startMinute == widget.selectedCellStartTime!.minute
                                   ).toList();
-                                  final students = DataManager.instance.students;
+                                  final allStudents = DataManager.instance.students;
+                                  print('[DEBUG][학생카드리스트] 전체 학생 수: ${allStudents.length}');
+                                  print('[DEBUG][학생카드리스트] 필터링된 학생 ID: ${widget.filteredStudentIds}');
+                                  print('[DEBUG][학생카드리스트] 해당 셀의 블록 수: ${blocks.length}');
+                                  
+                                  // 필터링 적용: 필터가 있으면 필터링된 학생만, 없으면 전체 학생
+                                  final students = widget.filteredStudentIds == null 
+                                    ? allStudents 
+                                    : allStudents.where((s) => widget.filteredStudentIds!.contains(s.student.id)).toList();
+                                  print('[DEBUG][학생카드리스트] 필터링 후 학생 수: ${students.length}');
+                                  
                                   final cellStudents = blocks.map((b) =>
                                     students.firstWhere(
                                       (s) => s.student.id == b.studentId,
@@ -560,7 +572,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
                                       ),
                                     )
-                                  ).toList();
+                                  ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
+                                  print('[DEBUG][학생카드리스트] 최종 셀 학생 수: ${cellStudents.length}');
+                                  print('[DEBUG][학생카드리스트] 최종 셀 학생 이름들: ${cellStudents.map((s) => s.student.name).toList()}');
                                   // 자습 블록 필터링
                                   // print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
                                   // print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
@@ -582,7 +596,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
                                       ),
                                     )
-                                  ).toList();
+                                  ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
+                                  print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
                                   
                                   // 학생이 없는 경우 기본 메시지 표시
                                   if (cellStudents.isEmpty && cellSelfStudyStudents.isEmpty) {
