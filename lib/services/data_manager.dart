@@ -10,6 +10,7 @@ import '../models/group_schedule.dart';
 import '../models/teacher.dart';
 import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
+import '../models/payment_record.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
@@ -36,15 +37,18 @@ class DataManager {
   List<OperatingHours> _operatingHours = [];
   Map<String, GroupInfo> _groupsById = {};
   bool _isInitialized = false;
+  List<PaymentRecord> _paymentRecords = [];
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
+  final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
     return List.unmodifiable(_groups);
   }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
+  List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
 
   AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
   PaymentType _paymentType = PaymentType.monthly;
@@ -354,6 +358,25 @@ class DataManager {
     print('[DEBUG][deleteStudent] loadStudents() 호출 완료');
     await loadStudentTimeBlocks();
     print('[DEBUG][deleteStudent] loadStudentTimeBlocks() 호출 완료');
+  }
+
+  // StudentBasicInfo만 업데이트하는 메소드
+  Future<void> updateStudentBasicInfo(String studentId, StudentBasicInfo basicInfo) async {
+    print('[DEBUG][updateStudentBasicInfo] studentId: $studentId');
+    print('[DEBUG][updateStudentBasicInfo] basicInfo: ${basicInfo.toString()}');
+    
+    try {
+      // DB에 basicInfo 저장
+      await AcademyDbService.instance.updateStudentBasicInfo(studentId, basicInfo.toDb());
+      print('[DEBUG][updateStudentBasicInfo] DB 저장 완료');
+      
+      // 메모리 상태 최신화
+      await loadStudents();
+      print('[DEBUG][updateStudentBasicInfo] 메모리 상태 최신화 완료');
+    } catch (e) {
+      print('[ERROR][updateStudentBasicInfo] 오류 발생: $e');
+      rethrow;
+    }
   }
 
   void updateStudentGroup(Student student, GroupInfo? newGroup) {
@@ -738,5 +761,46 @@ class DataManager {
     
     classesNotifier.value = List.unmodifiable(_classes);
     print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
+  }
+
+  // Payment Records 관련 메소드들
+  Future<void> loadPaymentRecords() async {
+    _paymentRecords = await AcademyDbService.instance.getPaymentRecords();
+    paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+  }
+
+  Future<void> addPaymentRecord(PaymentRecord record) async {
+    final newRecord = await AcademyDbService.instance.addPaymentRecord(record);
+    _paymentRecords.add(newRecord);
+    paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+  }
+
+  Future<void> updatePaymentRecord(PaymentRecord record) async {
+    final index = _paymentRecords.indexWhere((r) => r.id == record.id);
+    if (index != -1) {
+      _paymentRecords[index] = record;
+      await AcademyDbService.instance.updatePaymentRecord(record);
+      paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+    }
+  }
+
+  Future<void> deletePaymentRecord(int id) async {
+    _paymentRecords.removeWhere((r) => r.id == id);
+    await AcademyDbService.instance.deletePaymentRecord(id);
+    paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+  }
+
+  List<PaymentRecord> getPaymentRecordsForStudent(String studentId) {
+    return _paymentRecords.where((r) => r.studentId == studentId).toList();
+  }
+
+  PaymentRecord? getPaymentRecord(String studentId, int cycle) {
+    try {
+      return _paymentRecords.firstWhere(
+        (r) => r.studentId == studentId && r.cycle == cycle,
+      );
+    } catch (e) {
+      return null;
+    }
   }
 } 

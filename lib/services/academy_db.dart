@@ -11,6 +11,7 @@ import 'dart:convert';
 import '../models/student_time_block.dart';
 import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
+import '../models/payment_record.dart';
 
 class AcademyDbService {
   static final AcademyDbService instance = AcademyDbService._internal();
@@ -29,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 8,
+      version: 9,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -125,6 +126,16 @@ class AcademyDbService {
             capacity INTEGER,
             description TEXT,
             color INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE payment_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT,
+            cycle INTEGER,
+            due_date INTEGER,
+            paid_date INTEGER,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
       },
@@ -225,6 +236,18 @@ class AcademyDbService {
               capacity INTEGER,
               description TEXT,
               color INTEGER
+            )
+          ''');
+        }
+        if (oldVersion < 9) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS payment_records (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              student_id TEXT,
+              cycle INTEGER,
+              due_date INTEGER,
+              paid_date INTEGER,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
         }
@@ -705,5 +728,86 @@ class AcademyDbService {
   Future<void> deleteAllClasses() async {
     final dbClient = await db;
     await dbClient.delete('classes');
+  }
+
+  // Payment Records 관련 메소드들
+  Future<List<PaymentRecord>> getPaymentRecords() async {
+    final dbClient = await db;
+    final result = await dbClient.query('payment_records');
+    return result.map((map) => PaymentRecord.fromMap(map)).toList();
+  }
+
+  Future<PaymentRecord> addPaymentRecord(PaymentRecord record) async {
+    final dbClient = await db;
+    final id = await dbClient.insert(
+      'payment_records',
+      record.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return record.copyWith(id: id);
+  }
+
+  Future<void> updatePaymentRecord(PaymentRecord record) async {
+    final dbClient = await db;
+    await dbClient.update(
+      'payment_records',
+      record.toMap(),
+      where: 'id = ?',
+      whereArgs: [record.id],
+    );
+  }
+
+  Future<void> deletePaymentRecord(int id) async {
+    final dbClient = await db;
+    await dbClient.delete(
+      'payment_records',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<List<PaymentRecord>> getPaymentRecordsForStudent(String studentId) async {
+    final dbClient = await db;
+    final result = await dbClient.query(
+      'payment_records',
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+    );
+    return result.map((map) => PaymentRecord.fromMap(map)).toList();
+  }
+
+  // payment_records 테이블 존재 여부 확인 및 생성
+  Future<void> ensurePaymentRecordsTable() async {
+    final dbClient = await db;
+    
+    try {
+      // 테이블 존재 여부 확인
+      final result = await dbClient.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='payment_records'"
+      );
+      
+      if (result.isEmpty) {
+        print('[DEBUG] payment_records 테이블이 존재하지 않음. 생성 중...');
+        
+        // 테이블 생성
+        await dbClient.execute('''
+          CREATE TABLE payment_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT,
+            cycle INTEGER,
+            due_date INTEGER,
+            paid_date INTEGER,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        
+        print('[DEBUG] payment_records 테이블 생성 완료');
+      } else {
+        print('[DEBUG] payment_records 테이블이 이미 존재함');
+      }
+    } catch (e) {
+      print('[ERROR] payment_records 테이블 확인/생성 중 오류: $e');
+      rethrow;
+    }
   }
 } 
