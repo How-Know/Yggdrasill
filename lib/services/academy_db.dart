@@ -890,12 +890,12 @@ class AcademyDbService {
     return result;
   }
 
-  Future<Map<String, dynamic>?> getAttendanceRecord(String studentId, String date, String classDateTime) async {
+  Future<Map<String, dynamic>?> getAttendanceRecord(String studentId, String classDateTime) async {
     final dbClient = await db;
     final result = await dbClient.query(
       'attendance_records',
-      where: 'student_id = ? AND date = ? AND class_date_time = ?',
-      whereArgs: [studentId, date, classDateTime],
+      where: 'student_id = ? AND class_date_time = ?',
+      whereArgs: [studentId, classDateTime],
       limit: 1,
     );
     return result.isNotEmpty ? result.first : null;
@@ -918,8 +918,8 @@ class AcademyDbService {
           CREATE TABLE attendance_records (
             id TEXT PRIMARY KEY,
             student_id TEXT,
-            date TEXT,
             class_date_time TEXT,
+            class_end_time TEXT,
             class_name TEXT,
             is_present INTEGER,
             arrival_time TEXT,
@@ -934,6 +934,66 @@ class AcademyDbService {
         print('[DEBUG] attendance_records 테이블 생성 완료');
       } else {
         print('[DEBUG] attendance_records 테이블이 이미 존재함');
+        
+        // 기존 테이블이 있으면 스키마 업데이트 확인
+        final tableInfo = await dbClient.rawQuery("PRAGMA table_info(attendance_records)");
+        final columnNames = tableInfo.map((col) => col['name'] as String).toList();
+        
+        // class_end_time 컬럼이 없으면 추가
+        if (!columnNames.contains('class_end_time')) {
+          print('[DEBUG] class_end_time 컬럼 추가 중...');
+          await dbClient.execute('ALTER TABLE attendance_records ADD COLUMN class_end_time TEXT');
+        }
+        
+        // date 컬럼이 있으면 삭제 (SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재생성)
+        if (columnNames.contains('date')) {
+          print('[DEBUG] date 컬럼 제거를 위해 테이블 재생성 중...');
+          
+          // 기존 데이터 백업
+          final existingData = await dbClient.query('attendance_records');
+          
+          // 기존 테이블 삭제
+          await dbClient.execute('DROP TABLE attendance_records');
+          
+          // 새 테이블 생성
+          await dbClient.execute('''
+            CREATE TABLE attendance_records (
+              id TEXT PRIMARY KEY,
+              student_id TEXT,
+              class_date_time TEXT,
+              class_end_time TEXT,
+              class_name TEXT,
+              is_present INTEGER,
+              arrival_time TEXT,
+              departure_time TEXT,
+              notes TEXT,
+              created_at TEXT,
+              updated_at TEXT,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+            )
+          ''');
+          
+          // 데이터 복원 (date 컬럼 제외)
+          for (final row in existingData) {
+            final newRow = Map<String, dynamic>.from(row);
+            newRow.remove('date');
+            
+            // class_end_time 계산 (기존 로직에서 duration 사용)
+            if (newRow['class_date_time'] != null) {
+              try {
+                final classDateTime = DateTime.parse(newRow['class_date_time']);
+                final classEndTime = classDateTime.add(const Duration(minutes: 50)); // 기본 50분
+                newRow['class_end_time'] = classEndTime.toIso8601String();
+              } catch (e) {
+                print('[WARNING] class_end_time 계산 실패: $e');
+              }
+            }
+            
+            await dbClient.insert('attendance_records', newRow);
+          }
+          
+          print('[DEBUG] 테이블 재생성 및 데이터 복원 완료');
+        }
       }
     } catch (e) {
       print('[ERROR] attendance_records 테이블 확인/생성 중 오류: $e');

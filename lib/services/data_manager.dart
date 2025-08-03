@@ -819,6 +819,17 @@ class DataManager {
 
   // =================== ATTENDANCE RECORDS ===================
   
+  Future<void> forceMigration() async {
+    try {
+      print('[DEBUG] 강제 마이그레이션 시작...');
+      await AcademyDbService.instance.ensureAttendanceRecordsTable();
+      await loadAttendanceRecords();
+      print('[DEBUG] 강제 마이그레이션 완료');
+    } catch (e) {
+      print('[ERROR] 강제 마이그레이션 실패: $e');
+    }
+  }
+  
   Future<void> loadAttendanceRecords() async {
     try {
       await AcademyDbService.instance.ensureAttendanceRecordsTable();
@@ -863,14 +874,12 @@ class DataManager {
     return _attendanceRecords.where((r) => r.studentId == studentId).toList();
   }
 
-  AttendanceRecord? getAttendanceRecord(String studentId, DateTime date, DateTime classDateTime) {
+  AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) {
     try {
-      final dateStr = DateTime(date.year, date.month, date.day).toIso8601String();
       final classDateTimeStr = classDateTime.toIso8601String();
       
       return _attendanceRecords.firstWhere(
         (r) => r.studentId == studentId && 
-               r.date.toIso8601String() == dateStr && 
                r.classDateTime.toIso8601String() == classDateTimeStr,
       );
     } catch (e) {
@@ -880,8 +889,8 @@ class DataManager {
 
   Future<void> saveOrUpdateAttendance({
     required String studentId,
-    required DateTime date,
     required DateTime classDateTime,
+    required DateTime classEndTime,
     required String className,
     required bool isPresent,
     DateTime? arrivalTime,
@@ -889,7 +898,7 @@ class DataManager {
     String? notes,
   }) async {
     // 기존 출석 기록 확인
-    final existing = getAttendanceRecord(studentId, date, classDateTime);
+    final existing = getAttendanceRecord(studentId, classDateTime);
     
     if (existing != null) {
       // 업데이트
@@ -904,8 +913,8 @@ class DataManager {
       // 새로 생성
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
-        date: date,
         classDateTime: classDateTime,
+        classEndTime: classEndTime,
         className: className,
         isPresent: isPresent,
         arrivalTime: arrivalTime,
@@ -914,5 +923,105 @@ class DataManager {
       );
       await addAttendanceRecord(newRecord);
     }
+  }
+
+  // 과거 수업 정리 로직 (등원시간만 있고 하원시간이 없는 경우 정상 출석 처리)
+  Future<void> processPastClassesAttendance() async {
+    final now = DateTime.now();
+    final todayEndOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59);
+
+    final recordsToUpdate = <AttendanceRecord>[];
+    final recordsToCreate = <AttendanceRecord>[];
+
+    // 모든 학생의 수업 시간 블록을 확인
+    for (final student in _studentsWithInfo) {
+      final studentId = student.student.id;
+      final registrationDate = student.basicInfo.registrationDate;
+      
+      if (registrationDate == null) continue;
+
+      // 해당 학생의 time blocks 가져오기
+      final timeBlocks = studentTimeBlocks
+          .where((block) => block.studentId == studentId)
+          .toList();
+      
+      if (timeBlocks.isEmpty) continue;
+
+      // SET_ID별로 timeBlocks 그룹화
+      final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
+      for (final block in timeBlocks) {
+        blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
+      }
+
+      // 등록일부터 오늘까지의 모든 수업 일정 생성
+      for (DateTime date = registrationDate; date.isBefore(todayEndOfDay); date = date.add(const Duration(days: 1))) {
+        for (final entry in blocksBySetId.entries) {
+          final blocks = entry.value;
+          if (blocks.isEmpty) continue;
+          
+          final firstBlock = blocks.first;
+          
+          // 해당 날짜가 수업 요일인지 확인
+          if (date.weekday - 1 != firstBlock.dayIndex) continue;
+          
+          final classDateTime = DateTime(
+            date.year,
+            date.month,
+            date.day,
+            firstBlock.startHour,
+            firstBlock.startMinute,
+          );
+          
+          final classEndTime = classDateTime.add(firstBlock.duration);
+
+          // 기존 출석 기록 확인
+          final existingRecord = getAttendanceRecord(studentId, classDateTime);
+          
+          if (existingRecord != null) {
+            // 등원시간만 있고 하원시간이 없는 경우 정상 출석으로 처리
+            if (existingRecord.arrivalTime != null && existingRecord.departureTime == null) {
+              final updated = existingRecord.copyWith(
+                isPresent: true,
+                arrivalTime: classDateTime, // 수업 시작 시간으로 변경
+                departureTime: classEndTime, // 수업 종료 시간으로 설정
+              );
+              recordsToUpdate.add(updated);
+            }
+          } else {
+            // 출석 기록이 없는 경우 무단결석으로 기록
+            String className = '수업';
+            try {
+              final classInfo = classes.firstWhere((c) => c.id == firstBlock.sessionTypeId);
+              className = classInfo.name;
+            } catch (e) {
+              // 클래스 정보를 찾지 못한 경우 기본값 사용
+            }
+
+            final newRecord = AttendanceRecord.create(
+              studentId: studentId,
+              classDateTime: classDateTime,
+              classEndTime: classEndTime,
+              className: className,
+              isPresent: false, // 무단결석
+              arrivalTime: null,
+              departureTime: null,
+            );
+            recordsToCreate.add(newRecord);
+          }
+        }
+      }
+    }
+
+    // 업데이트 실행
+    for (final record in recordsToUpdate) {
+      await updateAttendanceRecord(record);
+    }
+
+    // 생성 실행
+    for (final record in recordsToCreate) {
+      await addAttendanceRecord(record);
+    }
+
+    print('[DEBUG] 과거 수업 정리 완료: ${recordsToUpdate.length}개 업데이트, ${recordsToCreate.length}개 생성');
   }
 } 

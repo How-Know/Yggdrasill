@@ -3,8 +3,8 @@ import 'package:uuid/uuid.dart';
 class AttendanceRecord {
   final String? id;
   final String studentId;
-  final DateTime date; // 출석 날짜 (날짜만, 시간은 무시)
-  final DateTime classDateTime; // 실제 수업 시간
+  final DateTime classDateTime; // 실제 수업 시작 시간
+  final DateTime classEndTime; // 실제 수업 종료 시간
   final String className;
   final bool isPresent; // 출석 여부
   final DateTime? arrivalTime; // 등원 시간 (슬라이드시트와 연동)
@@ -16,8 +16,8 @@ class AttendanceRecord {
   AttendanceRecord({
     this.id,
     required this.studentId,
-    required this.date,
     required this.classDateTime,
+    required this.classEndTime,
     required this.className,
     required this.isPresent,
     this.arrivalTime,
@@ -29,8 +29,8 @@ class AttendanceRecord {
 
   factory AttendanceRecord.create({
     required String studentId,
-    required DateTime date,
     required DateTime classDateTime,
+    required DateTime classEndTime,
     required String className,
     required bool isPresent,
     DateTime? arrivalTime,
@@ -41,8 +41,8 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: const Uuid().v4(),
       studentId: studentId,
-      date: DateTime(date.year, date.month, date.day), // 날짜만 저장
       classDateTime: classDateTime,
+      classEndTime: classEndTime,
       className: className,
       isPresent: isPresent,
       arrivalTime: arrivalTime,
@@ -57,8 +57,8 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: map['id'] as String?,
       studentId: map['student_id'] as String,
-      date: DateTime.parse(map['date'] as String),
       classDateTime: DateTime.parse(map['class_date_time'] as String),
+      classEndTime: DateTime.parse(map['class_end_time'] as String),
       className: map['class_name'] as String,
       isPresent: (map['is_present'] as int) == 1,
       arrivalTime: map['arrival_time'] != null 
@@ -77,8 +77,8 @@ class AttendanceRecord {
     return {
       'id': id,
       'student_id': studentId,
-      'date': date.toIso8601String(),
       'class_date_time': classDateTime.toIso8601String(),
+      'class_end_time': classEndTime.toIso8601String(),
       'class_name': className,
       'is_present': isPresent ? 1 : 0,
       'arrival_time': arrivalTime?.toIso8601String(),
@@ -92,8 +92,8 @@ class AttendanceRecord {
   AttendanceRecord copyWith({
     String? id,
     String? studentId,
-    DateTime? date,
     DateTime? classDateTime,
+    DateTime? classEndTime,
     String? className,
     bool? isPresent,
     DateTime? arrivalTime,
@@ -105,8 +105,8 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
-      date: date ?? this.date,
       classDateTime: classDateTime ?? this.classDateTime,
+      classEndTime: classEndTime ?? this.classEndTime,
       className: className ?? this.className,
       isPresent: isPresent ?? this.isPresent,
       arrivalTime: arrivalTime ?? this.arrivalTime,
@@ -123,20 +123,20 @@ class AttendanceRecord {
     return other is AttendanceRecord &&
         other.id == id &&
         other.studentId == studentId &&
-        other.date == date &&
-        other.classDateTime == classDateTime;
+        other.classDateTime == classDateTime &&
+        other.classEndTime == classEndTime;
   }
 
   @override
   int get hashCode {
     return id.hashCode ^
         studentId.hashCode ^
-        date.hashCode ^
-        classDateTime.hashCode;
+        classDateTime.hashCode ^
+        classEndTime.hashCode;
   }
 
   @override
   String toString() {
-    return 'AttendanceRecord(id: $id, studentId: $studentId, date: $date, className: $className, isPresent: $isPresent)';
+    return 'AttendanceRecord(id: $id, studentId: $studentId, classDateTime: $classDateTime, className: $className, isPresent: $isPresent)';
   }
 }

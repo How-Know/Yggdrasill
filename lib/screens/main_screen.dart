@@ -83,6 +83,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           classInfo: classInfo,
           startHour: block.startHour,
           startMinute: block.startMinute,
+          duration: block.duration,
         ));
       }
     }
@@ -195,6 +196,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
     
+    // 강제 마이그레이션 실행
+    await DataManager.instance.forceMigration();
+    
+    // 과거 수업 정리 로직 실행 (등원시간만 있는 경우 정상 출석 처리, 기록 없는 경우 무단결석 처리)
+    await DataManager.instance.processPastClassesAttendance();
+    
     // 오늘의 출석 기록을 바탕으로 등원/하원 상태 복원
     _restoreTodayAttendanceStatus();
     
@@ -213,10 +220,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final todayEnd = todayStart.add(const Duration(days: 1));
     
     final todayAttendanceRecords = DataManager.instance.attendanceRecords
-        .where((record) => 
-            record.date.isAfter(todayStart.subtract(const Duration(days: 1))) && 
-            record.date.isBefore(todayEnd) &&
-            record.isPresent)
+        .where((record) {
+            final recordDate = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+            return recordDate.isAfter(todayStart.subtract(const Duration(days: 1))) && 
+                   recordDate.isBefore(todayEnd) &&
+                   record.isPresent;
+        })
         .toList();
     
     // 오늘의 등원/하원 상태 복원
@@ -480,8 +489,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         
                                                         await DataManager.instance.saveOrUpdateAttendance(
                                                           studentId: t.student.id,
-                                                          date: today,
                                                           classDateTime: classDateTime,
+                                                          classEndTime: classDateTime.add(t.duration),
                                                           className: t.classInfo?.name ?? '수업',
                                                           isPresent: true,
                                                           arrivalTime: now,
@@ -641,15 +650,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             // 등원 체크 - 출석 기록 생성/업데이트
             await DataManager.instance.saveOrUpdateAttendance(
               studentId: t.student.id,
-              date: today,
               classDateTime: classDateTime,
+              classEndTime: classDateTime.add(t.duration),
               className: t.classInfo?.name ?? '수업',
               isPresent: true,
               arrivalTime: now,
             );
           } else if (status == 'attended') {
             // 하원 체크 - 하원 시간 업데이트
-            final existing = DataManager.instance.getAttendanceRecord(t.student.id, today, classDateTime);
+            final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
             if (existing != null) {
               final updated = existing.copyWith(departureTime: now);
               await DataManager.instance.updateAttendanceRecord(updated);
@@ -681,7 +690,8 @@ class _AttendanceTarget {
   final ClassInfo? classInfo;
   final int startHour;
   final int startMinute;
-  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute});
+  final Duration duration;
+  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute, required this.duration});
 
   DateTime get startTime => DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, startHour, startMinute);
 }

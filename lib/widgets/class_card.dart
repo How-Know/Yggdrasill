@@ -109,6 +109,7 @@ class GroupCard extends StatelessWidget {
                         builder: (context) => GroupRegistrationDialog(
                           editMode: true,
                           groupInfo: groupInfo,
+                          onSave: (groupInfo) {},
                         ),
                       );
                       if (result != null) {
@@ -172,10 +173,10 @@ class GroupCard extends StatelessWidget {
                     alignment: WrapAlignment.start,
                     children: groupStudents
                         .map((student) => StudentCard(
-                              student: student,
-                              groups: groups,
-                              onEdit: onStudentEdit,
-                              onDelete: onStudentDelete,
+                              studentWithInfo: student,
+                              onShowDetails: (studentWithInfo) {},
+                              onDelete: onStudentDelete != null ? (studentWithInfo) => onStudentDelete!(studentWithInfo.student) : null,
+                              onUpdate: onStudentEdit != null ? (studentWithInfo) => onStudentEdit!(studentWithInfo.student) : null,
                             ))
                         .toList(),
                   ),

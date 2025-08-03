@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
 import '../../../models/class_info.dart';
@@ -95,8 +96,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         
         if (blocks.isEmpty) continue;
         
-        // 각 SET_ID별로 하나의 카드만 생성 (첫 번째 블록 기준)
-        final firstBlock = blocks.first;
+        // 같은 SET_ID의 블록들을 시간순으로 정렬
+        blocks.sort((a, b) {
+          final aTime = a.startHour * 60 + a.startMinute;
+          final bTime = b.startHour * 60 + b.startMinute;
+          return aTime.compareTo(bTime);
+        });
+        
+        final firstBlock = blocks.first;  // 가장 빠른 시간
+        final lastBlock = blocks.last;    // 가장 늦은 시간
         
         // 해당 날짜가 수업 요일인지 확인
         if (date.weekday - 1 != firstBlock.dayIndex) continue; // weekday: 1(월)~7(일), dayIndex: 0(월)~6(일)
@@ -122,18 +130,23 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         // 기존 출석 기록 확인
         final attendanceRecord = DataManager.instance.getAttendanceRecord(
           widget.selectedStudent!.student.id,
-          date,
           classDateTime,
         );
+
+        // 전체 수업 시간 계산: 첫 번째 블록 시작시간부터 마지막 블록 끝나는 시간까지
+        final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
+        final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
+        final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
 
         final sessionFromTimeBlock = ClassSession(
           dateTime: classDateTime,
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
-          duration: firstBlock.duration.inMinutes, // Duration을 int(분)로 변환
+          duration: totalDurationMinutes, // 전체 수업 시간 (첫 번째 시작 ~ 마지막 끝)
           isAttended: attendanceRecord?.isPresent ?? false, // 기존 출석 기록 반영
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
+          attendanceStatus: _getAttendanceStatus(attendanceRecord),
         );
         
         sessions.add(sessionFromTimeBlock);
@@ -199,6 +212,25 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   String _getDayOfWeekName(int dayIndex) {
     const days = ['일', '월', '화', '수', '목', '금', '토'];
     return days[dayIndex % 7];
+  }
+
+  // 출석 상태 계산
+  AttendanceStatus _getAttendanceStatus(AttendanceRecord? record) {
+    if (record == null) {
+      return AttendanceStatus.none; // 기록 없음
+    }
+    
+    if (!record.isPresent) {
+      return AttendanceStatus.absent; // 무단결석
+    }
+    
+    if (record.arrivalTime != null && record.departureTime != null) {
+      return AttendanceStatus.completed; // 등원+하원 완료
+    } else if (record.arrivalTime != null) {
+      return AttendanceStatus.arrived; // 등원만 완료
+    } else {
+      return AttendanceStatus.none; // 기록 없음
+    }
   }
 
   // 실제 날짜를 기반으로 요일을 계산
@@ -382,29 +414,19 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           const SizedBox(height: 10),
           // 출석 체크박스
           GestureDetector(
-            onTap: () => _toggleAttendance(session),
+            onTap: () => _handleAttendanceClick(session),
             child: Container(
               width: 20,
               height: 20,
               decoration: BoxDecoration(
-                color: session.isAttended 
-                    ? const Color(0xFF4CAF50)
-                    : Colors.transparent,
+                color: _getCheckboxColor(session.attendanceStatus),
                 border: Border.all(
-                  color: session.isAttended 
-                      ? const Color(0xFF4CAF50)
-                      : Colors.white54,
+                  color: _getCheckboxBorderColor(session.attendanceStatus),
                   width: 1,
                 ),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: session.isAttended
-                  ? const Icon(
-                      Icons.check,
-                      size: 14,
-                      color: Colors.white,
-                    )
-                  : null,
+              child: _getCheckboxIcon(session.attendanceStatus),
             ),
           ),
         ],
@@ -439,14 +461,61 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
            dateTime.day == now.day;
   }
 
-  void _toggleAttendance(ClassSession session) async {
+  // 체크박스 색상 계산
+  Color _getCheckboxColor(AttendanceStatus status) {
+    switch (status) {
+      case AttendanceStatus.completed:
+        return const Color(0xFF4CAF50); // 초록색 (출석 완료)
+      case AttendanceStatus.arrived:
+        return const Color(0xFF2196F3); // 파란색 (등원만)
+      case AttendanceStatus.absent:
+        return const Color(0xFFE53E3E); // 빨간색 (무단결석)
+      case AttendanceStatus.none:
+        return Colors.transparent; // 투명 (기록 없음)
+    }
+  }
+
+  // 체크박스 테두리 색상 계산
+  Color _getCheckboxBorderColor(AttendanceStatus status) {
+    switch (status) {
+      case AttendanceStatus.completed:
+        return const Color(0xFF4CAF50);
+      case AttendanceStatus.arrived:
+        return const Color(0xFF2196F3);
+      case AttendanceStatus.absent:
+        return const Color(0xFFE53E3E);
+      case AttendanceStatus.none:
+        return Colors.white54;
+    }
+  }
+
+  // 체크박스 아이콘 계산
+  Widget? _getCheckboxIcon(AttendanceStatus status) {
+    switch (status) {
+      case AttendanceStatus.completed:
+        return const Icon(Icons.check, size: 14, color: Colors.white);
+      case AttendanceStatus.arrived:
+        return const Icon(Icons.login, size: 12, color: Colors.white);
+      case AttendanceStatus.absent:
+        return const Icon(Icons.close, size: 14, color: Colors.white);
+      case AttendanceStatus.none:
+        return null;
+    }
+  }
+
+  void _handleAttendanceClick(ClassSession session) async {
     if (widget.selectedStudent == null) return;
 
-    final newAttendanceState = !session.isAttended;
     final now = DateTime.now();
     
+    // 무단결석인 경우 시간 수정 다이얼로그 표시
+    if (session.attendanceStatus == AttendanceStatus.absent) {
+      await _showEditAttendanceDialog(session);
+      return;
+    }
+    
     // 아직 시작하지 않은 수업인지 확인 (수업 시작 시간이 현재 시간보다 미래인 경우)
-    if (newAttendanceState && session.dateTime.isAfter(now)) {
+    if (session.dateTime.isAfter(now)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('아직 시작하지 않은 수업입니다.'),
@@ -458,51 +527,74 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     
     try {
-      // 수업 시간을 기준으로 등원/하원 시간 설정
       final classStartTime = session.dateTime;
       final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
       
       DateTime? arrivalTime;
       DateTime? departureTime;
+      bool isPresent;
+      AttendanceStatus newStatus;
+      String message;
       
-      if (newAttendanceState) {
-        arrivalTime = classStartTime; // 수업 시작 시간을 등원 시간으로 설정
-        departureTime = classEndTime; // 수업 끝 시간을 하원 시간으로 설정
-      } else {
-        arrivalTime = null; // 출석 해제 시 등원/하원 시간 모두 초기화
-        departureTime = null;
+      switch (session.attendanceStatus) {
+        case AttendanceStatus.none:
+          // 첫 번째 클릭: 등원 기록
+          arrivalTime = now;
+          departureTime = null;
+          isPresent = false; // 아직 완료되지 않음
+          newStatus = AttendanceStatus.arrived;
+          message = '등원 시간 기록 완료';
+          break;
+          
+        case AttendanceStatus.arrived:
+          // 두 번째 클릭: 하원 기록
+          arrivalTime = session.arrivalTime; // 기존 등원 시간 유지
+          departureTime = now;
+          isPresent = true; // 출석 완료
+          newStatus = AttendanceStatus.completed;
+          message = '하원 시간 기록 완료';
+          break;
+          
+        case AttendanceStatus.completed:
+          // 세 번째 클릭: 출석 해제
+          arrivalTime = null;
+          departureTime = null;
+          isPresent = false;
+          newStatus = AttendanceStatus.none;
+          message = '출석 기록 해제';
+          break;
+          
+        case AttendanceStatus.absent:
+          // 무단결석은 위에서 처리됨
+          return;
       }
 
       await DataManager.instance.saveOrUpdateAttendance(
         studentId: widget.selectedStudent!.student.id,
-        date: session.dateTime,
         classDateTime: session.dateTime,
+        classEndTime: classEndTime,
         className: session.className,
-        isPresent: newAttendanceState,
+        isPresent: isPresent,
         arrivalTime: arrivalTime,
         departureTime: departureTime,
       );
 
       setState(() {
-        session.isAttended = newAttendanceState;
-        if (newAttendanceState) {
-          session.arrivalTime = arrivalTime;
-          session.departureTime = departureTime;
-        } else {
-          session.arrivalTime = null;
-          session.departureTime = null;
-        }
+        session.isAttended = isPresent;
+        session.arrivalTime = arrivalTime;
+        session.departureTime = departureTime;
+        session.attendanceStatus = newStatus;
       });
 
       // 성공 피드백
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            newAttendanceState ? '출석 체크 완료' : '출석 체크 해제',
-          ),
-          backgroundColor: newAttendanceState 
+          content: Text(message),
+          backgroundColor: newStatus == AttendanceStatus.completed 
               ? const Color(0xFF4CAF50) 
-              : const Color(0xFF757575),
+              : newStatus == AttendanceStatus.arrived
+                  ? const Color(0xFF2196F3)
+                  : const Color(0xFF757575),
           duration: const Duration(milliseconds: 1500),
         ),
       );
@@ -515,6 +607,254 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         ),
       );
     }
+  }
+
+  // 무단결석 수업 시간 수정 다이얼로그
+  Future<void> _showEditAttendanceDialog(ClassSession session) async {
+    DateTime selectedDate = session.dateTime;
+    TimeOfDay selectedArrivalTime = TimeOfDay.fromDateTime(session.dateTime);
+    TimeOfDay selectedDepartureTime = TimeOfDay.fromDateTime(
+      session.dateTime.add(Duration(minutes: session.duration))
+    );
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              title: const Text(
+                '출석 시간 수정',
+                style: TextStyle(color: Colors.white, fontSize: 18),
+              ),
+              content: SizedBox(
+                width: 300,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 날짜 선택
+                    ListTile(
+                      leading: const Icon(Icons.calendar_today, color: Colors.white70),
+                      title: Text(
+                        '날짜: ${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () async {
+                        final DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedDate,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2030),
+                          builder: (BuildContext context, Widget? child) {
+                            return Theme(
+                              data: Theme.of(context).copyWith(
+                                colorScheme: const ColorScheme(
+                                  brightness: Brightness.dark,
+                                  primary: Color(0xFF1976D2),
+                                  onPrimary: Colors.white,
+                                  secondary: Color(0xFF1976D2),
+                                  onSecondary: Colors.white,
+                                  error: Color(0xFFB00020),
+                                  onError: Colors.white,
+                                  background: Color(0xFF18181A),
+                                  onBackground: Colors.white,
+                                  surface: Color(0xFF18181A),
+                                  onSurface: Colors.white,
+                                ),
+                                dialogBackgroundColor: const Color(0xFF18181A),
+                              ),
+                              child: child!,
+                            );
+                          },
+                        );
+                        if (picked != null) {
+                          setDialogState(() {
+                            selectedDate = DateTime(
+                              picked.year,
+                              picked.month,
+                              picked.day,
+                              selectedDate.hour,
+                              selectedDate.minute,
+                            );
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    // 등원 시간 선택
+                    ListTile(
+                      leading: const Icon(Icons.login, color: Colors.white70),
+                      title: Text(
+                        '등원 시간: ${selectedArrivalTime.format(context)}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () async {
+                        final TimeOfDay? picked = await _showCustomTimePicker(
+                          context,
+                          selectedArrivalTime,
+                        );
+                        if (picked != null) {
+                          setDialogState(() {
+                            selectedArrivalTime = picked;
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    // 하원 시간 선택
+                    ListTile(
+                      leading: const Icon(Icons.logout, color: Colors.white70),
+                      title: Text(
+                        '하원 시간: ${selectedDepartureTime.format(context)}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () async {
+                        final TimeOfDay? picked = await _showCustomTimePicker(
+                          context,
+                          selectedDepartureTime,
+                        );
+                        if (picked != null) {
+                          setDialogState(() {
+                            selectedDepartureTime = picked;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('취소', style: TextStyle(color: Colors.grey)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final arrivalDateTime = DateTime(
+                      selectedDate.year,
+                      selectedDate.month,
+                      selectedDate.day,
+                      selectedArrivalTime.hour,
+                      selectedArrivalTime.minute,
+                    );
+                    final departureDateTime = DateTime(
+                      selectedDate.year,
+                      selectedDate.month,
+                      selectedDate.day,
+                      selectedDepartureTime.hour,
+                      selectedDepartureTime.minute,
+                    );
+                    
+                    Navigator.of(context).pop({
+                      'arrivalTime': arrivalDateTime,
+                      'departureTime': departureDateTime,
+                    });
+                  },
+                  child: const Text('확인', style: TextStyle(color: Color(0xFF1976D2))),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null && mounted) {
+      try {
+        final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
+        
+        await DataManager.instance.saveOrUpdateAttendance(
+          studentId: widget.selectedStudent!.student.id,
+          classDateTime: session.dateTime,
+          classEndTime: classEndTime,
+          className: session.className,
+          isPresent: true,
+          arrivalTime: result['arrivalTime'],
+          departureTime: result['departureTime'],
+        );
+
+        setState(() {
+          session.isAttended = true;
+          session.arrivalTime = result['arrivalTime'];
+          session.departureTime = result['departureTime'];
+          session.attendanceStatus = AttendanceStatus.completed;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('출석 시간이 수정되었습니다.'),
+            backgroundColor: Color(0xFF4CAF50),
+            duration: Duration(milliseconds: 1500),
+          ),
+        );
+      } catch (e) {
+        print('[ERROR] 출석 시간 수정 실패: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('출석 시간 수정에 실패했습니다.'),
+            backgroundColor: Color(0xFFE53E3E),
+          ),
+        );
+      }
+    }
+  }
+
+  // 설정 스타일의 커스텀 시간 선택기
+  Future<TimeOfDay?> _showCustomTimePicker(BuildContext context, TimeOfDay initialTime) {
+    return showTimePicker(
+      context: context,
+      initialTime: initialTime,
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme(
+              brightness: Brightness.dark,
+              primary: Color(0xFF1976D2),
+              onPrimary: Colors.white,
+              secondary: Color(0xFF1976D2),
+              onSecondary: Colors.white,
+              error: Color(0xFFB00020),
+              onError: Colors.white,
+              background: Color(0xFF18181A),
+              onBackground: Colors.white,
+              surface: Color(0xFF18181A),
+              onSurface: Colors.white,
+            ),
+            dialogBackgroundColor: const Color(0xFF18181A),
+            timePickerTheme: const TimePickerThemeData(
+              backgroundColor: Color(0xFF18181A),
+              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteTextColor: Colors.white,
+              dialHandColor: Color(0xFF1976D2),
+              dialBackgroundColor: Color(0xFF18181A),
+              entryModeIconColor: Color(0xFF1976D2),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(24))
+              ),
+              helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              dayPeriodTextColor: Colors.white,
+              dayPeriodColor: Color(0xFF1976D2),
+            ),
+          ),
+          child: Localizations.override(
+            context: context,
+            locale: const Locale('ko'),
+            delegates: [
+              ...GlobalMaterialLocalizations.delegates,
+            ],
+            child: Builder(
+              builder: (context) {
+                return MediaQuery(
+                  data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+                  child: child!,
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -567,35 +907,110 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     ),
                     const Spacer(),
                     // 범례
-                    Row(
+                    Wrap(
                       children: [
-                        Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2).withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
+                        // 다음 수업
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1976D2).withOpacity(0.3),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '다음 수업',
+                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          '다음 수업',
-                          style: TextStyle(fontSize: 13, color: Colors.white70),
+                        const SizedBox(width: 8),
+                        // 최근 수업
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(2),
+                                border: Border.all(color: const Color(0xFF1976D2), width: 1),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '최근 수업',
+                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(2),
-                            border: Border.all(color: const Color(0xFF1976D2), width: 1),
-                          ),
+                        const SizedBox(width: 8),
+                        // 출석 완료
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF4CAF50),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const Icon(Icons.check, size: 8, color: Colors.white),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '출석완료',
+                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          '최근 수업',
-                          style: TextStyle(fontSize: 13, color: Colors.white70),
+                        const SizedBox(width: 8),
+                        // 등원만
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2196F3),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const Icon(Icons.login, size: 8, color: Colors.white),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '등원만',
+                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 8),
+                        // 무단결석
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE53E3E),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const Icon(Icons.close, size: 8, color: Colors.white),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '무단결석',
+                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -642,6 +1057,13 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   }
 }
 
+enum AttendanceStatus {
+  none,       // 기록 없음
+  arrived,    // 등원만 완료
+  completed,  // 등원+하원 완료
+  absent,     // 무단결석
+}
+
 class ClassSession {
   final DateTime dateTime;
   final String className;
@@ -650,6 +1072,7 @@ class ClassSession {
   bool isAttended;
   DateTime? arrivalTime;
   DateTime? departureTime;
+  AttendanceStatus attendanceStatus;
 
   ClassSession({
     required this.dateTime,
@@ -659,5 +1082,6 @@ class ClassSession {
     this.isAttended = false,
     this.arrivalTime,
     this.departureTime,
+    this.attendanceStatus = AttendanceStatus.none,
   });
 }
