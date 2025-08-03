@@ -535,13 +535,21 @@ class _AttendanceViewState extends State<AttendanceView> {
 
     final now = DateTime.now();
     final currentMonth = DateTime(now.year, now.month);
-    final validMonths = [
+    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
+    
+    // 등록일 이후의 달만 포함하도록 수정
+    final candidateMonths = [
       DateTime(currentMonth.year, currentMonth.month - 2),
       DateTime(currentMonth.year, currentMonth.month - 1),
       currentMonth,
       DateTime(currentMonth.year, currentMonth.month + 1),
       DateTime(currentMonth.year, currentMonth.month + 2),
     ];
+    
+    // 등록월 이후의 달만 필터링
+    final validMonths = candidateMonths
+        .where((month) => month.isAfter(registrationMonth) || month.isAtSameMomentAs(registrationMonth))
+        .toList();
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -581,7 +589,18 @@ class _AttendanceViewState extends State<AttendanceView> {
             children: validMonths.asMap().entries.map((entry) {
               final index = entry.key;
               final month = entry.value;
-              final label = ['2달전', '1달전', '이번달', '1달후', '2달후'][index];
+              
+              // 동적으로 라벨 생성
+              String label;
+              final monthDiff = (month.year - currentMonth.year) * 12 + (month.month - currentMonth.month);
+              if (monthDiff == 0) {
+                label = '이번달';
+              } else if (monthDiff < 0) {
+                label = '${monthDiff.abs()}달전';
+              } else {
+                label = '${monthDiff}달후';
+              }
+              
               final isCurrentMonth = month.year == currentMonth.year && month.month == currentMonth.month;
 
               return Expanded(

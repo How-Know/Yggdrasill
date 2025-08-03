@@ -30,9 +30,19 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   @override
   void didUpdateWidget(AttendanceCheckView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    
     if (oldWidget.selectedStudent != widget.selectedStudent) {
       _loadClassSessions();
+    } else if (oldWidget.selectedStudent == widget.selectedStudent && widget.selectedStudent != null) {
+      // 같은 학생이지만 수업 시간이 변경되었을 수 있음 - 전체 재생성
+      _updateFutureClassSessions();
     }
+  }
+
+  // 수업 시간 변경 시 전체 세션 재생성 (과거 출석 기록 보존)
+  void _updateFutureClassSessions() {
+    // 단순히 _loadClassSessions를 호출하여 전체 재생성
+    _loadClassSessions();
   }
 
   void _loadClassSessions() {
@@ -43,19 +53,24 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
 
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
+    final studentId = widget.selectedStudent!.student.id;
+    final sessions = <ClassSession>[];
+    
+    // 현재 timeBlocks에서 duration 정보 가져오기
     final timeBlocks = DataManager.instance.studentTimeBlocks
-        .where((block) => block.studentId == widget.selectedStudent!.student.id)
+        .where((block) => block.studentId == studentId)
         .toList();
-
+    
     if (timeBlocks.isEmpty) {
       setState(() {
         _classSessions = [];
+        _centerIndex = 0;
       });
       return;
     }
-
-    final now = DateTime.now();
-    final sessions = <ClassSession>[];
 
     // SET_ID별로 timeBlocks 그룹화
     final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
@@ -63,10 +78,17 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
     }
 
-    // 현재 날짜를 기준으로 ±4주간의 수업 일정 생성
-    for (int weekOffset = -4; weekOffset <= 4; weekOffset++) {
-      final weekStart = now.add(Duration(days: -now.weekday + 1 + (weekOffset * 7)));
-      
+    // 등록일 확인
+    final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
+    if (registrationDate == null) {
+      return;
+    }
+    
+    // 등록일부터 현재일 기준 +4주까지 수업 일정 생성
+    final startDate = registrationDate;
+    final endDate = now.add(const Duration(days: 28)); // 현재일 + 4주
+    
+    for (DateTime date = startDate; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
       for (final entry in blocksBySetId.entries) {
         final setId = entry.key;
         final blocks = entry.value;
@@ -75,11 +97,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         
         // 각 SET_ID별로 하나의 카드만 생성 (첫 번째 블록 기준)
         final firstBlock = blocks.first;
-        final classDate = weekStart.add(Duration(days: firstBlock.dayIndex));
+        
+        // 해당 날짜가 수업 요일인지 확인
+        if (date.weekday - 1 != firstBlock.dayIndex) continue; // weekday: 1(월)~7(일), dayIndex: 0(월)~6(일)
+        
         final classDateTime = DateTime(
-          classDate.year,
-          classDate.month,
-          classDate.day,
+          date.year,
+          date.month,
+          date.day,
           firstBlock.startHour,
           firstBlock.startMinute,
         );
@@ -97,19 +122,21 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         // 기존 출석 기록 확인
         final attendanceRecord = DataManager.instance.getAttendanceRecord(
           widget.selectedStudent!.student.id,
-          classDate,
+          date,
           classDateTime,
         );
 
-        sessions.add(ClassSession(
+        final sessionFromTimeBlock = ClassSession(
           dateTime: classDateTime,
           className: className,
-          dayOfWeek: _getDayOfWeekName(firstBlock.dayIndex),
+          dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: firstBlock.duration.inMinutes, // Duration을 int(분)로 변환
           isAttended: attendanceRecord?.isPresent ?? false, // 기존 출석 기록 반영
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
-        ));
+        );
+        
+        sessions.add(sessionFromTimeBlock);
       }
     }
 
@@ -117,7 +144,6 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     sessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
     // 오늘 수업이 있는지 확인
-    final today = DateTime(now.year, now.month, now.day);
     int centerIndex = -1;
     
     // 먼저 오늘 수업을 찾기
@@ -145,9 +171,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       centerIndex = 0;
     }
     
-    // 15개 수업만 선택 (가운데 수업 기준으로 앞뒤 7개씩)
-    if (sessions.length <= 15) {
-      // 전체 수업이 15개 이하면 모두 표시하고 가운데 인덱스 조정
+    // 13개 수업만 선택 (가운데 수업 기준으로 앞뒤 6개씩)
+    if (sessions.length <= 13) {
+      // 전체 수업이 13개 이하면 모두 표시하고 가운데 인덱스 조정
       final actualCenterIndex = centerIndex.clamp(0, sessions.length - 1);
       setState(() {
         _classSessions = sessions;
@@ -156,9 +182,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
     
-    // 15개보다 많으면 가운데 기준으로 앞뒤 7개씩 선택
-    final startIndex = (centerIndex - 7).clamp(0, sessions.length - 15);
-    final endIndex = startIndex + 15;
+    // 13개보다 많으면 가운데 기준으로 앞뒤 6개씩 선택
+    final startIndex = (centerIndex - 6).clamp(0, sessions.length - 13);
+    final endIndex = startIndex + 13;
     final selectedSessions = sessions.sublist(startIndex, endIndex);
 
     // 실제 가운데 인덱스 계산 (선택된 세션 내에서의 위치)
@@ -175,6 +201,78 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return days[dayIndex % 7];
   }
 
+  // 실제 날짜를 기반으로 요일을 계산
+  String _getDayOfWeekFromDate(DateTime date) {
+    const days = ['일', '월', '화', '수', '목', '금', '토'];
+    // DateTime.weekday: 1(월요일) ~ 7(일요일)
+    // 우리 배열: 0(일요일) ~ 6(토요일)
+    int dayIndex = date.weekday % 7; // 1~7 -> 1~0, 즉 월~일 -> 월~일
+    return days[dayIndex];
+  }
+
+  // 수강 사이클 번호 계산 (월 기준)
+  int _calculateCycleNumber(DateTime registrationDate, DateTime sessionDate) {
+    int months = (sessionDate.year - registrationDate.year) * 12 + (sessionDate.month - registrationDate.month);
+    if (sessionDate.day < registrationDate.day) {
+      months--;
+    }
+    return (months + 1).clamp(1, double.infinity).toInt();
+  }
+
+  // 해당 사이클 내에서 수업 순서 계산
+  int _calculateSessionNumberInCycle(DateTime registrationDate, DateTime sessionDate) {
+    if (widget.selectedStudent == null) return 1;
+    
+    // 해당 사이클의 시작일 계산
+    final cycleNumber = _calculateCycleNumber(registrationDate, sessionDate);
+    DateTime cycleStartDate;
+    if (cycleNumber == 1) {
+      cycleStartDate = registrationDate;
+    } else {
+      cycleStartDate = DateTime(
+        registrationDate.year + ((registrationDate.month + cycleNumber - 2) ~/ 12),
+        ((registrationDate.month + cycleNumber - 2) % 12) + 1,
+        registrationDate.day,
+      );
+    }
+    
+    // 해당 사이클의 끝일 계산
+    final cycleEndDate = DateTime(
+      registrationDate.year + ((registrationDate.month + cycleNumber - 1) ~/ 12),
+      ((registrationDate.month + cycleNumber - 1) % 12) + 1,
+      registrationDate.day,
+    ).subtract(const Duration(days: 1));
+    
+    // 해당 학생의 수업 요일들 가져오기
+    final studentTimeBlocks = DataManager.instance.studentTimeBlocks
+        .where((block) => block.studentId == widget.selectedStudent!.student.id)
+        .toList();
+    
+    if (studentTimeBlocks.isEmpty) return 1;
+    
+    // 해당 사이클 내의 모든 수업 날짜 생성 (중복 제거)
+    final Set<DateTime> classDateSet = {};
+    final studentDayIndices = studentTimeBlocks.map((block) => block.dayIndex).toSet();
+    
+    for (DateTime date = cycleStartDate; date.isBefore(cycleEndDate.add(const Duration(days: 1))); date = date.add(const Duration(days: 1))) {
+      // 해당 날짜가 수업 요일 중 하나인지 확인
+      if (studentDayIndices.contains(date.weekday - 1)) { // weekday: 1(월)~7(일), dayIndex: 0(월)~6(일)
+        classDateSet.add(DateTime(date.year, date.month, date.day));
+      }
+    }
+    
+    final List<DateTime> classDatesinCycle = classDateSet.toList();
+    
+    // 날짜 순으로 정렬
+    classDatesinCycle.sort();
+    
+    // 해당 수업이 몇 번째인지 찾기
+    final sessionDateOnly = DateTime(sessionDate.year, sessionDate.month, sessionDate.day);
+    final sessionIndex = classDatesinCycle.indexWhere((date) => date.isAtSameMomentAs(sessionDateOnly));
+    
+    return sessionIndex >= 0 ? sessionIndex + 1 : 1;
+  }
+
   Widget _buildClassSessionCard(ClassSession session, int index, double cardWidth) {
     final isCenter = index == _centerIndex;
     final isPast = session.dateTime.isBefore(DateTime.now());
@@ -184,11 +282,29 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final isNextClass = !isPast && _classSessions.where((s) => s.dateTime.isAfter(now)).isNotEmpty && 
         session.dateTime == _classSessions.where((s) => s.dateTime.isAfter(now)).first.dateTime;
     
+    // 수업 번호 계산 (사이클-순서)
+    String classNumber = '';
+    if (widget.selectedStudent != null) {
+      final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
+      if (registrationDate != null) {
+        final cycleNumber = _calculateCycleNumber(registrationDate, session.dateTime);
+        final sessionNumber = _calculateSessionNumberInCycle(registrationDate, session.dateTime);
+        classNumber = '$cycleNumber-$sessionNumber';
+      }
+    }
+    
     // 등원/하원 시간 정보가 있으면 툴팁 메시지 생성
     String tooltipMessage = '';
+    
+    // 수업 번호 추가
+    if (classNumber.isNotEmpty) {
+      tooltipMessage += '$classNumber';
+    }
+    
     if (session.arrivalTime != null || session.departureTime != null) {
       if (session.arrivalTime != null) {
         final arrivalTime = session.arrivalTime!;
+        if (tooltipMessage.isNotEmpty) tooltipMessage += '\n';
         tooltipMessage += '등원: ${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
       }
       if (session.departureTime != null) {
@@ -201,10 +317,20 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 끝시간 계산
     final endTime = session.dateTime.add(Duration(minutes: session.duration));
     
+    // 마진을 조건부로 설정 (첫번째/마지막 카드는 한쪽 마진만)
+    EdgeInsets cardMargin;
+    if (index == 0) {
+      cardMargin = const EdgeInsets.only(right: 8); // 첫 번째 카드
+    } else if (index == _classSessions.length - 1) {
+      cardMargin = EdgeInsets.zero; // 마지막 카드
+    } else {
+      cardMargin = const EdgeInsets.only(right: 8); // 중간 카드들
+    }
+    
     Widget cardWidget = Container(
       width: cardWidth,
       height: 140, // 카드 높이 추가 증가 (130→140)
-      margin: const EdgeInsets.symmetric(horizontal: 4),
+      margin: cardMargin,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isNextClass 
@@ -319,14 +445,29 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final newAttendanceState = !session.isAttended;
     final now = DateTime.now();
     
+    // 아직 시작하지 않은 수업인지 확인 (수업 시작 시간이 현재 시간보다 미래인 경우)
+    if (newAttendanceState && session.dateTime.isAfter(now)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('아직 시작하지 않은 수업입니다.'),
+          backgroundColor: Color(0xFFFF9800),
+          duration: Duration(milliseconds: 2000),
+        ),
+      );
+      return;
+    }
+    
     try {
-      // 출석 체크 시 등원 시간 설정, 출석 해제 시 등원/하원 시간 초기화
+      // 수업 시간을 기준으로 등원/하원 시간 설정
+      final classStartTime = session.dateTime;
+      final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
+      
       DateTime? arrivalTime;
       DateTime? departureTime;
       
       if (newAttendanceState) {
-        arrivalTime = now; // 출석 체크 시 현재 시간을 등원 시간으로 설정
-        departureTime = session.departureTime; // 기존 하원 시간 유지
+        arrivalTime = classStartTime; // 수업 시작 시간을 등원 시간으로 설정
+        departureTime = classEndTime; // 수업 끝 시간을 하원 시간으로 설정
       } else {
         arrivalTime = null; // 출석 해제 시 등원/하원 시간 모두 초기화
         departureTime = null;
@@ -344,6 +485,13 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
       setState(() {
         session.isAttended = newAttendanceState;
+        if (newAttendanceState) {
+          session.arrivalTime = arrivalTime;
+          session.departureTime = departureTime;
+        } else {
+          session.arrivalTime = null;
+          session.departureTime = null;
+        }
       });
 
       // 성공 피드백
@@ -374,10 +522,6 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return ValueListenableBuilder<List<AttendanceRecord>>(
       valueListenable: DataManager.instance.attendanceRecordsNotifier,
       builder: (context, attendanceRecords, child) {
-        // 출석 기록이 변경되면 수업 세션 다시 로드
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _loadClassSessions();
-        });
 
         if (widget.selectedStudent == null) {
           return Container(
@@ -472,23 +616,20 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 else
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      // 전체 너비에서 패딩과 마진을 제외하고 15개 카드로 나눔
+                      // 전체 너비에서 패딩을 제외하고 카드로 나눔
                       final totalWidth = constraints.maxWidth;
-                      final availableWidth = totalWidth - 32; // 좌우 패딩 16*2
-                      final cardMargin = 8; // 카드 간 마진 (horizontal: 4 * 2)
-                      final totalMarginWidth = cardMargin * 14; // 15개 카드 사이의 14개 마진
-                      final cardWidth = (availableWidth - totalMarginWidth) / 15;
+                      final availableWidth = totalWidth;
+                      final cardMargin = 8; // 카드 간 마진
+                      final totalMarginWidth = cardMargin * (_classSessions.length - 1); // 카드 사이의 마진 (마지막 카드 제외)
+                      final cardWidth = (availableWidth - totalMarginWidth) / _classSessions.length;
                       
                       // 카드 너비가 너무 작아지지 않도록 최소값 설정
                       final finalCardWidth = cardWidth.clamp(80.0, 200.0);
                       
-                      return SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: _classSessions.asMap().entries.map((entry) {
-                            return _buildClassSessionCard(entry.value, entry.key, finalCardWidth);
-                          }).toList(),
-                        ),
+                      return Row(
+                        children: _classSessions.asMap().entries.map((entry) {
+                          return _buildClassSessionCard(entry.value, entry.key, finalCardWidth);
+                        }).toList(),
                       );
                     },
                   ),
@@ -507,8 +648,8 @@ class ClassSession {
   final String dayOfWeek;
   final int duration;
   bool isAttended;
-  final DateTime? arrivalTime;
-  final DateTime? departureTime;
+  DateTime? arrivalTime;
+  DateTime? departureTime;
 
   ClassSession({
     required this.dateTime,
