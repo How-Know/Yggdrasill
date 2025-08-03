@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/student/student_screen.dart';
@@ -63,6 +64,17 @@ class MyApp extends StatelessWidget {
         scaffoldMessengerKey: rootScaffoldMessengerKey,
         navigatorKey: rootNavigatorKey,
         title: 'Yggdrasill',
+        // 로케일 설정 추가
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('en', 'US'), // 영어 (기본)
+          Locale('ko', 'KR'), // 한국어
+        ],
+        locale: const Locale('ko', 'KR'), // 기본 로케일을 한국어로 설정
         theme: ThemeData(
           useMaterial3: true,
           scaffoldBackgroundColor: const Color(0xFF1F1F1F),

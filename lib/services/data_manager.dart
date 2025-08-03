@@ -11,6 +11,7 @@ import '../models/teacher.dart';
 import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
 import '../models/payment_record.dart';
+import '../models/attendance_record.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
@@ -38,10 +39,12 @@ class DataManager {
   Map<String, GroupInfo> _groupsById = {};
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
+  List<AttendanceRecord> _attendanceRecords = [];
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
+  final ValueNotifier<List<AttendanceRecord>> attendanceRecordsNotifier = ValueNotifier<List<AttendanceRecord>>([]);
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
@@ -49,6 +52,7 @@ class DataManager {
   }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
   List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
+  List<AttendanceRecord> get attendanceRecords => List.unmodifiable(_attendanceRecords);
 
   AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
   PaymentType _paymentType = PaymentType.monthly;
@@ -123,6 +127,9 @@ class DataManager {
       await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
       await loadTeachers();
+      await loadClasses(); // 수업 정보 로딩 추가
+      await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
+      await loadAttendanceRecords(); // 출석 기록 로딩 추가
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -136,6 +143,9 @@ class DataManager {
     _studentsWithInfo = [];
     _operatingHours = [];
     _studentTimeBlocks = [];
+    _classes = [];
+    _paymentRecords = [];
+    _attendanceRecords = [];
     _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
     _paymentType = PaymentType.monthly;
     _notifyListeners();
@@ -264,6 +274,9 @@ class DataManager {
     groupSchedulesNotifier.value = List.unmodifiable(_groupSchedules);
     teachersNotifier.value = List.unmodifiable(_teachers);
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+    classesNotifier.value = List.unmodifiable(_classes);
+    paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
   }
 
   void addGroup(GroupInfo groupInfo) {
@@ -801,6 +814,105 @@ class DataManager {
       );
     } catch (e) {
       return null;
+    }
+  }
+
+  // =================== ATTENDANCE RECORDS ===================
+  
+  Future<void> loadAttendanceRecords() async {
+    try {
+      await AcademyDbService.instance.ensureAttendanceRecordsTable();
+      final recordMaps = await AcademyDbService.instance.getAttendanceRecords();
+      _attendanceRecords = recordMaps.map((map) => AttendanceRecord.fromMap(map)).toList();
+      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      print('[DEBUG] 출석 기록 로드 완료: ${_attendanceRecords.length}개');
+    } catch (e) {
+      print('[ERROR] 출석 기록 로드 실패: $e');
+      _attendanceRecords = [];
+      attendanceRecordsNotifier.value = [];
+    }
+  }
+
+  Future<void> addAttendanceRecord(AttendanceRecord record) async {
+    final recordData = record.toMap();
+    await AcademyDbService.instance.addAttendanceRecord(recordData);
+    _attendanceRecords.add(record);
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+  }
+
+  Future<void> updateAttendanceRecord(AttendanceRecord record) async {
+    if (record.id == null) return;
+    
+    final recordData = record.toMap();
+    await AcademyDbService.instance.updateAttendanceRecord(record.id!, recordData);
+    
+    final index = _attendanceRecords.indexWhere((r) => r.id == record.id);
+    if (index != -1) {
+      _attendanceRecords[index] = record;
+      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    }
+  }
+
+  Future<void> deleteAttendanceRecord(String id) async {
+    _attendanceRecords.removeWhere((r) => r.id == id);
+    await AcademyDbService.instance.deleteAttendanceRecord(id);
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+  }
+
+  List<AttendanceRecord> getAttendanceRecordsForStudent(String studentId) {
+    return _attendanceRecords.where((r) => r.studentId == studentId).toList();
+  }
+
+  AttendanceRecord? getAttendanceRecord(String studentId, DateTime date, DateTime classDateTime) {
+    try {
+      final dateStr = DateTime(date.year, date.month, date.day).toIso8601String();
+      final classDateTimeStr = classDateTime.toIso8601String();
+      
+      return _attendanceRecords.firstWhere(
+        (r) => r.studentId == studentId && 
+               r.date.toIso8601String() == dateStr && 
+               r.classDateTime.toIso8601String() == classDateTimeStr,
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> saveOrUpdateAttendance({
+    required String studentId,
+    required DateTime date,
+    required DateTime classDateTime,
+    required String className,
+    required bool isPresent,
+    DateTime? arrivalTime,
+    DateTime? departureTime,
+    String? notes,
+  }) async {
+    // 기존 출석 기록 확인
+    final existing = getAttendanceRecord(studentId, date, classDateTime);
+    
+    if (existing != null) {
+      // 업데이트
+      final updated = existing.copyWith(
+        isPresent: isPresent,
+        arrivalTime: arrivalTime,
+        departureTime: departureTime,
+        notes: notes,
+      );
+      await updateAttendanceRecord(updated);
+    } else {
+      // 새로 생성
+      final newRecord = AttendanceRecord.create(
+        studentId: studentId,
+        date: date,
+        classDateTime: classDateTime,
+        className: className,
+        isPresent: isPresent,
+        arrivalTime: arrivalTime,
+        departureTime: departureTime,
+        notes: notes,
+      );
+      await addAttendanceRecord(newRecord);
     }
   }
 } 

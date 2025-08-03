@@ -3,6 +3,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../widgets/navigation_rail.dart';
 import '../widgets/student_registration_dialog.dart';
 import '../services/data_manager.dart';
+import '../models/attendance_record.dart';
 import 'student/student_screen.dart';
 import 'timetable/timetable_screen.dart';
 import 'settings/settings_screen.dart';
@@ -193,12 +194,57 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
+    
+    // 오늘의 출석 기록을 바탕으로 등원/하원 상태 복원
+    _restoreTodayAttendanceStatus();
+    
     setState(() {
       _groups.clear();
       _groups.addAll(DataManager.instance.groups);
       _students.clear();
       _students.addAll(DataManager.instance.students.map((s) => s.student));
     });
+  }
+
+  // 오늘의 출석 기록을 바탕으로 등원/하원 상태 복원
+  void _restoreTodayAttendanceStatus() {
+    final today = DateTime.now();
+    final todayStart = DateTime(today.year, today.month, today.day);
+    final todayEnd = todayStart.add(const Duration(days: 1));
+    
+    final todayAttendanceRecords = DataManager.instance.attendanceRecords
+        .where((record) => 
+            record.date.isAfter(todayStart.subtract(const Duration(days: 1))) && 
+            record.date.isBefore(todayEnd) &&
+            record.isPresent)
+        .toList();
+    
+    // 오늘의 등원/하원 상태 복원
+    for (final record in todayAttendanceRecords) {
+      // setId를 찾기 위해 해당 학생의 오늘 time block 확인
+      final todayIdx = today.weekday - 1;
+      final studentTimeBlocks = DataManager.instance.studentTimeBlocks
+          .where((block) => 
+              block.studentId == record.studentId && 
+              block.dayIndex == todayIdx)
+          .toList();
+      
+      for (final block in studentTimeBlocks) {
+        if (block.setId != null) {
+          // 등원 시간이 있으면 등원 상태로 설정
+          if (record.arrivalTime != null) {
+            _attendedSetIds.add(block.setId!);
+            _attendTimes[block.setId!] = record.arrivalTime!;
+          }
+          
+          // 하원 시간이 있으면 하원 상태로 설정
+          if (record.departureTime != null) {
+            _leavedSetIds.add(block.setId!);
+            _leaveTimes[block.setId!] = record.departureTime!;
+          }
+        }
+      }
+    }
   }
 
   @override
@@ -420,11 +466,29 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           runSpacing: _cardSpacing,
                                           children: entry.value
                                               .map((t) => GestureDetector(
-                                                    onTap: () {
+                                                    onTap: () async {
+                                                      final now = DateTime.now();
                                                       setState(() {
                                                         _attendedSetIds.add(t.setId);
-                                                        _attendTimes[t.setId] = DateTime.now();
+                                                        _attendTimes[t.setId] = now;
                                                       });
+                                                      
+                                                      // 출석 기록 생성
+                                                      try {
+                                                        final today = DateTime(now.year, now.month, now.day);
+                                                        final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+                                                        
+                                                        await DataManager.instance.saveOrUpdateAttendance(
+                                                          studentId: t.student.id,
+                                                          date: today,
+                                                          classDateTime: classDateTime,
+                                                          className: t.classInfo?.name ?? '수업',
+                                                          isPresent: true,
+                                                          arrivalTime: now,
+                                                        );
+                                                      } catch (e) {
+                                                        print('[ERROR] 등원 체크 출석 기록 실패: $e');
+                                                      }
                                                     },
                                                     child: MouseRegion(
                                                       onEnter: (event) {
@@ -556,16 +620,44 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     return GestureDetector(
       key: key,
-      onTap: () {
+      onTap: () async {
+        final now = DateTime.now();
         setState(() {
           if (status == 'waiting') {
             _attendedSetIds.add(t.setId);
-            _attendTimes[t.setId] = DateTime.now();
+            _attendTimes[t.setId] = now;
           } else if (status == 'attended') {
             _leavedSetIds.add(t.setId);
-            _leaveTimes[t.setId] = DateTime.now();
+            _leaveTimes[t.setId] = now;
           }
         });
+        
+        // 출석 기록 업데이트
+        try {
+          final today = DateTime(now.year, now.month, now.day);
+          final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+          
+          if (status == 'waiting') {
+            // 등원 체크 - 출석 기록 생성/업데이트
+            await DataManager.instance.saveOrUpdateAttendance(
+              studentId: t.student.id,
+              date: today,
+              classDateTime: classDateTime,
+              className: t.classInfo?.name ?? '수업',
+              isPresent: true,
+              arrivalTime: now,
+            );
+          } else if (status == 'attended') {
+            // 하원 체크 - 하원 시간 업데이트
+            final existing = DataManager.instance.getAttendanceRecord(t.student.id, today, classDateTime);
+            if (existing != null) {
+              final updated = existing.copyWith(departureTime: now);
+              await DataManager.instance.updateAttendanceRecord(updated);
+            }
+          }
+        } catch (e) {
+          print('[ERROR] 출석 기록 동기화 실패: $e');
+        }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),

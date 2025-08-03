@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 9,
+      version: 10,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -135,6 +135,22 @@ class AcademyDbService {
             cycle INTEGER,
             due_date INTEGER,
             paid_date INTEGER,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE attendance_records (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            date TEXT,
+            class_date_time TEXT,
+            class_name TEXT,
+            is_present INTEGER,
+            arrival_time TEXT,
+            departure_time TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -247,6 +263,24 @@ class AcademyDbService {
               cycle INTEGER,
               due_date INTEGER,
               paid_date INTEGER,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+            )
+          ''');
+        }
+        if (oldVersion < 10) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS attendance_records (
+              id TEXT PRIMARY KEY,
+              student_id TEXT,
+              date TEXT,
+              class_date_time TEXT,
+              class_name TEXT,
+              is_present INTEGER,
+              arrival_time TEXT,
+              departure_time TEXT,
+              notes TEXT,
+              created_at TEXT,
+              updated_at TEXT,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
@@ -807,6 +841,102 @@ class AcademyDbService {
       }
     } catch (e) {
       print('[ERROR] payment_records 테이블 확인/생성 중 오류: $e');
+      rethrow;
+    }
+  }
+
+  // =================== ATTENDANCE RECORDS ===================
+  
+  Future<void> addAttendanceRecord(Map<String, dynamic> attendanceData) async {
+    final dbClient = await db;
+    await dbClient.insert('attendance_records', attendanceData);
+    print('[DEBUG] 출석 기록 추가: ${attendanceData['student_id']} - ${attendanceData['date']}');
+  }
+
+  Future<List<Map<String, dynamic>>> getAttendanceRecords() async {
+    final dbClient = await db;
+    return await dbClient.query('attendance_records', orderBy: 'date DESC, class_date_time DESC');
+  }
+
+  Future<void> updateAttendanceRecord(String id, Map<String, dynamic> attendanceData) async {
+    final dbClient = await db;
+    await dbClient.update(
+      'attendance_records',
+      attendanceData,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    print('[DEBUG] 출석 기록 수정: $id');
+  }
+
+  Future<void> deleteAttendanceRecord(String id) async {
+    final dbClient = await db;
+    await dbClient.delete(
+      'attendance_records',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    print('[DEBUG] 출석 기록 삭제: $id');
+  }
+
+  Future<List<Map<String, dynamic>>> getAttendanceRecordsForStudent(String studentId) async {
+    final dbClient = await db;
+    final result = await dbClient.query(
+      'attendance_records',
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+      orderBy: 'date DESC, class_date_time DESC',
+    );
+    return result;
+  }
+
+  Future<Map<String, dynamic>?> getAttendanceRecord(String studentId, String date, String classDateTime) async {
+    final dbClient = await db;
+    final result = await dbClient.query(
+      'attendance_records',
+      where: 'student_id = ? AND date = ? AND class_date_time = ?',
+      whereArgs: [studentId, date, classDateTime],
+      limit: 1,
+    );
+    return result.isNotEmpty ? result.first : null;
+  }
+
+  Future<void> ensureAttendanceRecordsTable() async {
+    final dbClient = await db;
+    
+    try {
+      // 테이블 존재 여부 확인
+      final result = await dbClient.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_records'"
+      );
+      
+      if (result.isEmpty) {
+        print('[DEBUG] attendance_records 테이블이 존재하지 않음. 생성 중...');
+        
+        // 테이블 생성
+        await dbClient.execute('''
+          CREATE TABLE attendance_records (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            date TEXT,
+            class_date_time TEXT,
+            class_name TEXT,
+            is_present INTEGER,
+            arrival_time TEXT,
+            departure_time TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        
+        print('[DEBUG] attendance_records 테이블 생성 완료');
+      } else {
+        print('[DEBUG] attendance_records 테이블이 이미 존재함');
+      }
+    } catch (e) {
+      print('[ERROR] attendance_records 테이블 확인/생성 중 오류: $e');
       rethrow;
     }
   }

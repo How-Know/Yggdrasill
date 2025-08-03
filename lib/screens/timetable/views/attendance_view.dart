@@ -1,13 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'package:mneme_flutter/models/class_info.dart';
-import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/payment_record.dart';
 import 'package:mneme_flutter/models/student_time_block.dart';
 import 'package:mneme_flutter/services/academy_db.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
-import 'package:mneme_flutter/models/student.dart';
+import '../components/attendance_check_view.dart';
+import '../../../models/student.dart';
 
 class AttendanceView extends StatefulWidget {
   const AttendanceView({Key? key}) : super(key: key);
@@ -30,7 +27,7 @@ class _AttendanceViewState extends State<AttendanceView> {
 
   Future<void> _loadInitialData() async {
     await _ensurePaymentRecordsTable();
-    await DataManager.instance.loadPaymentRecords();
+    // DataManager.initialize()에서 이미 로딩되므로 중복 제거
     if (mounted) {
       setState(() {});
     }
@@ -54,7 +51,7 @@ class _AttendanceViewState extends State<AttendanceView> {
             children: [
               // 왼쪽 학생 리스트 컨테이너
               Container(
-                width: 240,
+                width: 260,
                 decoration: BoxDecoration(
                   color: const Color(0xFF1F1F1F),
                   borderRadius: BorderRadius.circular(12),
@@ -65,12 +62,12 @@ class _AttendanceViewState extends State<AttendanceView> {
                   children: [
                     // 헤더
                     const Padding(
-                      padding: EdgeInsets.all(16),
+                      padding: EdgeInsets.all(8),
                       child: Text(
                         '학생 목록',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 18,
+                          fontSize: 20,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -82,15 +79,15 @@ class _AttendanceViewState extends State<AttendanceView> {
                         builder: (context, students, child) {
                           final gradeGroups = _groupStudentsByGrade(students);
                           return ListView(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
                             children: [
                               ...gradeGroups.entries.map((entry) {
                                 return Padding(
-                                  padding: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.only(bottom: 4),
                                   child: _buildGradeGroup(entry.key, entry.value),
                                 );
                               }).toList(),
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 32),
                             ],
                           );
                         },
@@ -112,29 +109,54 @@ class _AttendanceViewState extends State<AttendanceView> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.black, width: 1),
                       ),
-                      child: Row(
-                        children: [
-                          // 학생 정보 영역
-                          Expanded(
-                            flex: 3,
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: _selectedStudent != null
-                                  ? _buildStudentInfoDisplay(_selectedStudent!)
-                                  : const Center(
-                                      child: Text(
-                                        '학생을 선택해주세요',
-                                        style: TextStyle(color: Colors.white70, fontSize: 16),
+                                              child: Row(
+                          children: [
+                            // 학생 정보 영역
+                            Expanded(
+                              flex: 4,
+                              child: Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: _selectedStudent != null
+                                    ? _buildStudentInfoDisplay(_selectedStudent!)
+                                    : const Center(
+                                        child: Text(
+                                          '학생을 선택해주세요',
+                                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                                        ),
+                                      ),
+                              ),
+                            ),
+                            // 중간 요약 영역
+                            Expanded(
+                              flex: 4,
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2A2A2A),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.black54, width: 1),
+                                ),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Center(
+                                    child: Text(
+                                      '전체 요약',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
-                          // 달력 영역
-                          Expanded(
-                            flex: 2,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
-                              child: Column(
+                            // 달력 영역
+                            Expanded(
+                              flex: 5,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
+                                child: Column(
                                 children: [
                                   // 달력 헤더
                                   Padding(
@@ -172,24 +194,35 @@ class _AttendanceViewState extends State<AttendanceView> {
                         ],
                       ),
                     ),
-                    // 하단: 수강료 납부
+                    // 하단: 수강료 납부 + 출석체크
                     const SizedBox(height: 16),
                     Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 16, right: 24),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1F1F1F),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.black, width: 1),
-                        ),
-                        child: _selectedStudent != null
-                            ? _buildPaymentSchedule(_selectedStudent!)
-                            : const Center(
-                                child: Text(
-                                  '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
-                                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                                ),
-                              ),
+                      child: Column(
+                        children: [
+                          // 수강료 납부
+                          Container(
+                            height: 240,
+                            margin: const EdgeInsets.only(bottom: 16, right: 24),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1F1F1F),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.black, width: 1),
+                            ),
+                            child: _selectedStudent != null
+                                ? _buildPaymentSchedule(_selectedStudent!)
+                                : const Center(
+                                    child: Text(
+                                      '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
+                                      style: TextStyle(color: Colors.white70, fontSize: 16),
+                                    ),
+                                  ),
+                          ),
+                          // 출석 체크
+                          AttendanceCheckView(
+                            selectedStudent: _selectedStudent,
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                       ),
                     ),
                   ],
@@ -206,7 +239,9 @@ class _AttendanceViewState extends State<AttendanceView> {
   Map<String, List<StudentWithInfo>> _groupStudentsByGrade(List<StudentWithInfo> students) {
     final Map<String, List<StudentWithInfo>> gradeGroups = {};
     for (var student in students) {
-      final grade = student.student.grade.toString(); // int를 String으로 변환
+      // educationLevel과 grade를 조합하여 '초6', '중1' 등으로 표시
+      final levelPrefix = _getEducationLevelPrefix(student.student.educationLevel);
+      final grade = '$levelPrefix${student.student.grade}';
       if (gradeGroups[grade] == null) {
         gradeGroups[grade] = [];
       }
@@ -231,14 +266,22 @@ class _AttendanceViewState extends State<AttendanceView> {
     return {for (var key in sortedKeys) key: gradeGroups[key]!};
   }
 
+  // 교육 단계 접두사 반환
+  String _getEducationLevelPrefix(dynamic educationLevel) {
+    if (educationLevel.toString().contains('elementary')) return '초';
+    if (educationLevel.toString().contains('middle')) return '중';
+    if (educationLevel.toString().contains('high')) return '고';
+    return '';
+  }
+
   // 학년 그룹 위젯
   Widget _buildGradeGroup(String grade, List<StudentWithInfo> students) {
     final key = grade;
     final isExpanded = _isExpanded[key] ?? false;
     return Container(
       decoration: BoxDecoration(
-        color: isExpanded ? const Color(0xFF2A2A2A) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        color: isExpanded ? const Color(0xFF2A2A2A) : const Color(0xFF2D2D2D), // 접혀있을 때도 배경색 지정
+        borderRadius: BorderRadius.circular(0),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -255,17 +298,17 @@ class _AttendanceViewState extends State<AttendanceView> {
               child: Row(
                 children: [
                   Text(
-                    grade,
+                    '  $grade   ${students.length}명', // 인원수 추가
                     style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
+                      color: Color(0xFFB0B0B0), // 덜 밝은 흰색
+                      fontSize: 17,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const Spacer(),
                   Icon(
                     isExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: Colors.white,
+                    color: const Color(0xFFB0B0B0), // 덜 밝은 흰색
                   ),
                 ],
               ),
@@ -302,53 +345,69 @@ class _AttendanceViewState extends State<AttendanceView> {
         .toList();
     final classSchedules = _groupTimeBlocksByClass(timeBlocks);
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                  student.name,
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '${student.school} / ${student.educationLevel} / ${student.grade}',
-                  style: const TextStyle(fontSize: 16, color: Colors.white70),
-                ),
-              ],
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.start, // 상단 정렬
+        children: [
+          Row(
+            children: [
+              Text(
+                student.name,
+                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '${student.school} / ${_getEducationLevelKorean(student.educationLevel)} / ${student.grade}학년', // 한글로 변경
+                style: const TextStyle(fontSize: 16, color: Colors.white70),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white24),
+          const SizedBox(height: 16),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ...classSchedules.entries.map((entry) {
+                    final className = entry.key;
+                    final schedules = entry.value;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            className,
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
+                          ),
+                          const SizedBox(height: 8),
+                          ...schedules.map((schedule) => Text(
+                            '${schedule['day']} ${schedule['start']} ~ ${schedule['end']}',
+                            style: const TextStyle(fontSize: 17, color: Colors.white70),
+                          )),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            const Divider(color: Colors.white24),
-            const SizedBox(height: 16),
-            ...classSchedules.entries.map((entry) {
-              final className = entry.key;
-              final schedules = entry.value;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      className,
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
-                    ),
-                    const SizedBox(height: 8),
-                    ...schedules.map((schedule) => Text(
-                      '${schedule['day']} ${schedule['start']} ~ ${schedule['end']}',
-                      style: const TextStyle(fontSize: 15, color: Colors.white70),
-                    )),
-                  ],
-                ),
-              );
-            }).toList(),
-          ],
-        ),
+          ),
+        ],
       ),
     );
+  }
+
+  // 교육 단계 한글 변환
+  String _getEducationLevelKorean(dynamic educationLevel) {
+    if (educationLevel.toString().contains('elementary')) return '초등';
+    if (educationLevel.toString().contains('middle')) return '중등';
+    if (educationLevel.toString().contains('high')) return '고등';
+    return educationLevel.toString();
   }
 
   // 수업 시간 블록 그룹핑
@@ -443,14 +502,18 @@ class _AttendanceViewState extends State<AttendanceView> {
                 margin: const EdgeInsets.all(5),
                 decoration: isToday
                     ? BoxDecoration(
-                        border: Border.all(color: const Color(0xFF1976D2), width: 2),
-                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF1976D2), width: 3),
+                        borderRadius: BorderRadius.circular(7),
                       )
                     : null,
                 child: Center(
                   child: Text(
                     '$dayNumber',
-                    style: const TextStyle(color: Colors.white, fontSize: 15),
+                    style: TextStyle(
+                      color: isToday ? Colors.white : Colors.white, 
+                      fontSize: 17,
+                      fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                    ),
                   ),
                 ),
               );
@@ -485,26 +548,33 @@ class _AttendanceViewState extends State<AttendanceView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Text(
-                '수강료 납부',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
-              ),
-              const SizedBox(width: 16),
-              GestureDetector(
-                onTap: _showDueDateEditDialog,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1976D2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text('수정', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      Row(
+              children: [
+                const Text(
+                  '수강료 납부',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white), // 2포인트 증가 (18 → 20)
                 ),
-              ),
-            ],
-          ),
+                const SizedBox(width: 16),
+                GestureDetector(
+                  onTap: _showDueDateEditDialog,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 8), // 패딩 증가
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1976D2),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      '수정', 
+                      style: TextStyle(
+                        color: Colors.white, 
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16, // 폰트 크기 증가
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           const SizedBox(height: 16),
           // 납부 예정일
           Row(
@@ -581,7 +651,7 @@ class _AttendanceViewState extends State<AttendanceView> {
     return GestureDetector(
       onTap: () => _showPaymentDatePicker(record ?? PaymentRecord(studentId: _selectedStudent!.student.id, cycle: cycleNumber, dueDate: paymentDate)),
       child: Container(
-        height: 60,
+        height: 30,
         decoration: BoxDecoration(
           color: Colors.transparent,
           border: Border.all(color: Colors.transparent),
@@ -599,7 +669,7 @@ class _AttendanceViewState extends State<AttendanceView> {
             child: record?.paidDate != null
                 ? Text(
                     '${record!.paidDate!.month}/${record.paidDate!.day}',
-                    style: const TextStyle(color: Color(0xFF4CAF50), fontSize: 18, fontWeight: FontWeight.w600),
+                    style: const TextStyle(color: Color(0xFF4CAF50), fontSize: 19, fontWeight: FontWeight.w600),
                   )
                 : Container(
                     width: 20,
@@ -619,6 +689,7 @@ class _AttendanceViewState extends State<AttendanceView> {
       initialDate: record.paidDate ?? DateTime.now(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
+      locale: const Locale('ko', 'KR'), // 이제 한국어 사용 가능
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -629,6 +700,31 @@ class _AttendanceViewState extends State<AttendanceView> {
               onSurface: Colors.white,
             ),
             dialogBackgroundColor: const Color(0xFF1F1F1F),
+            // DatePicker 스타일링 추가
+            datePickerTheme: DatePickerThemeData(
+              headerHeadlineStyle: const TextStyle(fontSize: 14), // 월 폰트 크기 줄임
+              weekdayStyle: const TextStyle(fontSize: 11), // 요일 폰트 크기 줄임
+            ),
+            // 확인 버튼을 알약 형태로
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20), // 알약 형태
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF1976D2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20), // 알약 형태
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
           ),
           child: child!,
         );
@@ -678,6 +774,7 @@ class _AttendanceViewState extends State<AttendanceView> {
       initialDate: targetDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
+      locale: const Locale('ko', 'KR'), // 이제 한국어 사용 가능
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -688,6 +785,31 @@ class _AttendanceViewState extends State<AttendanceView> {
               onSurface: Colors.white,
             ),
             dialogBackgroundColor: const Color(0xFF1F1F1F),
+            // DatePicker 스타일링 추가
+            datePickerTheme: DatePickerThemeData(
+              headerHeadlineStyle: const TextStyle(fontSize: 14), // 월 폰트 크기 줄임
+              weekdayStyle: const TextStyle(fontSize: 11), // 요일 폰트 크기 줄임
+            ),
+            // 확인 버튼을 알약 형태로
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20), // 알약 형태
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF1976D2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20), // 알약 형태
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
           ),
           child: child!,
         );
@@ -766,7 +888,8 @@ class _AttendanceViewState extends State<AttendanceView> {
     if (paymentDate.day < registrationDate.day) {
       months--;
     }
-    return months + 1;
+    // 사이클은 최소 1부터 시작하도록 보장
+    return (months + 1).clamp(1, double.infinity).toInt();
   }
 }
 
