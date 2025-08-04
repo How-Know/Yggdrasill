@@ -107,13 +107,13 @@ class _AttendanceViewState extends State<AttendanceView> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1F1F1F),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.black, width: 1),
+                        border: Border.all(color: Colors.transparent, width: 1),
                       ),
                                               child: Row(
                           children: [
                             // 학생 정보 영역
                             Expanded(
-                              flex: 4,
+                              flex: 1,
                               child: Padding(
                                 padding: const EdgeInsets.all(16.0),
                                 child: _selectedStudent != null
@@ -128,13 +128,13 @@ class _AttendanceViewState extends State<AttendanceView> {
                             ),
                             // 중간 요약 영역
                             Expanded(
-                              flex: 4,
+                              flex: 1,
                               child: Container(
                                 margin: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF2A2A2A),
+                                  color: const Color(0xFF212A31),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.black54, width: 1),
+                                  border: Border.all(color: const Color(0xFF212A31), width: 1),
                                 ),
                                 child: const Padding(
                                   padding: EdgeInsets.all(16.0),
@@ -153,7 +153,7 @@ class _AttendanceViewState extends State<AttendanceView> {
                             ),
                             // 달력 영역
                             Expanded(
-                              flex: 5,
+                              flex: 1,
                               child: Padding(
                                 padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
                                 child: Column(
@@ -201,19 +201,19 @@ class _AttendanceViewState extends State<AttendanceView> {
                         children: [
                           // 수강료 납부
                           Container(
-                            height: 240,
-                            margin: const EdgeInsets.only(bottom: 16, right: 24),
+                            height: 220,
+                            margin: const EdgeInsets.only(bottom: 24, right: 24),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1F1F1F),
+                              color: const Color(0xFF18181A),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.black, width: 1),
+                              border: Border.all(color: const Color(0xFF18181A), width: 1),
                             ),
                             child: _selectedStudent != null
                                 ? _buildPaymentSchedule(_selectedStudent!)
                                 : const Center(
                                     child: Text(
                                       '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
-                                      style: TextStyle(color: Colors.white70, fontSize: 16),
+                                      style: TextStyle(color: Colors.white54, fontSize: 16),
                                     ),
                                   ),
                           ),
@@ -289,7 +289,15 @@ class _AttendanceViewState extends State<AttendanceView> {
           GestureDetector(
             onTap: () {
               setState(() {
-                _isExpanded[key] = !isExpanded;
+                // 🔄 아코디언 방식: 다른 모든 그룹을 닫고 현재 그룹만 토글
+                if (isExpanded) {
+                  // 현재 그룹이 열려있으면 닫기
+                  _isExpanded[key] = false;
+                } else {
+                  // 현재 그룹이 닫혀있으면 모든 그룹을 닫고 현재 그룹만 열기
+                  _isExpanded.clear();
+                  _isExpanded[key] = true;
+                }
               });
             },
             child: Container(
@@ -560,7 +568,7 @@ class _AttendanceViewState extends State<AttendanceView> {
               children: [
                 const Text(
                   '수강료 납부',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white), // 2포인트 증가 (18 → 20)
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Colors.white), // 2포인트 증가 (18 → 20)
                 ),
                 const SizedBox(width: 16),
                 GestureDetector(

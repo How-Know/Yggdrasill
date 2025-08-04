@@ -928,7 +928,8 @@ class DataManager {
   // 과거 수업 정리 로직 (등원시간만 있고 하원시간이 없는 경우 정상 출석 처리)
   Future<void> processPastClassesAttendance() async {
     final now = DateTime.now();
-    final todayEndOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59);
+    final yesterday = now.subtract(const Duration(days: 1));
+    final yesterdayEndOfDay = DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59);
 
     final recordsToUpdate = <AttendanceRecord>[];
     final recordsToCreate = <AttendanceRecord>[];
@@ -953,8 +954,8 @@ class DataManager {
         blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
       }
 
-      // 등록일부터 오늘까지의 모든 수업 일정 생성
-      for (DateTime date = registrationDate; date.isBefore(todayEndOfDay); date = date.add(const Duration(days: 1))) {
+      // 등록일부터 어제까지의 모든 수업 일정 생성 (오늘 수업은 제외)
+      for (DateTime date = registrationDate; date.isBefore(yesterdayEndOfDay); date = date.add(const Duration(days: 1))) {
         for (final entry in blocksBySetId.entries) {
           final blocks = entry.value;
           if (blocks.isEmpty) continue;
@@ -982,7 +983,7 @@ class DataManager {
             if (existingRecord.arrivalTime != null && existingRecord.departureTime == null) {
               final updated = existingRecord.copyWith(
                 isPresent: true,
-                arrivalTime: classDateTime, // 수업 시작 시간으로 변경
+                arrivalTime: existingRecord.arrivalTime, // 실제 등원시간 유지
                 departureTime: classEndTime, // 수업 종료 시간으로 설정
               );
               recordsToUpdate.add(updated);

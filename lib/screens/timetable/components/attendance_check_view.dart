@@ -108,11 +108,46 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
     // 출석 기록을 ClassSession으로 변환
     for (final record in attendanceRecords) {
+      // 과거 기록의 setId 추출 시도
+      String? extractedSetId;
+      final recordDayIndex = record.classDateTime.weekday - 1; // 0(월)~6(일)
+      final recordHour = record.classDateTime.hour;
+      final recordMinute = record.classDateTime.minute;
+      
+      // 현재 timeBlocks에서 같은 요일과 비슷한 시간의 블록 찾기
+      final timeBlocks = DataManager.instance.studentTimeBlocks
+          .where((block) => block.studentId == studentId)
+          .where((block) => block.dayIndex == recordDayIndex)
+          .toList();
+      
+      // 시간이 가장 가까운 블록의 setId 사용
+      if (timeBlocks.isNotEmpty) {
+        StudentTimeBlock? closestBlock;
+        int minTimeDiff = 24 * 60; // 최대 24시간 차이
+        
+        for (final block in timeBlocks) {
+          final blockMinutes = block.startHour * 60 + block.startMinute;
+          final recordMinutes = recordHour * 60 + recordMinute;
+          final timeDiff = (blockMinutes - recordMinutes).abs();
+          
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            closestBlock = block;
+          }
+        }
+        
+        // 30분 이내 차이면 같은 수업으로 간주
+        if (closestBlock != null && minTimeDiff <= 30) {
+          extractedSetId = closestBlock.setId;
+        }
+      }
+      
       final session = ClassSession(
         dateTime: record.classDateTime,
         className: record.className,
         dayOfWeek: _getDayOfWeekFromDate(record.classDateTime),
         duration: record.classEndTime.difference(record.classDateTime).inMinutes,
+        setId: extractedSetId, // 추출한 setId 사용
         isAttended: record.isPresent,
         arrivalTime: record.arrivalTime,
         departureTime: record.departureTime,
@@ -190,6 +225,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: totalDurationMinutes,
+          setId: entry.key, // 미래 세션에는 setId 포함
           isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
@@ -300,9 +336,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return (months + 1).clamp(1, double.infinity).toInt();
   }
 
-  // 해당 사이클 내에서 수업 순서 계산
-  int _calculateSessionNumberInCycle(DateTime registrationDate, DateTime sessionDate) {
+  // 해당 사이클 내에서 수업 순서 계산 (수업명 기준)
+  int _calculateSessionNumberInCycle(DateTime registrationDate, DateTime sessionDate, String className) {
     if (widget.selectedStudent == null) return 1;
+    
+
     
     // 해당 사이클의 시작일 계산
     final cycleNumber = _calculateCycleNumber(registrationDate, sessionDate);
@@ -324,32 +362,32 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       registrationDate.day,
     ).subtract(const Duration(days: 1));
     
-    // 해당 학생의 수업 요일들 가져오기
-    final studentTimeBlocks = DataManager.instance.studentTimeBlocks
-        .where((block) => block.studentId == widget.selectedStudent!.student.id)
+
+    
+    // 🔥 새로운 접근: 현재 생성된 모든 세션에서 같은 수업명인 것들만 필터링
+    final sameClassSessions = _classSessions
+        .where((session) => session.className == className)
+        .where((session) {
+          final sessionDateOnly = DateTime(session.dateTime.year, session.dateTime.month, session.dateTime.day);
+          return !sessionDateOnly.isBefore(cycleStartDate) && !sessionDateOnly.isAfter(cycleEndDate);
+        })
         .toList();
     
-    if (studentTimeBlocks.isEmpty) return 1;
+    // 날짜순 정렬
+    sameClassSessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
     
-    // 해당 사이클 내의 모든 수업 날짜 생성 (중복 제거)
-    final Set<DateTime> classDateSet = {};
-    final studentDayIndices = studentTimeBlocks.map((block) => block.dayIndex).toSet();
-    
-    for (DateTime date = cycleStartDate; date.isBefore(cycleEndDate.add(const Duration(days: 1))); date = date.add(const Duration(days: 1))) {
-      // 해당 날짜가 수업 요일 중 하나인지 확인
-      if (studentDayIndices.contains(date.weekday - 1)) { // weekday: 1(월)~7(일), dayIndex: 0(월)~6(일)
-        classDateSet.add(DateTime(date.year, date.month, date.day));
-      }
-    }
-    
-    final List<DateTime> classDatesinCycle = classDateSet.toList();
-    
-    // 날짜 순으로 정렬
-    classDatesinCycle.sort();
+
     
     // 해당 수업이 몇 번째인지 찾기
     final sessionDateOnly = DateTime(sessionDate.year, sessionDate.month, sessionDate.day);
-    final sessionIndex = classDatesinCycle.indexWhere((date) => date.isAtSameMomentAs(sessionDateOnly));
+    final sessionIndex = sameClassSessions.indexWhere((session) {
+      final sesDateOnly = DateTime(session.dateTime.year, session.dateTime.month, session.dateTime.day);
+      final sesTime = Duration(hours: session.dateTime.hour, minutes: session.dateTime.minute);
+      final targetTime = Duration(hours: sessionDate.hour, minutes: sessionDate.minute);
+      return sesDateOnly.isAtSameMomentAs(sessionDateOnly) && sesTime == targetTime;
+    });
+    
+
     
     return sessionIndex >= 0 ? sessionIndex + 1 : 1;
   }
@@ -363,14 +401,16 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final isNextClass = !isPast && _classSessions.where((s) => s.dateTime.isAfter(now)).isNotEmpty && 
         session.dateTime == _classSessions.where((s) => s.dateTime.isAfter(now)).first.dateTime;
     
-    // 수업 번호 계산 (사이클-순서)
+    // 수업 번호 계산 (사이클-순서-수업명)
     String classNumber = '';
     if (widget.selectedStudent != null) {
       final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
       if (registrationDate != null) {
+
         final cycleNumber = _calculateCycleNumber(registrationDate, session.dateTime);
-        final sessionNumber = _calculateSessionNumberInCycle(registrationDate, session.dateTime);
-        classNumber = '$cycleNumber-$sessionNumber';
+        final sessionNumber = _calculateSessionNumberInCycle(registrationDate, session.dateTime, session.className);
+        classNumber = '$cycleNumber-$sessionNumber-${session.className}';
+
       }
     }
     
@@ -557,9 +597,44 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
     final now = DateTime.now();
     
-    // 무단결석인 경우 시간 수정 다이얼로그 표시
+    // 무단결석인 경우 첫 클릭으로 출석완료 처리
     if (session.attendanceStatus == AttendanceStatus.absent) {
-      await _showEditAttendanceDialog(session);
+      final classStartTime = session.dateTime;
+      final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
+      
+      try {
+        await DataManager.instance.saveOrUpdateAttendance(
+          studentId: widget.selectedStudent!.student.id,
+          classDateTime: session.dateTime,
+          classEndTime: classEndTime,
+          className: session.className,
+          isPresent: true,
+          arrivalTime: classStartTime, // 수업 시작 시간
+          departureTime: classEndTime, // 수업 종료 시간
+        );
+
+        setState(() {
+          session.isAttended = true;
+          session.arrivalTime = classStartTime;
+          session.departureTime = classEndTime;
+          session.attendanceStatus = AttendanceStatus.completed;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('출석으로 변경되었습니다'),
+            backgroundColor: Color(0xFF4CAF50),
+            duration: Duration(milliseconds: 1500),
+          ),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('출석 변경에 실패했습니다'),
+            backgroundColor: Color(0xFFE53E3E),
+          ),
+        );
+      }
       return;
     }
     
@@ -605,13 +680,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           break;
           
         case AttendanceStatus.completed:
-          // 세 번째 클릭: 출석 해제
-          arrivalTime = null;
-          departureTime = null;
-          isPresent = false;
-          newStatus = AttendanceStatus.none;
-          message = '출석 기록 해제';
-          break;
+          // 출석완료 클릭: 수정 다이얼로그 표시
+          await _showEditAttendanceDialog(session);
+          return;
           
         case AttendanceStatus.absent:
           // 무단결석은 위에서 처리됨
@@ -780,6 +851,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 ),
                 TextButton(
                   onPressed: () {
+                    Navigator.of(context).pop({'action': 'delete'});
+                  },
+                  child: const Text('출석 해제', style: TextStyle(color: Color(0xFFE53E3E))),
+                ),
+                TextButton(
+                  onPressed: () {
                     final arrivalDateTime = DateTime(
                       selectedDate.year,
                       selectedDate.month,
@@ -796,6 +873,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     );
                     
                     Navigator.of(context).pop({
+                      'action': 'update',
                       'arrivalTime': arrivalDateTime,
                       'departureTime': departureDateTime,
                     });
@@ -813,35 +891,64 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       try {
         final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
         
-        await DataManager.instance.saveOrUpdateAttendance(
-          studentId: widget.selectedStudent!.student.id,
-          classDateTime: session.dateTime,
-          classEndTime: classEndTime,
-          className: session.className,
-          isPresent: true,
-          arrivalTime: result['arrivalTime'],
-          departureTime: result['departureTime'],
-        );
+        if (result['action'] == 'delete') {
+          // 출석 해제 - 무단결석으로 기록
+          await DataManager.instance.saveOrUpdateAttendance(
+            studentId: widget.selectedStudent!.student.id,
+            classDateTime: session.dateTime,
+            classEndTime: classEndTime,
+            className: session.className,
+            isPresent: false,
+            arrivalTime: null,
+            departureTime: null,
+          );
 
-        setState(() {
-          session.isAttended = true;
-          session.arrivalTime = result['arrivalTime'];
-          session.departureTime = result['departureTime'];
-          session.attendanceStatus = AttendanceStatus.completed;
-        });
+          setState(() {
+            session.isAttended = false;
+            session.arrivalTime = null;
+            session.departureTime = null;
+            session.attendanceStatus = AttendanceStatus.absent;
+          });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('출석 시간이 수정되었습니다.'),
-            backgroundColor: Color(0xFF4CAF50),
-            duration: Duration(milliseconds: 1500),
-          ),
-        );
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('출석이 해제되었습니다.'),
+              backgroundColor: Color(0xFFE53E3E),
+              duration: Duration(milliseconds: 1500),
+            ),
+          );
+        } else {
+          // 출석 시간 수정
+          await DataManager.instance.saveOrUpdateAttendance(
+            studentId: widget.selectedStudent!.student.id,
+            classDateTime: session.dateTime,
+            classEndTime: classEndTime,
+            className: session.className,
+            isPresent: true,
+            arrivalTime: result['arrivalTime'],
+            departureTime: result['departureTime'],
+          );
+
+          setState(() {
+            session.isAttended = true;
+            session.arrivalTime = result['arrivalTime'];
+            session.departureTime = result['departureTime'];
+            session.attendanceStatus = AttendanceStatus.completed;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('출석 시간이 수정되었습니다.'),
+              backgroundColor: Color(0xFF4CAF50),
+              duration: Duration(milliseconds: 1500),
+            ),
+          );
+        }
       } catch (e) {
-        print('[ERROR] 출석 시간 수정 실패: $e');
+        print('[ERROR] 출석 처리 실패: $e');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('출석 시간 수정에 실패했습니다.'),
+            content: Text('출석 처리에 실패했습니다.'),
             backgroundColor: Color(0xFFE53E3E),
           ),
         );
@@ -917,9 +1024,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             height: 160,
             margin: const EdgeInsets.only(bottom: 16, right: 24),
             decoration: BoxDecoration(
-              color: const Color(0xFF1F1F1F),
+              color: const Color(0xFF18181A),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black, width: 1),
+              border: Border.all(color: Color(0xFF18181A), width: 1),
             ),
             child: const Center(
               child: Text(
@@ -933,9 +1040,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         return Container(
           margin: const EdgeInsets.only(bottom: 16, right: 24),
           decoration: BoxDecoration(
-            color: const Color(0xFF1F1F1F),
+            color: const Color(0xFF18181A),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.black, width: 1),
+            border: Border.all(color: const Color(0xFF18181A), width: 1),
           ),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -949,7 +1056,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     const Text(
                       '출석 체크',
                       style: TextStyle(
-                        fontSize: 20,
+                        fontSize: 22,
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
@@ -963,8 +1070,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 12,
-                              height: 12,
+                              width: 14,
+                              height: 14,
                               decoration: BoxDecoration(
                                 color: const Color(0xFF1976D2).withOpacity(0.3),
                                 borderRadius: BorderRadius.circular(2),
@@ -973,18 +1080,18 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                             const SizedBox(width: 4),
                             const Text(
                               '다음 수업',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                              style: TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 12),
                         // 최근 수업
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 12,
-                              height: 12,
+                              width: 14,
+                              height: 14,
                               decoration: BoxDecoration(
                                 color: Colors.transparent,
                                 borderRadius: BorderRadius.circular(2),
@@ -994,70 +1101,70 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                             const SizedBox(width: 4),
                             const Text(
                               '최근 수업',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                              style: TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 12),
                         // 출석 완료
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 12,
-                              height: 12,
+                              width: 14,
+                              height: 14,
                               decoration: BoxDecoration(
                                 color: const Color(0xFF4CAF50),
                                 borderRadius: BorderRadius.circular(2),
                               ),
-                              child: const Icon(Icons.check, size: 8, color: Colors.white),
+                              child: const Icon(Icons.check, size: 10, color: Colors.white),
                             ),
                             const SizedBox(width: 4),
                             const Text(
                               '출석완료',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                              style: TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 12),
                         // 등원만
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 12,
-                              height: 12,
+                              width: 14,
+                              height: 14,
                               decoration: BoxDecoration(
                                 color: const Color(0xFF2196F3),
                                 borderRadius: BorderRadius.circular(2),
                               ),
-                              child: const Icon(Icons.login, size: 8, color: Colors.white),
+                              child: const Icon(Icons.login, size: 10, color: Colors.white),
                             ),
                             const SizedBox(width: 4),
                             const Text(
                               '등원만',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                              style: TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 12),
                         // 무단결석
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 12,
-                              height: 12,
+                              width: 14,
+                              height: 14,
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE53E3E),
                                 borderRadius: BorderRadius.circular(2),
                               ),
-                              child: const Icon(Icons.close, size: 8, color: Colors.white),
+                              child: const Icon(Icons.close, size: 10, color: Colors.white),
                             ),
                             const SizedBox(width: 4),
                             const Text(
                               '무단결석',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
+                              style: TextStyle(fontSize: 13, color: Colors.white70),
                             ),
                           ],
                         ),
@@ -1118,6 +1225,7 @@ class ClassSession {
   final String className;
   final String dayOfWeek;
   final int duration;
+  final String? setId; // 수업 회차 계산을 위한 setId 추가
   bool isAttended;
   DateTime? arrivalTime;
   DateTime? departureTime;
@@ -1128,6 +1236,7 @@ class ClassSession {
     required this.className,
     required this.dayOfWeek,
     required this.duration,
+    this.setId,
     this.isAttended = false,
     this.arrivalTime,
     this.departureTime,
