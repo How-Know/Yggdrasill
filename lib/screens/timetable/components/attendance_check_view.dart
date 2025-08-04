@@ -58,7 +58,6 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final today = DateTime(now.year, now.month, now.day);
     
     final studentId = widget.selectedStudent!.student.id;
-    final sessions = <ClassSession>[];
     
     // 현재 timeBlocks에서 duration 정보 가져오기
     final timeBlocks = DataManager.instance.studentTimeBlocks
@@ -73,25 +72,73 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
 
-    // SET_ID별로 timeBlocks 그룹화
-    final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
-    for (final block in timeBlocks) {
-      blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
-    }
-
     // 등록일 확인
     final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
     if (registrationDate == null) {
       return;
     }
+
+    // 🔄 최적화: 과거는 DB에서, 미래만 새로 계산
+    final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, today);
+    final futureSessions = _generateFutureSessions(timeBlocks, today, now);
     
-    // 등록일부터 현재일 기준 +4주까지 수업 일정 생성
-    final startDate = registrationDate;
-    final endDate = now.add(const Duration(days: 28)); // 현재일 + 4주
+    // 과거 + 미래 세션 합치기
+    final allSessions = <ClassSession>[];
+    allSessions.addAll(pastSessions);
+    allSessions.addAll(futureSessions);
+
+    // 날짜순 정렬
+    allSessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+
+    _applySessionSelection(allSessions, today);
+  }
+
+  // 🗄️ 과거 출석 기록에서 ClassSession 생성
+  List<ClassSession> _loadPastSessionsFromDB(String studentId, DateTime registrationDate, DateTime today) {
+    final pastSessions = <ClassSession>[];
     
-    for (DateTime date = startDate; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
+    // DB에서 해당 학생의 모든 출석 기록 조회
+    final attendanceRecords = DataManager.instance.attendanceRecords
+        .where((record) => record.studentId == studentId)
+        .where((record) {
+          final recordDate = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+          return recordDate.isBefore(today) && !recordDate.isBefore(registrationDate);
+        })
+        .toList();
+
+    // 출석 기록을 ClassSession으로 변환
+    for (final record in attendanceRecords) {
+      final session = ClassSession(
+        dateTime: record.classDateTime,
+        className: record.className,
+        dayOfWeek: _getDayOfWeekFromDate(record.classDateTime),
+        duration: record.classEndTime.difference(record.classDateTime).inMinutes,
+        isAttended: record.isPresent,
+        arrivalTime: record.arrivalTime,
+        departureTime: record.departureTime,
+        attendanceStatus: _getAttendanceStatus(record),
+      );
+      pastSessions.add(session);
+    }
+
+    return pastSessions;
+  }
+
+  // 🔮 미래 수업 세션 생성 (기존 로직 활용)
+  List<ClassSession> _generateFutureSessions(List<StudentTimeBlock> timeBlocks, DateTime today, DateTime now) {
+    final futureSessions = <ClassSession>[];
+    
+    // SET_ID별로 timeBlocks 그룹화
+    final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
+    for (final block in timeBlocks) {
+      blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
+    }
+    
+    // 오늘부터 +4주까지 미래 수업 생성
+    final endDate = now.add(const Duration(days: 28));
+    
+    for (DateTime date = today; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
       for (final entry in blocksBySetId.entries) {
-        final setId = entry.key;
         final blocks = entry.value;
         
         if (blocks.isEmpty) continue;
@@ -103,11 +150,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           return aTime.compareTo(bTime);
         });
         
-        final firstBlock = blocks.first;  // 가장 빠른 시간
-        final lastBlock = blocks.last;    // 가장 늦은 시간
+        final firstBlock = blocks.first;
+        final lastBlock = blocks.last;
         
         // 해당 날짜가 수업 요일인지 확인
-        if (date.weekday - 1 != firstBlock.dayIndex) continue; // weekday: 1(월)~7(일), dayIndex: 0(월)~6(일)
+        if (date.weekday - 1 != firstBlock.dayIndex) continue;
         
         final classDateTime = DateTime(
           date.year,
@@ -127,41 +174,43 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           // 클래스 정보를 찾지 못한 경우 기본값 사용
         }
 
-        // 기존 출석 기록 확인
+        // 기존 출석 기록 확인 (미래에도 기록이 있을 수 있음)
         final attendanceRecord = DataManager.instance.getAttendanceRecord(
           widget.selectedStudent!.student.id,
           classDateTime,
         );
 
-        // 전체 수업 시간 계산: 첫 번째 블록 시작시간부터 마지막 블록 끝나는 시간까지
+        // 전체 수업 시간 계산
         final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
         final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
         final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
 
-        final sessionFromTimeBlock = ClassSession(
+        final session = ClassSession(
           dateTime: classDateTime,
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
-          duration: totalDurationMinutes, // 전체 수업 시간 (첫 번째 시작 ~ 마지막 끝)
-          isAttended: attendanceRecord?.isPresent ?? false, // 기존 출석 기록 반영
+          duration: totalDurationMinutes,
+          isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
           attendanceStatus: _getAttendanceStatus(attendanceRecord),
         );
         
-        sessions.add(sessionFromTimeBlock);
+        futureSessions.add(session);
       }
     }
 
-    // 날짜순 정렬
-    sessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+    return futureSessions;
+  }
 
+  // 📍 13개 세션 선택 및 가운데 인덱스 설정
+  void _applySessionSelection(List<ClassSession> allSessions, DateTime today) {
     // 오늘 수업이 있는지 확인
     int centerIndex = -1;
     
     // 먼저 오늘 수업을 찾기
-    for (int i = 0; i < sessions.length; i++) {
-      final sessionDate = DateTime(sessions[i].dateTime.year, sessions[i].dateTime.month, sessions[i].dateTime.day);
+    for (int i = 0; i < allSessions.length; i++) {
+      final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
       if (sessionDate.isAtSameMomentAs(today)) {
         centerIndex = i;
         break;
@@ -170,8 +219,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
     // 오늘 수업이 없으면 오늘에 가장 가까운 이전 수업 찾기
     if (centerIndex == -1) {
-      for (int i = sessions.length - 1; i >= 0; i--) {
-        final sessionDate = DateTime(sessions[i].dateTime.year, sessions[i].dateTime.month, sessions[i].dateTime.day);
+      for (int i = allSessions.length - 1; i >= 0; i--) {
+        final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
         if (sessionDate.isBefore(today) || sessionDate.isAtSameMomentAs(today)) {
           centerIndex = i;
           break;
@@ -180,25 +229,25 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     
     // 여전히 찾지 못했으면 (모든 수업이 미래) 첫 번째 수업을 중심으로
-    if (centerIndex == -1 && sessions.isNotEmpty) {
+    if (centerIndex == -1 && allSessions.isNotEmpty) {
       centerIndex = 0;
     }
     
     // 13개 수업만 선택 (가운데 수업 기준으로 앞뒤 6개씩)
-    if (sessions.length <= 13) {
+    if (allSessions.length <= 13) {
       // 전체 수업이 13개 이하면 모두 표시하고 가운데 인덱스 조정
-      final actualCenterIndex = centerIndex.clamp(0, sessions.length - 1);
+      final actualCenterIndex = centerIndex.clamp(0, allSessions.length - 1);
       setState(() {
-        _classSessions = sessions;
+        _classSessions = allSessions;
         _centerIndex = actualCenterIndex;
       });
       return;
     }
     
     // 13개보다 많으면 가운데 기준으로 앞뒤 6개씩 선택
-    final startIndex = (centerIndex - 6).clamp(0, sessions.length - 13);
+    final startIndex = (centerIndex - 6).clamp(0, allSessions.length - 13);
     final endIndex = startIndex + 13;
-    final selectedSessions = sessions.sublist(startIndex, endIndex);
+    final selectedSessions = allSessions.sublist(startIndex, endIndex);
 
     // 실제 가운데 인덱스 계산 (선택된 세션 내에서의 위치)
     final actualCenterIndex = centerIndex - startIndex;
