@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_speed_dial/flutter_speed_dial.dart';
 
 class MainFab extends StatefulWidget {
   const MainFab({Key? key}) : super(key: key);
@@ -7,34 +8,9 @@ class MainFab extends StatefulWidget {
   State<MainFab> createState() => _MainFabState();
 }
 
-class _MainFabState extends State<MainFab> with SingleTickerProviderStateMixin {
-  late AnimationController _fabController;
-  late Animation<double> _fabScaleAnimation;
-  late Animation<double> _fabOpacityAnimation;
-  bool _isFabExpanded = false;
+class _MainFabState extends State<MainFab> {
   double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
-
-  @override
-  void initState() {
-    super.initState();
-    _fabController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _fabScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
-      CurvedAnimation(parent: _fabController, curve: Curves.easeOut),
-    );
-    _fabOpacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _fabController, curve: Curves.easeOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _fabController.dispose();
-    super.dispose();
-  }
 
   void _showFloatingSnackBar(BuildContext context, String message) {
     setState(() {
@@ -60,127 +36,81 @@ class _MainFabState extends State<MainFab> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 200),
-      padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
-      child: Builder(
-        builder: (context) => Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (_isFabExpanded) ...[
-              Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                child: ScaleTransition(
-                  scale: _fabScaleAnimation,
-                  child: FadeTransition(
-                    opacity: _fabOpacityAnimation,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        GestureDetector(
-                          onTap: () {
-                            _showFloatingSnackBar(context, '수강 등록 기능');
-                          },
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1976D2),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.add_rounded, color: Colors.white, size: 28),
-                                const SizedBox(width: 14),
-                                Text(
-                                  '수강 등록',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.chat_outlined, color: Colors.white, size: 28),
-                              const SizedBox(width: 14),
-                              Text(
-                                '상담',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.event_repeat_rounded, color: Colors.white, size: 28),
-                              const SizedBox(width: 14),
-                              Text(
-                                '보강',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            FloatingActionButton(
-              heroTag: 'main',
-              onPressed: () {
-                setState(() {
-                  _isFabExpanded = !_isFabExpanded;
-                  if (_isFabExpanded) {
-                    _fabController.forward();
-                  } else {
-                    _fabController.reverse();
-                  }
-                });
-              },
-              shape: _isFabExpanded 
-                ? const CircleBorder()
-                : RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: AnimatedRotation(
-                duration: const Duration(milliseconds: 200),
-                turns: _isFabExpanded ? 0.125 : 0,
-                child: Icon(_isFabExpanded ? Icons.close : Icons.add, size: 24),
-              ),
+    return Padding(
+      padding: EdgeInsets.only(bottom: _fabBottomPadding),
+      child: SpeedDial(
+        icon: Icons.add,
+        activeIcon: Icons.close,
+        backgroundColor: const Color(0xFF1976D2),
+        foregroundColor: Colors.white,
+        activeForegroundColor: Colors.white,
+        activeBackgroundColor: const Color(0xFF1976D2),
+        visible: true,
+        closeManually: false,
+        // 🎯 아래에서 위로 튀어나오는 부드러운 애니메이션 설정
+        curve: Curves.easeOutBack, // 부드럽게 튀어나오는 효과
+        overlayColor: Colors.transparent, // 배경 색상 변화 제거
+        overlayOpacity: 0.0, // 오버레이 효과 완전 제거
+        elevation: 8.0,
+        isOpenOnStart: false,
+        childPadding: const EdgeInsets.all(5),
+        spaceBetweenChildren: 4,
+        // 버튼들이 아래에서 위로 나타나는 방향
+        direction: SpeedDialDirection.up,
+        children: [
+          SpeedDialChild(
+            child: const Icon(Icons.school, color: Colors.white),
+            backgroundColor: const Color(0xFF1976D2),
+            foregroundColor: Colors.white,
+            label: '수강',
+            labelStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
             ),
-          ],
-        ),
+            labelBackgroundColor: const Color(0xFF1976D2),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            elevation: 4.0,
+            onTap: () {
+              _showFloatingSnackBar(context, '수강 기능');
+            },
+          ),
+          SpeedDialChild(
+            child: const Icon(Icons.chat_outlined, color: Colors.white),
+            backgroundColor: const Color(0xFF1976D2),
+            foregroundColor: Colors.white,
+            label: '상담',
+            labelStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+            ),
+            labelBackgroundColor: const Color(0xFF1976D2),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            elevation: 4.0,
+            onTap: () {
+              _showFloatingSnackBar(context, '상담 기능');
+            },
+          ),
+          SpeedDialChild(
+            child: const Icon(Icons.event_repeat_rounded, color: Colors.white),
+            backgroundColor: const Color(0xFF1976D2),
+            foregroundColor: Colors.white,
+            label: '보강',
+            labelStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+            ),
+            labelBackgroundColor: const Color(0xFF1976D2),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            elevation: 4.0,
+            onTap: () {
+              _showFloatingSnackBar(context, '보강 기능');
+            },
+          ),
+        ],
       ),
     );
   }
-} 
+}

@@ -10,7 +10,7 @@ import 'settings/settings_screen.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
-import '../widgets/main_fab.dart';
+import '../widgets/main_fab_alternative.dart';
 import '../models/class_info.dart';
 import '../models/student_time_block.dart';
 import 'dart:collection';
@@ -548,7 +548,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
         ],
       ),
-      floatingActionButton: MainFab(),
+      floatingActionButton: MainFabAlternative(),
     );
   }
 

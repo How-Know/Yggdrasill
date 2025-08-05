@@ -21,12 +21,11 @@ import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart'; // Added for firstWhereOrNull
-import 'views/attendance_view.dart';
+
 
 enum TimetableViewType {
   classes,    // 수업
-  schedule,   // 일정
-  attendance; // 출석
+  schedule;   // 일정
 
   String get name {
     switch (this) {
@@ -34,8 +33,6 @@ enum TimetableViewType {
         return '수업';
       case TimetableViewType.schedule:
         return '일정';
-      case TimetableViewType.attendance:
-        return '출석';
     }
   }
 }
@@ -1046,8 +1043,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
         );
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
-      case TimetableViewType.attendance:
-        return const AttendanceView();
     }
   }
 

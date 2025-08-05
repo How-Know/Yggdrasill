@@ -11,7 +11,7 @@ import '../../widgets/custom_tab_bar.dart';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import '../../models/teacher.dart';
-import '../../widgets/main_fab.dart';
+import '../../widgets/main_fab_alternative.dart';
 import '../../widgets/teacher_registration_dialog.dart';
 import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
@@ -1639,7 +1639,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      floatingActionButton: const MainFab(),
+      floatingActionButton: const MainFabAlternative(),
     );
   }
 
