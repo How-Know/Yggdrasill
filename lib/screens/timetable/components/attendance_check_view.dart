@@ -172,24 +172,27 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 오늘부터 +4주까지 미래 수업 생성
     final endDate = now.add(const Duration(days: 28));
     
-    for (DateTime date = today; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
-      for (final entry in blocksBySetId.entries) {
-        final blocks = entry.value;
-        
-        if (blocks.isEmpty) continue;
-        
-        // 같은 SET_ID의 블록들을 시간순으로 정렬
-        blocks.sort((a, b) {
-          final aTime = a.startHour * 60 + a.startMinute;
-          final bTime = b.startHour * 60 + b.startMinute;
-          return aTime.compareTo(bTime);
-        });
-        
-        final firstBlock = blocks.first;
-        final lastBlock = blocks.last;
-        
-        // 해당 날짜가 수업 요일인지 확인
-        if (date.weekday - 1 != firstBlock.dayIndex) continue;
+    // 각 setId별로 해당 요일에 수업 생성
+    for (final entry in blocksBySetId.entries) {
+      final blocks = entry.value;
+      
+      if (blocks.isEmpty) continue;
+      
+      // 같은 SET_ID의 블록들을 시간순으로 정렬
+      blocks.sort((a, b) {
+        final aTime = a.startHour * 60 + a.startMinute;
+        final bTime = b.startHour * 60 + b.startMinute;
+        return aTime.compareTo(bTime);
+      });
+      
+      final firstBlock = blocks.first;
+      final lastBlock = blocks.last;
+      final dayIndex = firstBlock.dayIndex; // 이 setId의 수업 요일
+      
+      // 해당 요일에만 수업 생성
+      for (DateTime date = today; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
+        // 해당 날짜가 이 setId의 수업 요일인지 확인
+        if (date.weekday - 1 != dayIndex) continue;
         
         final classDateTime = DateTime(
           date.year,
@@ -221,7 +224,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           print('[DEBUG] - 등원: ${attendanceRecord.arrivalTime}, 하원: ${attendanceRecord.departureTime}, isPresent: ${attendanceRecord.isPresent}');
         }
 
-        // 전체 수업 시간 계산
+        // 전체 수업 시간 계산 (같은 setId의 모든 블록 포함)
         final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
         final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
         final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
@@ -231,7 +234,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: totalDurationMinutes,
-          setId: entry.key, // 미래 세션에는 setId 포함
+          setId: entry.key, // setId 포함
           isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
