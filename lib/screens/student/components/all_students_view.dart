@@ -81,23 +81,22 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       }
     }
 
-    return Center(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
           const SizedBox(width: 24), // 왼쪽 여백
           Expanded(
             flex: 2,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
+                final maxHeight = MediaQuery.of(context).size.height * 0.82 + 24;
                 return Container(
                   constraints: BoxConstraints(
                     maxHeight: maxHeight,
                     minWidth: 624,
                     maxWidth: 624,
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
                   decoration: BoxDecoration(
                     color: Color(0xFF18181A),
                     borderRadius: BorderRadius.circular(16),
@@ -169,7 +168,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             flex: 1,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
+                final maxHeight = MediaQuery.of(context).size.height * 0.82 + 24;
                 return Container(
                   constraints: BoxConstraints(
                     maxHeight: maxHeight,
@@ -561,8 +560,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           ),
           const SizedBox(width: 24), // 오른쪽 여백
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildEducationLevelGroup(
