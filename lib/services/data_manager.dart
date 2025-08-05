@@ -837,6 +837,19 @@ class DataManager {
       _attendanceRecords = recordMaps.map((map) => AttendanceRecord.fromMap(map)).toList();
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
       print('[DEBUG] 출석 기록 로드 완료: ${_attendanceRecords.length}개');
+      
+      // 디버깅: 오늘 날짜 출석 기록 확인
+      final today = DateTime.now();
+      final todayRecords = _attendanceRecords.where((r) => 
+        r.classDateTime.year == today.year &&
+        r.classDateTime.month == today.month &&
+        r.classDateTime.day == today.day
+      ).toList();
+      
+      print('[DEBUG] 오늘(${today.year}-${today.month}-${today.day}) 출석 기록: ${todayRecords.length}개');
+      for (final record in todayRecords) {
+        print('[DEBUG] - 학생ID: ${record.studentId}, 수업시간: ${record.classDateTime}, 등원: ${record.arrivalTime}, 하원: ${record.departureTime}, isPresent: ${record.isPresent}');
+      }
     } catch (e) {
       print('[ERROR] 출석 기록 로드 실패: $e');
       _attendanceRecords = [];
@@ -876,11 +889,13 @@ class DataManager {
 
   AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) {
     try {
-      final classDateTimeStr = classDateTime.toIso8601String();
-      
       return _attendanceRecords.firstWhere(
         (r) => r.studentId == studentId && 
-               r.classDateTime.toIso8601String() == classDateTimeStr,
+               r.classDateTime.year == classDateTime.year &&
+               r.classDateTime.month == classDateTime.month &&
+               r.classDateTime.day == classDateTime.day &&
+               r.classDateTime.hour == classDateTime.hour &&
+               r.classDateTime.minute == classDateTime.minute,
       );
     } catch (e) {
       return null;
@@ -897,10 +912,13 @@ class DataManager {
     DateTime? departureTime,
     String? notes,
   }) async {
+    print('[DEBUG] saveOrUpdateAttendance 시작 - 학생ID: $studentId, 등원: $arrivalTime, 하원: $departureTime');
+    
     // 기존 출석 기록 확인
     final existing = getAttendanceRecord(studentId, classDateTime);
     
     if (existing != null) {
+      print('[DEBUG] 기존 출석 기록 업데이트 - ID: ${existing.id}');
       // 업데이트
       final updated = existing.copyWith(
         isPresent: isPresent,
@@ -909,7 +927,9 @@ class DataManager {
         notes: notes,
       );
       await updateAttendanceRecord(updated);
+      print('[DEBUG] 출석 기록 업데이트 완료');
     } else {
+      print('[DEBUG] 새 출석 기록 추가');
       // 새로 생성
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
@@ -922,6 +942,16 @@ class DataManager {
         notes: notes,
       );
       await addAttendanceRecord(newRecord);
+      print('[DEBUG] 출석 기록 추가 완료 - ID: ${newRecord.id}');
+    }
+    
+    // DB에 실제로 저장되었는지 확인
+    await loadAttendanceRecords(); // 메모리 새로고침
+    final saved = getAttendanceRecord(studentId, classDateTime);
+    if (saved != null) {
+      print('[DEBUG] DB 저장 확인 성공 - 등원: ${saved.arrivalTime}, 하원: ${saved.departureTime}');
+    } else {
+      print('[ERROR] DB 저장 확인 실패!');
     }
   }
 

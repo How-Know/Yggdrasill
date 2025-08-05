@@ -214,6 +214,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           widget.selectedStudent!.student.id,
           classDateTime,
         );
+        
+        // 디버깅 로그 추가
+        if (attendanceRecord != null) {
+          print('[DEBUG] 출석 기록 발견 - 학생: ${widget.selectedStudent!.student.name}, 날짜: $classDateTime');
+          print('[DEBUG] - 등원: ${attendanceRecord.arrivalTime}, 하원: ${attendanceRecord.departureTime}, isPresent: ${attendanceRecord.isPresent}');
+        }
 
         // 전체 수업 시간 계산
         final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
@@ -302,20 +308,29 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   // 출석 상태 계산
   AttendanceStatus _getAttendanceStatus(AttendanceRecord? record) {
     if (record == null) {
+      print('[DEBUG] _getAttendanceStatus: record가 null - AttendanceStatus.none 반환');
       return AttendanceStatus.none; // 기록 없음
     }
     
+    print('[DEBUG] _getAttendanceStatus: 등원=${record.arrivalTime}, 하원=${record.departureTime}, isPresent=${record.isPresent}');
+    
+    // 등원/하원 시간 기준으로 먼저 판단
+    if (record.arrivalTime != null && record.departureTime != null) {
+      print('[DEBUG] _getAttendanceStatus: AttendanceStatus.completed 반환');
+      return AttendanceStatus.completed; // 등원+하원 완료
+    } else if (record.arrivalTime != null) {
+      print('[DEBUG] _getAttendanceStatus: AttendanceStatus.arrived 반환');
+      return AttendanceStatus.arrived; // 등원만 완료
+    }
+    
+    // 등원 시간이 없고 isPresent가 false인 경우만 무단결석
     if (!record.isPresent) {
+      print('[DEBUG] _getAttendanceStatus: AttendanceStatus.absent 반환');
       return AttendanceStatus.absent; // 무단결석
     }
     
-    if (record.arrivalTime != null && record.departureTime != null) {
-      return AttendanceStatus.completed; // 등원+하원 완료
-    } else if (record.arrivalTime != null) {
-      return AttendanceStatus.arrived; // 등원만 완료
-    } else {
-      return AttendanceStatus.none; // 기록 없음
-    }
+    print('[DEBUG] _getAttendanceStatus: AttendanceStatus.none 반환 (기본)');
+    return AttendanceStatus.none; // 기록 없음
   }
 
   // 실제 날짜를 기반으로 요일을 계산
@@ -665,7 +680,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           // 첫 번째 클릭: 등원 기록
           arrivalTime = now;
           departureTime = null;
-          isPresent = false; // 아직 완료되지 않음
+          isPresent = true; // 등원 상태로 변경
           newStatus = AttendanceStatus.arrived;
           message = '등원 시간 기록 완료';
           break;

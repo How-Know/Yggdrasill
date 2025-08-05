@@ -291,6 +291,17 @@ class AcademyDbService {
 
   Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade}) async {
     print('[DB][경로] 실제 사용 DB 파일 경로: $path');
+    
+    // 파일 존재 여부 확인
+    final file = File(path);
+    final exists = await file.exists();
+    print('[DB][파일] DB 파일 존재 여부: $exists');
+    
+    if (exists) {
+      final stat = await file.stat();
+      print('[DB][파일] DB 파일 크기: ${stat.size} bytes, 수정일: ${stat.modified}');
+    }
+    
     return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade);
   }
 
@@ -850,12 +861,12 @@ class AcademyDbService {
   Future<void> addAttendanceRecord(Map<String, dynamic> attendanceData) async {
     final dbClient = await db;
     await dbClient.insert('attendance_records', attendanceData);
-    print('[DEBUG] 출석 기록 추가: ${attendanceData['student_id']} - ${attendanceData['date']}');
+    print('[DEBUG] 출석 기록 추가: ${attendanceData['student_id']} - ${attendanceData['class_date_time']}');
   }
 
   Future<List<Map<String, dynamic>>> getAttendanceRecords() async {
     final dbClient = await db;
-    return await dbClient.query('attendance_records', orderBy: 'date DESC, class_date_time DESC');
+    return await dbClient.query('attendance_records', orderBy: 'class_date_time DESC');
   }
 
   Future<void> updateAttendanceRecord(String id, Map<String, dynamic> attendanceData) async {
@@ -885,7 +896,7 @@ class AcademyDbService {
       'attendance_records',
       where: 'student_id = ?',
       whereArgs: [studentId],
-      orderBy: 'date DESC, class_date_time DESC',
+      orderBy: 'class_date_time DESC',
     );
     return result;
   }
@@ -946,11 +957,14 @@ class AcademyDbService {
         }
         
         // date 컬럼이 있으면 삭제 (SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재생성)
+        // 하지만 이 마이그레이션은 한 번만 실행되어야 함
         if (columnNames.contains('date')) {
           print('[DEBUG] date 컬럼 제거를 위해 테이블 재생성 중...');
+          print('[WARNING] 이 작업은 한 번만 실행되어야 합니다. 프로그램 재시작 시 데이터 손실 방지를 위해 주의깊게 진행합니다.');
           
-          // 기존 데이터 백업
+          // 기존 데이터 백업 (더 안전한 방식)
           final existingData = await dbClient.query('attendance_records');
+          print('[DEBUG] 백업된 기존 데이터: ${existingData.length}개 레코드');
           
           // 기존 테이블 삭제
           await dbClient.execute('DROP TABLE attendance_records');
@@ -973,26 +987,32 @@ class AcademyDbService {
             )
           ''');
           
-          // 데이터 복원 (date 컬럼 제외)
+          // 데이터 복원 (date 컬럼 제외, 더 안전한 방식)
+          int restoredCount = 0;
           for (final row in existingData) {
-            final newRow = Map<String, dynamic>.from(row);
-            newRow.remove('date');
-            
-            // class_end_time 계산 (기존 로직에서 duration 사용)
-            if (newRow['class_date_time'] != null) {
-              try {
-                final classDateTime = DateTime.parse(newRow['class_date_time']);
-                final classEndTime = classDateTime.add(const Duration(minutes: 50)); // 기본 50분
-                newRow['class_end_time'] = classEndTime.toIso8601String();
-              } catch (e) {
-                print('[WARNING] class_end_time 계산 실패: $e');
+            try {
+              final newRow = Map<String, dynamic>.from(row);
+              newRow.remove('date');
+              
+              // class_end_time 계산 (기존 로직에서 duration 사용)
+              if (newRow['class_date_time'] != null) {
+                try {
+                  final classDateTime = DateTime.parse(newRow['class_date_time']);
+                  final classEndTime = classDateTime.add(const Duration(minutes: 50)); // 기본 50분
+                  newRow['class_end_time'] = classEndTime.toIso8601String();
+                } catch (e) {
+                  print('[WARNING] class_end_time 계산 실패: $e');
+                }
               }
+              
+              await dbClient.insert('attendance_records', newRow);
+              restoredCount++;
+            } catch (e) {
+              print('[ERROR] 데이터 복원 실패: $e, 레코드: $row');
             }
-            
-            await dbClient.insert('attendance_records', newRow);
           }
           
-          print('[DEBUG] 테이블 재생성 및 데이터 복원 완료');
+          print('[DEBUG] 테이블 재생성 및 데이터 복원 완료: $restoredCount/${existingData.length}개 복원됨');
         }
       }
     } catch (e) {
