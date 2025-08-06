@@ -38,6 +38,7 @@ class StudentScreenState extends State<StudentScreen> {
   String _searchQuery = '';
   final Set<GroupInfo> _expandedGroups = {};
   int _customTabIndex = 0;
+  Map<String, Set<String>>? _activeFilter;
 
   // 출석 관리 관련 상태 변수들
   StudentWithInfo? _selectedStudent;
@@ -219,6 +220,12 @@ class StudentScreenState extends State<StudentScreen> {
                       groups: DataManager.instance.groups,
                     ),
                   );
+                },
+                activeFilter: _activeFilter,
+                onFilterChanged: (filter) {
+                  setState(() {
+                    _activeFilter = filter;
+                  });
                 },
               );
             }
@@ -500,6 +507,12 @@ class StudentScreenState extends State<StudentScreen> {
               onReorder: (oldIndex, newIndex) {},
               onDeleteStudent: (studentWithInfo) {},
               onStudentUpdated: (studentWithInfo) {},
+              activeFilter: _activeFilter,
+              onFilterChanged: (filter) {
+                setState(() {
+                  _activeFilter = filter;
+                });
+              },
             );
           },
         );

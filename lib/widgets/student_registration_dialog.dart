@@ -5,6 +5,7 @@ import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
+import 'package:mneme_flutter/models/student_payment_info.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
@@ -27,7 +28,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _schoolController;
   late final TextEditingController _phoneController;
   late final TextEditingController _parentPhoneController;
-  late final TextEditingController _weeklyClassCountController;
+
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
   late Grade? _grade;
@@ -56,7 +57,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _parentPhoneController = TextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
     _registrationDate = basicInfo?.registrationDate ?? student?.registrationDate ?? DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
-    _weeklyClassCountController = TextEditingController(text: (basicInfo?.weeklyClassCount ?? student?.weeklyClassCount ?? 1).toString());
+
     // [지불 방식 데이터 초기화 추가]
     _paymentType = basicInfo?.studentPaymentType ?? 'monthly';
     _paymentCycleController.text = (basicInfo?.studentSessionCycle ?? 1).toString();
@@ -79,7 +80,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _schoolController.dispose();
     _phoneController.dispose();
     _parentPhoneController.dispose();
-    _weeklyClassCountController.dispose();
+
     _paymentCycleController.dispose();
     super.dispose();
   }
@@ -133,40 +134,69 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
-  void _handleSave() {
+  void _handleSave() async {
     print('[DEBUG][dialog] _phoneController.text: \'${_phoneController.text}\'');
     print('[DEBUG][dialog] _parentPhoneController.text: \'${_parentPhoneController.text}\'');
-    print('[DEBUG][dialog] _weeklyClassCountController.text: \'${_weeklyClassCountController.text}\'');
     print('[DEBUG][dialog] _registrationDate: $_registrationDate');
     print('[DEBUG][dialog] _selectedGroup?.id: ${_selectedGroup?.id}');
     if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
       return;
     }
-    final weeklyClassCount = int.tryParse(_weeklyClassCountController.text) ?? 1;
+    
+    final studentId = widget.student?.id ?? const Uuid().v4();
     final student = Student(
-      id: widget.student?.id ?? const Uuid().v4(),
+      id: studentId,
       name: _nameController.text,
       school: _schoolController.text,
       grade: _grade!.value,
       educationLevel: _educationLevel,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
-      registrationDate: _registrationDate,
+      registrationDate: null, // 더 이상 Student에 저장하지 않음
       groupInfo: null,
-      weeklyClassCount: weeklyClassCount,
+      weeklyClassCount: 1, // 기본값
       groupId: _selectedGroup?.id,
     );
+    
+    // BasicInfo에서는 등록일자와 지불방식을 제거 (student_payment_info로 이관)
     final basicInfo = StudentBasicInfo(
       studentId: student.id,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
-      registrationDate: _registrationDate,
-      weeklyClassCount: weeklyClassCount,
+      registrationDate: DateTime.now(), // 임시값 (실제로는 student_payment_info 사용)
+      weeklyClassCount: 1, // 기본값
       groupId: _selectedGroup?.id,
-      studentPaymentType: _paymentType,
-      studentSessionCycle: _paymentType == 'session' ? int.tryParse(_paymentCycleController.text) : null,
+      studentPaymentType: null, // 더 이상 여기에 저장하지 않음
+      studentSessionCycle: null, // 더 이상 여기에 저장하지 않음
     );
+    
+    // StudentPaymentInfo 생성 (등록일자와 지불방식을 여기에 저장)
+    final paymentInfo = StudentPaymentInfo(
+      id: const Uuid().v4(),
+      studentId: studentId,
+      registrationDate: _registrationDate,
+      paymentMethod: _paymentType,
+      tuitionFee: 0, // 기본값
+      latenessThreshold: 10, // 기본값
+      scheduleNotification: false,
+      attendanceNotification: false,
+      departureNotification: false,
+      latenessNotification: false,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    
+    // 저장
     widget.onSave(student, basicInfo);
+    
+    // StudentPaymentInfo도 저장
+    try {
+      await DataManager.instance.addStudentPaymentInfo(paymentInfo);
+      print('[INFO] StudentPaymentInfo 저장 완료');
+    } catch (e) {
+      print('[ERROR] StudentPaymentInfo 저장 실패: $e');
+    }
+    
     Navigator.of(context).pop(student);
   }
 
@@ -184,29 +214,14 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: '이름',
-                labelStyle: const TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
                   child: TextField(
-                    controller: _schoolController,
+                    controller: _nameController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      labelText: '학교',
+                      labelText: '이름',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
@@ -220,11 +235,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 const SizedBox(width: 16),
                 Expanded(
                   child: TextField(
-                    controller: _weeklyClassCountController,
-                    keyboardType: TextInputType.number,
+                    controller: _schoolController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      labelText: '수업 횟수',
+                      labelText: '학교',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),

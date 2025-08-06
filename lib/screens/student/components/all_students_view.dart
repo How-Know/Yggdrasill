@@ -8,6 +8,7 @@ import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
+import '../../../widgets/student_filter_dialog.dart';
 
 class AllStudentsView extends StatefulWidget {
   final List<StudentWithInfo> students;
@@ -22,6 +23,8 @@ class AllStudentsView extends StatefulWidget {
   final void Function(int oldIndex, int newIndex) onReorder;
   final Function(StudentWithInfo) onDeleteStudent;
   final Function(StudentWithInfo) onStudentUpdated;
+  final Map<String, Set<String>>? activeFilter;
+  final Function(Map<String, Set<String>>?) onFilterChanged;
 
   const AllStudentsView({
     Key? key,
@@ -37,6 +40,8 @@ class AllStudentsView extends StatefulWidget {
     required this.onReorder,
     required this.onDeleteStudent,
     required this.onStudentUpdated,
+    this.activeFilter,
+    required this.onFilterChanged,
   }) : super(key: key);
 
   @override
@@ -44,13 +49,82 @@ class AllStudentsView extends StatefulWidget {
 }
 
 class _AllStudentsViewState extends State<AllStudentsView> {
-  int _selectedSegment = 0; // 0: 학년, 1: 학교
   bool _showDeleteZone = false;
+
+  List<StudentWithInfo> _applyFilter(List<StudentWithInfo> students) {
+    if (widget.activeFilter == null) {
+      print('[DEBUG] 필터 없음, 전체 학생 반환: ${students.length}명');
+      return students;
+    }
+    
+    print('[DEBUG] 필터 적용 시작: ${widget.activeFilter}');
+    
+    final filteredStudents = students.where((studentWithInfo) {
+      final student = studentWithInfo.student;
+      final filter = widget.activeFilter!;
+      
+      // 학년별 필터
+      final educationLevels = filter['educationLevels'] ?? <String>{};
+      final grades = filter['grades'] ?? <String>{};
+      
+      print('[DEBUG] 학생: ${student.name}, 학년: ${student.grade}, 학교: ${student.school}, 그룹: ${student.groupInfo?.name}');
+      
+      if (educationLevels.isNotEmpty || grades.isNotEmpty) {
+        String? studentEducationLevel;
+        switch (student.educationLevel) {
+          case EducationLevel.elementary:
+            studentEducationLevel = '초등';
+            break;
+          case EducationLevel.middle:
+            studentEducationLevel = '중등';
+            break;
+          case EducationLevel.high:
+            studentEducationLevel = '고등';
+            break;
+        }
+        
+        bool matchesEducationLevel = educationLevels.isEmpty || 
+          (studentEducationLevel != null && educationLevels.contains(studentEducationLevel));
+        bool matchesGrade = grades.isEmpty || grades.contains(student.grade);
+        
+        print('[DEBUG] 학년 필터 - 교육단계: $studentEducationLevel, 매치: $matchesEducationLevel, 학년매치: $matchesGrade');
+        
+        if (!matchesEducationLevel || !matchesGrade) {
+          print('[DEBUG] 학년 필터로 제외: ${student.name}');
+          return false;
+        }
+      }
+      
+      // 학교 필터
+      final schools = filter['schools'] ?? <String>{};
+      if (schools.isNotEmpty && !schools.contains(student.school)) {
+        print('[DEBUG] 학교 필터로 제외: ${student.name} (${student.school})');
+        return false;
+      }
+      
+      // 그룹 필터
+      final groups = filter['groups'] ?? <String>{};
+      if (groups.isNotEmpty) {
+        final studentGroupName = student.groupInfo?.name;
+        if (studentGroupName == null || !groups.contains(studentGroupName)) {
+          print('[DEBUG] 그룹 필터로 제외: ${student.name} (${studentGroupName})');
+          return false;
+        }
+      }
+      
+      print('[DEBUG] 필터 통과: ${student.name}');
+      return true;
+    }).toList();
+    
+    print('[DEBUG] 필터 적용 완료: ${students.length}명 -> ${filteredStudents.length}명');
+    return filteredStudents;
+  }
 
   @override
   Widget build(BuildContext context) {
     // 정렬 데이터 준비
-    final students = widget.students;
+    final filteredStudents = _applyFilter(widget.students);
+    final students = filteredStudents;
     final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedByGrade = {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
@@ -104,35 +178,67 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 1),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          SizedBox(
-                            width: 250,
-                            child: SegmentedButton<int>(
-                              segments: const [
-                                ButtonSegment(value: 0, label: Text('학년')),
-                                ButtonSegment(value: 1, label: Text('학교')),
-                              ],
-                              selected: {_selectedSegment},
-                              onSelectionChanged: (Set<int> newSelection) {
-                                setState(() {
-                                  _selectedSegment = newSelection.first;
-                                });
-                              },
-                              style: ButtonStyle(
-                                backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                                foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                                  (Set<MaterialState> states) {
-                                    if (states.contains(MaterialState.selected)) {
-                                      return Colors.white;
-                                    }
-                                    return Colors.white70;
-                                  },
+                          Padding(
+                            padding: const EdgeInsets.only(left: 0),
+                            child: Text(
+                              '학생 리스트',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 27,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 0),
+                            child: SizedBox(
+                              height: 40,
+                              width: 104,
+                              child: OutlinedButton(
+                                style: ButtonStyle(
+                                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                                  shape: MaterialStateProperty.all(RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(24),
+                                  )),
+                                  side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
+                                  padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
+                                  foregroundColor: MaterialStateProperty.all(Colors.white70),
+                                  textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                                  overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
                                 ),
-                                textStyle: MaterialStateProperty.all(
-                                  const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                onPressed: () async {
+                                  if (widget.activeFilter != null) {
+                                    // 필터 클리어
+                                    widget.onFilterChanged(null);
+                                  } else {
+                                    // 필터 다이얼로그 열기
+                                    final result = await showDialog<Map<String, Set<String>>>(
+                                      context: context,
+                                      builder: (context) => StudentFilterDialog(
+                                        initialFilter: widget.activeFilter,
+                                      ),
+                                    );
+                                    if (result != null) {
+                                      widget.onFilterChanged(result);
+                                    }
+                                  }
+                                },
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  mainAxisSize: MainAxisSize.max,
+                                  children: [
+                                    const Icon(Icons.filter_alt_outlined, size: 20),
+                                    const SizedBox(width: 6),
+                                    const Text('filter'),
+                                    if (widget.activeFilter != null) ...[
+                                      const SizedBox(width: 6),
+                                      Icon(Icons.close, size: 18, color: Colors.white70),
+                                    ],
+                                  ],
                                 ),
                               ),
                             ),
@@ -143,17 +249,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       Expanded(
                         child: ListView(
                           children: [
-                            _selectedSegment == 1
-                              ? _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedBySchool)
-                              : _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedByGrade),
-                            const Divider(color: Colors.white24, height: 48),
-                            _selectedSegment == 1
-                              ? _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedBySchool)
-                              : _buildEducationLevelGroup('중등', EducationLevel.middle, groupedByGrade),
-                            const Divider(color: Colors.white24, height: 48),
-                            _selectedSegment == 1
-                              ? _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedBySchool)
-                              : _buildEducationLevelGroup('고등', EducationLevel.high, groupedByGrade),
+                            _buildEducationLevelGroup(' 초등', EducationLevel.elementary, groupedByGrade),
+                            const Divider(color: Color(0xFF0F467D), height: 48),
+                            _buildEducationLevelGroup(' 중등', EducationLevel.middle, groupedByGrade),
+                            const Divider(color: Color(0xFF0F467D), height: 48),
+                            _buildEducationLevelGroup(' 고등', EducationLevel.high, groupedByGrade),
                           ],
                         ),
                       ),
@@ -192,8 +292,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             child: Text(
                               '그룹 목록',
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 22,
+                                color: Colors.grey,
+                                fontSize: 27,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
