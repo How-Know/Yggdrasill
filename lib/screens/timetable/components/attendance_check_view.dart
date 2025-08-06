@@ -93,7 +93,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     _applySessionSelection(allSessions, today);
   }
 
-  // 🗄️ 과거 출석 기록에서 ClassSession 생성
+  // 🗄️ 과거 출석 기록에서 ClassSession 생성 (set_id별로 그룹화)
   List<ClassSession> _loadPastSessionsFromDB(String studentId, DateTime registrationDate, DateTime today) {
     final pastSessions = <ClassSession>[];
     
@@ -106,7 +106,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         })
         .toList();
 
-    // 출석 기록을 ClassSession으로 변환
+    // 🔄 날짜별, set_id별로 출석 기록을 그룹화
+    final Map<String, List<AttendanceRecord>> groupedRecords = {};
+    
     for (final record in attendanceRecords) {
       // 과거 기록의 setId 추출 시도
       String? extractedSetId;
@@ -142,16 +144,88 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         }
       }
       
+      // 날짜 + set_id로 그룹 키 생성
+      final recordDate = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+      final groupKey = '${recordDate.millisecondsSinceEpoch}_${extractedSetId ?? 'unknown'}';
+      
+      groupedRecords.putIfAbsent(groupKey, () => []).add(record);
+    }
+
+    // 🎯 그룹화된 기록을 하나의 세션으로 변환
+    for (final records in groupedRecords.values) {
+      if (records.isEmpty) continue;
+      
+      // 같은 날짜, 같은 set_id의 기록들을 시간 순으로 정렬
+      records.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+      
+      final firstRecord = records.first;
+      final lastRecord = records.last;
+      
+      // 수업 시작시간은 첫 번째 기록, 종료시간은 마지막 기록 사용
+      final startTime = firstRecord.classDateTime;
+      final endTime = lastRecord.classEndTime;
+      
+      // 출석 상태: 하나라도 출석했으면 출석으로 처리
+      final isAttended = records.any((r) => r.isPresent);
+      
+      // 등원시간: 가장 빠른 등원시간 사용
+      DateTime? earliestArrival;
+      for (final record in records) {
+        if (record.arrivalTime != null) {
+          if (earliestArrival == null || record.arrivalTime!.isBefore(earliestArrival)) {
+            earliestArrival = record.arrivalTime;
+          }
+        }
+      }
+      
+      // 하원시간: 가장 늦은 하원시간 사용
+      DateTime? latestDeparture;
+      for (final record in records) {
+        if (record.departureTime != null) {
+          if (latestDeparture == null || record.departureTime!.isAfter(latestDeparture)) {
+            latestDeparture = record.departureTime;
+          }
+        }
+      }
+      
+      // set_id 추출 (첫 번째 기록 기준)
+      String? extractedSetId;
+      final recordDayIndex = firstRecord.classDateTime.weekday - 1;
+      final timeBlocks = DataManager.instance.studentTimeBlocks
+          .where((block) => block.studentId == studentId)
+          .where((block) => block.dayIndex == recordDayIndex)
+          .toList();
+      
+      if (timeBlocks.isNotEmpty) {
+        StudentTimeBlock? closestBlock;
+        int minTimeDiff = 24 * 60;
+        
+        for (final block in timeBlocks) {
+          final blockMinutes = block.startHour * 60 + block.startMinute;
+          final recordMinutes = firstRecord.classDateTime.hour * 60 + firstRecord.classDateTime.minute;
+          final timeDiff = (blockMinutes - recordMinutes).abs();
+          
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            closestBlock = block;
+          }
+        }
+        
+        if (closestBlock != null && minTimeDiff <= 30) {
+          extractedSetId = closestBlock.setId;
+        }
+      }
+
       final session = ClassSession(
-        dateTime: record.classDateTime,
-        className: record.className,
-        dayOfWeek: _getDayOfWeekFromDate(record.classDateTime),
-        duration: record.classEndTime.difference(record.classDateTime).inMinutes,
-        setId: extractedSetId, // 추출한 setId 사용
-        isAttended: record.isPresent,
-        arrivalTime: record.arrivalTime,
-        departureTime: record.departureTime,
-        attendanceStatus: _getAttendanceStatus(record),
+        dateTime: startTime,
+        className: firstRecord.className,
+        dayOfWeek: _getDayOfWeekFromDate(startTime),
+        duration: endTime.difference(startTime).inMinutes,
+        setId: extractedSetId,
+        isAttended: isAttended,
+        arrivalTime: earliestArrival,
+        departureTime: latestDeparture,
+        attendanceStatus: _getAttendanceStatusFromRecords(records),
       );
       pastSessions.add(session);
     }
@@ -334,6 +408,28 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
     print('[DEBUG] _getAttendanceStatus: AttendanceStatus.none 반환 (기본)');
     return AttendanceStatus.none; // 기록 없음
+  }
+
+  // 🔄 여러 출석 기록에서 최종 출석 상태 계산
+  AttendanceStatus _getAttendanceStatusFromRecords(List<AttendanceRecord> records) {
+    if (records.isEmpty) return AttendanceStatus.none;
+    
+    // 하나라도 등원+하원이 완료된 기록이 있으면 completed
+    if (records.any((r) => r.arrivalTime != null && r.departureTime != null)) {
+      return AttendanceStatus.completed;
+    }
+    
+    // 하나라도 등원한 기록이 있으면 arrived
+    if (records.any((r) => r.arrivalTime != null)) {
+      return AttendanceStatus.arrived;
+    }
+    
+    // 모든 기록이 불참이면 absent
+    if (records.every((r) => !r.isPresent)) {
+      return AttendanceStatus.absent;
+    }
+    
+    return AttendanceStatus.none;
   }
 
   // 실제 날짜를 기반으로 요일을 계산

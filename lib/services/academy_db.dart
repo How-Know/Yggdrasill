@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 10,
+      version: 11,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -281,6 +281,25 @@ class AcademyDbService {
               notes TEXT,
               created_at TEXT,
               updated_at TEXT,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+            )
+          ''');
+        }
+        if (oldVersion < 11) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS student_payment_info (
+              id TEXT PRIMARY KEY,
+              student_id TEXT UNIQUE,
+              registration_date INTEGER,
+              payment_method TEXT,
+              tuition_fee INTEGER,
+              lateness_threshold INTEGER DEFAULT 10,
+              schedule_notification INTEGER DEFAULT 0,
+              attendance_notification INTEGER DEFAULT 0,
+              departure_notification INTEGER DEFAULT 0,
+              lateness_notification INTEGER DEFAULT 0,
+              created_at INTEGER,
+              updated_at INTEGER,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
@@ -854,6 +873,105 @@ class AcademyDbService {
       print('[ERROR] payment_records 테이블 확인/생성 중 오류: $e');
       rethrow;
     }
+  }
+
+  // =================== STUDENT PAYMENT INFO ===================
+  
+  // student_payment_info 테이블 존재 여부 확인 및 생성
+  Future<void> ensureStudentPaymentInfoTable() async {
+    final dbClient = await db;
+    
+    try {
+      // 테이블 존재 여부 확인
+      final result = await dbClient.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='student_payment_info'"
+      );
+      
+      if (result.isEmpty) {
+        print('[DEBUG] student_payment_info 테이블이 존재하지 않음. 생성 중...');
+        
+        // 테이블 생성
+        await dbClient.execute('''
+          CREATE TABLE student_payment_info (
+            id TEXT PRIMARY KEY,
+            student_id TEXT UNIQUE,
+            registration_date INTEGER,
+            payment_method TEXT,
+            tuition_fee INTEGER,
+            lateness_threshold INTEGER DEFAULT 10,
+            schedule_notification INTEGER DEFAULT 0,
+            attendance_notification INTEGER DEFAULT 0,
+            departure_notification INTEGER DEFAULT 0,
+            lateness_notification INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        
+        print('[DEBUG] student_payment_info 테이블 생성 완료');
+      } else {
+        print('[DEBUG] student_payment_info 테이블이 이미 존재함');
+      }
+    } catch (e) {
+      print('[ERROR] student_payment_info 테이블 확인/생성 중 오류: $e');
+      rethrow;
+    }
+  }
+
+  // 학생 결제 정보 추가
+  Future<void> addStudentPaymentInfo(Map<String, dynamic> paymentInfoData) async {
+    final dbClient = await db;
+    await dbClient.insert(
+      'student_payment_info', 
+      paymentInfoData,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    print('[DEBUG] 학생 결제 정보 추가: ${paymentInfoData['student_id']}');
+  }
+
+  // 학생 결제 정보 업데이트
+  Future<void> updateStudentPaymentInfo(String studentId, Map<String, dynamic> paymentInfoData) async {
+    final dbClient = await db;
+    await dbClient.update(
+      'student_payment_info',
+      paymentInfoData,
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+    );
+    print('[DEBUG] 학생 결제 정보 업데이트: $studentId');
+  }
+
+  // 특정 학생의 결제 정보 조회
+  Future<Map<String, dynamic>?> getStudentPaymentInfo(String studentId) async {
+    final dbClient = await db;
+    final result = await dbClient.query(
+      'student_payment_info',
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+    );
+    
+    if (result.isNotEmpty) {
+      return result.first;
+    }
+    return null;
+  }
+
+  // 모든 학생 결제 정보 조회
+  Future<List<Map<String, dynamic>>> getAllStudentPaymentInfo() async {
+    final dbClient = await db;
+    return await dbClient.query('student_payment_info');
+  }
+
+  // 학생 결제 정보 삭제
+  Future<void> deleteStudentPaymentInfo(String studentId) async {
+    final dbClient = await db;
+    await dbClient.delete(
+      'student_payment_info',
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+    );
+    print('[DEBUG] 학생 결제 정보 삭제: $studentId');
   }
 
   // =================== ATTENDANCE RECORDS ===================

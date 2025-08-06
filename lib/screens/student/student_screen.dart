@@ -21,6 +21,8 @@ import '../../models/student_time_block.dart';
 import '../../services/academy_db.dart';
 import '../timetable/components/attendance_check_view.dart';
 import '../../models/education_level.dart';
+import '../../models/student_payment_info.dart';
+import 'package:uuid/uuid.dart';
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -55,6 +57,7 @@ class StudentScreenState extends State<StudentScreen> {
   Future<void> _loadData() async {
     await DataManager.instance.loadGroups();
     await DataManager.instance.loadStudents();
+    await DataManager.instance.loadStudentPaymentInfos();
     await _loadAttendanceData();
   }
 
@@ -833,9 +836,16 @@ class StudentScreenState extends State<StudentScreen> {
                 style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
               ),
               const SizedBox(width: 12),
-              Text(
-                '${student.school} / ${_getEducationLevelKorean(student.educationLevel)} / ${student.grade}학년', // 한글로 변경
-                style: const TextStyle(fontSize: 16, color: Colors.white70),
+              Expanded(
+                child: Text(
+                  '${student.school} / ${_getEducationLevelKorean(student.educationLevel)} / ${student.grade}학년', // 한글로 변경
+                  style: const TextStyle(fontSize: 16, color: Colors.white70),
+                ),
+              ),
+              IconButton(
+                onPressed: () => _showStudentPaymentSettingsDialog(studentWithInfo),
+                icon: const Icon(Icons.settings, color: Colors.white70),
+                tooltip: '결제 및 수업 설정',
               ),
             ],
           ),
@@ -1387,6 +1397,14 @@ class StudentScreenState extends State<StudentScreen> {
     final payMonth = DateTime(paymentDate.year, paymentDate.month);
     return (payMonth.year - regMonth.year) * 12 + (payMonth.month - regMonth.month) + 1;
   }
+
+  // 학생 결제 및 수업 설정 다이얼로그 표시
+  void _showStudentPaymentSettingsDialog(StudentWithInfo studentWithInfo) {
+    showDialog(
+      context: context,
+      builder: (context) => StudentPaymentSettingsDialog(studentWithInfo: studentWithInfo),
+    );
+  }
 }
 
 // 학생 리스트 카드
@@ -1469,6 +1487,710 @@ class _AttendanceStudentCardState extends State<_AttendanceStudentCard> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// 학생 결제 및 수업 설정 다이얼로그
+class StudentPaymentSettingsDialog extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+
+  const StudentPaymentSettingsDialog({
+    super.key,
+    required this.studentWithInfo,
+  });
+
+  @override
+  State<StudentPaymentSettingsDialog> createState() => _StudentPaymentSettingsDialogState();
+}
+
+class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDialog> {
+  late DateTime _registrationDate;
+  late String _paymentMethod;
+  late TextEditingController _tuitionFeeController;
+  late TextEditingController _latenessThresholdController;
+  
+  bool _scheduleNotification = false;
+  bool _attendanceNotification = false;
+  bool _departureNotification = false;
+  bool _latenessNotification = false;
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // 기존 결제 정보 로드 또는 기본값 설정
+    final existingPaymentInfo = DataManager.instance.getStudentPaymentInfo(widget.studentWithInfo.student.id);
+    
+    if (existingPaymentInfo != null) {
+      _registrationDate = existingPaymentInfo.registrationDate;
+      _paymentMethod = existingPaymentInfo.paymentMethod;
+      _tuitionFeeController = TextEditingController(text: existingPaymentInfo.tuitionFee.toString());
+      _latenessThresholdController = TextEditingController(text: existingPaymentInfo.latenessThreshold.toString());
+      _scheduleNotification = existingPaymentInfo.scheduleNotification;
+      _attendanceNotification = existingPaymentInfo.attendanceNotification;
+      _departureNotification = existingPaymentInfo.departureNotification;
+      _latenessNotification = existingPaymentInfo.latenessNotification;
+    } else {
+      // 기본값 설정 (기존 학생 정보에서 가져오기)
+      _registrationDate = widget.studentWithInfo.basicInfo?.registrationDate ?? DateTime.now();
+      _paymentMethod = widget.studentWithInfo.basicInfo?.studentPaymentType ?? 'monthly';
+      _tuitionFeeController = TextEditingController();
+      _latenessThresholdController = TextEditingController(text: '10');
+      
+      // 기존 students_basic_info 데이터가 있다면 student_payment_info로 자동 마이그레이션
+      _migrateFromBasicInfo();
+    }
+  }
+
+  // 기존 students_basic_info에서 student_payment_info로 데이터 마이그레이션
+  Future<void> _migrateFromBasicInfo() async {
+    final basicInfo = widget.studentWithInfo.basicInfo;
+    if (basicInfo != null && basicInfo.registrationDate != null) {
+      try {
+        final paymentInfo = StudentPaymentInfo(
+          id: const Uuid().v4(),
+          studentId: widget.studentWithInfo.student.id,
+          registrationDate: basicInfo.registrationDate!,
+          paymentMethod: basicInfo.studentPaymentType ?? 'monthly',
+          tuitionFee: 0,
+          latenessThreshold: 10,
+          scheduleNotification: false,
+          attendanceNotification: false,
+          departureNotification: false,
+          latenessNotification: false,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        
+        await DataManager.instance.addStudentPaymentInfo(paymentInfo);
+        print('[INFO] 학생 ${widget.studentWithInfo.student.name}의 정보를 student_payment_info로 마이그레이션 완료');
+      } catch (e) {
+        print('[ERROR] 마이그레이션 실패: $e');
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _tuitionFeeController.dispose();
+    _latenessThresholdController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 500,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 타이틀
+            Row(
+              children: [
+                Text(
+                  widget.studentWithInfo.student.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white70),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            
+            // 1. 등록일자와 지불방식
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () async {
+                      final selectedDate = await showDatePicker(
+                        context: context,
+                        initialDate: _registrationDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                        builder: (context, child) => Theme(
+                          data: ThemeData.dark().copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: Color(0xFF1976D2),
+                            ),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (selectedDate != null) {
+                        setState(() {
+                          _registrationDate = selectedDate;
+                        });
+                      }
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: '등록일자',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF1976D2)),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '${_registrationDate.year}년 ${_registrationDate.month}월 ${_registrationDate.day}일',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          const Icon(
+                            Icons.calendar_today,
+                            color: Colors.white70,
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _paymentMethod,
+                    style: const TextStyle(color: Colors.white),
+                    dropdownColor: const Color(0xFF2A2A2A),
+                    decoration: InputDecoration(
+                      labelText: '지불방식',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'monthly',
+                        child: Text('월결제', style: TextStyle(color: Colors.white)),
+                      ),
+                      DropdownMenuItem(
+                        value: 'session',
+                        child: Text('횟수제', style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _paymentMethod = value;
+                        });
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            
+            // 2. 수업료 입력란
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _tuitionFeeController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: '수업료',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                      hintText: '수업료를 입력하세요',
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      suffixText: '만원',
+                      suffixStyle: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  height: 48,
+                  width: 48,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: IconButton(
+                    onPressed: () => _showTuitionCustomDialog(),
+                    icon: const Icon(
+                      Icons.add,
+                      color: Colors.white70,
+                    ),
+                    tooltip: '수업별 커스텀 수업료',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            
+            // 3. 지각기준 필드
+            SizedBox(
+              width: 200,
+              child: TextField(
+                controller: _latenessThresholdController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: '지각기준',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                  ),
+                  focusedBorder: const OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                  ),
+                  hintText: '분 단위로 입력',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  suffixText: '분',
+                  suffixStyle: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            
+            // 4. 안내문자 체크박스들
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('안내문자', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  children: [
+                    _buildCheckboxItem('수강일자 안내', _scheduleNotification, (value) {
+                      setState(() => _scheduleNotification = value);
+                    }),
+                    _buildCheckboxItem('출결', _attendanceNotification, (value) {
+                      setState(() => _attendanceNotification = value);
+                    }),
+                    _buildCheckboxItem('하원', _departureNotification, (value) {
+                      setState(() => _departureNotification = value);
+                    }),
+                    _buildCheckboxItem('지각', _latenessNotification, (value) {
+                      setState(() => _latenessNotification = value);
+                    }),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
+            
+            // 버튼들
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  onPressed: _saveSettings,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text(
+                    '저장',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCheckboxItem(String title, bool value, Function(bool) onChanged) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Checkbox(
+          value: value,
+          onChanged: (newValue) => onChanged(newValue ?? false),
+          activeColor: const Color(0xFF1976D2),
+          checkColor: Colors.white,
+        ),
+        Text(
+          title,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+        ),
+      ],
+    );
+  }
+
+  // 학생의 수업 정보 가져오기
+  Map<String, List<StudentTimeBlock>> _getStudentClassesGrouped() {
+    final studentBlocks = DataManager.instance.studentTimeBlocks
+        .where((block) => block.studentId == widget.studentWithInfo.student.id)
+        .toList();
+
+    final Map<String, List<StudentTimeBlock>> classGroups = {};
+    
+    for (final block in studentBlocks) {
+      String className = '일반 수업';
+      
+      // sessionTypeId가 있으면 해당 클래스 이름 찾기
+      if (block.sessionTypeId != null) {
+        try {
+          final classInfo = DataManager.instance.classes
+              .firstWhere((c) => c.id == block.sessionTypeId);
+          className = classInfo.name;
+        } catch (e) {
+          // 클래스를 찾을 수 없는 경우 기본값 사용
+          className = '일반 수업';
+        }
+      }
+      
+      classGroups.putIfAbsent(className, () => []).add(block);
+    }
+    
+    return classGroups;
+  }
+
+  void _showTuitionCustomDialog() {
+    final classGroups = _getStudentClassesGrouped();
+    
+    showDialog(
+      context: context,
+      builder: (context) => TuitionCustomDialog(
+        studentName: widget.studentWithInfo.student.name,
+        classGroups: classGroups,
+      ),
+    );
+  }
+
+  void _saveSettings() async {
+    try {
+      final tuitionFee = int.tryParse(_tuitionFeeController.text) ?? 0;
+      final latenessThreshold = int.tryParse(_latenessThresholdController.text) ?? 10;
+
+      final paymentInfo = StudentPaymentInfo(
+        id: const Uuid().v4(),
+        studentId: widget.studentWithInfo.student.id,
+        registrationDate: _registrationDate,
+        paymentMethod: _paymentMethod,
+        tuitionFee: tuitionFee,
+        latenessThreshold: latenessThreshold,
+        scheduleNotification: _scheduleNotification,
+        attendanceNotification: _attendanceNotification,
+        departureNotification: _departureNotification,
+        latenessNotification: _latenessNotification,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      await DataManager.instance.addStudentPaymentInfo(paymentInfo);
+      
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('설정이 저장되었습니다.'),
+            backgroundColor: Color(0xFF4CAF50),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('설정 저장 중 오류가 발생했습니다: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+}
+
+// 수업료 커스텀 다이얼로그
+class TuitionCustomDialog extends StatefulWidget {
+  final String studentName;
+  final Map<String, List<StudentTimeBlock>> classGroups;
+
+  const TuitionCustomDialog({
+    super.key,
+    required this.studentName,
+    required this.classGroups,
+  });
+
+  @override
+  State<TuitionCustomDialog> createState() => _TuitionCustomDialogState();
+}
+
+class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
+  final Map<String, TextEditingController> _controllers = {};
+  final Map<String, int> _classFees = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // 각 수업명별로 컨트롤러 생성
+    for (final className in widget.classGroups.keys) {
+      _controllers[className] = TextEditingController();
+      _classFees[className] = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  String _getDayName(int dayIndex) {
+    const days = ['월', '화', '수', '목', '금', '토', '일'];
+    return days[dayIndex] ?? '?';
+  }
+
+  String _formatTime(int hour, int minute) {
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
+  int _getTotalFee() {
+    return _classFees.values.fold(0, (sum, fee) => sum + fee);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      child: Container(
+        width: 600,
+        constraints: const BoxConstraints(
+          maxHeight: 700, // 다이얼로그 최대 높이 제한
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 타이틀
+            Row(
+              children: [
+                Text(
+                  '${widget.studentName} - 수업별 수업료',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white70),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            // 수업별 리스트
+            if (widget.classGroups.isEmpty)
+              const Center(
+                child: Text(
+                  '등록된 수업이 없습니다.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxHeight: 300, // 최대 높이 제한 (더 컴팩트하게)
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true, // 내용에 맞춰 크기 조정
+                  physics: const BouncingScrollPhysics(), // 부드러운 스크롤
+                  itemCount: widget.classGroups.length,
+                  itemBuilder: (context, index) {
+                    final className = widget.classGroups.keys.elementAt(index);
+                    final blocks = widget.classGroups[className]!;
+                    
+                    // 주당 횟수 계산 (중복 제거)
+                    final uniqueDays = blocks.map((b) => b.dayIndex).toSet();
+                    final weeklyCount = uniqueDays.length;
+
+                    return Card(
+                      color: const Color(0xFF2A2A2A),
+                      margin: const EdgeInsets.only(bottom: 16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // 수업명과 주당 횟수
+                            Text(
+                              '$className (주 ${weeklyCount}회)',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+
+                            // 수업 시간 정보
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: uniqueDays.map((dayIndex) {
+                                final dayBlocks = blocks.where((b) => b.dayIndex == dayIndex).toList();
+                                if (dayBlocks.isEmpty) return const SizedBox();
+                                
+                                final startTime = _formatTime(dayBlocks.first.startHour, dayBlocks.first.startMinute);
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1976D2).withOpacity(0.3),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    '${_getDayName(dayIndex)} $startTime',
+                                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                            const SizedBox(height: 16),
+
+                            // 수업료 입력
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controllers[className],
+                                    keyboardType: TextInputType.number,
+                                    style: const TextStyle(color: Colors.white),
+                                    onChanged: (value) {
+                                      setState(() {
+                                        _classFees[className] = int.tryParse(value) ?? 0;
+                                      });
+                                    },
+                                    decoration: InputDecoration(
+                                      labelText: '수업료',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: const OutlineInputBorder(
+                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                      ),
+                                      suffixText: '만원',
+                                      suffixStyle: const TextStyle(color: Colors.white70),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+            const SizedBox(height: 16),
+
+            // 총 수업료 표시
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.5)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '총 수업료',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    '${_getTotalFee()}만원',
+                    style: const TextStyle(
+                      color: Color(0xFF1976D2),
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // 버튼
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text(
+                    '취소',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  onPressed: () {
+                    // TODO: 수업별 수업료 저장 로직 (향후 구현)
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('수업별 수업료 설정이 저장되었습니다. (총 ${_getTotalFee()}만원)'),
+                        backgroundColor: const Color(0xFF4CAF50),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2),
+                  ),
+                  child: const Text(
+                    '저장',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

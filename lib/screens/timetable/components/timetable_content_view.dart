@@ -66,6 +66,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
   void initState() {
     super.initState();
     DataManager.instance.loadClasses();
+    // 🧹 앱 시작 시 삭제된 수업의 sessionTypeId를 가진 블록들 정리
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _diagnoseOrphanedSessionTypeIds(); // 진단 먼저
+      await cleanupOrphanedSessionTypeIds();
+      await _diagnoseOrphanedSessionTypeIds(); // 정리 후 다시 확인
+    });
   }
 
   void _showDropdownMenu() {
@@ -1393,6 +1399,159 @@ class TimetableContentViewState extends State<TimetableContentView> {
       clearSearch();
     }
   }
+
+  // 수업카드 수정 시 관련 StudentTimeBlock의 session_type_id 일괄 수정
+  Future<void> updateSessionTypeIdForClass(String oldClassId, String newClassId) async {
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == oldClassId).toList();
+    for (final block in blocks) {
+      final updated = block.copyWith(sessionTypeId: newClassId);
+      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    }
+  }
+
+  // 수업카드 삭제 시 관련 StudentTimeBlock의 session_type_id를 null로 초기화
+  Future<void> clearSessionTypeIdForClass(String classId) async {
+    print('[DEBUG][clearSessionTypeIdForClass] 시작: classId=$classId');
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
+    print('[DEBUG][clearSessionTypeIdForClass] 찾은 블록 수: ${blocks.length}');
+    
+    for (final block in blocks) {
+      print('[DEBUG][clearSessionTypeIdForClass] 업데이트 중: blockId=${block.id}, studentId=${block.studentId}');
+      // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
+      final updated = StudentTimeBlock(
+        id: block.id,
+        studentId: block.studentId,
+        groupId: block.groupId,
+        dayIndex: block.dayIndex,
+        startHour: block.startHour,
+        startMinute: block.startMinute,
+        duration: block.duration,
+        createdAt: block.createdAt,
+        setId: block.setId,
+        number: block.number,
+        sessionTypeId: null, // 명시적으로 null 설정
+      );
+      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    }
+    
+    // 🔄 업데이트 후 데이터 새로고침
+    await DataManager.instance.loadStudentTimeBlocks();
+    print('[DEBUG][clearSessionTypeIdForClass] 완료: 데이터 새로고침됨');
+  }
+
+  // 🔍 고아 sessionTypeId 진단 함수
+  Future<void> _diagnoseOrphanedSessionTypeIds() async {
+    print('[DEBUG][진단] === 고아 sessionTypeId 진단 시작 ===');
+    
+    final allBlocks = DataManager.instance.studentTimeBlocks;
+    final existingClassIds = DataManager.instance.classes.map((c) => c.id).toSet();
+    
+    print('[DEBUG][진단] 전체 블록 수: ${allBlocks.length}');
+    print('[DEBUG][진단] 등록된 수업 ID들: $existingClassIds');
+    
+    // 모든 sessionTypeId 수집
+    final allSessionTypeIds = allBlocks
+        .where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty)
+        .map((b) => b.sessionTypeId!)
+        .toSet();
+    print('[DEBUG][진단] 사용 중인 sessionTypeId들: $allSessionTypeIds');
+    
+    // 고아 sessionTypeId 찾기
+    final orphanedSessionTypeIds = allSessionTypeIds
+        .where((id) => !existingClassIds.contains(id))
+        .toSet();
+    print('[DEBUG][진단] 고아 sessionTypeId들: $orphanedSessionTypeIds');
+    
+    // 고아 블록들 찾기
+    final orphanedBlocks = allBlocks.where((block) {
+      return block.sessionTypeId != null && 
+             block.sessionTypeId!.isNotEmpty && 
+             !existingClassIds.contains(block.sessionTypeId);
+    }).toList();
+    
+    print('[DEBUG][진단] 고아 블록 수: ${orphanedBlocks.length}');
+    
+    // 고아 블록들을 sessionTypeId별로 그룹화
+    final groupedOrphans = <String, List<StudentTimeBlock>>{};
+    for (final block in orphanedBlocks) {
+      final sessionTypeId = block.sessionTypeId!;
+      groupedOrphans.putIfAbsent(sessionTypeId, () => []).add(block);
+    }
+    
+    for (final entry in groupedOrphans.entries) {
+      print('[DEBUG][진단] sessionTypeId ${entry.key}: ${entry.value.length}개 블록');
+      // 처음 5개만 샘플로 출력
+      final samples = entry.value.take(5);
+      for (final block in samples) {
+        print('[DEBUG][진단]   - blockId: ${block.id}, studentId: ${block.studentId}');
+      }
+      if (entry.value.length > 5) {
+        print('[DEBUG][진단]   - ... 외 ${entry.value.length - 5}개 더');
+      }
+    }
+    
+    print('[DEBUG][진단] === 고아 sessionTypeId 진단 완료 ===');
+  }
+
+  // 🧹 삭제된 수업의 sessionTypeId를 가진 블록들을 정리하는 유틸리티 함수
+  Future<void> cleanupOrphanedSessionTypeIds() async {
+    print('[DEBUG][cleanupOrphanedSessionTypeIds] 시작');
+    
+    final allBlocks = DataManager.instance.studentTimeBlocks;
+    final existingClassIds = DataManager.instance.classes.map((c) => c.id).toSet();
+    
+    // sessionTypeId가 있지만 해당 수업이 존재하지 않는 블록들 찾기
+    final orphanedBlocks = allBlocks.where((block) {
+      return block.sessionTypeId != null && 
+             block.sessionTypeId!.isNotEmpty && 
+             !existingClassIds.contains(block.sessionTypeId);
+    }).toList();
+    
+    print('[DEBUG][cleanupOrphanedSessionTypeIds] 정리할 블록 수: ${orphanedBlocks.length}');
+    
+    if (orphanedBlocks.isNotEmpty) {
+      print('[DEBUG][cleanupOrphanedSessionTypeIds] 고아 sessionTypeId들: ${orphanedBlocks.map((b) => b.sessionTypeId).toSet()}');
+      
+      try {
+        // 🔄 삭제 후 재추가 방식으로 안전하게 처리
+        final blockIdsToDelete = orphanedBlocks.map((b) => b.id).toList();
+        final updatedBlocks = orphanedBlocks.map((block) {
+          // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
+          return StudentTimeBlock(
+            id: block.id,
+            studentId: block.studentId,
+            groupId: block.groupId,
+            dayIndex: block.dayIndex,
+            startHour: block.startHour,
+            startMinute: block.startMinute,
+            duration: block.duration,
+            createdAt: block.createdAt,
+            setId: block.setId,
+            number: block.number,
+            sessionTypeId: null, // 명시적으로 null 설정
+          );
+        }).toList();
+        
+        print('[DEBUG][cleanupOrphanedSessionTypeIds] 삭제할 블록 ID들: ${blockIdsToDelete.take(5)}${blockIdsToDelete.length > 5 ? '... 외 ${blockIdsToDelete.length - 5}개' : ''}');
+        
+        // 1. 기존 블록들 삭제
+        await DataManager.instance.bulkDeleteStudentTimeBlocks(blockIdsToDelete);
+        print('[DEBUG][cleanupOrphanedSessionTypeIds] 삭제 완료');
+        
+        // 2. sessionTypeId가 null로 설정된 새 블록들 추가
+        print('[DEBUG][cleanupOrphanedSessionTypeIds] 재추가할 블록들의 sessionTypeId: ${updatedBlocks.take(3).map((b) => b.sessionTypeId)}');
+        await DataManager.instance.bulkAddStudentTimeBlocks(updatedBlocks);
+        print('[DEBUG][cleanupOrphanedSessionTypeIds] 재추가 완료');
+        
+        print('[DEBUG][cleanupOrphanedSessionTypeIds] 완료: ${orphanedBlocks.length}개 블록 정리됨 (삭제 후 재추가)');
+      } catch (e, stackTrace) {
+        print('[ERROR][cleanupOrphanedSessionTypeIds] 정리 중 오류 발생: $e');
+        print('[ERROR][cleanupOrphanedSessionTypeIds] 스택트레이스: $stackTrace');
+      }
+    } else {
+      print('[DEBUG][cleanupOrphanedSessionTypeIds] 완료: 정리할 블록 없음');
+    }
+  }
 }
 
 // 드롭다운 메뉴 항목 위젯
@@ -1827,24 +1986,3 @@ class _ClassCardState extends State<_ClassCard> {
     );
   }
 } 
-
-// TimetableContentViewState 내부에 아래 메서드 추가
-// (적절한 위치에 삽입)
-
-  // 수업카드 수정 시 관련 StudentTimeBlock의 session_type_id 일괄 수정
-  Future<void> updateSessionTypeIdForClass(String oldClassId, String newClassId) async {
-    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == oldClassId).toList();
-    for (final block in blocks) {
-      final updated = block.copyWith(sessionTypeId: newClassId);
-      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
-    }
-  }
-
-  // 수업카드 삭제 시 관련 StudentTimeBlock의 session_type_id를 null로 초기화
-  Future<void> clearSessionTypeIdForClass(String classId) async {
-    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
-    for (final block in blocks) {
-      final updated = block.copyWith(sessionTypeId: null);
-      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
-    }
-  } 

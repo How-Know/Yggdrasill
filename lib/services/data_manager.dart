@@ -12,6 +12,7 @@ import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
 import '../models/payment_record.dart';
 import '../models/attendance_record.dart';
+import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
@@ -40,11 +41,13 @@ class DataManager {
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
   List<AttendanceRecord> _attendanceRecords = [];
+  List<StudentPaymentInfo> _studentPaymentInfos = [];
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<AttendanceRecord>> attendanceRecordsNotifier = ValueNotifier<List<AttendanceRecord>>([]);
+  final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
@@ -130,6 +133,7 @@ class DataManager {
       await loadClasses(); // 수업 정보 로딩 추가
       await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
       await loadAttendanceRecords(); // 출석 기록 로딩 추가
+      await loadStudentPaymentInfos(); // 학생 결제 정보 로딩 추가
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -1054,5 +1058,94 @@ class DataManager {
     }
 
     print('[DEBUG] 과거 수업 정리 완료: ${recordsToUpdate.length}개 업데이트, ${recordsToCreate.length}개 생성');
+  }
+
+  // =================== STUDENT PAYMENT INFO ===================
+
+  List<StudentPaymentInfo> get studentPaymentInfos => List.unmodifiable(_studentPaymentInfos);
+
+  // 학생 결제 정보 로드
+  Future<void> loadStudentPaymentInfos() async {
+    try {
+      await AcademyDbService.instance.ensureStudentPaymentInfoTable();
+      final paymentInfoMaps = await AcademyDbService.instance.getAllStudentPaymentInfo();
+      
+      _studentPaymentInfos = paymentInfoMaps.map((map) => StudentPaymentInfo.fromJson(map)).toList();
+      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      
+      print('[DEBUG] 학생 결제 정보 로드 완료: ${_studentPaymentInfos.length}개');
+    } catch (e) {
+      print('[ERROR] 학생 결제 정보 로드 실패: $e');
+      _studentPaymentInfos = [];
+      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+    }
+  }
+
+  // 특정 학생의 결제 정보 조회
+  StudentPaymentInfo? getStudentPaymentInfo(String studentId) {
+    try {
+      return _studentPaymentInfos.firstWhere((info) => info.studentId == studentId);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 학생 결제 정보 추가
+  Future<void> addStudentPaymentInfo(StudentPaymentInfo paymentInfo) async {
+    try {
+      final paymentInfoData = paymentInfo.toJson();
+      await AcademyDbService.instance.addStudentPaymentInfo(paymentInfoData);
+      
+      // 메모리 업데이트
+      final existingIndex = _studentPaymentInfos.indexWhere((info) => info.studentId == paymentInfo.studentId);
+      if (existingIndex != -1) {
+        _studentPaymentInfos[existingIndex] = paymentInfo;
+      } else {
+        _studentPaymentInfos.add(paymentInfo);
+      }
+      
+      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      print('[DEBUG] 학생 결제 정보 추가/업데이트 완료: ${paymentInfo.studentId}');
+    } catch (e) {
+      print('[ERROR] 학생 결제 정보 추가 실패: $e');
+      rethrow;
+    }
+  }
+
+  // 학생 결제 정보 업데이트
+  Future<void> updateStudentPaymentInfo(StudentPaymentInfo paymentInfo) async {
+    try {
+      final updatedPaymentInfo = paymentInfo.copyWith(updatedAt: DateTime.now());
+      final paymentInfoData = updatedPaymentInfo.toJson();
+      await AcademyDbService.instance.updateStudentPaymentInfo(paymentInfo.studentId, paymentInfoData);
+      
+      // 메모리 업데이트
+      final index = _studentPaymentInfos.indexWhere((info) => info.studentId == paymentInfo.studentId);
+      if (index != -1) {
+        _studentPaymentInfos[index] = updatedPaymentInfo;
+        studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      }
+      
+      print('[DEBUG] 학생 결제 정보 업데이트 완료: ${paymentInfo.studentId}');
+    } catch (e) {
+      print('[ERROR] 학생 결제 정보 업데이트 실패: $e');
+      rethrow;
+    }
+  }
+
+  // 학생 결제 정보 삭제
+  Future<void> deleteStudentPaymentInfo(String studentId) async {
+    try {
+      await AcademyDbService.instance.deleteStudentPaymentInfo(studentId);
+      
+      // 메모리에서 제거
+      _studentPaymentInfos.removeWhere((info) => info.studentId == studentId);
+      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      
+      print('[DEBUG] 학생 결제 정보 삭제 완료: $studentId');
+    } catch (e) {
+      print('[ERROR] 학생 결제 정보 삭제 실패: $e');
+      rethrow;
+    }
   }
 } 
