@@ -184,7 +184,15 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                 // 🎯 결제 관리 다이얼로그 표시
                 showDialog(
                   context: context,
-                  builder: (context) => const PaymentManagementDialog(),
+                  builder: (context) => PaymentManagementDialog(
+                    onClose: () {
+                      // 다이얼로그 닫힐 때 FAB도 접기
+                      setState(() {
+                        _isFabExpanded = false;
+                        _fabController.reverse();
+                      });
+                    },
+                  ),
                 );
               },
             ),

@@ -4,7 +4,9 @@ import '../services/data_manager.dart';
 import '../models/payment_record.dart';
 
 class PaymentManagementDialog extends StatefulWidget {
-  const PaymentManagementDialog({super.key});
+  final VoidCallback? onClose;
+  
+  const PaymentManagementDialog({super.key, this.onClose});
 
   @override
   State<PaymentManagementDialog> createState() => _PaymentManagementDialogState();
@@ -94,47 +96,12 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     final paymentDate = _getActualPaymentDateForMonth(student.id, registrationDate, currentMonth);
     final cycle = _calculateCycleNumber(registrationDate, paymentDate);
 
-    return Tooltip(
-      message: '결제 사이클: ${cycle}번째\n결제 예정일: ${paymentDate.month}/${paymentDate.day}',
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      textStyle: const TextStyle(color: Colors.white, fontSize: 14),
-      waitDuration: const Duration(milliseconds: 300),
-      child: Container(
-        height: 58,
-        margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
-        decoration: BoxDecoration(
-          color: isOverdue ? const Color(0xFF2A2A2A) : const Color(0xFF1F1F1F),
-          border: isOverdue 
-            ? Border.all(color: Colors.red.withOpacity(0.3), width: 1)
-            : Border.all(color: Colors.transparent, width: 1),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                student.name,
-                style: TextStyle(
-                  color: isOverdue ? Colors.red.shade300 : const Color(0xFFE0E0E0),
-                  fontSize: 17,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            Text(
-              '${paymentDate.month}/${paymentDate.day}',
-              style: TextStyle(
-                color: isOverdue ? Colors.red.shade400 : Colors.white54,
-                fontSize: 14,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return _PaymentStudentCard(
+      studentWithInfo: studentWithInfo,
+      paymentDate: paymentDate,
+      cycle: cycle,
+      isOverdue: isOverdue,
+      onClose: widget.onClose,
     );
   }
 
@@ -142,7 +109,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF232326),
+        backgroundColor: const Color(0xFF1F1F1F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('이번달 결제 완료 명단', style: TextStyle(color: Colors.white)),
         content: SizedBox(
@@ -218,7 +185,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF232326),
+      backgroundColor: const Color(0xFF1F1F1F), // 학생등록 다이얼로그와 동일한 배경색
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 800,
@@ -269,7 +236,13 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                           ),
                           const SizedBox(height: 12),
                           Expanded(
-                            child: ListView.builder(
+                            child: GridView.builder(
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2, // 2열로 배치
+                                childAspectRatio: 2.5, // 카드 비율
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                              ),
                               itemCount: _overdueStudents.length,
                               itemBuilder: (context, index) {
                                 return _buildPaymentStudentCard(_overdueStudents[index], isOverdue: true);
@@ -310,7 +283,13 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                           ),
                           const SizedBox(height: 12),
                           Expanded(
-                            child: ListView.builder(
+                            child: GridView.builder(
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2, // 2열로 배치
+                                childAspectRatio: 2.5, // 카드 비율
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                              ),
                               itemCount: _upcomingStudents.length,
                               itemBuilder: (context, index) {
                                 return _buildPaymentStudentCard(_upcomingStudents[index]);
@@ -360,19 +339,158 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
             
             const SizedBox(height: 16),
             
-            // 닫기 버튼
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
-                ),
-              ],
-            ),
+                          // 닫기 버튼
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      widget.onClose?.call(); // FAB 닫기 콜백 호출
+                    },
+                    child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+                  ),
+                ],
+              ),
           ],
         ),
       ),
     );
+  }
+}
+
+// 슬라이드시트 출석체크 카드와 동일한 스타일의 결제 학생 카드
+class _PaymentStudentCard extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+  final DateTime paymentDate;
+  final int cycle;
+  final bool isOverdue;
+  final VoidCallback? onClose;
+
+  const _PaymentStudentCard({
+    required this.studentWithInfo,
+    required this.paymentDate,
+    required this.cycle,
+    required this.isOverdue,
+    this.onClose,
+  });
+
+  @override
+  State<_PaymentStudentCard> createState() => _PaymentStudentCardState();
+}
+
+class _PaymentStudentCardState extends State<_PaymentStudentCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final student = widget.studentWithInfo.student;
+    
+    return Tooltip(
+      message: '결제 사이클: ${widget.cycle}번째\n결제 예정일: ${widget.paymentDate.month}/${widget.paymentDate.day}',
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 14),
+      waitDuration: const Duration(milliseconds: 300),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
+          onTap: () => _handlePaymentTap(context),
+          child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          decoration: BoxDecoration(
+            color: widget.isOverdue ? Colors.transparent : const Color(0xFF2A2A2A),
+            border: widget.isOverdue 
+              ? Border.all(color: Colors.red.withOpacity(0.5), width: 2)
+              : (_isHovered 
+                ? Border.all(color: const Color(0xFF1976D2), width: 2)
+                : Border.all(color: Colors.transparent, width: 2)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Stack(
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    student.name,
+                    style: const TextStyle(
+                      color: Color(0xFFE0E0E0), // 연체자도 같은 색상
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${widget.paymentDate.month}/${widget.paymentDate.day} 예정',
+                    style: const TextStyle(
+                      color: Colors.white54, // 연체자도 같은 색상
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+
+            ],
+          ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _handlePaymentTap(BuildContext context) async {
+    // 바로 결제 처리
+    await _processPayment();
+    
+    // 결제 완료 메시지
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${widget.studentWithInfo.student.name} 학생의 수강료 납부가 완료되었습니다.'),
+          backgroundColor: const Color(0xFF4CAF50),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      
+      // 부모 다이얼로그 새로고침을 위해 pop 후 재로드
+      Navigator.of(context).pop();
+      showDialog(
+        context: context,
+        builder: (context) => PaymentManagementDialog(onClose: widget.onClose),
+      );
+    }
+  }
+
+  Future<void> _processPayment() async {
+    final now = DateTime.now();
+    final registrationDate = widget.studentWithInfo.basicInfo.registrationDate!;
+    
+    // 기존 레코드 확인
+    final existingRecord = DataManager.instance.getPaymentRecord(
+      widget.studentWithInfo.student.id, 
+      widget.cycle
+    );
+
+    final paymentRecord = PaymentRecord(
+      id: existingRecord?.id,
+      studentId: widget.studentWithInfo.student.id,
+      cycle: widget.cycle,
+      dueDate: widget.paymentDate,
+      paidDate: now, // 현재 시간을 납부일로 설정
+    );
+
+    if (existingRecord?.id != null) {
+      // 기존 레코드 업데이트
+      await DataManager.instance.updatePaymentRecord(paymentRecord);
+    } else {
+      // 새 레코드 추가
+      await DataManager.instance.addPaymentRecord(paymentRecord);
+    }
   }
 }
