@@ -63,6 +63,15 @@ class StudentScreenState extends State<StudentScreen> {
     _loadFuture = _loadData();
   }
 
+  @override
+  void didUpdateWidget(StudentScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    
+    // 위젯이 업데이트될 때 페이지 인덱스 초기화 (학생 변경 시)
+    // 실제로는 학생 선택이 _selectedStudent 변수로 관리되므로 여기서는 초기화하지 않음
+    // 대신 학생 변경 시 직접 초기화하는 로직을 별도로 구현
+  }
+
   Future<void> _loadData() async {
     await DataManager.instance.loadGroups();
     await DataManager.instance.loadStudents();
@@ -703,29 +712,22 @@ class StudentScreenState extends State<StudentScreen> {
                                   ),
                           ),
                           // 출석 체크
-                          Expanded(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF18181A),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: const Color(0xFF18181A), width: 1),
-                              ),
-                              child: Column(
-                                children: [
-                                  // 출석체크 내용
-                                  Expanded(
-                                    child: AttendanceCheckView(
-                                      selectedStudent: _selectedStudent,
-                                      pageIndex: _attendancePageIndex,
-                                      onPageIndexChanged: (newIndex) {
-                                        setState(() {
-                                          _attendancePageIndex = newIndex;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
+                          Container(
+                            height: 260,
+                            margin: const EdgeInsets.only(bottom: 24, right: 24),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF18181A),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFF18181A), width: 1),
+                            ),
+                            child: AttendanceCheckView(
+                              selectedStudent: _selectedStudent,
+                              pageIndex: _attendancePageIndex,
+                              onPageIndexChanged: (newIndex) {
+                                setState(() {
+                                  _attendancePageIndex = newIndex;
+                                });
+                              },
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -847,6 +849,12 @@ class StudentScreenState extends State<StudentScreen> {
                   isSelected: _selectedStudent?.student.id == studentWithInfo.student.id,
                   onTap: () {
                     setState(() {
+                      // 다른 학생으로 변경될 때 페이지 인덱스 초기화
+                      if (_selectedStudent?.student.id != studentWithInfo.student.id) {
+                        _paymentPageIndex = 0;
+                        _attendancePageIndex = 0;
+                        print('[DEBUG][onTap] 학생 변경으로 인한 초기화 - ${studentWithInfo.student.name}');
+                      }
                       _selectedStudent = studentWithInfo;
                     });
                   },
@@ -1052,24 +1060,41 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
-  // 과거 납부 기록이 있는지 확인
+  // 왼쪽 화살표 활성화 조건 확인
   bool _hasPastPaymentRecords(StudentWithInfo studentWithInfo, DateTime currentMonth) {
     final registrationDate = studentWithInfo.basicInfo.registrationDate;
     if (registrationDate == null) return false;
     
     final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
-    return currentMonth.isAfter(registrationMonth);
+    
+    // 전체 월 리스트 생성
+    final allMonths = <DateTime>[];
+    DateTime month = registrationMonth;
+    while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
+      allMonths.add(month);
+      month = DateTime(month.year, month.month + 1);
+    }
+    
+    // 현재월의 인덱스 찾기
+    final currentMonthIndex = allMonths.indexWhere((m) => 
+      m.year == currentMonth.year && m.month == currentMonth.month);
+    
+    if (currentMonthIndex == -1) return false;
+    
+    // 조건: 현재월 기준 왼쪽에 3개 이상 카드가 있어야 함
+    // 그리고 아직 최대한 왼쪽으로 이동하지 않은 상태
+    final leftCardsCount = currentMonthIndex; // 현재월 왼쪽에 있는 카드 수
+    final maxLeftMove = (leftCardsCount - 2).clamp(0, leftCardsCount); // 최대 왼쪽 이동 가능 횟수
+    
+    print('[DEBUG][_hasPastPaymentRecords] 현재월 인덱스: $currentMonthIndex, 왼쪽 카드 수: $leftCardsCount, 최대 이동: $maxLeftMove, 현재 페이지: $_paymentPageIndex');
+    
+    return leftCardsCount >= 3 && _paymentPageIndex < maxLeftMove;
   }
   
-  // 미래 납부 카드가 생성 가능한지 확인 (현재부터 +2달까지)
+  // 오른쪽 화살표 활성화 조건 확인 (복귀용)
   bool _hasFuturePaymentCards(StudentWithInfo studentWithInfo, DateTime currentMonth) {
-    final registrationDate = studentWithInfo.basicInfo.registrationDate;
-    if (registrationDate == null) return false;
-    
-    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
-    final futureMonth = DateTime(currentMonth.year, currentMonth.month + 2);
-    
-    return futureMonth.isAfter(registrationMonth) || futureMonth.isAtSameMomentAs(registrationMonth);
+    // 왼쪽으로 이동한 상태(_paymentPageIndex > 0)에서만 오른쪽으로 복귀 가능
+    return _paymentPageIndex > 0;
   }
 
   // 수강료 납부 일정 위젯
@@ -1098,26 +1123,47 @@ class StudentScreenState extends State<StudentScreen> {
       }
     });
     
-    // 페이지 인덱스에 따라 5개월씩 표시
-    // pageIndex가 0이면 이전 2달 + 현재 + 다음 2달
-    // pageIndex가 1이면 이전 7달 ~ 이전 3달
+    // 페이지 인덱스에 따라 월별 카드 생성
+    print('[DEBUG][_buildPaymentSchedule] _paymentPageIndex: $_paymentPageIndex');
+    print('[DEBUG][_buildPaymentSchedule] currentMonth: $currentMonth');
+    print('[DEBUG][_buildPaymentSchedule] registrationMonth: $registrationMonth');
+    
+    // 전체 가능한 월 리스트 생성 (등록월부터 현재월+2달까지)
+    final allMonths = <DateTime>[];
+    DateTime month = registrationMonth;
+    while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
+      allMonths.add(month);
+      month = DateTime(month.year, month.month + 1);
+    }
+    
+    print('[DEBUG][_buildPaymentSchedule] 전체 가능한 월: ${allMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
+    
+    // 현재월의 인덱스 찾기
+    final currentMonthIndex = allMonths.indexWhere((m) => 
+      m.year == currentMonth.year && m.month == currentMonth.month);
+    
+    print('[DEBUG][_buildPaymentSchedule] 현재월 인덱스: $currentMonthIndex');
+    
     final candidateMonths = <DateTime>[];
-    if (_paymentPageIndex == 0) {
-      // 현재 페이지: 2달 전 ~ 2달 후
-      candidateMonths.addAll([
-        DateTime(currentMonth.year, currentMonth.month - 2),
-        DateTime(currentMonth.year, currentMonth.month - 1),
-        currentMonth,
-        DateTime(currentMonth.year, currentMonth.month + 1),
-        DateTime(currentMonth.year, currentMonth.month + 2),
-      ]);
+    if (currentMonthIndex == -1) {
+      // 현재월이 없으면 전체 표시
+      candidateMonths.addAll(allMonths.take(5));
     } else {
-      // 과거 페이지: startMonthOffset부터 5개월
-      final startMonthOffset = 3 + (_paymentPageIndex - 1) * 5; // 3달 전부터 시작
-      candidateMonths.addAll([
-        for (int i = 0; i < 5; i++)
-          DateTime(currentMonth.year, currentMonth.month - startMonthOffset - (4 - i)),
-      ]);
+      // 스마트 페이징: 현재월을 기준으로 5개 윈도우 계산
+      int windowStart;
+      
+      if (_paymentPageIndex == 0) {
+        // 초기 상태: 현재월이 가운데 오도록 (또는 오른쪽에 치우치게)
+        windowStart = (currentMonthIndex - 2).clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
+      } else {
+        // 페이징 상태: _paymentPageIndex만큼 왼쪽으로 이동
+        windowStart = (currentMonthIndex - 2 - _paymentPageIndex).clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
+      }
+      
+      final windowEnd = (windowStart + 5).clamp(0, allMonths.length);
+      candidateMonths.addAll(allMonths.sublist(windowStart, windowEnd));
+      
+      print('[DEBUG][_buildPaymentSchedule] 윈도우 범위: $windowStart~${windowEnd-1}, 표시 월: ${candidateMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
     }
     
     // 등록월 이후의 달만 필터링

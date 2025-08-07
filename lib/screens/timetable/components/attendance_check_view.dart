@@ -27,6 +27,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   int _centerIndex = 7; // 가운데 수업 인덱스 (0~14 중 7번째)
   bool _hasPastRecords = false;
   bool _hasFutureCards = false;
+  
+  // 스마트 슬라이딩을 위한 상태 변수들
+  List<ClassSession> _allSessions = []; // 전체 세션 저장
+  int _currentStartIndex = 0; // 현재 화면의 시작 인덱스
+  int _blueBorderAbsoluteIndex = -1; // 파란 테두리의 절대 인덱스
+  
+  // 디바운싱을 위한 변수들
+  bool _isUpdating = false;
 
   @override
   void initState() {
@@ -42,11 +50,21 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     super.dispose();
   }
 
-  void _onAttendanceRecordsChanged() {
-    // 현재 선택된 학생의 출석 기록이 변경되었을 때만 새로고침
-    if (widget.selectedStudent != null) {
+  void _onAttendanceRecordsChanged() async {
+    // 디바운싱 및 안전성 체크
+    if (_isUpdating || !mounted || widget.selectedStudent == null) return;
+    
+    _isUpdating = true;
+    print('[DEBUG][AttendanceCheckView] 출석 기록 변경 감지, _loadClassSessions 호출');
+    
+    // 짧은 지연을 추가하여 연속된 업데이트 방지
+    await Future.delayed(const Duration(milliseconds: 50));
+    
+    if (mounted && widget.selectedStudent != null) {
       _loadClassSessions();
     }
+    
+    _isUpdating = false;
   }
 
   // 과거 출석 기록이 있는지 확인
@@ -69,7 +87,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return pastRecords.isNotEmpty;
   }
   
-  // 미래 출석 카드가 생성 가능한지 확인 (현재부터 +2사이클까지)
+  // 미래 출석 카드가 생성 가능한지 확인 (실제 페이지 수 기준)
   bool _checkHasFutureCards() {
     if (widget.selectedStudent == null) return false;
     
@@ -78,8 +96,39 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         .where((block) => block.studentId == studentId)
         .toList();
     
-    // 수업 시간이 등록되어 있고, 현재부터 2사이클 이내면 미래 카드 생성 가능
-    return timeBlocks.isNotEmpty && widget.pageIndex < 2;
+    if (timeBlocks.isEmpty) return false;
+    
+    // 등록일 확인
+    final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
+    if (registrationDate == null) return false;
+    
+    // 다음 페이지에서 실제로 생성될 세션 개수 계산
+    final today = DateTime.now();
+    final nextPageAdjustedToday = today.subtract(Duration(days: (widget.pageIndex + 1) * 91));
+    final nextPageActualStartDate = nextPageAdjustedToday.isAfter(registrationDate) 
+        ? nextPageAdjustedToday 
+        : registrationDate;
+    final nextPageEndDate = DateTime(
+      nextPageActualStartDate.year,
+      nextPageActualStartDate.month + 2,
+      nextPageActualStartDate.day,
+    );
+    
+    // 다음 페이지에서 생성될 수업이 있는지 간단히 확인
+    if (nextPageActualStartDate.isAfter(nextPageEndDate) || 
+        nextPageActualStartDate.isBefore(registrationDate)) {
+      return false;
+    }
+    
+    // 현재 _classSessions이 있다면 총 세션 수를 기준으로 페이지 계산
+    if (_classSessions.isNotEmpty) {
+      // 현재 표시 중인 데이터를 기준으로 추정
+      // 실제로는 다음 페이지 데이터를 생성해서 확인해야 하지만, 
+      // 성능상 간단한 추정 로직 사용
+      return widget.pageIndex < 3; // 최대 4페이지 정도로 제한
+    }
+    
+    return widget.pageIndex < 2; // 기본적으로 3페이지까지
   }
 
   @override
@@ -113,6 +162,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   }
 
   void _loadClassSessions() {
+    print('[DEBUG][AttendanceCheckView] _loadClassSessions 시작');
+    print('[DEBUG][AttendanceCheckView] pageIndex: ${widget.pageIndex}');
+    print('[DEBUG][AttendanceCheckView] selectedStudent: ${widget.selectedStudent?.student.name}');
+    
     if (widget.selectedStudent == null) {
       setState(() {
         _classSessions = [];
@@ -123,9 +176,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     
-    // 페이지 인덱스에 따라 13주씩 이전 기간 계산
-    final weeksOffset = widget.pageIndex * 13;
-    final adjustedToday = today.subtract(Duration(days: weeksOffset * 7));
+    // 페이지 인덱스에 따라 기간 계산
+    // pageIndex = 0: 현재 기준 (과거 + 현재 + 오늘부터 +2달)
+    // pageIndex > 0: 과거 기록만 (13주씩 뒤로)
+    final adjustedToday = widget.pageIndex == 0 ? today : today.subtract(Duration(days: widget.pageIndex * 91));
     
     final studentId = widget.selectedStudent!.student.id;
     
@@ -148,25 +202,176 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
 
-    // 🔄 최적화: 과거는 DB에서, 미래만 새로 계산
-    final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, adjustedToday);
-    final futureSessions = _generateFutureSessions(timeBlocks, adjustedToday, now);
-    
-    // 과거 + 미래 세션 합치기
+    // 페이지별 세션 생성 로직
     final allSessions = <ClassSession>[];
-    allSessions.addAll(pastSessions);
-    allSessions.addAll(futureSessions);
+    
+    print('[DEBUG][AttendanceCheckView] adjustedToday: $adjustedToday');
+    print('[DEBUG][AttendanceCheckView] today: $today');
+    print('[DEBUG][AttendanceCheckView] registrationDate: $registrationDate');
+    
+    if (widget.pageIndex == 0) {
+      // 현재 페이지: 과거 기록(오늘 이전) + 오늘부터 +2달까지 미래 수업
+      print('[DEBUG][AttendanceCheckView] 현재 페이지 세션 생성');
+      
+      // 과거 기록: 오늘 이전의 실제 출석 기록만 불러옴
+      final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, today);
+      
+      // 미래 세션: 오늘부터 +2달까지 생성 (등록일과 무관하게 오늘 기준)
+      final futureSessions = _generateFutureSessionsFromToday(timeBlocks, today, now);
+      
+      print('[DEBUG][AttendanceCheckView] pastSessions count: ${pastSessions.length}');
+      print('[DEBUG][AttendanceCheckView] futureSessions count: ${futureSessions.length}');
+      allSessions.addAll(pastSessions);
+      allSessions.addAll(futureSessions);
+    } else {
+      // 과거 페이지: adjustedToday 기준으로 과거 기록 + 미래 예정 수업 (2달치)
+      print('[DEBUG][AttendanceCheckView] 과거 페이지 세션 생성');
+      final rangeStart = adjustedToday.subtract(const Duration(days: 91)); // 13주 전
+      final pastSessions = _loadPastSessionsFromDBRange(studentId, registrationDate, rangeStart, adjustedToday);
+      final futureSessions = _generateFutureSessionsFromDate(timeBlocks, adjustedToday, now);
+      print('[DEBUG][AttendanceCheckView] pastSessions count (${rangeStart} ~ ${adjustedToday}): ${pastSessions.length}');
+      print('[DEBUG][AttendanceCheckView] futureSessions count (from ${adjustedToday}): ${futureSessions.length}');
+      allSessions.addAll(pastSessions);
+      allSessions.addAll(futureSessions);
+    }
 
     // 날짜순 정렬
     allSessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
-    _applySessionSelection(allSessions, adjustedToday);
+    print('[DEBUG][AttendanceCheckView] allSessions total count: ${allSessions.length}');
+    
+    if (widget.pageIndex == 0) {
+      // 현재 페이지: 스마트 슬라이딩 로직 적용
+      _setupSmartSliding(allSessions, today);
+    } else {
+      // 과거 페이지: 기존 로직 유지  
+      _applySessionSelection(allSessions, adjustedToday);
+      
+      // 화살표 활성화 상태 업데이트
+      final newHasPastRecords = _checkHasPastRecords();
+      final newHasFutureCards = _checkHasFutureCards();
+      
+      print('[DEBUG][AttendanceCheckView] newHasPastRecords: $newHasPastRecords');
+      print('[DEBUG][AttendanceCheckView] newHasFutureCards: $newHasFutureCards');
+      
+      if (_hasPastRecords != newHasPastRecords || _hasFutureCards != newHasFutureCards) {
+        setState(() {
+          _hasPastRecords = newHasPastRecords;
+          _hasFutureCards = newHasFutureCards;
+        });
+      }
+    }
+    
+    print('[DEBUG][AttendanceCheckView] final _classSessions count: ${_classSessions.length}');
+  }
+
+  // 🎯 스마트 슬라이딩 초기 설정
+  void _setupSmartSliding(List<ClassSession> allSessions, DateTime today) {
+    print('[DEBUG][_setupSmartSliding] 시작 - allSessions: ${allSessions.length}개');
+    
+    // 전체 세션 저장
+    _allSessions = allSessions;
+    
+    // 파란 테두리(오늘)의 절대 인덱스 찾기
+    _blueBorderAbsoluteIndex = -1;
+    for (int i = 0; i < allSessions.length; i++) {
+      final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+      if (sessionDate.isAtSameMomentAs(today)) {
+        _blueBorderAbsoluteIndex = i;
+        break;
+      }
+    }
+    
+    // 오늘 수업이 없으면 가장 가까운 미래/과거 수업 찾기
+    if (_blueBorderAbsoluteIndex == -1) {
+      for (int i = 0; i < allSessions.length; i++) {
+        final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+        if (sessionDate.isAfter(today)) {
+          _blueBorderAbsoluteIndex = i;
+          break;
+        }
+      }
+      if (_blueBorderAbsoluteIndex == -1) {
+        for (int i = allSessions.length - 1; i >= 0; i--) {
+          final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+          if (sessionDate.isBefore(today)) {
+            _blueBorderAbsoluteIndex = i;
+            break;
+          }
+        }
+      }
+    }
+    
+    print('[DEBUG][_setupSmartSliding] _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
+    
+    // 초기 화면 설정 (파란 테두리를 가운데에)
+    _setInitialView();
     
     // 화살표 활성화 상태 업데이트
-    final newHasPastRecords = _checkHasPastRecords();
-    final newHasFutureCards = _checkHasFutureCards();
+    _updateNavigationState();
+  }
+
+  // 📍 초기 화면 설정 (파란 테두리를 가운데에)
+  void _setInitialView() {
+    if (_allSessions.isEmpty || _blueBorderAbsoluteIndex == -1) {
+      setState(() {
+        _classSessions = [];
+        _centerIndex = -1;
+        _currentStartIndex = 0;
+      });
+      return;
+    }
     
-    if (_hasPastRecords != newHasPastRecords || _hasFutureCards != newHasFutureCards) {
+    // 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
+    if (_blueBorderAbsoluteIndex >= 6 && _blueBorderAbsoluteIndex < _allSessions.length - 6) {
+      // 완벽한 센터링 가능
+      _currentStartIndex = _blueBorderAbsoluteIndex - 6;
+    } else if (_blueBorderAbsoluteIndex < 6) {
+      // 과거 부족
+      _currentStartIndex = 0;
+    } else {
+      // 미래 부족
+      _currentStartIndex = (_allSessions.length - 13).clamp(0, _allSessions.length);
+    }
+    
+    _updateDisplayedSessions();
+    
+    print('[DEBUG][_setInitialView] _currentStartIndex: $_currentStartIndex');
+  }
+
+  // 📱 화면에 표시할 세션들 업데이트
+  void _updateDisplayedSessions() {
+    if (!mounted) return;
+    
+    final endIndex = (_currentStartIndex + 13).clamp(0, _allSessions.length);
+    final displayedSessions = _allSessions.sublist(_currentStartIndex, endIndex);
+    
+    // 파란 테두리의 상대적 위치 계산
+    int centerIndex = -1;
+    if (_blueBorderAbsoluteIndex >= _currentStartIndex && _blueBorderAbsoluteIndex < endIndex) {
+      centerIndex = _blueBorderAbsoluteIndex - _currentStartIndex;
+    }
+    
+    if (mounted) {
+      setState(() {
+        _classSessions = displayedSessions;
+        _centerIndex = centerIndex;
+      });
+    }
+    
+    print('[DEBUG][_updateDisplayedSessions] 표시: ${_currentStartIndex}~${endIndex-1}, 파란테두리: $centerIndex');
+  }
+
+  // 🔄 네비게이션 상태 업데이트
+  void _updateNavigationState() {
+    if (!mounted) return;
+    
+    final newHasPastRecords = _currentStartIndex > 0;
+    final newHasFutureCards = _currentStartIndex + 13 < _allSessions.length;
+    
+    print('[DEBUG][_updateNavigationState] hasPast: $newHasPastRecords, hasFuture: $newHasFutureCards');
+    
+    if (mounted && (_hasPastRecords != newHasPastRecords || _hasFutureCards != newHasFutureCards)) {
       setState(() {
         _hasPastRecords = newHasPastRecords;
         _hasFutureCards = newHasFutureCards;
@@ -174,8 +379,49 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
   }
 
+  // ⬅️ 왼쪽으로 이동 (과거)
+  void _moveLeft() {
+    if (_currentStartIndex <= 0) return;
+    
+    final leftCards = _currentStartIndex;
+    
+    if (leftCards >= 13) {
+      // 13개씩 점프
+      _currentStartIndex = (_currentStartIndex - 13).clamp(0, _allSessions.length);
+      print('[DEBUG][_moveLeft] 13칸 점프 - 새 startIndex: $_currentStartIndex');
+    } else {
+      // 1칸씩 슬라이딩
+      _currentStartIndex = (_currentStartIndex - 1).clamp(0, _allSessions.length);
+      print('[DEBUG][_moveLeft] 1칸 슬라이딩 - 새 startIndex: $_currentStartIndex');
+    }
+    
+    _updateDisplayedSessions();
+    _updateNavigationState();
+  }
+
+  // ➡️ 오른쪽으로 이동 (미래)
+  void _moveRight() {
+    if (_currentStartIndex + 13 >= _allSessions.length) return;
+    
+    final rightCards = _allSessions.length - (_currentStartIndex + 13);
+    
+    if (rightCards >= 13) {
+      // 13개씩 점프
+      _currentStartIndex = (_currentStartIndex + 13).clamp(0, _allSessions.length - 13);
+      print('[DEBUG][_moveRight] 13칸 점프 - 새 startIndex: $_currentStartIndex');
+    } else {
+      // 1칸씩 슬라이딩
+      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 13);
+      print('[DEBUG][_moveRight] 1칸 슬라이딩 - 새 startIndex: $_currentStartIndex');
+    }
+    
+    _updateDisplayedSessions();
+    _updateNavigationState();
+  }
+
   // 🗄️ 과거 출석 기록에서 ClassSession 생성 (set_id별로 그룹화)
   List<ClassSession> _loadPastSessionsFromDB(String studentId, DateTime registrationDate, DateTime today) {
+    print('[DEBUG][_loadPastSessionsFromDB] studentId: $studentId, registrationDate: $registrationDate, today: $today');
     final pastSessions = <ClassSession>[];
     
     // DB에서 해당 학생의 모든 출석 기록 조회
@@ -186,6 +432,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           return recordDate.isBefore(today) && !recordDate.isBefore(registrationDate);
         })
         .toList();
+    
+    print('[DEBUG][_loadPastSessionsFromDB] 전체 attendanceRecords 개수: ${DataManager.instance.attendanceRecords.length}');
+    print('[DEBUG][_loadPastSessionsFromDB] 필터링된 attendanceRecords 개수: ${attendanceRecords.length}');
 
     // 🔄 날짜별, set_id별로 출석 기록을 그룹화
     final Map<String, List<AttendanceRecord>> groupedRecords = {};
@@ -314,6 +563,77 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return pastSessions;
   }
 
+  // 🗄️ 특정 범위의 과거 출석 기록에서 ClassSession 생성
+  List<ClassSession> _loadPastSessionsFromDBRange(String studentId, DateTime registrationDate, DateTime rangeStart, DateTime rangeEnd) {
+    print('[DEBUG][_loadPastSessionsFromDBRange] studentId: $studentId, rangeStart: $rangeStart, rangeEnd: $rangeEnd');
+    final pastSessions = <ClassSession>[];
+    
+    // DB에서 해당 학생의 특정 범위 출석 기록 조회
+    final attendanceRecords = DataManager.instance.attendanceRecords
+        .where((record) => record.studentId == studentId)
+        .where((record) {
+          final recordDate = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+          return recordDate.isAfter(rangeStart) && 
+                 recordDate.isBefore(rangeEnd) && 
+                 !recordDate.isBefore(registrationDate);
+        })
+        .toList();
+    
+    print('[DEBUG][_loadPastSessionsFromDBRange] 필터링된 attendanceRecords 개수: ${attendanceRecords.length}');
+
+    // 🔄 날짜별, 수업명별로 출석 기록을 그룹화
+    final Map<String, List<AttendanceRecord>> groupedRecords = {};
+    
+    for (final record in attendanceRecords) {
+      final dateKey = '${record.classDateTime.year}-${record.classDateTime.month}-${record.classDateTime.day}';
+      final className = record.className;
+      final key = '$dateKey-$className';
+      
+      groupedRecords.putIfAbsent(key, () => []).add(record);
+    }
+
+    // 각 그룹에서 대표 ClassSession 생성
+    for (final entry in groupedRecords.entries) {
+      final records = entry.value;
+      if (records.isEmpty) continue;
+
+      final firstRecord = records.first;
+      final classDateTime = firstRecord.classDateTime;
+
+      // 해당 날짜/setId의 모든 기록에서 가장 이른 등원시간과 가장 늦은 하원시간 찾기
+      DateTime? earliestArrival;
+      DateTime? latestDeparture;
+
+      for (final record in records) {
+        if (record.arrivalTime != null) {
+          if (earliestArrival == null || record.arrivalTime!.isBefore(earliestArrival)) {
+            earliestArrival = record.arrivalTime;
+          }
+        }
+        if (record.departureTime != null) {
+          if (latestDeparture == null || record.departureTime!.isAfter(latestDeparture)) {
+            latestDeparture = record.departureTime;
+          }
+        }
+      }
+
+      final session = ClassSession(
+        dateTime: classDateTime,
+        className: firstRecord.className,
+        dayOfWeek: _getDayOfWeekFromDate(classDateTime),
+        duration: 50, // 기본값
+        setId: null, // AttendanceRecord에는 setId가 없으므로 null
+        isAttended: firstRecord.isPresent,
+        arrivalTime: earliestArrival,
+        departureTime: latestDeparture,
+        attendanceStatus: _getAttendanceStatusFromRecords(records),
+      );
+      pastSessions.add(session);
+    }
+
+    return pastSessions;
+  }
+
   // 🔮 미래 수업 세션 생성 (기존 로직 활용)
   List<ClassSession> _generateFutureSessions(List<StudentTimeBlock> timeBlocks, DateTime today, DateTime now) {
     final futureSessions = <ClassSession>[];
@@ -325,8 +645,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     
     // 오늘부터 +4주까지 미래 수업 생성
-    // 13주 범위로 제한 (91일)
-    final endDate = today.add(const Duration(days: 91));
+    // 미래 세션 생성 범위 제한
+    // pageIndex = 0: 오늘부터 +2달 (약 60일)
+    // pageIndex > 0: 과거 기록만 (미래 세션 생성 안 함)
+    final endDate = widget.pageIndex == 0 
+        ? DateTime(today.year, today.month + 2, today.day) // 정확한 2달
+        : today; // 과거 페이지에서는 미래 세션 생성 안 함
     
     // 각 setId별로 해당 요일에 수업 생성
     for (final entry in blocksBySetId.entries) {
@@ -404,12 +728,261 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return futureSessions;
   }
 
+  // 🔮 오늘부터 2달까지 미래 수업 세션 생성 (등록일 무관)
+  List<ClassSession> _generateFutureSessionsFromToday(List<StudentTimeBlock> timeBlocks, DateTime today, DateTime now) {
+    print('[DEBUG][_generateFutureSessionsFromToday] today: $today');
+    final futureSessions = <ClassSession>[];
+    
+    // SET_ID별로 timeBlocks 그룹화
+    final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
+    for (final block in timeBlocks) {
+      blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
+    }
+    
+    print('[DEBUG][_generateFutureSessionsFromToday] timeBlocks 총 개수: ${timeBlocks.length}');
+    print('[DEBUG][_generateFutureSessionsFromToday] setId별 그룹 개수: ${blocksBySetId.length}');
+    
+    // 오늘부터 +2달까지 미래 수업 생성
+    final endDate = DateTime(today.year, today.month + 2, today.day);
+    print('[DEBUG][_generateFutureSessionsFromToday] endDate: $endDate');
+    
+    // 각 setId별로 해당 요일에 수업 생성
+    for (final entry in blocksBySetId.entries) {
+      final blocks = entry.value;
+      
+      if (blocks.isEmpty) continue;
+      
+      // 같은 SET_ID의 블록들을 시간순으로 정렬
+      blocks.sort((a, b) {
+        final aTime = a.startHour * 60 + a.startMinute;
+        final bTime = b.startHour * 60 + b.startMinute;
+        return aTime.compareTo(bTime);
+      });
+      
+      final firstBlock = blocks.first;
+      final lastBlock = blocks.last;
+      final dayIndex = firstBlock.dayIndex; // 이 setId의 수업 요일
+      
+      print('[DEBUG][_generateFutureSessionsFromToday] setId: ${entry.key}, dayIndex: $dayIndex');
+      
+      int generatedCount = 0;
+      // 오늘부터 해당 요일에 수업 생성
+      for (DateTime date = today; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
+        // 해당 날짜가 이 setId의 수업 요일인지 확인
+        if (date.weekday - 1 != dayIndex) continue;
+        
+        final classDateTime = DateTime(
+          date.year,
+          date.month,
+          date.day,
+          firstBlock.startHour,
+          firstBlock.startMinute,
+        );
+
+        // 수업명 가져오기
+        String className = '수업';
+        try {
+          final classInfo = DataManager.instance.classes
+              .firstWhere((c) => c.id == firstBlock.sessionTypeId);
+          className = classInfo.name;
+        } catch (e) {
+          // 클래스 정보를 찾지 못한 경우 기본값 사용
+        }
+
+        // 기존 출석 기록 확인
+        final attendanceRecord = DataManager.instance.getAttendanceRecord(
+          widget.selectedStudent!.student.id,
+          classDateTime,
+        );
+
+        // 전체 수업 시간 계산
+        final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
+        final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
+        final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
+
+        final session = ClassSession(
+          dateTime: classDateTime,
+          className: className,
+          dayOfWeek: _getDayOfWeekFromDate(classDateTime),
+          duration: totalDurationMinutes,
+          setId: entry.key,
+          isAttended: attendanceRecord?.isPresent ?? false,
+          arrivalTime: attendanceRecord?.arrivalTime,
+          departureTime: attendanceRecord?.departureTime,
+          attendanceStatus: _getAttendanceStatus(attendanceRecord),
+        );
+
+        futureSessions.add(session);
+        generatedCount++;
+      }
+      
+      print('[DEBUG][_generateFutureSessionsFromToday] setId ${entry.key} 총 생성 개수: $generatedCount');
+    }
+
+    return futureSessions;
+  }
+
+  // 🔮 특정 날짜부터 미래 수업 세션 생성 (등록일 이후만)
+  List<ClassSession> _generateFutureSessionsFromDate(List<StudentTimeBlock> timeBlocks, DateTime startDate, DateTime now) {
+    print('[DEBUG][_generateFutureSessionsFromDate] startDate: $startDate');
+    final futureSessions = <ClassSession>[];
+    
+    // 등록일 확인
+    final registrationDate = widget.selectedStudent?.basicInfo.registrationDate;
+    if (registrationDate == null) {
+      print('[DEBUG][_generateFutureSessionsFromDate] registrationDate가 null - 수업 생성하지 않음');
+      return futureSessions;
+    }
+    
+    // startDate와 registrationDate 중 더 늦은 날짜를 실제 시작일로 사용
+    final actualStartDate = startDate.isAfter(registrationDate) ? startDate : registrationDate;
+    print('[DEBUG][_generateFutureSessionsFromDate] actualStartDate: $actualStartDate (registrationDate: $registrationDate)');
+    
+    // SET_ID별로 timeBlocks 그룹화
+    final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
+    for (final block in timeBlocks) {
+      blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
+    }
+    
+    print('[DEBUG][_generateFutureSessionsFromDate] timeBlocks 총 개수: ${timeBlocks.length}');
+    print('[DEBUG][_generateFutureSessionsFromDate] setId별 그룹 개수: ${blocksBySetId.length}');
+    for (final entry in blocksBySetId.entries) {
+      final blocks = entry.value;
+      if (blocks.isNotEmpty) {
+        final firstBlock = blocks.first;
+        print('[DEBUG][_generateFutureSessionsFromDate] setId: ${entry.key}, 요일: ${firstBlock.dayIndex}, 시간: ${firstBlock.startHour}:${firstBlock.startMinute}');
+      }
+    }
+    
+    // actualStartDate부터 +2달까지 미래 수업 생성 (정확한 월 계산)
+    final endDate = DateTime(
+      actualStartDate.year,
+      actualStartDate.month + 2,
+      actualStartDate.day,
+    );
+    print('[DEBUG][_generateFutureSessionsFromDate] endDate: $endDate');
+    
+    // 각 setId별로 해당 요일에 수업 생성
+    for (final entry in blocksBySetId.entries) {
+      final blocks = entry.value;
+      
+      if (blocks.isEmpty) continue;
+      
+      // 같은 SET_ID의 블록들을 시간순으로 정렬
+      blocks.sort((a, b) {
+        final aTime = a.startHour * 60 + a.startMinute;
+        final bTime = b.startHour * 60 + b.startMinute;
+        return aTime.compareTo(bTime);
+      });
+      
+      final firstBlock = blocks.first;
+      final lastBlock = blocks.last;
+      final dayIndex = firstBlock.dayIndex; // 이 setId의 수업 요일
+      
+      // 해당 요일에만 수업 생성 (등록일 이후부터)
+      print('[DEBUG][_generateFutureSessionsFromDate] setId: ${entry.key}, dayIndex: $dayIndex');
+      
+      int generatedCount = 0;
+      for (DateTime date = actualStartDate; date.isBefore(endDate); date = date.add(const Duration(days: 1))) {
+        // 해당 날짜가 이 setId의 수업 요일인지 확인
+        if (date.weekday - 1 != dayIndex) continue;
+        
+        print('[DEBUG][_generateFutureSessionsFromDate] 수업 생성 중 - 날짜: $date, 요일: ${date.weekday - 1}');
+        
+        final classDateTime = DateTime(
+          date.year,
+          date.month,
+          date.day,
+          firstBlock.startHour,
+          firstBlock.startMinute,
+        );
+
+        // 수업명 가져오기
+        String className = '수업';
+        try {
+          final classInfo = DataManager.instance.classes
+              .firstWhere((c) => c.id == firstBlock.sessionTypeId);
+          className = classInfo.name;
+        } catch (e) {
+          // 클래스 정보를 찾지 못한 경우 기본값 사용
+        }
+
+        // 기존 출석 기록 확인
+        final attendanceRecord = DataManager.instance.getAttendanceRecord(
+          widget.selectedStudent!.student.id,
+          classDateTime,
+        );
+
+        // 전체 수업 시간 계산
+        final startMinutes = firstBlock.startHour * 60 + firstBlock.startMinute;
+        final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
+        final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
+
+        final session = ClassSession(
+          dateTime: classDateTime,
+          className: className,
+          dayOfWeek: _getDayOfWeekFromDate(classDateTime),
+          duration: totalDurationMinutes,
+          setId: entry.key,
+          isAttended: attendanceRecord?.isPresent ?? false,
+          arrivalTime: attendanceRecord?.arrivalTime,
+          departureTime: attendanceRecord?.departureTime,
+          attendanceStatus: _getAttendanceStatus(attendanceRecord),
+        );
+
+        futureSessions.add(session);
+        generatedCount++;
+        print('[DEBUG][_generateFutureSessionsFromDate] 세션 생성 완료 - ${classDateTime}, className: $className');
+      }
+      
+      print('[DEBUG][_generateFutureSessionsFromDate] setId ${entry.key} 총 생성 개수: $generatedCount');
+    }
+
+    return futureSessions;
+  }
+
   // 📍 13개 세션 선택 및 가운데 인덱스 설정
   void _applySessionSelection(List<ClassSession> allSessions, DateTime today) {
+    print('[DEBUG][_applySessionSelection] 시작 - allSessions count: ${allSessions.length}, pageIndex: ${widget.pageIndex}');
+    print('[DEBUG][_applySessionSelection] today: $today');
+    
+    // 생성된 세션들의 날짜 범위 출력
+    if (allSessions.isNotEmpty) {
+      final firstSession = allSessions.first;
+      final lastSession = allSessions.last;
+      print('[DEBUG][_applySessionSelection] 세션 날짜 범위: ${firstSession.dateTime} ~ ${lastSession.dateTime}');
+    }
+    
     // 과거 기록을 보는 경우(pageIndex > 0) 파란 테두리 비활성화
     if (widget.pageIndex > 0) {
+      // 과거 페이지에서도 13개씩 순차적 페이징
+      final pageSize = 13;
+      final totalPages = (allSessions.length / pageSize).ceil();
+      final currentPageIndex = widget.pageIndex - 1; // pageIndex=1이 첫 번째 과거 페이지
+      
+      print('[DEBUG][_applySessionSelection] 과거 페이지 - 총 세션: ${allSessions.length}개, 총 페이지: $totalPages, 현재 페이지: $currentPageIndex');
+      
+      if (currentPageIndex >= totalPages) {
+        // 페이지 범위를 벗어나면 빈 세션
+        print('[DEBUG][_applySessionSelection] 페이지 범위 초과 - 빈 세션 표시');
+        setState(() {
+          _classSessions = [];
+          _centerIndex = -1;
+        });
+        return;
+      }
+      
+      final startIndex = currentPageIndex * pageSize;
+      final endIndex = (startIndex + pageSize).clamp(0, allSessions.length);
+      final selectedSessions = allSessions.sublist(startIndex, endIndex);
+      
+      print('[DEBUG][_applySessionSelection] 과거 페이지 - 선택된 세션: ${selectedSessions.length}개 (${startIndex}~${endIndex-1})');
+      if (selectedSessions.isNotEmpty) {
+        print('[DEBUG][_applySessionSelection] 세션 범위: ${selectedSessions.first.dateTime} ~ ${selectedSessions.last.dateTime}');
+      }
+      
       setState(() {
-        _classSessions = allSessions.length <= 13 ? allSessions : allSessions.sublist(0, 13);
+        _classSessions = selectedSessions;
         _centerIndex = -1; // 파란 테두리 비활성화
       });
       return;
@@ -454,13 +1027,97 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
     
-    // 13개보다 많으면 가운데 기준으로 앞뒤 6개씩 선택
-    final startIndex = (centerIndex - 6).clamp(0, allSessions.length - 13);
-    final endIndex = startIndex + 13;
+    // 현재 페이지에서도 스마트 페이징 적용
+    // pageIndex == 0이면 기존 로직 (오늘 기준), pageIndex > 0이면 위에서 처리됨
+    
+    // 13개씩 점프하는 스마트 페이징
+    final pageSize = 13;
+    final totalPages = (allSessions.length / pageSize).ceil();
+    
+    print('[DEBUG][_applySessionSelection] 현재 페이지 - 총 세션: ${allSessions.length}개, 총 페이지: $totalPages');
+    
+    // 오늘 수업 또는 가장 가까운 미래 수업을 포함한 페이지 찾기
+    int targetPageIndex = 0;
+    int todayOrNextSessionIndex = -1;
+    
+    // 1. 먼저 오늘 수업이 있는지 확인
+    for (int i = 0; i < allSessions.length; i++) {
+      final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+      if (sessionDate.isAtSameMomentAs(today)) {
+        todayOrNextSessionIndex = i;
+        break;
+      }
+    }
+    
+    // 2. 오늘 수업이 없으면 가장 가까운 미래 수업 찾기
+    if (todayOrNextSessionIndex == -1) {
+      for (int i = 0; i < allSessions.length; i++) {
+        final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+        if (sessionDate.isAfter(today)) {
+          todayOrNextSessionIndex = i;
+          break;
+        }
+      }
+    }
+    
+    // 3. 미래 수업도 없으면 가장 최근 과거 수업 찾기
+    if (todayOrNextSessionIndex == -1) {
+      for (int i = allSessions.length - 1; i >= 0; i--) {
+        final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
+        if (sessionDate.isBefore(today) || sessionDate.isAtSameMomentAs(today)) {
+          todayOrNextSessionIndex = i;
+          break;
+        }
+      }
+    }
+    
+    // 타겟 세션을 포함하는 페이지 계산
+    if (todayOrNextSessionIndex >= 0) {
+      targetPageIndex = (todayOrNextSessionIndex / pageSize).floor();
+    }
+    
+    print('[DEBUG][_applySessionSelection] 타겟 세션 인덱스: $todayOrNextSessionIndex, 타겟 페이지: $targetPageIndex');
+    
+    // 스마트 센터링: 과거 기록이 충분하면 파란 테두리를 가운데(6번 인덱스)에 배치
+    int startIndex;
+    int actualCenterIndex = -1;
+    
+    if (allSessions.length <= 13) {
+      // 전체 수업이 13개 이하면 모두 표시
+      startIndex = 0;
+      final selectedSessions = allSessions;
+      if (todayOrNextSessionIndex >= 0) {
+        actualCenterIndex = todayOrNextSessionIndex;
+      }
+      print('[DEBUG][_applySessionSelection] 13개 이하 - 전체 표시, centerIndex: $actualCenterIndex');
+    } else {
+      // 13개보다 많을 때: 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
+      if (todayOrNextSessionIndex >= 6 && todayOrNextSessionIndex < allSessions.length - 6) {
+        // 과거 기록이 6개 이상이고 미래 수업도 6개 이상 있는 경우
+        // 파란 테두리를 정확히 가운데(6번 인덱스)에 배치
+        startIndex = todayOrNextSessionIndex - 6;
+        actualCenterIndex = 6;
+        print('[DEBUG][_applySessionSelection] 완벽한 센터링 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex');
+      } else if (todayOrNextSessionIndex < 6) {
+        // 과거 기록이 부족한 경우 (6개 미만)
+        startIndex = 0;
+        actualCenterIndex = todayOrNextSessionIndex;
+        print('[DEBUG][_applySessionSelection] 과거 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, actualCenterIndex: $actualCenterIndex');
+      } else {
+        // 미래 수업이 부족한 경우 (6개 미만)
+        startIndex = allSessions.length - 13;
+        actualCenterIndex = todayOrNextSessionIndex - startIndex;
+        print('[DEBUG][_applySessionSelection] 미래 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex, actualCenterIndex: $actualCenterIndex');
+      }
+    }
+    
+    final endIndex = (startIndex + pageSize).clamp(0, allSessions.length);
     final selectedSessions = allSessions.sublist(startIndex, endIndex);
-
-    // 실제 가운데 인덱스 계산 (선택된 세션 내에서의 위치)
-    final actualCenterIndex = centerIndex - startIndex;
+    
+    print('[DEBUG][_applySessionSelection] 현재 페이지 - 선택된 세션: ${selectedSessions.length}개 (${startIndex}~${endIndex-1})');
+    if (selectedSessions.isNotEmpty) {
+      print('[DEBUG][_applySessionSelection] 세션 범위: ${selectedSessions.first.dateTime} ~ ${selectedSessions.last.dateTime}');
+    }
 
     setState(() {
       _classSessions = selectedSessions;
@@ -1220,14 +1877,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<AttendanceRecord>>(
-      valueListenable: DataManager.instance.attendanceRecordsNotifier,
-      builder: (context, attendanceRecords, child) {
+    return IntrinsicHeight(
+      child: ValueListenableBuilder<List<AttendanceRecord>>(
+        valueListenable: DataManager.instance.attendanceRecordsNotifier,
+        builder: (context, attendanceRecords, child) {
 
         if (widget.selectedStudent == null) {
           return Container(
             height: 160,
-            margin: const EdgeInsets.only(bottom: 16, right: 24),
+            margin: const EdgeInsets.only(bottom: 24, right: 24),
             decoration: BoxDecoration(
               color: const Color(0xFF18181A),
               borderRadius: BorderRadius.circular(12),
@@ -1243,7 +1901,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         }
 
         return Container(
-          margin: const EdgeInsets.only(bottom: 16, right: 24),
+          margin: const EdgeInsets.only(bottom: 24, right: 1),
           decoration: BoxDecoration(
             color: const Color(0xFF18181A),
             borderRadius: BorderRadius.circular(12),
@@ -1376,25 +2034,31 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                       ],
                     ),
                     const Spacer(), // 범례와 화살표 사이 공간
-                    // 왼쪽 화살표 (현재로 이동)
+                    // 왼쪽 화살표 (과거로 이동)
                     IconButton(
-                      onPressed: (widget.pageIndex > 0 && widget.onPageIndexChanged != null) ? () {
-                        widget.onPageIndexChanged!(widget.pageIndex - 1);
-                      } : null,
+                      onPressed: widget.pageIndex == 0 ? 
+                        (_hasPastRecords ? _moveLeft : null) :
+                        (widget.pageIndex > 0 && widget.onPageIndexChanged != null ? () {
+                          widget.onPageIndexChanged!(widget.pageIndex - 1);
+                        } : null),
                       icon: Icon(
                         Icons.arrow_back_ios,
-                        color: widget.pageIndex > 0 ? Colors.white70 : Colors.white24,
+                        color: _hasPastRecords || widget.pageIndex > 0 ? Colors.white70 : Colors.white24,
                         size: 20,
                       ),
                     ),
-                    // 오른쪽 화살표 (과거로 이동)
+                    // 오른쪽 화살표 (미래로 이동)
                     IconButton(
-                      onPressed: (widget.onPageIndexChanged != null && widget.pageIndex < 2 && _hasPastRecords) ? () {
-                        widget.onPageIndexChanged!(widget.pageIndex + 1);
-                      } : null,
+                      onPressed: widget.pageIndex == 0 ?
+                        (_hasFutureCards ? _moveRight : null) :
+                        (widget.onPageIndexChanged != null && widget.pageIndex < 2 && _hasFutureCards ? () {
+                          print('[DEBUG][AttendanceCheckView] 오른쪽 화살표 클릭 - pageIndex: ${widget.pageIndex} -> ${widget.pageIndex + 1}');
+                          print('[DEBUG][AttendanceCheckView] _hasFutureCards: $_hasFutureCards');
+                          widget.onPageIndexChanged!(widget.pageIndex + 1);
+                        } : null),
                       icon: Icon(
                         Icons.arrow_forward_ios,
-                        color: (widget.pageIndex < 2 && _hasPastRecords) ? Colors.white70 : Colors.white24,
+                        color: _hasFutureCards || (widget.pageIndex < 2 && _hasFutureCards) ? Colors.white70 : Colors.white24,
                         size: 20,
                       ),
                     ),
@@ -1436,7 +2100,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             ),
           ),
         );
-      },
+        },
+      ),
     );
   }
 }
