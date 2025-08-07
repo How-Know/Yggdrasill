@@ -150,7 +150,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         _loadClassSessions();
       } else {
         // 수업 시간이 변경되었을 수 있음 - 전체 재생성
-        _updateFutureClassSessions();
+      _updateFutureClassSessions();
       }
     }
   }
@@ -214,15 +214,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       print('[DEBUG][AttendanceCheckView] 현재 페이지 세션 생성');
       
       // 과거 기록: 오늘 이전의 실제 출석 기록만 불러옴
-      final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, today);
+    final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, today);
       
       // 미래 세션: 오늘부터 +2달까지 생성 (등록일과 무관하게 오늘 기준)
       final futureSessions = _generateFutureSessionsFromToday(timeBlocks, today, now);
       
       print('[DEBUG][AttendanceCheckView] pastSessions count: ${pastSessions.length}');
       print('[DEBUG][AttendanceCheckView] futureSessions count: ${futureSessions.length}');
-      allSessions.addAll(pastSessions);
-      allSessions.addAll(futureSessions);
+    allSessions.addAll(pastSessions);
+    allSessions.addAll(futureSessions);
     } else {
       // 과거 페이지: adjustedToday 기준으로 과거 기록 + 미래 예정 수업 (2달치)
       print('[DEBUG][AttendanceCheckView] 과거 페이지 세션 생성');
@@ -267,10 +267,24 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
   // 🎯 스마트 슬라이딩 초기 설정
   void _setupSmartSliding(List<ClassSession> allSessions, DateTime today) {
+    final studentName = widget.selectedStudent?.student.name ?? "미선택";
+    print('\n=== [SMART_SLIDING_DEBUG] 학생: $studentName ===');
     print('[DEBUG][_setupSmartSliding] 시작 - allSessions: ${allSessions.length}개');
+    print('[DEBUG][_setupSmartSliding] today: $today');
     
     // 전체 세션 저장
     _allSessions = allSessions;
+    
+    // 전체 세션 날짜 로그
+    print('[DEBUG][_setupSmartSliding] 전체 세션 목록:');
+    for (int i = 0; i < allSessions.length; i++) {
+      final session = allSessions[i];
+      final sessionDate = DateTime(session.dateTime.year, session.dateTime.month, session.dateTime.day);
+      final isSameAsToday = sessionDate.isAtSameMomentAs(today);
+      final isAfterToday = sessionDate.isAfter(today);
+      final isBeforeToday = sessionDate.isBefore(today);
+      print('  [$i] ${session.dateTime} (${session.className}) - 오늘대비: ${isSameAsToday ? "오늘" : isAfterToday ? "미래" : "과거"}');
+    }
     
     // 파란 테두리(오늘)의 절대 인덱스 찾기
     _blueBorderAbsoluteIndex = -1;
@@ -278,42 +292,56 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
       if (sessionDate.isAtSameMomentAs(today)) {
         _blueBorderAbsoluteIndex = i;
+        print('[DEBUG][_setupSmartSliding] 오늘 수업 발견 - 인덱스: $i, 날짜: $sessionDate');
         break;
       }
     }
     
     // 오늘 수업이 없으면 가장 가까운 미래/과거 수업 찾기
     if (_blueBorderAbsoluteIndex == -1) {
+      print('[DEBUG][_setupSmartSliding] 오늘 수업 없음 - 가장 가까운 수업 찾기');
+      
+      // 가장 가까운 미래 수업 찾기
       for (int i = 0; i < allSessions.length; i++) {
         final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
         if (sessionDate.isAfter(today)) {
           _blueBorderAbsoluteIndex = i;
+          print('[DEBUG][_setupSmartSliding] 가장 가까운 미래 수업 - 인덱스: $i, 날짜: $sessionDate');
           break;
         }
       }
+      
+      // 미래 수업도 없으면 가장 최근 과거 수업 찾기
       if (_blueBorderAbsoluteIndex == -1) {
         for (int i = allSessions.length - 1; i >= 0; i--) {
           final sessionDate = DateTime(allSessions[i].dateTime.year, allSessions[i].dateTime.month, allSessions[i].dateTime.day);
           if (sessionDate.isBefore(today)) {
             _blueBorderAbsoluteIndex = i;
+            print('[DEBUG][_setupSmartSliding] 가장 최근 과거 수업 - 인덱스: $i, 날짜: $sessionDate');
             break;
           }
         }
       }
     }
     
-    print('[DEBUG][_setupSmartSliding] _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
+    print('[DEBUG][_setupSmartSliding] 최종 _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
     
     // 초기 화면 설정 (파란 테두리를 가운데에)
     _setInitialView();
     
     // 화살표 활성화 상태 업데이트
     _updateNavigationState();
+    
+    print('=== [SMART_SLIDING_DEBUG] 학생: $studentName 완료 ===\n');
   }
 
   // 📍 초기 화면 설정 (파란 테두리를 가운데에)
   void _setInitialView() {
+    final studentName = widget.selectedStudent?.student.name ?? "미선택";
+    print('\n--- [SET_INITIAL_VIEW_DEBUG] 학생: $studentName ---');
+    
     if (_allSessions.isEmpty || _blueBorderAbsoluteIndex == -1) {
+      print('[DEBUG][_setInitialView] 세션이 없거나 파란테두리 없음 - 빈 화면');
       setState(() {
         _classSessions = [];
         _centerIndex = -1;
@@ -322,34 +350,69 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return;
     }
     
+    print('[DEBUG][_setInitialView] 초기 화면 설정 시작:');
+    print('  _allSessions.length: ${_allSessions.length}');
+    print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
+    
     // 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
     if (_blueBorderAbsoluteIndex >= 6 && _blueBorderAbsoluteIndex < _allSessions.length - 6) {
       // 완벽한 센터링 가능
       _currentStartIndex = _blueBorderAbsoluteIndex - 6;
+      print('[DEBUG][_setInitialView] 완벽한 센터링 - startIndex: $_currentStartIndex (파란테두리를 6번째에)');
     } else if (_blueBorderAbsoluteIndex < 6) {
       // 과거 부족
       _currentStartIndex = 0;
+      print('[DEBUG][_setInitialView] 과거 부족 - startIndex: $_currentStartIndex (처음부터 시작)');
     } else {
       // 미래 부족
       _currentStartIndex = (_allSessions.length - 13).clamp(0, _allSessions.length);
+      print('[DEBUG][_setInitialView] 미래 부족 - startIndex: $_currentStartIndex (끝에서 13개)');
     }
     
-    _updateDisplayedSessions();
+    print('[DEBUG][_setInitialView] 최종 _currentStartIndex: $_currentStartIndex');
+    print('--- [SET_INITIAL_VIEW_DEBUG] 설정 완료, 화면 업데이트 시작 ---');
     
-    print('[DEBUG][_setInitialView] _currentStartIndex: $_currentStartIndex');
+    _updateDisplayedSessions();
   }
 
   // 📱 화면에 표시할 세션들 업데이트
   void _updateDisplayedSessions() {
     if (!mounted) return;
     
+    final studentName = widget.selectedStudent?.student.name ?? "미선택";
+    print('\n--- [UPDATE_DISPLAY_DEBUG] 학생: $studentName ---');
+    
     final endIndex = (_currentStartIndex + 13).clamp(0, _allSessions.length);
     final displayedSessions = _allSessions.sublist(_currentStartIndex, endIndex);
     
-    // 파란 테두리의 상대적 위치 계산
+    print('[DEBUG][_updateDisplayedSessions] 화면 업데이트:');
+    print('  _currentStartIndex: $_currentStartIndex');
+    print('  endIndex: ${endIndex - 1}');
+    print('  표시할 세션 수: ${displayedSessions.length}개');
+    print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex (고정값)');
+    
+    // 파란 테두리의 상대적 위치 계산 (절대 인덱스는 변경하지 않음!)
     int centerIndex = -1;
     if (_blueBorderAbsoluteIndex >= _currentStartIndex && _blueBorderAbsoluteIndex < endIndex) {
       centerIndex = _blueBorderAbsoluteIndex - _currentStartIndex;
+      print('[DEBUG][_updateDisplayedSessions] 파란테두리 화면 내 위치: $centerIndex번째 (절대인덱스 $_blueBorderAbsoluteIndex)');
+      
+      // 파란 테두리 세션 정보 출력
+      if (_blueBorderAbsoluteIndex < _allSessions.length) {
+        final blueSession = _allSessions[_blueBorderAbsoluteIndex];
+        print('[DEBUG][_updateDisplayedSessions] 파란테두리 세션: ${blueSession.dateTime} (${blueSession.className})');
+      }
+    } else {
+      print('[DEBUG][_updateDisplayedSessions] 파란테두리 화면 밖 (절대인덱스 $_blueBorderAbsoluteIndex 유지)');
+    }
+    
+    // 화면에 표시되는 세션들 로그
+    print('[DEBUG][_updateDisplayedSessions] 표시 세션 목록:');
+    for (int i = 0; i < displayedSessions.length; i++) {
+      final session = displayedSessions[i];
+      final absoluteIndex = _currentStartIndex + i;
+      final isBlueCard = (absoluteIndex == _blueBorderAbsoluteIndex);
+      print('  [상대$i/절대$absoluteIndex] ${session.dateTime} (${session.className}) ${isBlueCard ? "★파란카드★" : ""}');
     }
     
     if (mounted) {
@@ -359,7 +422,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       });
     }
     
-    print('[DEBUG][_updateDisplayedSessions] 표시: ${_currentStartIndex}~${endIndex-1}, 파란테두리: $centerIndex');
+    print('--- [UPDATE_DISPLAY_DEBUG] 완료 ---\n');
   }
 
   // 🔄 네비게이션 상태 업데이트
@@ -381,42 +444,88 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
   // ⬅️ 왼쪽으로 이동 (과거)
   void _moveLeft() {
-    if (_currentStartIndex <= 0) return;
+    final studentName = widget.selectedStudent?.student.name ?? "미선택";
+    print('\n--- [MOVE_LEFT_DEBUG] 학생: $studentName ---');
+    print('[DEBUG][_moveLeft] 이동 전 상태:');
+    print('  _currentStartIndex: $_currentStartIndex');
+    print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
+    print('  _allSessions.length: ${_allSessions.length}');
+    
+    if (_currentStartIndex <= 0) {
+      print('[DEBUG][_moveLeft] 이동 불가 - 이미 시작점');
+      return;
+    }
     
     final leftCards = _currentStartIndex;
+    print('[DEBUG][_moveLeft] 왼쪽 카드 수: $leftCards개');
     
     if (leftCards >= 13) {
       // 13개씩 점프
+      final oldStartIndex = _currentStartIndex;
       _currentStartIndex = (_currentStartIndex - 13).clamp(0, _allSessions.length);
-      print('[DEBUG][_moveLeft] 13칸 점프 - 새 startIndex: $_currentStartIndex');
+      print('[DEBUG][_moveLeft] 13칸 점프 - $oldStartIndex → $_currentStartIndex');
     } else {
       // 1칸씩 슬라이딩
+      final oldStartIndex = _currentStartIndex;
       _currentStartIndex = (_currentStartIndex - 1).clamp(0, _allSessions.length);
-      print('[DEBUG][_moveLeft] 1칸 슬라이딩 - 새 startIndex: $_currentStartIndex');
+      print('[DEBUG][_moveLeft] 1칸 슬라이딩 - $oldStartIndex → $_currentStartIndex');
     }
+    
+    print('[DEBUG][_moveLeft] 이동 후 상태:');
+    print('  새 _currentStartIndex: $_currentStartIndex');
+    print('  파란테두리는 절대인덱스 $_blueBorderAbsoluteIndex 그대로 유지');
     
     _updateDisplayedSessions();
     _updateNavigationState();
+    
+    print('--- [MOVE_LEFT_DEBUG] 완료 ---\n');
   }
 
   // ➡️ 오른쪽으로 이동 (미래)
   void _moveRight() {
-    if (_currentStartIndex + 13 >= _allSessions.length) return;
+    final studentName = widget.selectedStudent?.student.name ?? "미선택";
+    print('\n--- [MOVE_RIGHT_DEBUG] 학생: $studentName ---');
+    print('[DEBUG][_moveRight] 이동 전 상태:');
+    print('  _currentStartIndex: $_currentStartIndex');
+    print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
+    print('  _allSessions.length: ${_allSessions.length}');
     
-    final rightCards = _allSessions.length - (_currentStartIndex + 13);
-    
-    if (rightCards >= 13) {
-      // 13개씩 점프
-      _currentStartIndex = (_currentStartIndex + 13).clamp(0, _allSessions.length - 13);
-      print('[DEBUG][_moveRight] 13칸 점프 - 새 startIndex: $_currentStartIndex');
-    } else {
-      // 1칸씩 슬라이딩
-      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 13);
-      print('[DEBUG][_moveRight] 1칸 슬라이딩 - 새 startIndex: $_currentStartIndex');
+    if (_currentStartIndex + 13 >= _allSessions.length) {
+      print('[DEBUG][_moveRight] 이동 불가 - 이미 끝점');
+      return;
     }
+    
+    // 13칸 점프 후에도 완전한 13개 화면을 만들 수 있는지 확인
+    final jumpTargetStartIndex = _currentStartIndex + 13;
+    final canMake13AfterJump = (jumpTargetStartIndex + 13) <= _allSessions.length;
+    
+    print('[DEBUG][_moveRight] 13칸 점프 가능성 분석:');
+    print('  현재 시작: $_currentStartIndex');
+    print('  13칸 점프 목표: $jumpTargetStartIndex');
+    print('  점프 후 화면 끝: ${jumpTargetStartIndex + 13}');
+    print('  전체 세션 수: ${_allSessions.length}');
+    print('  점프 후 완전한 화면 가능: $canMake13AfterJump');
+    
+    if (canMake13AfterJump) {
+      // 13개씩 점프 (점프 후에도 완전한 13개 화면 가능)
+      final oldStartIndex = _currentStartIndex;
+      _currentStartIndex = jumpTargetStartIndex;
+      print('[DEBUG][_moveRight] 13칸 점프 - $oldStartIndex → $_currentStartIndex');
+    } else {
+      // 1칸씩 슬라이딩 (점프하면 마지막이 안 채워짐)
+      final oldStartIndex = _currentStartIndex;
+      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 13);
+      print('[DEBUG][_moveRight] 1칸 슬라이딩 - $oldStartIndex → $_currentStartIndex (점프하면 화면이 안 채워짐)');
+    }
+    
+    print('[DEBUG][_moveRight] 이동 후 상태:');
+    print('  새 _currentStartIndex: $_currentStartIndex');
+    print('  파란테두리는 절대인덱스 $_blueBorderAbsoluteIndex 그대로 유지');
     
     _updateDisplayedSessions();
     _updateNavigationState();
+    
+    print('--- [MOVE_RIGHT_DEBUG] 완료 ---\n');
   }
 
   // 🗄️ 과거 출석 기록에서 ClassSession 생성 (set_id별로 그룹화)
@@ -1113,7 +1222,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
     final endIndex = (startIndex + pageSize).clamp(0, allSessions.length);
     final selectedSessions = allSessions.sublist(startIndex, endIndex);
-    
+
     print('[DEBUG][_applySessionSelection] 현재 페이지 - 선택된 세션: ${selectedSessions.length}개 (${startIndex}~${endIndex-1})');
     if (selectedSessions.isNotEmpty) {
       print('[DEBUG][_applySessionSelection] 세션 범위: ${selectedSessions.first.dateTime} ~ ${selectedSessions.last.dateTime}');
@@ -1879,8 +1988,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   Widget build(BuildContext context) {
     return IntrinsicHeight(
       child: ValueListenableBuilder<List<AttendanceRecord>>(
-        valueListenable: DataManager.instance.attendanceRecordsNotifier,
-        builder: (context, attendanceRecords, child) {
+      valueListenable: DataManager.instance.attendanceRecordsNotifier,
+      builder: (context, attendanceRecords, child) {
 
         if (widget.selectedStudent == null) {
           return Container(
@@ -2100,7 +2209,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             ),
           ),
         );
-        },
+      },
       ),
     );
   }
