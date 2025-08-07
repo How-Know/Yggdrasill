@@ -28,17 +28,17 @@ class StudentCard extends StatelessWidget {
   }) : super(key: key);
 
   Future<void> _handleEdit(BuildContext context) async {
-    final result = await showDialog<Student>(
+    await showDialog(
       context: context,
       builder: (context) => StudentRegistrationDialog(
         student: studentWithInfo.student,
         onSave: (updatedStudent, basicInfo) async {
           await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+          Navigator.of(context).pop();
         },
         groups: DataManager.instance.groups,
       ),
     );
-    // result는 Student만 반환되므로, 별도 후처리 필요 없음
   }
 
   void _showDetails(BuildContext context) {

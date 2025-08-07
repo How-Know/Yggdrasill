@@ -66,7 +66,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 클래스 멤버에 선택된 학생 상태 추가
   StudentWithInfo? _selectedStudentWithInfo; // 추가: 학생+부가정보 통합 객체
   // 학생 연속 등록을 위한 상태 변수 추가
-  int? _remainingRegisterCount;
+
   final ScrollController _timetableScrollController = ScrollController();
   bool _hasScrolledToCurrentTime = false;
   bool _hasScrolledOnTabClick = false; // 탭 클릭 시 스크롤 플래그 추가
@@ -232,7 +232,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final studentNames = toRemove.map((b) {
           final s = DataManager.instance.students.firstWhere((s) => s.student.id == b.studentId, orElse: () => StudentWithInfo(
             student: Student(id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-            basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+            basicInfo: StudentBasicInfo(studentId: ''),
           ));
           return s.student.name;
         }).toSet().join(', ');
@@ -285,14 +285,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 항상 students에서 StudentWithInfo를 찾아서 사용
         studentWithInfo = DataManager.instance.students.firstWhere(
           (s) => s.student.id == selectedStudent.id,
-          orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id, registrationDate: selectedStudent.registrationDate ?? DateTime.now())),
+          orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id)),
         );
         // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
         if (studentWithInfo.student.id != selectedStudent.id) {
           await DataManager.instance.loadStudents();
           studentWithInfo = DataManager.instance.students.firstWhere(
             (s) => s.student.id == selectedStudent.id,
-            orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id, registrationDate: selectedStudent.registrationDate ?? DateTime.now())),
+            orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id)),
           );
         }
         final classCount = studentWithInfo.basicInfo.weeklyClassCount;
@@ -305,17 +305,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
           _selectedStudentWithInfo = studentWithInfo != null ? studentWithInfo : null;
-          _remainingRegisterCount = remaining > 0 ? remaining : 0;
-          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
+          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
         });
-        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
+        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       } else {
         setState(() {
           _isStudentRegistrationMode = false;
           _isClassRegistrationMode = false;
           _selectedStudentWithInfo = null;
-          _remainingRegisterCount = null;
-          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
+          
+          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
         });
         print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
@@ -630,6 +629,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       onKey: (event) {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
           if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+            final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
             setState(() {
               _isStudentRegistrationMode = false;
               _isClassRegistrationMode = false;
@@ -638,6 +638,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _selectedStartTimeHour = null;
               _selectedStartTimeMinute = null;
             });
+            // ESC 키로 등록모드 종료 시 스낵바 출력
+            if (mounted) {
+              showAppSnackBar(context, '$currentStudentName 학생의 수업등록이 완료되었습니다.', useRoot: true);
+            }
           }
         }
       },
@@ -651,7 +655,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _isStudentRegistrationMode = false;
               _isClassRegistrationMode = false;
               _selectedStudentWithInfo = null;
-              _remainingRegisterCount = null;
+              
             });
           }
           // 선택모드 해제: 셀 클릭 시 자동으로 선택모드 false
@@ -761,9 +765,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
                         final setIds = blocks.map((b) => b.setId).toSet();
                         final registeredCount = setIds.length;
-                        final totalCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
+                        final nextLessonNumber = registeredCount + 1;
                         return Text(
-                          '${studentWithInfo.student.name} 학생: 수업시간 등록 ($registeredCount/$totalCount)',
+                          '${studentWithInfo.student.name} 학생: ${nextLessonNumber}번째 수업시간 등록',
                           style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
                         );
                       },
@@ -850,7 +854,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         return;
                       }
                       // 학생 등록 모드에서만 동작
-                      if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
+                      if (_isStudentRegistrationMode && _selectedStudentWithInfo != null) {
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final student = studentWithInfo.student;
                         
@@ -869,16 +873,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           
                           final foundStudentWithInfo = DataManager.instance.students.firstWhere(
                             (s) => s.student.id == student.id,
-                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
                           );
                           final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
                           print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
                           
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           setState(() {
-                            _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                            print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
-                            if (_remainingRegisterCount == 0) {
+                    
+                            
+                            if (false) { // 자동 종료 로직 비활성화
                               print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록모드 종료');
                               _isStudentRegistrationMode = false;
                               _selectedStudentWithInfo = null;
@@ -887,9 +891,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               _selectedStartTimeMinute = null;
                             }
                           });
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           
-                          if (_remainingRegisterCount == 0 && mounted) {
+                          if (false && mounted) { // 자동 종료 로직 비활성화
                             showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                           }
                           print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
@@ -940,16 +944,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
                           final foundStudentWithInfo = DataManager.instance.students.firstWhere(
                             (s) => s.student.id == student.id,
-                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
                           );
                           final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
                           print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
                           
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           setState(() {
-                            _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                            print('[DEBUG][onCellStudentsSelected] 남은 수업횟수: $_remainingRegisterCount');
-                            if (_remainingRegisterCount == 0) {
+                    
+                            
+                            if (false) { // 자동 종료 로직 비활성화
                               print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
                               _isStudentRegistrationMode = false;
                               _selectedStudentWithInfo = null;
@@ -958,9 +962,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               _selectedStartTimeMinute = null;
                             }
                           });
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           
-                          if (_remainingRegisterCount == 0 && mounted) {
+                          if (false && mounted) { // 자동 종료 로직 비활성화
                             showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                           }
                           print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
@@ -1052,7 +1056,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final studentWithInfo = _selectedStudentWithInfo!;
       totalClassCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
     }
-    print('[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _remainingRegisterCount=$_remainingRegisterCount');
+    print('[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
     final Set<String>? filteredStudentIds = _activeFilter == null
         ? null
         : _filteredStudents.map((s) => s.student.id).toSet();
@@ -1080,9 +1084,19 @@ class _TimetableScreenState extends State<TimetableScreen> {
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 8.0),
-            child: Text(
-              '${_selectedStudentWithInfo!.student.name} 학생: 수업시간 등록 (${(totalClassCount ?? 1) - (_remainingRegisterCount ?? 0) + 1}/${totalClassCount ?? 1})',
-              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+            child: Builder(
+              builder: (context) {
+                final studentWithInfo = _selectedStudentWithInfo!;
+                final studentId = studentWithInfo.student.id;
+                final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+                final setIds = blocks.map((b) => b.setId).toSet();
+                final registeredCount = setIds.length;
+                final nextLessonNumber = registeredCount + 1;
+                return Text(
+                  '${studentWithInfo.student.name} 학생: ${nextLessonNumber}번째 수업시간 등록',
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                );
+              },
             ),
           ),
         // 시간표 본문
@@ -1112,7 +1126,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
               });
               // 학생 등록 모드에서만 동작
-              if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
+              if (_isStudentRegistrationMode && _selectedStudentWithInfo != null) {
                 final studentWithInfo = _selectedStudentWithInfo!;
                 final student = studentWithInfo.student;
                 final blockMinutes = 30;
@@ -1125,15 +1139,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   int usedCount = setIds.length;
                   final foundStudentWithInfo = DataManager.instance.students.firstWhere(
                     (s) => s.student.id == student.id,
-                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
                   );
                   final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount, maxCount=$maxCount, _remainingRegisterCount=$_remainingRegisterCount');
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount, maxCount=$maxCount');
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
-                    _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
-                    if (_remainingRegisterCount == 0) {
+            
+                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (false) { // 자동 종료 로직 비활성화
                       print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 등록모드 종료');
                       _isStudentRegistrationMode = false;
                       _selectedStudentWithInfo = null;
@@ -1189,15 +1203,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   int usedCount = setIds.length;
                   final foundStudentWithInfo = DataManager.instance.students.firstWhere(
                     (s) => s.student.id == student.id,
-                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
                   );
                   final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount, maxCount=$maxCount, _remainingRegisterCount=$_remainingRegisterCount');
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount, maxCount=$maxCount');
+                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
-                    _remainingRegisterCount = (maxCount - usedCount) > 0 ? (maxCount - usedCount) : 0;
-                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _remainingRegisterCount=$_remainingRegisterCount, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
-                    if (_remainingRegisterCount == 0) {
+            
+                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (false) { // 자동 종료 로직 비활성화
                       print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 등록모드 종료');
                       _isStudentRegistrationMode = false;
                       _selectedStudentWithInfo = null;
@@ -1206,7 +1220,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       _selectedStartTimeMinute = null;
                     }
                   });
-                  if (_remainingRegisterCount == 0 && mounted) {
+                  if (false && mounted) { // 자동 종료 로직 비활성화
                     print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 완료 스낵바');
                     showAppSnackBar(context, '\x1b[33m${student.name}\x1b[0m 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                   }
@@ -1226,8 +1240,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Future<void> _handleTimeSelection(int dayIdx, DateTime startTime) async {
-    print('[DEBUG] _handleTimeSelection called: dayIdx= [33m$dayIdx [0m, startTime= [33m$startTime [0m, _isStudentRegistrationMode=$_isStudentRegistrationMode, _remainingRegisterCount=$_remainingRegisterCount');
-    if (_isStudentRegistrationMode && _remainingRegisterCount != null && _remainingRegisterCount! > 0) {
+    print('[DEBUG] _handleTimeSelection called: dayIdx= [33m$dayIdx [0m, startTime= [33m$startTime [0m, _isStudentRegistrationMode=$_isStudentRegistrationMode, ');
+    if (_isStudentRegistrationMode) {
       // 요일별 운영시간 체크
       final operatingHours = _operatingHours.length > dayIdx ? _operatingHours[dayIdx] : null;
       if (operatingHours != null) {
@@ -1262,7 +1276,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             .length;
         final foundStudentWithInfo = DataManager.instance.students.firstWhere(
           (s) => s.student.id == studentWithInfo.student.id,
-          orElse: () => StudentWithInfo(student: studentWithInfo.student, basicInfo: StudentBasicInfo(studentId: studentWithInfo.student.id, registrationDate: studentWithInfo.student.registrationDate ?? DateTime.now())),
+          orElse: () => StudentWithInfo(student: studentWithInfo.student, basicInfo: StudentBasicInfo(studentId: studentWithInfo.student.id)),
         );
         final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
         if (existingBlocks >= maxCount) {
@@ -1290,23 +1304,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
         print('[DEBUG] studentWithInfo == null, 등록 실패');
       }
       setState(() {
-        if (_remainingRegisterCount != null && _remainingRegisterCount! > 1) {
-          _remainingRegisterCount = _remainingRegisterCount! - 1;
-          // 등록모드 유지, 다음 셀 선택 대기
-        } else {
-          // 마지막 등록, 등록모드 종료
-          _isStudentRegistrationMode = false;
-          _selectedStudentWithInfo = null;
-          _selectedDayIndex = null;
-          _selectedStartTimeHour = null;
-          _selectedStartTimeMinute = null;
-          _remainingRegisterCount = null;
-        }
+        // 등록모드 유지, 다음 셀 선택 대기 (자동 종료 안함)
+        // 등록 완료되어도 계속 등록 모드 유지
       });
       // 마지막 등록 후 안내
-      if (_remainingRegisterCount == null) {
-        if (mounted && studentWithInfo != null) {
-          showAppSnackBar(context, '${studentWithInfo.student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+      if (false) { // 마지막 등록 후 안내 로직 비활성화
+        if (mounted && _selectedStudentWithInfo != null) {
+          showAppSnackBar(context, '${_selectedStudentWithInfo!.student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
         }
       }
       return;
@@ -1444,7 +1448,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         (s) => s.student.id == b.studentId,
         orElse: () => StudentWithInfo(
           student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+          basicInfo: StudentBasicInfo(studentId: ''),
         ),
       )
     ).toList();

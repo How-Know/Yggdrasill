@@ -46,6 +46,14 @@ class StudentScreenState extends State<StudentScreen> {
   DateTime _currentDate = DateTime.now();
   DateTime _currentCalendarDate = DateTime.now();
   int _prevTabIndex = 0;
+  
+  // 수강료납부 및 출석체크 네비게이션을 위한 상태 변수
+  int _paymentPageIndex = 0; // 수강료납부 페이지 인덱스 (0이 현재)
+  int _attendancePageIndex = 0; // 출석체크 페이지 인덱스 (0이 현재)
+  
+  // 화살표 활성화 상태 (실제 데이터 존재 여부에 따라 동적 계산)
+  bool _paymentHasPastRecords = false;
+  bool _paymentHasFutureCards = false;
 
   late Future<void> _loadFuture;
 
@@ -205,7 +213,7 @@ class StudentScreenState extends State<StudentScreen> {
                   print('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
                   await DataManager.instance.deleteStudent(studentWithInfo.student.id);
                   print('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
-                  showAppSnackBar(context, '학생이 삭제되었습니다.');
+                  showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
                   print('[DEBUG][StudentScreen] 스낵바 호출 완료');
                 },
                 onStudentUpdated: (studentWithInfo) async {
@@ -695,8 +703,30 @@ class StudentScreenState extends State<StudentScreen> {
                                   ),
                           ),
                           // 출석 체크
-                          AttendanceCheckView(
-                            selectedStudent: _selectedStudent,
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF18181A),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: const Color(0xFF18181A), width: 1),
+                              ),
+                              child: Column(
+                                children: [
+                                  // 출석체크 내용
+                                  Expanded(
+                                    child: AttendanceCheckView(
+                                      selectedStudent: _selectedStudent,
+                                      pageIndex: _attendancePageIndex,
+                                      onPageIndexChanged: (newIndex) {
+                                        setState(() {
+                                          _attendancePageIndex = newIndex;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                           const SizedBox(height: 16),
                         ],
@@ -1022,6 +1052,26 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
+  // 과거 납부 기록이 있는지 확인
+  bool _hasPastPaymentRecords(StudentWithInfo studentWithInfo, DateTime currentMonth) {
+    final registrationDate = studentWithInfo.basicInfo.registrationDate;
+    if (registrationDate == null) return false;
+    
+    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
+    return currentMonth.isAfter(registrationMonth);
+  }
+  
+  // 미래 납부 카드가 생성 가능한지 확인 (현재부터 +2달까지)
+  bool _hasFuturePaymentCards(StudentWithInfo studentWithInfo, DateTime currentMonth) {
+    final registrationDate = studentWithInfo.basicInfo.registrationDate;
+    if (registrationDate == null) return false;
+    
+    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
+    final futureMonth = DateTime(currentMonth.year, currentMonth.month + 2);
+    
+    return futureMonth.isAfter(registrationMonth) || futureMonth.isAtSameMomentAs(registrationMonth);
+  }
+
   // 수강료 납부 일정 위젯
   Widget _buildPaymentSchedule(StudentWithInfo studentWithInfo) {
     final basicInfo = studentWithInfo.basicInfo;
@@ -1035,14 +1085,40 @@ class StudentScreenState extends State<StudentScreen> {
     final currentMonth = DateTime(now.year, now.month);
     final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
     
-    // 등록일 이후의 달만 포함하도록 수정
-    final candidateMonths = [
-      DateTime(currentMonth.year, currentMonth.month - 2),
-      DateTime(currentMonth.year, currentMonth.month - 1),
-      currentMonth,
-      DateTime(currentMonth.year, currentMonth.month + 1),
-      DateTime(currentMonth.year, currentMonth.month + 2),
-    ];
+    // 화살표 활성화 상태 계산 및 업데이트
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final hasPastRecords = _hasPastPaymentRecords(studentWithInfo, currentMonth);
+      final hasFutureCards = _hasFuturePaymentCards(studentWithInfo, currentMonth);
+      
+      if (_paymentHasPastRecords != hasPastRecords || _paymentHasFutureCards != hasFutureCards) {
+        setState(() {
+          _paymentHasPastRecords = hasPastRecords;
+          _paymentHasFutureCards = hasFutureCards;
+        });
+      }
+    });
+    
+    // 페이지 인덱스에 따라 5개월씩 표시
+    // pageIndex가 0이면 이전 2달 + 현재 + 다음 2달
+    // pageIndex가 1이면 이전 7달 ~ 이전 3달
+    final candidateMonths = <DateTime>[];
+    if (_paymentPageIndex == 0) {
+      // 현재 페이지: 2달 전 ~ 2달 후
+      candidateMonths.addAll([
+        DateTime(currentMonth.year, currentMonth.month - 2),
+        DateTime(currentMonth.year, currentMonth.month - 1),
+        currentMonth,
+        DateTime(currentMonth.year, currentMonth.month + 1),
+        DateTime(currentMonth.year, currentMonth.month + 2),
+      ]);
+    } else {
+      // 과거 페이지: startMonthOffset부터 5개월
+      final startMonthOffset = 3 + (_paymentPageIndex - 1) * 5; // 3달 전부터 시작
+      candidateMonths.addAll([
+        for (int i = 0; i < 5; i++)
+          DateTime(currentMonth.year, currentMonth.month - startMonthOffset - (4 - i)),
+      ]);
+    }
     
     // 등록월 이후의 달만 필터링
     final validMonths = candidateMonths
@@ -1060,7 +1136,7 @@ class StudentScreenState extends State<StudentScreen> {
                 '수강료 납부',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Colors.white),
               ),
-              const SizedBox(width: 16),
+              const Spacer(), // 공간을 채워서 수정 버튼과 화살표들을 오른쪽으로 밀기
               GestureDetector(
                 onTap: _showDueDateEditDialog,
                 child: Container(
@@ -1077,6 +1153,33 @@ class StudentScreenState extends State<StudentScreen> {
                       fontSize: 16,
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(width: 8), // 수정 버튼과 화살표 사이 간격
+              // 왼쪽 화살표 (과거로 이동)
+              IconButton(
+                onPressed: _paymentPageIndex > 0 || _paymentHasPastRecords ? () {
+                  setState(() {
+                    _paymentPageIndex--;
+                  });
+                } : null,
+                icon: Icon(
+                  Icons.arrow_back_ios,
+                  color: (_paymentPageIndex > 0 || _paymentHasPastRecords) ? Colors.white70 : Colors.white24,
+                  size: 20,
+                ),
+              ),
+              // 오른쪽 화살표 (미래로 이동)
+              IconButton(
+                onPressed: (_paymentPageIndex == 0 && _paymentHasFutureCards) ? () {
+                  setState(() {
+                    _paymentPageIndex++;
+                  });
+                } : null,
+                icon: Icon(
+                  Icons.arrow_forward_ios,
+                  color: (_paymentPageIndex == 0 && _paymentHasFutureCards) ? Colors.white70 : Colors.white24,
+                  size: 20,
                 ),
               ),
             ],
@@ -1099,7 +1202,10 @@ class StudentScreenState extends State<StudentScreen> {
                 label = '${monthDiff}달후';
               }
               
-              final isCurrentMonth = month.year == currentMonth.year && month.month == currentMonth.month;
+              // 과거 기록을 보는 경우(_paymentPageIndex > 0)에는 파란 테두리 제거
+              final isCurrentMonth = _paymentPageIndex == 0 && 
+                                   month.year == currentMonth.year && 
+                                   month.month == currentMonth.month;
 
               return Expanded(
                 child: Padding(
@@ -1291,10 +1397,13 @@ class StudentScreenState extends State<StudentScreen> {
         DateTime(earliestUnpaidMonth.year, earliestUnpaidMonth.month, registrationDate.day);
 
     // 3. 날짜 선택 다이얼로그 표시
+    // 1번째 사이클의 경우 수강등록일 이후만 선택 가능하도록 제한
+    final firstSelectableDate = earliestUnpaidCycle == 1 ? registrationDate : DateTime(2000);
+    
     final DateTime? pickedDate = await showDatePicker(
       context: context,
-      initialDate: currentDueDate,
-      firstDate: DateTime(2000),
+      initialDate: currentDueDate.isBefore(firstSelectableDate) ? firstSelectableDate : currentDueDate,
+      firstDate: firstSelectableDate,
       lastDate: DateTime(2101),
       locale: const Locale('ko', 'KR'),
       builder: (context, child) {
@@ -1310,11 +1419,27 @@ class StudentScreenState extends State<StudentScreen> {
           child: child!,
         );
       },
-      helpText: '${earliestUnpaidMonth.month}월 납부일 수정',
+      helpText: earliestUnpaidCycle == 1 
+        ? '${earliestUnpaidMonth.month}월 납부일 수정 (수강등록일 이후만 가능)'
+        : '${earliestUnpaidMonth.month}월 납부일 수정',
     );
 
     if (pickedDate != null) {
-      // 4. 선택한 날짜로 해당 사이클 업데이트 또는 추가
+      // 4-1. 1번째 사이클의 경우 수강등록일 이전으로 설정할 수 없도록 방어
+      if (earliestUnpaidCycle == 1 && pickedDate.isBefore(registrationDate)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('1번째 사이클 결제일은 수강등록일(${registrationDate.month}/${registrationDate.day}) 이전으로 설정할 수 없습니다.'),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // 4-2. 선택한 날짜로 해당 사이클 업데이트 또는 추가
       final updatedRecord = PaymentRecord(
         id: currentRecord?.id,
         studentId: _selectedStudent!.student.id,
@@ -1548,26 +1673,26 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
       _latenessNotification = existingPaymentInfo.latenessNotification;
     } else {
       // 기본값 설정 (기존 학생 정보에서 가져오기)
-      _registrationDate = widget.studentWithInfo.basicInfo?.registrationDate ?? DateTime.now();
-      _paymentMethod = widget.studentWithInfo.basicInfo?.studentPaymentType ?? 'monthly';
+      _registrationDate = DateTime.now();
+      _paymentMethod = 'monthly';
       _tuitionFeeController = TextEditingController();
       _latenessThresholdController = TextEditingController(text: '10');
       
-      // 기존 students_basic_info 데이터가 있다면 student_payment_info로 자동 마이그레이션
+      // 기존 student_basic_info 데이터가 있다면 student_payment_info로 자동 마이그레이션
       _migrateFromBasicInfo();
     }
   }
 
-  // 기존 students_basic_info에서 student_payment_info로 데이터 마이그레이션
+      // 기존 student_basic_info에서 student_payment_info로 데이터 마이그레이션
   Future<void> _migrateFromBasicInfo() async {
     final basicInfo = widget.studentWithInfo.basicInfo;
-    if (basicInfo != null && basicInfo.registrationDate != null) {
+    if (basicInfo != null) {
       try {
         final paymentInfo = StudentPaymentInfo(
           id: const Uuid().v4(),
           studentId: widget.studentWithInfo.student.id,
-          registrationDate: basicInfo.registrationDate!,
-          paymentMethod: basicInfo.studentPaymentType ?? 'monthly',
+          registrationDate: DateTime.now(),
+          paymentMethod: 'monthly',
           tuitionFee: 0,
           latenessThreshold: 10,
           scheduleNotification: false,

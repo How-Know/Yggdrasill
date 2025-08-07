@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 11,
+      version: 13,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -64,15 +64,11 @@ class AcademyDbService {
           )
         ''');
         await db.execute('''
-          CREATE TABLE students_basic_info (
+          CREATE TABLE student_basic_info (
             student_id TEXT PRIMARY KEY,
             phone_number TEXT,
             parent_phone_number TEXT,
-            registration_date TEXT,
-            weekly_class_count INTEGER,
             group_id TEXT,
-            student_payment_type TEXT,
-            student_session_cycle INTEGER,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -101,7 +97,8 @@ class AcademyDbService {
             student_id TEXT,
             group_id TEXT,
             day_index INTEGER,
-            start_time TEXT,
+            start_hour INTEGER,
+            start_minute INTEGER,
             duration INTEGER,
             created_at TEXT,
             set_id TEXT,
@@ -170,12 +167,10 @@ class AcademyDbService {
         }
         if (oldVersion < 3) {
           await db.execute('''
-            CREATE TABLE IF NOT EXISTS students_basic_info (
+            CREATE TABLE IF NOT EXISTS student_basic_info (
               student_id TEXT PRIMARY KEY,
               phone_number TEXT,
               parent_phone_number TEXT,
-              registration_date TEXT,
-              weekly_class_count INTEGER,
               group_id TEXT,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
@@ -184,8 +179,8 @@ class AcademyDbService {
           final hasPhone = columns.any((col) => col['name'] == 'phone_number');
           if (hasPhone) {
             await db.execute('''
-              INSERT OR IGNORE INTO students_basic_info (student_id, phone_number, parent_phone_number, registration_date, weekly_class_count, group_id)
-              SELECT id, phone_number, parent_phone_number, registration_date, weekly_class_count, group_id FROM students
+              INSERT OR IGNORE INTO student_basic_info (student_id, phone_number, parent_phone_number, group_id)
+              SELECT id, phone_number, parent_phone_number, group_id FROM students
             ''');
           }
         }
@@ -194,10 +189,15 @@ class AcademyDbService {
             CREATE TABLE IF NOT EXISTS student_time_blocks (
               id TEXT PRIMARY KEY,
               student_id TEXT,
+              group_id TEXT,
               day_index INTEGER,
-              start_time TEXT,
+              start_hour INTEGER,
+              start_minute INTEGER,
               duration INTEGER,
-              created_at TEXT
+              created_at TEXT,
+              set_id TEXT,
+              number INTEGER,
+              session_type_id TEXT
             )
           ''');
         }
@@ -210,8 +210,7 @@ class AcademyDbService {
           }
         }
         if (oldVersion < 6) {
-          await db.execute("ALTER TABLE students_basic_info ADD COLUMN student_payment_type TEXT;");
-          await db.execute("ALTER TABLE students_basic_info ADD COLUMN student_session_cycle INTEGER;");
+          // 이전 버전 호환성을 위한 코드 (삭제됨 - 더 이상 해당 컬럼을 사용하지 않음)
         }
         final columns = await db.rawQuery("PRAGMA table_info(students)");
         final hasGroupId = columns.any((col) => col['name'] == 'group_id');
@@ -303,6 +302,121 @@ class AcademyDbService {
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
+        }
+        
+        // 버전 12: students_basic_info -> student_basic_info 마이그레이션 및 컬럼 정리
+        if (oldVersion < 12) {
+          print('[DB] 버전 12 마이그레이션 시작: students_basic_info -> student_basic_info');
+          
+          // 1. 기존 students_basic_info 테이블 존재 확인
+          final tableExists = await db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='students_basic_info'"
+          );
+          
+          if (tableExists.isNotEmpty) {
+            print('[DB] 기존 students_basic_info 테이블 발견, 마이그레이션 진행');
+            
+            // 2. 새 student_basic_info 테이블 생성
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS student_basic_info (
+                student_id TEXT PRIMARY KEY,
+                phone_number TEXT,
+                parent_phone_number TEXT,
+                group_id TEXT,
+                FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+              )
+            ''');
+            
+            // 3. 기존 데이터를 새 테이블로 마이그레이션 (필요한 컬럼만)
+            await db.execute('''
+              INSERT OR REPLACE INTO student_basic_info (student_id, phone_number, parent_phone_number, group_id)
+              SELECT student_id, phone_number, parent_phone_number, group_id 
+              FROM students_basic_info
+            ''');
+            
+            // 4. 기존 테이블 삭제
+            await db.execute('DROP TABLE students_basic_info');
+            
+            print('[DB] students_basic_info -> student_basic_info 마이그레이션 완료');
+          } else {
+            print('[DB] students_basic_info 테이블이 없음, 새로 생성');
+            // 테이블이 없다면 새로 생성
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS student_basic_info (
+                student_id TEXT PRIMARY KEY,
+                phone_number TEXT,
+                parent_phone_number TEXT,
+                group_id TEXT,
+                FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+              )
+            ''');
+          }
+        }
+        
+        // 버전 13: student_time_blocks 테이블 컬럼 구조 수정
+        if (oldVersion < 13) {
+          print('[DB] 버전 13 마이그레이션 시작: student_time_blocks 컬럼 구조 수정');
+          
+          // 1. 기존 student_time_blocks 테이블 백업
+          await db.execute('''
+            CREATE TABLE student_time_blocks_backup AS 
+            SELECT * FROM student_time_blocks
+          ''');
+          
+          // 2. 기존 테이블 삭제
+          await db.execute('DROP TABLE student_time_blocks');
+          
+          // 3. 새로운 구조로 테이블 재생성
+          await db.execute('''
+            CREATE TABLE student_time_blocks (
+              id TEXT PRIMARY KEY,
+              student_id TEXT,
+              group_id TEXT,
+              day_index INTEGER,
+              start_hour INTEGER,
+              start_minute INTEGER,
+              duration INTEGER,
+              created_at TEXT,
+              set_id TEXT,
+              number INTEGER,
+              session_type_id TEXT
+            )
+          ''');
+          
+          // 4. 백업 데이터를 새 구조로 변환하여 복원 (start_time을 start_hour, start_minute로 분리)
+          final backupData = await db.rawQuery('SELECT * FROM student_time_blocks_backup');
+          for (final row in backupData) {
+            String? startTime = row['start_time'] as String?;
+            int startHour = 0;
+            int startMinute = 0;
+            
+            if (startTime != null && startTime.contains(':')) {
+              final parts = startTime.split(':');
+              if (parts.length >= 2) {
+                startHour = int.tryParse(parts[0]) ?? 0;
+                startMinute = int.tryParse(parts[1]) ?? 0;
+              }
+            }
+            
+            await db.insert('student_time_blocks', {
+              'id': row['id'],
+              'student_id': row['student_id'],
+              'group_id': row['group_id'],
+              'day_index': row['day_index'],
+              'start_hour': startHour,
+              'start_minute': startMinute,
+              'duration': row['duration'],
+              'created_at': row['created_at'],
+              'set_id': row['set_id'],
+              'number': row['number'],
+              'session_type_id': row['session_type_id'],
+            });
+          }
+          
+          // 5. 백업 테이블 삭제
+          await db.execute('DROP TABLE student_time_blocks_backup');
+          
+          print('[DB] 버전 13 마이그레이션 완료: student_time_blocks 컬럼 구조 수정');
         }
       },
     );
@@ -534,12 +648,12 @@ class AcademyDbService {
 
   Future<void> insertStudentBasicInfo(Map<String, dynamic> info) async {
     final dbClient = await db;
-    await dbClient.insert('students_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('student_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<Map<String, dynamic>?> getStudentBasicInfo(String studentId) async {
     final dbClient = await db;
-    final result = await dbClient.query('students_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+    final result = await dbClient.query('student_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
     if (result.isNotEmpty) return result.first;
     return null;
   }
@@ -547,12 +661,12 @@ class AcademyDbService {
   Future<void> updateStudentBasicInfo(String studentId, Map<String, dynamic> info) async {
     print('[DB] updateStudentBasicInfo:  [33mstudentId=$studentId [0m, groupId= [36m${info['group_id']} [0m');
     final dbClient = await db;
-    await dbClient.update('students_basic_info', info, where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.update('student_basic_info', info, where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<void> deleteStudentBasicInfo(String studentId) async {
     final dbClient = await db;
-    await dbClient.delete('students_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.delete('student_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {

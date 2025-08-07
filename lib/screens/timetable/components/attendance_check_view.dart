@@ -8,10 +8,14 @@ import '../../../services/data_manager.dart';
 
 class AttendanceCheckView extends StatefulWidget {
   final StudentWithInfo? selectedStudent;
+  final int pageIndex;
+  final Function(int)? onPageIndexChanged;
 
   const AttendanceCheckView({
     super.key,
     required this.selectedStudent,
+    this.pageIndex = 0,
+    this.onPageIndexChanged,
   });
 
   @override
@@ -21,11 +25,61 @@ class AttendanceCheckView extends StatefulWidget {
 class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   List<ClassSession> _classSessions = [];
   int _centerIndex = 7; // 가운데 수업 인덱스 (0~14 중 7번째)
+  bool _hasPastRecords = false;
+  bool _hasFutureCards = false;
 
   @override
   void initState() {
     super.initState();
     _loadClassSessions();
+    // 출석 기록 변경 시 자동 새로고침
+    DataManager.instance.attendanceRecordsNotifier.addListener(_onAttendanceRecordsChanged);
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.attendanceRecordsNotifier.removeListener(_onAttendanceRecordsChanged);
+    super.dispose();
+  }
+
+  void _onAttendanceRecordsChanged() {
+    // 현재 선택된 학생의 출석 기록이 변경되었을 때만 새로고침
+    if (widget.selectedStudent != null) {
+      _loadClassSessions();
+    }
+  }
+
+  // 과거 출석 기록이 있는지 확인
+  bool _checkHasPastRecords() {
+    if (widget.selectedStudent == null) return false;
+    
+    final studentId = widget.selectedStudent!.student.id;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
+    // DB에서 과거 출석 기록 확인
+    final pastRecords = DataManager.instance.attendanceRecords
+        .where((record) => record.studentId == studentId)
+        .where((record) {
+          final recordDate = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+          return recordDate.isBefore(today);
+        })
+        .toList();
+    
+    return pastRecords.isNotEmpty;
+  }
+  
+  // 미래 출석 카드가 생성 가능한지 확인 (현재부터 +2사이클까지)
+  bool _checkHasFutureCards() {
+    if (widget.selectedStudent == null) return false;
+    
+    final studentId = widget.selectedStudent!.student.id;
+    final timeBlocks = DataManager.instance.studentTimeBlocks
+        .where((block) => block.studentId == studentId)
+        .toList();
+    
+    // 수업 시간이 등록되어 있고, 현재부터 2사이클 이내면 미래 카드 생성 가능
+    return timeBlocks.isNotEmpty && widget.pageIndex < 2;
   }
 
   @override
@@ -34,9 +88,21 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
     if (oldWidget.selectedStudent != widget.selectedStudent) {
       _loadClassSessions();
+    } else if (oldWidget.pageIndex != widget.pageIndex) {
+      // pageIndex가 변경되었으므로 전체 재생성
+      _loadClassSessions();
     } else if (oldWidget.selectedStudent == widget.selectedStudent && widget.selectedStudent != null) {
-      // 같은 학생이지만 수업 시간이 변경되었을 수 있음 - 전체 재생성
-      _updateFutureClassSessions();
+      // 같은 학생이지만 registration_date가 변경되었는지 확인
+      final oldRegistrationDate = oldWidget.selectedStudent?.basicInfo.registrationDate;
+      final newRegistrationDate = widget.selectedStudent?.basicInfo.registrationDate;
+      
+      if (oldRegistrationDate != newRegistrationDate) {
+        // registration_date가 변경되었으므로 전체 재생성
+        _loadClassSessions();
+      } else {
+        // 수업 시간이 변경되었을 수 있음 - 전체 재생성
+        _updateFutureClassSessions();
+      }
     }
   }
 
@@ -56,6 +122,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    
+    // 페이지 인덱스에 따라 13주씩 이전 기간 계산
+    final weeksOffset = widget.pageIndex * 13;
+    final adjustedToday = today.subtract(Duration(days: weeksOffset * 7));
     
     final studentId = widget.selectedStudent!.student.id;
     
@@ -79,8 +149,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
 
     // 🔄 최적화: 과거는 DB에서, 미래만 새로 계산
-    final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, today);
-    final futureSessions = _generateFutureSessions(timeBlocks, today, now);
+    final pastSessions = _loadPastSessionsFromDB(studentId, registrationDate, adjustedToday);
+    final futureSessions = _generateFutureSessions(timeBlocks, adjustedToday, now);
     
     // 과거 + 미래 세션 합치기
     final allSessions = <ClassSession>[];
@@ -90,7 +160,18 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 날짜순 정렬
     allSessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
-    _applySessionSelection(allSessions, today);
+    _applySessionSelection(allSessions, adjustedToday);
+    
+    // 화살표 활성화 상태 업데이트
+    final newHasPastRecords = _checkHasPastRecords();
+    final newHasFutureCards = _checkHasFutureCards();
+    
+    if (_hasPastRecords != newHasPastRecords || _hasFutureCards != newHasFutureCards) {
+      setState(() {
+        _hasPastRecords = newHasPastRecords;
+        _hasFutureCards = newHasFutureCards;
+      });
+    }
   }
 
   // 🗄️ 과거 출석 기록에서 ClassSession 생성 (set_id별로 그룹화)
@@ -244,7 +325,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     
     // 오늘부터 +4주까지 미래 수업 생성
-    final endDate = now.add(const Duration(days: 28));
+    // 13주 범위로 제한 (91일)
+    final endDate = today.add(const Duration(days: 91));
     
     // 각 setId별로 해당 요일에 수업 생성
     for (final entry in blocksBySetId.entries) {
@@ -324,6 +406,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
   // 📍 13개 세션 선택 및 가운데 인덱스 설정
   void _applySessionSelection(List<ClassSession> allSessions, DateTime today) {
+    // 과거 기록을 보는 경우(pageIndex > 0) 파란 테두리 비활성화
+    if (widget.pageIndex > 0) {
+      setState(() {
+        _classSessions = allSessions.length <= 13 ? allSessions : allSessions.sublist(0, 13);
+        _centerIndex = -1; // 파란 테두리 비활성화
+      });
+      return;
+    }
+    
     // 오늘 수업이 있는지 확인
     int centerIndex = -1;
     
@@ -1175,7 +1266,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                         color: Colors.white,
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 16), // 타이틀과 범례 사이 간격
                     // 범례
                     Wrap(
                       children: [
@@ -1284,6 +1375,29 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                         ),
                       ],
                     ),
+                    const Spacer(), // 범례와 화살표 사이 공간
+                    // 왼쪽 화살표 (현재로 이동)
+                    IconButton(
+                      onPressed: (widget.pageIndex > 0 && widget.onPageIndexChanged != null) ? () {
+                        widget.onPageIndexChanged!(widget.pageIndex - 1);
+                      } : null,
+                      icon: Icon(
+                        Icons.arrow_back_ios,
+                        color: widget.pageIndex > 0 ? Colors.white70 : Colors.white24,
+                        size: 20,
+                      ),
+                    ),
+                    // 오른쪽 화살표 (과거로 이동)
+                    IconButton(
+                      onPressed: (widget.onPageIndexChanged != null && widget.pageIndex < 2 && _hasPastRecords) ? () {
+                        widget.onPageIndexChanged!(widget.pageIndex + 1);
+                      } : null,
+                      icon: Icon(
+                        Icons.arrow_forward_ios,
+                        color: (widget.pageIndex < 2 && _hasPastRecords) ? Colors.white70 : Colors.white24,
+                        size: 20,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -1294,7 +1408,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                       padding: EdgeInsets.all(20),
                       child: Text(
                         '등록된 수업이 없습니다',
-                        style: TextStyle(color: Colors.white54, fontSize: 14),
+                        style: TextStyle(color: Colors.white54, fontSize: 17),
                       ),
                     ),
                   )

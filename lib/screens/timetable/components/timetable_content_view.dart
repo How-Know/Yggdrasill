@@ -155,7 +155,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         (s) => s.student.id == b.studentId,
         orElse: () => StudentWithInfo(
           student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+          basicInfo: StudentBasicInfo(studentId: ''),
         ),
       )
     ).toList();
@@ -225,7 +225,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         (s) => s.student.id == b.studentId,
         orElse: () => StudentWithInfo(
           student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-          basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+          basicInfo: StudentBasicInfo(studentId: ''),
         ),
       )
     ).toList();
@@ -575,7 +575,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       (s) => s.student.id == b.studentId,
                                       orElse: () => StudentWithInfo(
                                         student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                                        basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                        basicInfo: StudentBasicInfo(studentId: ''),
                                       ),
                                     )
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
@@ -599,7 +599,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       (s) => s.student.id == b.studentId,
                                       orElse: () => StudentWithInfo(
                                         student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                                        basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                        basicInfo: StudentBasicInfo(studentId: ''),
                                       ),
                                     )
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거

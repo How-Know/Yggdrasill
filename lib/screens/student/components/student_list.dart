@@ -96,8 +96,8 @@ class StudentList extends StatelessWidget {
             Text(
               title,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
+                color: Color(0xFF0F467D),
+                fontSize: 23,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -105,7 +105,7 @@ class StudentList extends StatelessWidget {
             Text(
               '$totalCount명',
               style: const TextStyle(
-                color: Colors.white70,
+                color: Color(0xFF0F467D),
                 fontSize: 20,
               ),
             ),

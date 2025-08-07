@@ -31,7 +31,8 @@ class EducationLevelSchoolGroup extends StatelessWidget {
         Text(
           levelTitle,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: Colors.white,
+                color: const Color(0xFF0F467D),
+                fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) - 1,
               ),
         ),
         const SizedBox(height: 16),

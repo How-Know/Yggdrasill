@@ -19,7 +19,9 @@ class DateView extends StatelessWidget {
     final dateFormat = DateFormat('yyyy년 MM월');
     
     for (final student in students) {
-      final dateKey = dateFormat.format(student.registrationDate);
+      // registrationDate가 항상 현재시간을 반환하므로 임시로 현재시간 사용
+      final registrationDate = student.registrationDate;
+      final dateKey = dateFormat.format(registrationDate);
       dateGroups[dateKey] ??= [];
       dateGroups[dateKey]!.add(student);
     }

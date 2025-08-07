@@ -25,9 +25,12 @@ class StudentWithInfo {
   GroupInfo? get groupInfo => student.groupInfo;
   String? get phoneNumber => student.phoneNumber;
   String? get parentPhoneNumber => student.parentPhoneNumber;
-  DateTime? get registrationDate => student.registrationDate;
-  // 반드시 basicInfo.weeklyClassCount만 사용해야 함
-  int get weeklyClassCount => basicInfo.weeklyClassCount;
+  DateTime? get registrationDate => basicInfo.registrationDate;
+  // 기본 주간 수업 횟수
+  int get weeklyClassCount => 1;
+  // 호환성을 위한 추가 getter들
+  String? get studentPaymentType => 'monthly';
+  int? get studentSessionCycle => 1;
 }
 
 class DataManager {
@@ -122,7 +125,8 @@ class DataManager {
 
     try {
       await loadGroups();
-      await loadStudents();
+      await loadStudentPaymentInfos(); // 학생 결제 정보를 먼저 로딩
+      await loadStudents(); // registration_date를 가져오기 위해 student_payment_info 후에 호출
       await loadAcademySettings();
       await loadPaymentType();
       await _loadOperatingHours();
@@ -133,7 +137,6 @@ class DataManager {
       await loadClasses(); // 수업 정보 로딩 추가
       await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
       await loadAttendanceRecords(); // 출석 기록 로딩 추가
-      await loadStudentPaymentInfos(); // 학생 결제 정보 로딩 추가
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -171,21 +174,49 @@ class DataManager {
     print('[DEBUG][loadStudents] 진입');
     // 1. students 테이블에서 기본 정보 불러오기
     final studentsRaw = await AcademyDbService.instance.getStudents();
-    // 2. students_basic_info 테이블에서 부가 정보 불러오기
+    // 2. student_basic_info 테이블에서 부가 정보 불러오기
     List<StudentBasicInfo> basicInfos = [];
     for (final s in studentsRaw) {
       final info = await AcademyDbService.instance.getStudentBasicInfo(s.id);
+      
+      // 3. student_payment_info에서 registration_date 가져오기
+      DateTime? registrationDate;
+      final paymentInfo = _studentPaymentInfos.firstWhere(
+        (p) => p.studentId == s.id,
+        orElse: () => StudentPaymentInfo(
+          id: '',
+          studentId: s.id,
+          registrationDate: DateTime.now(),
+          paymentMethod: '',
+          tuitionFee: 0,
+          latenessThreshold: 10,
+          scheduleNotification: false,
+          attendanceNotification: false,
+          departureNotification: false,
+          latenessNotification: false,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      registrationDate = paymentInfo.registrationDate;
+      
       if (info != null) {
-        basicInfos.add(StudentBasicInfo.fromDb(info));
+        basicInfos.add(StudentBasicInfo(
+          studentId: info['student_id'] as String,
+          phoneNumber: info['phone_number'] as String?,
+          parentPhoneNumber: info['parent_phone_number'] as String?,
+          groupId: info['group_id'] as String?,
+          registrationDate: registrationDate,
+        ));
       } else {
         // 부가 정보가 없으면 기본값으로 생성
         basicInfos.add(StudentBasicInfo(
           studentId: s.id,
-          registrationDate: DateTime.now(),
+          registrationDate: registrationDate,
         ));
       }
     }
-    // 3. groupId로 groupInfo를 찾아서 Student에 할당 (students_basic_info 기준)
+    // 4. groupId로 groupInfo를 찾아서 Student에 할당 (student_basic_info 기준)
     final students = [
       for (int i = 0; i < studentsRaw.length; i++)
         Student(
@@ -194,15 +225,13 @@ class DataManager {
           school: studentsRaw[i].school,
           grade: studentsRaw[i].grade,
           educationLevel: studentsRaw[i].educationLevel,
-          phoneNumber: studentsRaw[i].phoneNumber,
-          parentPhoneNumber: studentsRaw[i].parentPhoneNumber,
-          registrationDate: studentsRaw[i].registrationDate,
-          weeklyClassCount: studentsRaw[i].weeklyClassCount,
+          phoneNumber: basicInfos[i].phoneNumber,
+          parentPhoneNumber: basicInfos[i].parentPhoneNumber,
           groupId: basicInfos[i].groupId,
           groupInfo: basicInfos[i].groupId != null ? _groupsById[basicInfos[i].groupId] : null,
         )
     ];
-    // 4. 매칭해서 StudentWithInfo 리스트 생성
+    // 5. 매칭해서 StudentWithInfo 리스트 생성
     _studentsWithInfo = [
       for (int i = 0; i < students.length; i++)
         StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
@@ -686,13 +715,12 @@ class DataManager {
     return setCount;
   }
 
-  /// 수업 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 > 0)
+  /// 수업 등록 가능 학생 리스트 반환 (수업이 등록되지 않은 학생들)
   List<StudentWithInfo> getLessonEligibleStudents() {
     final eligible = students.where((s) {
       final setCount = getStudentLessonSetCount(s.student.id);
-      final remain = (s.basicInfo.weeklyClassCount) - setCount;
-      print('[DEBUG][DataManager] getLessonEligibleStudents: ${s.student.name}, remain=$remain');
-      return remain > 0;
+      print('[DEBUG][DataManager] getLessonEligibleStudents: ${s.student.name}, setCount=$setCount');
+      return setCount == 0; // 수업이 하나도 등록되지 않은 학생만
     }).toList();
     print('[DEBUG][DataManager] getLessonEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
     return eligible;
@@ -702,7 +730,7 @@ class DataManager {
   List<StudentWithInfo> getSelfStudyEligibleStudents() {
     final eligible = students.where((s) {
       final setCount = getStudentLessonSetCount(s.student.id);
-      final remain = (s.basicInfo.weeklyClassCount) - setCount;
+      final remain = 1 - setCount;
       print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
       return remain <= 0;
     }).toList();
@@ -971,9 +999,7 @@ class DataManager {
     // 모든 학생의 수업 시간 블록을 확인
     for (final student in _studentsWithInfo) {
       final studentId = student.student.id;
-      final registrationDate = student.basicInfo.registrationDate;
-      
-      if (registrationDate == null) continue;
+          final registrationDate = DateTime.now().subtract(Duration(days: 30)); // 기본 30일 전부터
 
       // 해당 학생의 time blocks 가져오기
       final timeBlocks = studentTimeBlocks

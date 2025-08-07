@@ -28,15 +28,14 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     DataManager.instance.studentTimeBlocksNotifier.addListener(_refreshStudentList); // 시간표 변경 시 자동 새로고침
   }
 
-  /// 자습 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 <= 0)
+  /// 자습 등록 가능 학생 리스트 반환 (수업이 등록된 학생들)
   List<StudentWithInfo> getSelfStudyEligibleStudents() {
     final eligible = DataManager.instance.students.where((s) {
       final setCount = DataManager.instance.getStudentLessonSetCount(s.student.id);
-      final remain = (s.basicInfo.weeklyClassCount) - setCount;
-      print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
-      return remain <= 0;
+      print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${s.student.name}, setCount=$setCount');
+      return setCount > 0; // 수업이 하나 이상 등록된 학생만
     }).toList();
-    print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
     return eligible;
   }
 

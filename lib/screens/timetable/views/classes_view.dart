@@ -434,8 +434,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               final cellStudentWithInfos = activeBlocks.map((b) => studentsWithInfo.firstWhere(
                                 (s) => s.student.id == b.studentId,
                                 orElse: () => StudentWithInfo(
-                                  student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1),
-                                  basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now()),
+                                  student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ),
+                                  basicInfo: StudentBasicInfo(studentId: ''),
                                 ),
                               )).toList();
                               // 디버깅용 프린트 추가
@@ -567,7 +567,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                           final studentsWithInfo = DataManager.instance.students;
                                           final cellSelfStudyStudentWithInfos = selfStudyBlocks.map((b) => studentsWithInfo.firstWhere(
                                             (s) => s.student.id == b.studentId,
-                                            orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())),
+                                            orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ), basicInfo: StudentBasicInfo(studentId: '')),
                                           )).toList();
                                           widget.onCellSelfStudyStudentsChanged!(dayIdx, timeBlocks[blockIdx].startTime, cellSelfStudyStudentWithInfos);
                                         }
@@ -790,7 +790,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               runSpacing: 10,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
-                final studentWithInfo = studentsWithInfo.firstWhere((s) => s.student.id == block.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, registrationDate: DateTime.now(), weeklyClassCount: 1), basicInfo: StudentBasicInfo(studentId: '', registrationDate: DateTime.now())));
+                final studentWithInfo = studentsWithInfo.firstWhere((s) => s.student.id == block.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ), basicInfo: StudentBasicInfo(studentId: '')));
                 final groupInfo = block.groupId != null ?
                   groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
                 // 삭제된 학생이면 카드 자체를 렌더링하지 않음

@@ -188,7 +188,9 @@ class StudentDetailsDialog extends StatelessWidget {
                       const SizedBox(width: 8),
                       Text('등록일: ', style: TextStyle(color: Colors.white70, fontSize: 15)),
                       Text(
-                        DateFormat('yyyy년 MM월 dd일').format(basicInfo.registrationDate),
+                        basicInfo.registrationDate != null 
+                          ? DateFormat('yyyy년 MM월 dd일').format(basicInfo.registrationDate!)
+                          : '등록일 정보 없음',
                         style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
                       ),
                     ],

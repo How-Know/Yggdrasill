@@ -81,9 +81,9 @@ class StudentSchoolView extends StatelessWidget {
           child: Text(
             levelTitle,
             style: const TextStyle(
-              fontSize: 20,
+              fontSize: 19,
               fontWeight: FontWeight.w600,
-              color: Colors.white,
+              color: Color(0xFF0F467D),
             ),
           ),
         ),

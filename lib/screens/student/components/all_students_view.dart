@@ -249,11 +249,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       Expanded(
                         child: ListView(
                           children: [
-                            _buildEducationLevelGroup(' 초등', EducationLevel.elementary, groupedByGrade),
+                            _buildEducationLevelGroup('E 초등', EducationLevel.elementary, groupedByGrade),
                             const Divider(color: Color(0xFF0F467D), height: 48),
-                            _buildEducationLevelGroup(' 중등', EducationLevel.middle, groupedByGrade),
+                            _buildEducationLevelGroup('M 중등', EducationLevel.middle, groupedByGrade),
                             const Divider(color: Color(0xFF0F467D), height: 48),
-                            _buildEducationLevelGroup(' 고등', EducationLevel.high, groupedByGrade),
+                            _buildEducationLevelGroup('H 고등', EducationLevel.high, groupedByGrade),
                           ],
                         ),
                       ),
@@ -679,11 +679,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(top: 16, bottom: 8),
+                padding: const EdgeInsets.only(top: 8, bottom: 8),
                 child: Text(
                   '${entry.key}학년',
                   style: const TextStyle(
-                    color: Colors.white70,
+                    color: Color(0xFF0F467D),
                     fontSize: 18,
                     fontWeight: FontWeight.w500,
                   ),
@@ -738,8 +738,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             Text(
               title,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
+                color: Color(0xFF0F467D),
+                fontSize: 23,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -747,7 +747,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             Text(
               '$totalCount명',
               style: const TextStyle(
-                color: Colors.white70,
+                color: Color(0xFF0F467D),
                 fontSize: 20,
               ),
             ),
@@ -838,8 +838,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             Text(
               title,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
+                color: Color(0xFF0F467D),
+                fontSize: 23,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -847,7 +847,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             Text(
               '$totalCount명',
               style: const TextStyle(
-                color: Colors.white70,
+                color: Color(0xFF0F467D),
                 fontSize: 20,
               ),
             ),

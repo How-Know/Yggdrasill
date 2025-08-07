@@ -47,7 +47,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       final studentsWithInfo = DataManager.instance.students;
       final match = studentsWithInfo.firstWhere(
         (s) => s.student.id == student.id,
-        orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id, registrationDate: student.registrationDate ?? DateTime.now())),
+        orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
       );
       basicInfo = match.basicInfo;
     }
@@ -55,12 +55,12 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _schoolController = TextEditingController(text: student?.school);
     _phoneController = TextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
     _parentPhoneController = TextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
-    _registrationDate = basicInfo?.registrationDate ?? student?.registrationDate ?? DateTime.now();
+    _registrationDate = DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
 
     // [지불 방식 데이터 초기화 추가]
-    _paymentType = basicInfo?.studentPaymentType ?? 'monthly';
-    _paymentCycleController.text = (basicInfo?.studentSessionCycle ?? 1).toString();
+    _paymentType = 'monthly';
+    _paymentCycleController.text = '1';
     if (student != null) {
       final grades = gradesByLevel[student.educationLevel] ?? [];
       _grade = grades.firstWhere(
@@ -152,9 +152,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       educationLevel: _educationLevel,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
-      registrationDate: null, // 더 이상 Student에 저장하지 않음
       groupInfo: null,
-      weeklyClassCount: 1, // 기본값
       groupId: _selectedGroup?.id,
     );
     
@@ -163,11 +161,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       studentId: student.id,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
-      registrationDate: DateTime.now(), // 임시값 (실제로는 student_payment_info 사용)
-      weeklyClassCount: 1, // 기본값
       groupId: _selectedGroup?.id,
-      studentPaymentType: null, // 더 이상 여기에 저장하지 않음
-      studentSessionCycle: null, // 더 이상 여기에 저장하지 않음
     );
     
     // StudentPaymentInfo 생성 (등록일자와 지불방식을 여기에 저장)

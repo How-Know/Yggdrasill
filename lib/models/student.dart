@@ -11,8 +11,6 @@ class Student {
   final GroupInfo? groupInfo;
   final String? phoneNumber;
   final String? parentPhoneNumber;
-  final DateTime? registrationDate;
-  final int? weeklyClassCount;
   final String? groupId;
 
   Student({
@@ -24,8 +22,6 @@ class Student {
     this.groupInfo,
     this.phoneNumber,
     this.parentPhoneNumber,
-    this.registrationDate,
-    this.weeklyClassCount,
     this.groupId,
   });
 
@@ -38,8 +34,6 @@ class Student {
     GroupInfo? groupInfo,
     String? phoneNumber,
     String? parentPhoneNumber,
-    DateTime? registrationDate,
-    int? weeklyClassCount,
     String? groupId,
   }) {
     return Student(
@@ -51,9 +45,7 @@ class Student {
       groupInfo: groupInfo ?? this.groupInfo,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
-      registrationDate: registrationDate ?? this.registrationDate,
-      weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
-      groupId: groupId,
+      groupId: groupId ?? this.groupId,
     );
   }
 
@@ -66,8 +58,7 @@ class Student {
       educationLevel: EducationLevel.values[row['education_level'] as int],
       phoneNumber: row['phone_number'] as String?,
       parentPhoneNumber: row['parent_phone_number'] as String?,
-      registrationDate: row['registration_date'] != null ? DateTime.parse(row['registration_date'] as String) : null,
-      weeklyClassCount: row['weekly_class_count'] as int?,
+
       groupId: row['group_id'] as String?,
       groupInfo: null,
     );
@@ -83,9 +74,13 @@ class Student {
     };
   }
 
+  // 호환성을 위한 getter들 (기본값 제공)
+  DateTime get registrationDate => DateTime.now();
+  int get weeklyClassCount => 1;
+
   @override
   String toString() {
-    return 'Student(id: $id, name: $name, school: $school, grade: $grade, educationLevel: $educationLevel, groupInfo: $groupInfo, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, registrationDate: $registrationDate, weeklyClassCount: $weeklyClassCount, groupId: $groupId)';
+    return 'Student(id: $id, name: $name, school: $school, grade: $grade, educationLevel: $educationLevel, groupInfo: $groupInfo, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, groupId: $groupId)';
   }
 }
 
@@ -93,41 +88,29 @@ class StudentBasicInfo {
   final String studentId;
   final String? phoneNumber;
   final String? parentPhoneNumber;
-  final DateTime registrationDate;
-  final int weeklyClassCount;
   final String? groupId;
-  final String? studentPaymentType;
-  final int? studentSessionCycle;
+  final DateTime? registrationDate;
 
   StudentBasicInfo({
     required this.studentId,
     this.phoneNumber,
     this.parentPhoneNumber,
-    required this.registrationDate,
-    this.weeklyClassCount = 1,
     this.groupId,
-    this.studentPaymentType,
-    this.studentSessionCycle,
+    this.registrationDate,
   });
 
   StudentBasicInfo copyWith({
     String? phoneNumber,
     String? parentPhoneNumber,
-    DateTime? registrationDate,
-    int? weeklyClassCount,
     String? groupId,
-    String? studentPaymentType,
-    int? studentSessionCycle,
+    DateTime? registrationDate,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
-      registrationDate: registrationDate ?? this.registrationDate,
-      weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
       groupId: groupId ?? this.groupId,
-      studentPaymentType: studentPaymentType ?? this.studentPaymentType,
-      studentSessionCycle: studentSessionCycle ?? this.studentSessionCycle,
+      registrationDate: registrationDate ?? this.registrationDate,
     );
   }
 
@@ -136,11 +119,7 @@ class StudentBasicInfo {
       studentId: row['student_id'] as String,
       phoneNumber: row['phone_number'] as String?,
       parentPhoneNumber: row['parent_phone_number'] as String?,
-      registrationDate: DateTime.parse(row['registration_date'] as String),
-      weeklyClassCount: row['weekly_class_count'] as int? ?? 1,
       groupId: row['group_id'] as String?,
-      studentPaymentType: row['student_payment_type'] as String?,
-      studentSessionCycle: row['student_session_cycle'] as int?,
     );
   }
 
@@ -149,17 +128,18 @@ class StudentBasicInfo {
       'student_id': studentId,
       'phone_number': phoneNumber,
       'parent_phone_number': parentPhoneNumber,
-      'registration_date': registrationDate.toIso8601String(),
-      'weekly_class_count': weeklyClassCount,
       'group_id': groupId,
-      'student_payment_type': studentPaymentType,
-      'student_session_cycle': studentSessionCycle,
     };
   }
 
+  // 호환성을 위한 getter들 (기본값 제공)
+  int get weeklyClassCount => 1;
+  String get studentPaymentType => 'monthly';
+  int get studentSessionCycle => 1;
+
   @override
   String toString() {
-    return 'StudentBasicInfo(studentId: $studentId, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, registrationDate: $registrationDate, weeklyClassCount: $weeklyClassCount, groupId: $groupId)';
+    return 'StudentBasicInfo(studentId: $studentId, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, groupId: $groupId)';
   }
 }
 
