@@ -8,6 +8,7 @@ import '../../widgets/group_schedule_dialog.dart';
 import '../../models/group_schedule.dart';
 import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
+import 'views/makeup_view.dart';
 import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
@@ -25,12 +26,15 @@ import 'package:collection/collection.dart'; // Added for firstWhereOrNull
 
 enum TimetableViewType {
   classes,    // 수업
+  makeup,     // 보강
   schedule;   // 일정
 
   String get name {
     switch (this) {
       case TimetableViewType.classes:
         return '수업';
+      case TimetableViewType.makeup:
+        return '보강';
       case TimetableViewType.schedule:
         return '일정';
     }
@@ -1045,6 +1049,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           },
           onExitSelectMode: exitSelectMode, // 콜백 전달
         );
+      case TimetableViewType.makeup:
+        return const MakeupView();
       case TimetableViewType.schedule:
         return Container(); // TODO: Implement ScheduleView
     }

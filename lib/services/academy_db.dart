@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 13,
+      version: 14,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -150,6 +150,34 @@ class AcademyDbService {
             updated_at TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
+        ''');
+        // v14: session_overrides
+        await db.execute('''
+          CREATE TABLE session_overrides (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            session_type_id TEXT,
+            set_id TEXT,
+            override_type TEXT NOT NULL,
+            original_class_datetime TEXT,
+            replacement_class_datetime TEXT,
+            duration_minutes INTEGER,
+            reason TEXT,
+            original_attendance_id TEXT,
+            replacement_attendance_id TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE UNIQUE INDEX idx_session_overrides_unique
+          ON session_overrides(student_id, original_class_datetime, override_type)
+        ''');
+        await db.execute('''
+          CREATE INDEX idx_session_overrides_lookup
+          ON session_overrides(student_id, replacement_class_datetime)
         ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
@@ -417,6 +445,38 @@ class AcademyDbService {
           await db.execute('DROP TABLE student_time_blocks_backup');
           
           print('[DB] 버전 13 마이그레이션 완료: student_time_blocks 컬럼 구조 수정');
+        }
+        // 버전 14: session_overrides 테이블 생성 및 인덱스 추가
+        if (oldVersion < 14) {
+          print('[DB] 버전 14 마이그레이션 시작: session_overrides 테이블 생성');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS session_overrides (
+              id TEXT PRIMARY KEY,
+              student_id TEXT NOT NULL,
+              session_type_id TEXT,
+              set_id TEXT,
+              override_type TEXT NOT NULL,
+              original_class_datetime TEXT,
+              replacement_class_datetime TEXT,
+              duration_minutes INTEGER,
+              reason TEXT,
+              original_attendance_id TEXT,
+              replacement_attendance_id TEXT,
+              status TEXT NOT NULL,
+              created_at TEXT,
+              updated_at TEXT,
+              FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+            )
+          ''');
+          await db.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_session_overrides_unique
+            ON session_overrides(student_id, original_class_datetime, override_type)
+          ''');
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_session_overrides_lookup
+            ON session_overrides(student_id, replacement_class_datetime)
+          ''');
+          print('[DB] 버전 14 마이그레이션 완료: session_overrides 테이블 생성');
         }
       },
     );
@@ -1251,5 +1311,32 @@ class AcademyDbService {
       print('[ERROR] attendance_records 테이블 확인/생성 중 오류: $e');
       rethrow;
     }
+  }
+
+  // =================== SESSION OVERRIDES ===================
+
+  Future<void> addSessionOverride(Map<String, dynamic> data) async {
+    final dbClient = await db;
+    await dbClient.insert('session_overrides', data, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> updateSessionOverride(String id, Map<String, dynamic> data) async {
+    final dbClient = await db;
+    await dbClient.update('session_overrides', data, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteSessionOverride(String id) async {
+    final dbClient = await db;
+    await dbClient.delete('session_overrides', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<Map<String, dynamic>>> getSessionOverridesForStudent(String studentId) async {
+    final dbClient = await db;
+    return await dbClient.query('session_overrides', where: 'student_id = ?', whereArgs: [studentId], orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
+  }
+
+  Future<List<Map<String, dynamic>>> getSessionOverridesAll() async {
+    final dbClient = await db;
+    return await dbClient.query('session_overrides', orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
   }
 } 

@@ -12,6 +12,7 @@ import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
 import '../models/payment_record.dart';
 import '../models/attendance_record.dart';
+import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
@@ -51,6 +52,10 @@ class DataManager {
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<AttendanceRecord>> attendanceRecordsNotifier = ValueNotifier<List<AttendanceRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
+  
+  // Session Overrides (보강/예외)
+  List<SessionOverride> _sessionOverrides = [];
+  final ValueNotifier<List<SessionOverride>> sessionOverridesNotifier = ValueNotifier<List<SessionOverride>>([]);
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
@@ -131,6 +136,7 @@ class DataManager {
       await loadPaymentType();
       await _loadOperatingHours();
       await loadStudentTimeBlocks();
+      await loadSessionOverrides();
       await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
       await loadTeachers();
@@ -153,6 +159,7 @@ class DataManager {
     _classes = [];
     _paymentRecords = [];
     _attendanceRecords = [];
+    _sessionOverrides = [];
     _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
     _paymentType = PaymentType.monthly;
     _notifyListeners();
@@ -310,6 +317,129 @@ class DataManager {
     classesNotifier.value = List.unmodifiable(_classes);
     paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+  }
+
+  // =================== SESSION OVERRIDES (보강/예외) ===================
+
+  List<SessionOverride> get sessionOverrides => List.unmodifiable(_sessionOverrides);
+
+  Future<void> loadSessionOverrides() async {
+    try {
+      final maps = await AcademyDbService.instance.getSessionOverridesAll();
+      _sessionOverrides = maps.map((m) => SessionOverride.fromMap(m)).toList();
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      print('[DEBUG] session_overrides 로드 완료: ${_sessionOverrides.length}개');
+    } catch (e) {
+      print('[ERROR] loadSessionOverrides 실패: $e');
+      _sessionOverrides = [];
+      sessionOverridesNotifier.value = [];
+    }
+  }
+
+  Future<void> addSessionOverride(SessionOverride overrideData) async {
+    try {
+      await AcademyDbService.instance.addSessionOverride(overrideData.toMap());
+      _sessionOverrides.removeWhere((o) => o.id == overrideData.id);
+      _sessionOverrides.add(overrideData);
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      print('[DEBUG] session_override 추가: id=${overrideData.id}, type=${overrideData.overrideType}, status=${overrideData.status}');
+    } catch (e) {
+      print('[ERROR] addSessionOverride 실패: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateSessionOverride(SessionOverride newData) async {
+    try {
+      // 저장 전 검증: 운영시간 및 충돌 방지
+      _validateOverride(newData);
+      await AcademyDbService.instance.updateSessionOverride(newData.id, newData.toMap());
+      final idx = _sessionOverrides.indexWhere((o) => o.id == newData.id);
+      if (idx != -1) {
+        _sessionOverrides[idx] = newData;
+      } else {
+        _sessionOverrides.add(newData);
+      }
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      print('[DEBUG] session_override 업데이트: id=${newData.id}, status=${newData.status}');
+    } catch (e) {
+      print('[ERROR] updateSessionOverride 실패: $e');
+      rethrow;
+    }
+  }
+
+  // 운영시간/중복/겹침 검증
+  void _validateOverride(SessionOverride ov) {
+    // replacement 필수
+    final replacement = ov.replacementClassDateTime;
+    if (replacement == null) {
+      throw Exception('대체 일정이 필요합니다.');
+    }
+    // 기간 유효성
+    final duration = ov.durationMinutes ?? _academySettings.lessonDuration;
+    if (duration <= 0 || duration > 360) {
+      throw Exception('기간이 올바르지 않습니다. (1~360분)');
+    }
+    // 운영시간 체크
+    final weekday = replacement.weekday % 7; // DateTime weekday: 1=Mon..7=Sun → 0~6로 변환
+    final hours = _operatingHours.firstWhere(
+      (h) => h.dayOfWeek == (weekday == 0 ? 6 : weekday - 1),
+      orElse: () => OperatingHours(dayOfWeek: 0, startHour: 0, startMinute: 0, endHour: 23, endMinute: 59),
+    );
+    final repStart = Duration(hours: replacement.hour, minutes: replacement.minute);
+    final repEnd = repStart + Duration(minutes: duration);
+    final opStart = Duration(hours: hours.startHour, minutes: hours.startMinute);
+    final opEnd = Duration(hours: hours.endHour, minutes: hours.endMinute);
+    if (repStart < opStart || repEnd > opEnd) {
+      throw Exception('운영시간을 벗어났습니다. (${hours.startHour.toString().padLeft(2,'0')}:${hours.startMinute.toString().padLeft(2,'0')}~${hours.endHour.toString().padLeft(2,'0')}:${hours.endMinute.toString().padLeft(2,'0')})');
+    }
+    // 휴게시간과 겹침 금지
+    for (final b in hours.breakTimes) {
+      final bStart = Duration(hours: b.startHour, minutes: b.startMinute);
+      final bEnd = Duration(hours: b.endHour, minutes: b.endMinute);
+      final overlap = repStart < bEnd && repEnd > bStart;
+      if (overlap) {
+        throw Exception('휴게시간과 겹칩니다.');
+      }
+    }
+    // 기존 보강들과 충돌 금지(동일 학생)
+    for (final other in _sessionOverrides) {
+      if (other.id == ov.id || other.studentId != ov.studentId) continue;
+      if (other.status == OverrideStatus.canceled) continue;
+      final otherStart = other.replacementClassDateTime ?? other.originalClassDateTime;
+      final otherDur = other.durationMinutes ?? _academySettings.lessonDuration;
+      if (otherStart == null) continue;
+      final otherRangeStart = Duration(hours: otherStart.hour, minutes: otherStart.minute);
+      final otherRangeEnd = otherRangeStart + Duration(minutes: otherDur);
+      final overlap = repStart < otherRangeEnd && repEnd > otherRangeStart && _isSameDate(replacement, otherStart);
+      if (overlap) {
+        throw Exception('동일 학생의 다른 보강/예외와 시간이 겹칩니다.');
+      }
+    }
+  }
+
+  bool _isSameDate(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  Future<void> cancelSessionOverride(String id) async {
+    try {
+      final idx = _sessionOverrides.indexWhere((o) => o.id == id);
+      if (idx == -1) return;
+      final canceled = _sessionOverrides[idx].copyWith(status: OverrideStatus.canceled);
+      await AcademyDbService.instance.updateSessionOverride(id, canceled.toMap());
+      _sessionOverrides[idx] = canceled;
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      print('[DEBUG] session_override 취소: id=$id');
+    } catch (e) {
+      print('[ERROR] cancelSessionOverride 실패: $e');
+      rethrow;
+    }
+  }
+
+  List<SessionOverride> getSessionOverridesForStudent(String studentId) {
+    return _sessionOverrides.where((o) => o.studentId == studentId).toList();
   }
 
   void addGroup(GroupInfo groupInfo) {
@@ -959,6 +1089,18 @@ class DataManager {
         notes: notes,
       );
       await updateAttendanceRecord(updated);
+      // 보강 planned → completed 자동 연결 시도 (replace/add 대상)
+      try {
+        if (updated.id != null) {
+          await _completePlannedOverrideFor(
+            studentId: studentId,
+            replacementDateTime: classDateTime,
+            replacementAttendanceId: updated.id!,
+          );
+        }
+      } catch (e) {
+        print('[WARN] planned→completed 링크 실패(업데이트): $e');
+      }
       print('[DEBUG] 출석 기록 업데이트 완료');
     } else {
       print('[DEBUG] 새 출석 기록 추가');
@@ -974,6 +1116,18 @@ class DataManager {
         notes: notes,
       );
       await addAttendanceRecord(newRecord);
+      // 보강 planned → completed 자동 연결 시도
+      try {
+        if (newRecord.id != null) {
+          await _completePlannedOverrideFor(
+            studentId: studentId,
+            replacementDateTime: classDateTime,
+            replacementAttendanceId: newRecord.id!,
+          );
+        }
+      } catch (e) {
+        print('[WARN] planned→completed 링크 실패(추가): $e');
+      }
       print('[DEBUG] 출석 기록 추가 완료 - ID: ${newRecord.id}');
     }
     
@@ -985,6 +1139,50 @@ class DataManager {
     } else {
       print('[ERROR] DB 저장 확인 실패!');
     }
+  }
+
+  // replacementClassDateTime와 동일한 planned override(add/replace)를 completed로 전환
+  Future<void> _completePlannedOverrideFor({
+    required String studentId,
+    required DateTime replacementDateTime,
+    required String replacementAttendanceId,
+  }) async {
+    bool sameMinute(DateTime a, DateTime b) {
+      return a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+    }
+
+    SessionOverride? target;
+    for (final o in _sessionOverrides) {
+      if (o.studentId != studentId) continue;
+      if (o.status != OverrideStatus.planned) continue;
+      if (!(o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace)) continue;
+      if (o.replacementClassDateTime == null) continue;
+      if (sameMinute(o.replacementClassDateTime!, replacementDateTime)) {
+        target = o;
+        break;
+      }
+    }
+
+    if (target == null) {
+      print('[DEBUG] matching planned override 없음: studentId=$studentId, time=$replacementDateTime');
+      return;
+    }
+
+    final updated = target.copyWith(
+      status: OverrideStatus.completed,
+      replacementAttendanceId: replacementAttendanceId,
+      updatedAt: DateTime.now(),
+    );
+    await AcademyDbService.instance.updateSessionOverride(updated.id, updated.toMap());
+
+    final idx = _sessionOverrides.indexWhere((o) => o.id == updated.id);
+    if (idx != -1) {
+      _sessionOverrides[idx] = updated;
+    } else {
+      _sessionOverrides.add(updated);
+    }
+    sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+    print('[DEBUG] planned→completed 링크 완료: overrideId=${updated.id}');
   }
 
   // 과거 수업 정리 로직 (등원시간만 있고 하원시간이 없는 경우 정상 출석 처리)

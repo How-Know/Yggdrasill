@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
+import '../../../models/session_override.dart';
 import '../../../models/class_info.dart';
 import '../../../models/attendance_record.dart';
 import '../../../services/data_manager.dart';
@@ -42,11 +43,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     _loadClassSessions();
     // 출석 기록 변경 시 자동 새로고침
     DataManager.instance.attendanceRecordsNotifier.addListener(_onAttendanceRecordsChanged);
+    // 보강/예외 변경 시 자동 새로고침
+    DataManager.instance.sessionOverridesNotifier.addListener(_onAttendanceRecordsChanged);
   }
 
   @override
   void dispose() {
     DataManager.instance.attendanceRecordsNotifier.removeListener(_onAttendanceRecordsChanged);
+    DataManager.instance.sessionOverridesNotifier.removeListener(_onAttendanceRecordsChanged);
     super.dispose();
   }
 
@@ -355,9 +359,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
     
     // 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
-    if (_blueBorderAbsoluteIndex >= 6 && _blueBorderAbsoluteIndex < _allSessions.length - 6) {
+    if (_blueBorderAbsoluteIndex >= 4 && _blueBorderAbsoluteIndex < _allSessions.length - 4) {
       // 완벽한 센터링 가능
-      _currentStartIndex = _blueBorderAbsoluteIndex - 6;
+      _currentStartIndex = _blueBorderAbsoluteIndex - 4;
       print('[DEBUG][_setInitialView] 완벽한 센터링 - startIndex: $_currentStartIndex (파란테두리를 6번째에)');
     } else if (_blueBorderAbsoluteIndex < 6) {
       // 과거 부족
@@ -382,7 +386,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final studentName = widget.selectedStudent?.student.name ?? "미선택";
     print('\n--- [UPDATE_DISPLAY_DEBUG] 학생: $studentName ---');
     
-    final endIndex = (_currentStartIndex + 13).clamp(0, _allSessions.length);
+    final endIndex = (_currentStartIndex + 9).clamp(0, _allSessions.length);
     final displayedSessions = _allSessions.sublist(_currentStartIndex, endIndex);
     
     print('[DEBUG][_updateDisplayedSessions] 화면 업데이트:');
@@ -430,7 +434,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     if (!mounted) return;
     
     final newHasPastRecords = _currentStartIndex > 0;
-    final newHasFutureCards = _currentStartIndex + 13 < _allSessions.length;
+    final newHasFutureCards = _currentStartIndex + 9 < _allSessions.length;
     
     print('[DEBUG][_updateNavigationState] hasPast: $newHasPastRecords, hasFuture: $newHasFutureCards');
     
@@ -459,10 +463,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final leftCards = _currentStartIndex;
     print('[DEBUG][_moveLeft] 왼쪽 카드 수: $leftCards개');
     
-    if (leftCards >= 13) {
+    if (leftCards >= 9) {
       // 13개씩 점프
       final oldStartIndex = _currentStartIndex;
-      _currentStartIndex = (_currentStartIndex - 13).clamp(0, _allSessions.length);
+      _currentStartIndex = (_currentStartIndex - 9).clamp(0, _allSessions.length);
       print('[DEBUG][_moveLeft] 13칸 점프 - $oldStartIndex → $_currentStartIndex');
     } else {
       // 1칸씩 슬라이딩
@@ -490,19 +494,19 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
     print('  _allSessions.length: ${_allSessions.length}');
     
-    if (_currentStartIndex + 13 >= _allSessions.length) {
+    if (_currentStartIndex + 9 >= _allSessions.length) {
       print('[DEBUG][_moveRight] 이동 불가 - 이미 끝점');
       return;
     }
     
     // 13칸 점프 후에도 완전한 13개 화면을 만들 수 있는지 확인
-    final jumpTargetStartIndex = _currentStartIndex + 13;
-    final canMake13AfterJump = (jumpTargetStartIndex + 13) <= _allSessions.length;
+    final jumpTargetStartIndex = _currentStartIndex + 9;
+    final canMake13AfterJump = (jumpTargetStartIndex + 9) <= _allSessions.length;
     
     print('[DEBUG][_moveRight] 13칸 점프 가능성 분석:');
     print('  현재 시작: $_currentStartIndex');
     print('  13칸 점프 목표: $jumpTargetStartIndex');
-    print('  점프 후 화면 끝: ${jumpTargetStartIndex + 13}');
+    print('  점프 후 화면 끝: ${jumpTargetStartIndex + 9}');
     print('  전체 세션 수: ${_allSessions.length}');
     print('  점프 후 완전한 화면 가능: $canMake13AfterJump');
     
@@ -514,7 +518,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     } else {
       // 1칸씩 슬라이딩 (점프하면 마지막이 안 채워짐)
       final oldStartIndex = _currentStartIndex;
-      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 13);
+      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 9);
       print('[DEBUG][_moveRight] 1칸 슬라이딩 - $oldStartIndex → $_currentStartIndex (점프하면 화면이 안 채워짐)');
     }
     
@@ -928,6 +932,16 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       print('[DEBUG][_generateFutureSessionsFromToday] setId ${entry.key} 총 생성 개수: $generatedCount');
     }
 
+    // 오버라이드 적용 (skip/replace/add)
+    final studentId = widget.selectedStudent!.student.id;
+    _applyOverridesToFutureSessions(
+      studentId: studentId,
+      sessions: futureSessions,
+      timeBlocks: timeBlocks,
+      rangeStart: today,
+      rangeEnd: DateTime(today.year, today.month + 2, today.day),
+    );
+
     return futureSessions;
   }
 
@@ -1047,7 +1061,149 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       print('[DEBUG][_generateFutureSessionsFromDate] setId ${entry.key} 총 생성 개수: $generatedCount');
     }
 
+    // 오버라이드 적용 (skip/replace/add)
+    final studentId = widget.selectedStudent!.student.id;
+    _applyOverridesToFutureSessions(
+      studentId: studentId,
+      sessions: futureSessions,
+      timeBlocks: timeBlocks,
+      rangeStart: actualStartDate,
+      rangeEnd: endDate,
+    );
+
     return futureSessions;
+  }
+
+  // === 오버라이드 적용 유틸 ===
+  void _applyOverridesToFutureSessions({
+    required String studentId,
+    required List<ClassSession> sessions,
+    required List<StudentTimeBlock> timeBlocks,
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+  }) {
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+    // 빠른 조회용 맵 (dateTime -> index)
+    int indexOfDate(DateTime dt) {
+      for (int i = 0; i < sessions.length; i++) {
+        if (sameMinute(sessions[i].dateTime, dt)) return i;
+      }
+      return -1;
+    }
+
+    int _inferDefaultDurationMinutes() {
+      if (timeBlocks.isEmpty) return DataManager.instance.academySettings.lessonDuration;
+      // 같은 setId 내의 첫/마지막 블록을 통해 총합 추정
+      final Map<String?, List<StudentTimeBlock>> bySet = {};
+      for (final b in timeBlocks) {
+        bySet.putIfAbsent(b.setId, () => []).add(b);
+      }
+      for (final entry in bySet.entries) {
+        if (entry.value.isEmpty) continue;
+        entry.value.sort((a, b) => (a.startHour * 60 + a.startMinute).compareTo(b.startHour * 60 + b.startMinute));
+        final first = entry.value.first;
+        final last = entry.value.last;
+        final start = first.startHour * 60 + first.startMinute;
+        final end = last.startHour * 60 + last.startMinute + last.duration.inMinutes;
+        final total = end - start;
+        if (total > 0) return total;
+      }
+      return DataManager.instance.academySettings.lessonDuration;
+    }
+
+    String _inferClassName() {
+      try {
+        // 첫 블록의 sessionTypeId로 클래스명 추정
+        final b = timeBlocks.firstWhere((e) => e.sessionTypeId != null);
+        final classInfo = DataManager.instance.classes.firstWhere((c) => c.id == b.sessionTypeId);
+        return classInfo.name;
+      } catch (_) {
+        return '수업';
+      }
+    }
+
+    final overrides = DataManager.instance.getSessionOverridesForStudent(studentId);
+    if (overrides.isEmpty) return;
+
+    final defaultDuration = _inferDefaultDurationMinutes();
+    final defaultClassName = _inferClassName();
+
+    for (final ov in overrides) {
+      // 범위 밖은 무시
+      bool inRange(DateTime dt) =>
+          !dt.isBefore(rangeStart) && dt.isBefore(rangeEnd);
+
+      if (ov.overrideType == OverrideType.skip || ov.overrideType == OverrideType.replace) {
+        if (ov.originalClassDateTime != null && inRange(ov.originalClassDateTime!)) {
+          final idx = indexOfDate(ov.originalClassDateTime!);
+          if (idx != -1) {
+            // replace 대비 원본 세션 정보 보관 및 표시용 고스트 추가
+            final originalSession = sessions[idx];
+            if (ov.overrideType == OverrideType.replace) {
+              // 원래 회차도 희미하게 표시되도록 고스트 세션으로 유지
+              final ghost = ClassSession(
+                dateTime: originalSession.dateTime,
+                className: originalSession.className,
+                dayOfWeek: originalSession.dayOfWeek,
+                duration: originalSession.duration,
+                setId: originalSession.setId,
+                isAttended: originalSession.isAttended,
+                arrivalTime: originalSession.arrivalTime,
+                departureTime: originalSession.departureTime,
+                attendanceStatus: originalSession.attendanceStatus,
+                isOverrideOriginalGhost: true,
+                overrideOriginalDateTime: originalSession.dateTime,
+              );
+              sessions[idx] = ghost; // 기존 자리에 고스트로 교체
+            } else {
+              // skip은 완전히 제거
+              sessions.removeAt(idx);
+            }
+
+            if (ov.overrideType == OverrideType.replace && ov.replacementClassDateTime != null && inRange(ov.replacementClassDateTime!)) {
+              final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
+              final newSession = ClassSession(
+                dateTime: ov.replacementClassDateTime!,
+                className: originalSession.className,
+                dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
+                duration: ov.durationMinutes ?? originalSession.duration,
+                setId: originalSession.setId,
+                isAttended: attendanceRecord?.isPresent ?? false,
+                arrivalTime: attendanceRecord?.arrivalTime,
+                departureTime: attendanceRecord?.departureTime,
+                attendanceStatus: _getAttendanceStatus(attendanceRecord),
+                isOverrideReplacement: true,
+                overrideOriginalDateTime: originalSession.dateTime,
+              );
+              sessions.add(newSession);
+            }
+          }
+        }
+      }
+
+      if (ov.overrideType == OverrideType.add) {
+        if (ov.replacementClassDateTime != null && inRange(ov.replacementClassDateTime!)) {
+          // 중복 방지
+          if (indexOfDate(ov.replacementClassDateTime!) == -1) {
+            final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
+            final newSession = ClassSession(
+              dateTime: ov.replacementClassDateTime!,
+              className: defaultClassName,
+              dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
+              duration: ov.durationMinutes ?? defaultDuration,
+              setId: null,
+              isAttended: attendanceRecord?.isPresent ?? false,
+              arrivalTime: attendanceRecord?.arrivalTime,
+              departureTime: attendanceRecord?.departureTime,
+              attendanceStatus: _getAttendanceStatus(attendanceRecord),
+            );
+            sessions.add(newSession);
+          }
+        }
+      }
+    }
   }
 
   // 📍 13개 세션 선택 및 가운데 인덱스 설정
@@ -1125,8 +1281,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       centerIndex = 0;
     }
     
-    // 13개 수업만 선택 (가운데 수업 기준으로 앞뒤 6개씩)
-    if (allSessions.length <= 13) {
+    // 9개 수업만 선택 (가운데 수업 기준으로 앞뒤 4개씩)
+    if (allSessions.length <= 9) {
       // 전체 수업이 13개 이하면 모두 표시하고 가운데 인덱스 조정
       final actualCenterIndex = centerIndex.clamp(0, allSessions.length - 1);
       setState(() {
@@ -1139,8 +1295,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 현재 페이지에서도 스마트 페이징 적용
     // pageIndex == 0이면 기존 로직 (오늘 기준), pageIndex > 0이면 위에서 처리됨
     
-    // 13개씩 점프하는 스마트 페이징
-    final pageSize = 13;
+    // 9개씩 점프하는 스마트 페이징
+    final pageSize = 9;
     final totalPages = (allSessions.length / pageSize).ceil();
     
     print('[DEBUG][_applySessionSelection] 현재 페이지 - 총 세션: ${allSessions.length}개, 총 페이지: $totalPages');
@@ -1187,11 +1343,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
     print('[DEBUG][_applySessionSelection] 타겟 세션 인덱스: $todayOrNextSessionIndex, 타겟 페이지: $targetPageIndex');
     
-    // 스마트 센터링: 과거 기록이 충분하면 파란 테두리를 가운데(6번 인덱스)에 배치
+    // 스마트 센터링: 과거 기록이 충분하면 파란 테두리를 가운데(4번 인덱스)에 배치
     int startIndex;
     int actualCenterIndex = -1;
     
-    if (allSessions.length <= 13) {
+    if (allSessions.length <= 9) {
       // 전체 수업이 13개 이하면 모두 표시
       startIndex = 0;
       final selectedSessions = allSessions;
@@ -1200,12 +1356,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       }
       print('[DEBUG][_applySessionSelection] 13개 이하 - 전체 표시, centerIndex: $actualCenterIndex');
     } else {
-      // 13개보다 많을 때: 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
-      if (todayOrNextSessionIndex >= 6 && todayOrNextSessionIndex < allSessions.length - 6) {
+      // 9개보다 많을 때: 파란 테두리를 가운데(4번 인덱스)에 배치하도록 계산
+      if (todayOrNextSessionIndex >= 4 && todayOrNextSessionIndex < allSessions.length - 4) {
         // 과거 기록이 6개 이상이고 미래 수업도 6개 이상 있는 경우
         // 파란 테두리를 정확히 가운데(6번 인덱스)에 배치
-        startIndex = todayOrNextSessionIndex - 6;
-        actualCenterIndex = 6;
+        startIndex = todayOrNextSessionIndex - 4;
+        actualCenterIndex = 4;
         print('[DEBUG][_applySessionSelection] 완벽한 센터링 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex');
       } else if (todayOrNextSessionIndex < 6) {
         // 과거 기록이 부족한 경우 (6개 미만)
@@ -1214,7 +1370,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         print('[DEBUG][_applySessionSelection] 과거 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, actualCenterIndex: $actualCenterIndex');
       } else {
         // 미래 수업이 부족한 경우 (6개 미만)
-        startIndex = allSessions.length - 13;
+        startIndex = allSessions.length - 9;
         actualCenterIndex = todayOrNextSessionIndex - startIndex;
         print('[DEBUG][_applySessionSelection] 미래 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex, actualCenterIndex: $actualCenterIndex');
       }
@@ -1364,8 +1520,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   }
 
   Widget _buildClassSessionCard(ClassSession session, int index, double cardWidth) {
+    final GlobalKey checkboxKey = GlobalKey();
     final isCenter = index == _centerIndex;
     final isPast = session.dateTime.isBefore(DateTime.now());
+    final isGhost = session.isOverrideOriginalGhost;
+    final isReplacement = session.isOverrideReplacement;
     
     // 다음 수업(미래 수업 중 가장 가까운 것) 찾기
     final now = DateTime.now();
@@ -1419,33 +1578,53 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       cardMargin = const EdgeInsets.only(right: 8); // 중간 카드들
     }
     
+    // 카드 본문: 체크박스가 시각적으로 카드 밖처럼 보이도록 아래 여백 확보
     Widget cardWidget = Container(
       width: cardWidth,
-      height: 140, // 카드 높이 추가 증가 (130→140)
+      height: 104,
       margin: cardMargin,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
       decoration: BoxDecoration(
-        color: isNextClass 
+        color: isGhost
+            ? const Color(0xFF2A2A2A).withOpacity(0.4)
+            : isNextClass 
             ? const Color(0xFF1976D2).withOpacity(0.3)  // 다음 수업은 filled box
             : const Color(0xFF2A2A2A),  // 기본 배경
         borderRadius: BorderRadius.circular(8),
         border: isCenter 
             ? Border.all(color: const Color(0xFF1976D2), width: 2)  // 가운데 카드에 파란 테두리
-            : null,
+            : isGhost
+                ? Border.all(color: Colors.white24, width: 1)
+                : null,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 1행: 날짜와 요일 (가운데 정렬)
-          Center(
-            child: Text(
-              '${session.dateTime.month}/${session.dateTime.day} ${session.dayOfWeek}',
-              style: TextStyle(
-                fontSize: 16, // 2포인트 증가 (14→16)
-                color: isPast ? Colors.grey : Colors.white,
-                fontWeight: isCenter ? FontWeight.bold : FontWeight.normal,
+          // 상단 배지 (제거: 날짜 라인에서만 표시)
+          // 1행: 대체/원래 배지 + 날짜/요일 (한 줄)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isReplacement)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: _buildSmallBadge('대체', const Color(0xFF1976D2)),
+                ),
+              if (isGhost)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: _buildSmallBadge('원래', Colors.white24),
+                ),
+              Text(
+                '${session.dateTime.month}/${session.dateTime.day} ${session.dayOfWeek}',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: isGhost ? Colors.white38 : (isPast ? Colors.grey : Colors.white),
+                  fontWeight: isCenter ? FontWeight.bold : FontWeight.normal,
+                ),
               ),
-            ),
+            ],
           ),
           const SizedBox(height: 8),
           // 2행: 시작시간 - 끝시간
@@ -1454,45 +1633,96 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               '${session.dateTime.hour.toString().padLeft(2, '0')}:${session.dateTime.minute.toString().padLeft(2, '0')} - ${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}',
               style: TextStyle(
                 fontSize: 12, // 2포인트 증가 (12→14)
-                color: isPast ? Colors.grey : Colors.white70,
+                color: isGhost ? Colors.white38 : (isPast ? Colors.grey : Colors.white70),
               ),
             ),
           ),
           const SizedBox(height: 8),
-          // 3행: 수업명
+          // 3행: 수업명 (가운데)
           Center(
             child: Text(
               session.className,
               style: TextStyle(
-                fontSize: 14, // 2포인트 증가 (12→14)
-                color: isPast ? Colors.grey : Colors.white,
+                fontSize: 15,
+                color: isGhost ? Colors.white38 : (isPast ? Colors.grey : Colors.white),
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(height: 10),
-          // 출석 체크박스
-          GestureDetector(
-            onTap: () => _handleAttendanceClick(session),
-            child: Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                color: _getCheckboxColor(session.attendanceStatus),
-                border: Border.all(
-                  color: _getCheckboxBorderColor(session.attendanceStatus),
-                  width: 1,
+          const SizedBox(height: 1),
+          // 체크박스는 카드 밖에 겹쳐 보이도록, 별도 Stack에 배치
+        ],
+      ),
+    );
+    
+    // 카드 탭으로 메뉴 열기 (버튼 제거 대체)
+    final bool canShowMenu = !isGhost && !isPast;
+    Offset? tapDownPosition;
+    // 카드(1~3행)만 탭 영역으로, 체크박스(4행)는 카드 아래에 분리된 영역
+    final interactive = Container(
+      margin: EdgeInsets.zero,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) => tapDownPosition = details.globalPosition,
+              onTap: () async {
+                if (!canShowMenu || tapDownPosition == null) return;
+                final selected = await showMenu<String>(
+                  context: context,
+                  position: RelativeRect.fromLTRB(
+                    tapDownPosition!.dx,
+                    tapDownPosition!.dy,
+                    tapDownPosition!.dx,
+                    tapDownPosition!.dy,
+                  ),
+                  color: const Color(0xFF1F1F1F),
+                  items: [
+                    _menuItem('replace', '이번 회차만 변경'),
+                    _menuItem('skip', '이번 회차 건너뛰기'),
+                  ],
+                );
+                if (selected == 'replace') {
+                  await _showReplaceDialog(session);
+                } else if (selected == 'skip') {
+                  await _applySkipOverride(session);
+                }
+              },
+              child: cardWidget,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _handleAttendanceClick(session),
+                child: Container(
+                  key: checkboxKey,
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: _getCheckboxColor(session.attendanceStatus),
+                    border: Border.all(
+                      color: _getCheckboxBorderColor(session.attendanceStatus),
+                      width: 1,
+                    ),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: _getCheckboxIcon(session.attendanceStatus),
                 ),
-                borderRadius: BorderRadius.circular(4),
               ),
-              child: _getCheckboxIcon(session.attendanceStatus),
             ),
           ),
         ],
       ),
     );
-    
+
     // 툴팁이 있으면 Tooltip으로 감싸고, 없으면 그대로 반환
     if (tooltipMessage.isNotEmpty) {
       return Tooltip(
@@ -1507,10 +1737,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           fontSize: 12,
         ),
         waitDuration: const Duration(milliseconds: 300),
-        child: cardWidget,
+        child: interactive,
       );
     } else {
-      return cardWidget;
+      return interactive;
     }
   }
 
@@ -1560,6 +1790,188 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         return const Icon(Icons.close, size: 14, color: Colors.white);
       case AttendanceStatus.none:
         return null;
+    }
+  }
+
+  // 작은 배지 위젯
+  Widget _buildSmallBadge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _menuItem(String value, String text) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: DefaultTextStyle(
+        style: const TextStyle(color: Colors.white),
+        child: Text(text),
+      ),
+    );
+  }
+
+  Future<void> _applySkipOverride(ClassSession session) async {
+    try {
+      final studentId = widget.selectedStudent!.student.id;
+      final ov = SessionOverride(
+        studentId: studentId,
+        overrideType: OverrideType.skip,
+        status: OverrideStatus.planned,
+        originalClassDateTime: session.dateTime,
+        durationMinutes: session.duration,
+        reason: OverrideReason.makeup,
+      );
+      await DataManager.instance.addSessionOverride(ov);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('이번 회차가 건너뛰기로 설정되었습니다.'),
+          backgroundColor: Color(0xFF1976D2),
+          duration: Duration(milliseconds: 1500),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('건너뛰기 설정 실패: $e'),
+          backgroundColor: const Color(0xFFE53E3E),
+        ));
+      }
+    }
+  }
+
+  Future<void> _showReplaceDialog(ClassSession session) async {
+    DateTime targetDate = session.dateTime;
+    TimeOfDay targetTime = TimeOfDay.fromDateTime(session.dateTime);
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              title: const Text('이번 회차만 변경', style: TextStyle(color: Colors.white, fontSize: 18)),
+              content: SizedBox(
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.calendar_today, color: Colors.white70),
+                      title: Text(
+                        '${targetDate.year}-${targetDate.month.toString().padLeft(2, '0')}-${targetDate.day.toString().padLeft(2, '0')}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: targetDate,
+                          firstDate: DateTime.now().subtract(const Duration(days: 1)),
+                          lastDate: DateTime(DateTime.now().year + 2),
+                          builder: (context, child) => Theme(
+                            data: Theme.of(context).copyWith(
+                              colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                              dialogBackgroundColor: const Color(0xFF18181A),
+                            ),
+                            child: child!,
+                          ),
+                        );
+                        if (picked != null) setDialogState(() => targetDate = picked);
+                      },
+                      tileColor: const Color(0xFF2A2A2A),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    const SizedBox(height: 12),
+                    ListTile(
+                      leading: const Icon(Icons.access_time, color: Colors.white70),
+                      title: Text(
+                        '${targetTime.hour.toString().padLeft(2, '0')}:${targetTime.minute.toString().padLeft(2, '0')}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: targetTime,
+                          builder: (context, child) => Theme(
+                            data: Theme.of(context).copyWith(
+                              colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                              dialogBackgroundColor: const Color(0xFF18181A),
+                            ),
+                            child: child!,
+                          ),
+                        );
+                        if (picked != null) setDialogState(() => targetTime = picked);
+                      },
+                      tileColor: const Color(0xFF2A2A2A),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final dt = DateTime(
+                      targetDate.year,
+                      targetDate.month,
+                      targetDate.day,
+                      targetTime.hour,
+                      targetTime.minute,
+                    );
+                    Navigator.of(context).pop({'dateTime': dt});
+                  },
+                  child: const Text('적용', style: TextStyle(color: Colors.white)),
+                  style: TextButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (result != null && result['dateTime'] is DateTime) {
+      await _applyReplaceOverride(session, result['dateTime'] as DateTime);
+    }
+  }
+
+  Future<void> _applyReplaceOverride(ClassSession session, DateTime replacementDateTime) async {
+    try {
+      final studentId = widget.selectedStudent!.student.id;
+      final ov = SessionOverride(
+        studentId: studentId,
+        overrideType: OverrideType.replace,
+        status: OverrideStatus.planned,
+        originalClassDateTime: session.dateTime,
+        replacementClassDateTime: replacementDateTime,
+        durationMinutes: session.duration,
+        reason: OverrideReason.makeup,
+      );
+      await DataManager.instance.addSessionOverride(ov);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('이번 회차 변경이 적용되었습니다.'),
+          backgroundColor: Color(0xFF1976D2),
+          duration: Duration(milliseconds: 1500),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('변경 적용 실패: $e'),
+          backgroundColor: const Color(0xFFE53E3E),
+        ));
+      }
     }
   }
 
@@ -2232,6 +2644,10 @@ class ClassSession {
   DateTime? arrivalTime;
   DateTime? departureTime;
   AttendanceStatus attendanceStatus;
+  // 보강/예외 표시용 메타
+  final bool isOverrideReplacement; // 대체 회차
+  final bool isOverrideOriginalGhost; // 원래 회차(표시용)
+  final DateTime? overrideOriginalDateTime; // 대체가 참조하는 원본 시간
 
   ClassSession({
     required this.dateTime,
@@ -2243,5 +2659,8 @@ class ClassSession {
     this.arrivalTime,
     this.departureTime,
     this.attendanceStatus = AttendanceStatus.none,
+    this.isOverrideReplacement = false,
+    this.isOverrideOriginalGhost = false,
+    this.overrideOriginalDateTime,
   });
 }
