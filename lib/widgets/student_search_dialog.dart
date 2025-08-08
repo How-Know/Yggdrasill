@@ -58,19 +58,128 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   }
 
   void _filterStudents(String query) {
-    _refreshStudentList();
     setState(() {
-      _filteredStudents = _students.where((studentWithInfo) {
-        final name = studentWithInfo.student.name.toLowerCase();
-        final school = studentWithInfo.student.school?.toLowerCase() ?? '';
-        final searchQuery = query.toLowerCase();
-        return name.contains(searchQuery) || school.contains(searchQuery);
-      }).toList();
+      if (query.trim().isEmpty) {
+        // 검색어가 없으면 기본 필터링된 리스트 사용
+        _refreshStudentList();
+        _filteredStudents = _students;
+      } else {
+        // 검색어가 있으면 모든 학생을 대상으로 검색
+        final allStudents = DataManager.instance.students;
+        _filteredStudents = allStudents.where((studentWithInfo) {
+          final name = studentWithInfo.student.name.toLowerCase();
+          final school = studentWithInfo.student.school?.toLowerCase() ?? '';
+          final searchQuery = query.toLowerCase();
+          return name.contains(searchQuery) || school.contains(searchQuery);
+        }).toList();
+      }
     });
+  }
+
+  /// 학생이 등록된 수업이 있는지 확인
+  bool _hasRegisteredClasses(String studentId) {
+    final allTimeBlocks = DataManager.instance.studentTimeBlocks
+        .where((block) => block.studentId == studentId)
+        .toList();
+    
+    final timeBlocksWithSessionType = allTimeBlocks
+        .where((block) => block.sessionTypeId != null)
+        .toList();
+    
+    print('[DEBUG] _hasRegisteredClasses: 학생 $studentId의 전체 블록: ${allTimeBlocks.length}개, sessionTypeId 있는 블록: ${timeBlocksWithSessionType.length}개');
+    
+    return allTimeBlocks.isNotEmpty; // sessionTypeId가 없어도 시간블록이 있으면 수업으로 간주
+  }
+
+  /// 수업 정보를 색상이 적용된 위젯으로 반환
+  Widget _buildClassInfoWidget(String studentId) {
+    final allTimeBlocks = DataManager.instance.studentTimeBlocks
+        .where((block) => block.studentId == studentId)
+        .toList();
+    print('[DEBUG] 학생 $studentId의 전체 시간블록: ${allTimeBlocks.length}개');
+    
+    if (allTimeBlocks.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    // setId 기준으로 그룹핑하여 수업별 세트 개수 계산
+    final Map<String, Set<String?>> classSetIds = {};
+    
+    for (final block in allTimeBlocks) {
+      final sessionTypeId = block.sessionTypeId ?? 'default_class';
+      if (classSetIds[sessionTypeId] == null) {
+        classSetIds[sessionTypeId] = <String?>{};
+      }
+      classSetIds[sessionTypeId]!.add(block.setId);
+      print('[DEBUG] 블록 sessionTypeId: ${block.sessionTypeId} -> $sessionTypeId, setId: ${block.setId}');
+    }
+    
+    // 각 수업별 고유한 setId 개수 계산
+    final Map<String, int> classCounts = {};
+    for (final entry in classSetIds.entries) {
+      classCounts[entry.key] = entry.value.length;
+      print('[DEBUG] 수업 ${entry.key}: ${entry.value.length}개 세트 (setIds: ${entry.value})');
+    }
+    
+    // 수업 정보를 위젯으로 변환
+    final classWidgets = classCounts.entries.map((entry) {
+      final classId = entry.key;
+      final count = entry.value;
+      
+      // ClassInfo에서 수업명과 색상 찾기
+      String className;
+      Color classColor;
+      
+      if (classId == 'default_class') {
+        // sessionTypeId가 없는 경우
+        className = '수업';
+        classColor = Colors.white.withOpacity(0.7);
+        print('[DEBUG] 기본 수업 처리: $className');
+      } else {
+        // sessionTypeId가 있는 경우
+        print('[DEBUG] 찾는 classId: $classId, 전체 수업 수: ${DataManager.instance.classes.length}');
+        final classInfo = DataManager.instance.classes
+            .where((c) => c.id == classId)
+            .firstOrNull;
+        
+        className = classInfo?.name ?? '알 수 없는 수업';
+        classColor = classInfo?.color ?? Colors.white.withOpacity(0.7);
+        print('[DEBUG] 찾은 수업: $className (색상: $classColor)');
+      }
+      
+      return RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: className,
+              style: TextStyle(
+                color: classColor,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            TextSpan(
+              text: ' ($count개)',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.7),
+                fontSize: 15,
+              ),
+            ),
+          ],
+        ),
+      );
+    }).toList();
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: classWidgets,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    print('[DEBUG] StudentSearchDialog build - 수정된 버전');
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       title: const Text(
@@ -105,6 +214,11 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                 itemBuilder: (context, index) {
                   final studentWithInfo = _filteredStudents[index];
                   final student = studentWithInfo.student;
+                  
+                  // 학생의 수업 정보 확인
+                  final hasClasses = _hasRegisteredClasses(student.id);
+                  print('[DEBUG] 학생 ${student.name} 수업 있나요: $hasClasses');
+                  
                   return ListTile(
                     title: Text(
                       student.name,
@@ -114,6 +228,12 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                       '${student.school ?? ''} ${student.grade != null ? '${student.grade}학년' : ''}',
                       style: TextStyle(color: Colors.white.withOpacity(0.7)),
                     ),
+                    trailing: hasClasses 
+                        ? Container(
+                            constraints: const BoxConstraints(maxWidth: 200),
+                            child: _buildClassInfoWidget(student.id),
+                          )
+                        : null,
                     onTap: () {
                       Navigator.of(context).pop(student);
                     },

@@ -23,6 +23,7 @@ import '../timetable/components/attendance_check_view.dart';
 import '../../models/education_level.dart';
 import '../../models/student_payment_info.dart';
 import 'package:uuid/uuid.dart';
+import 'components/attendance_indicator.dart';
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -681,6 +682,16 @@ class StudentScreenState extends State<StudentScreen> {
                                   ),
                                   // 달력 본체
                                   Expanded(child: _buildCalendar()),
+                                  // 출석 상태 범례 (선택된 학생이 있을 때만)
+                                  if (_selectedStudent != null)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 8, bottom: 24),
+                                      child: AttendanceLegend(
+                                        showTitle: false,
+                                        iconSize: 30,
+                                        fontSize: 15,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -1042,15 +1053,35 @@ class StudentScreenState extends State<StudentScreen> {
                         borderRadius: BorderRadius.circular(7),
                       )
                     : null,
-                child: Center(
-                  child: Text(
-                    '$dayNumber',
-                    style: TextStyle(
-                      color: isToday ? Colors.white : Colors.white, 
-                      fontSize: 17,
-                      fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                child: Stack(
+                  children: [
+                    // 날짜 숫자는 중앙에 고정
+                    Center(
+                      child: Text(
+                        '$dayNumber',
+                        style: TextStyle(
+                          color: isToday ? Colors.white : Colors.white, 
+                          fontSize: 17,
+                          fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
                     ),
-                  ),
+                    // 출석 표시는 하단에 절대 위치로 배치 (선택된 학생이 있을 때만)
+                    if (_selectedStudent != null)
+                      Positioned(
+                        bottom: 6,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: AttendanceIndicator(
+                            studentId: _selectedStudent!.student.id,
+                            date: date,
+                            width: 40,
+                            thickness: 8.0,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               );
             },
