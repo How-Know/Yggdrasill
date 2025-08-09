@@ -778,6 +778,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           });
                           // print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
                           // print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
+                          // 수업 블록 삭제 후 weekly_class_count를 현재 set 개수로 동기화 (수업 삭제에만 적용)
+                          if (!isSelfStudy) {
+                            for (final s in students) {
+                              final sid = s.student.id;
+                              final registered = DataManager.instance.getStudentLessonSetCount(sid);
+                              await DataManager.instance.setStudentWeeklyClassCount(sid, registered);
+                            }
+                          }
                           // 스낵바 즉시 표시 (지연 제거)
                           if (mounted) {
                             final blockType = isSelfStudy ? '자습시간' : '수업시간';
@@ -1418,19 +1426,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
     for (final block in blocks) {
       print('[DEBUG][clearSessionTypeIdForClass] 업데이트 중: blockId=${block.id}, studentId=${block.studentId}');
       // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
-      final updated = StudentTimeBlock(
-        id: block.id,
-        studentId: block.studentId,
-        groupId: block.groupId,
-        dayIndex: block.dayIndex,
-        startHour: block.startHour,
-        startMinute: block.startMinute,
-        duration: block.duration,
-        createdAt: block.createdAt,
-        setId: block.setId,
-        number: block.number,
-        sessionTypeId: null, // 명시적으로 null 설정
-      );
+          final updated = StudentTimeBlock(
+            id: block.id,
+            studentId: block.studentId,
+            dayIndex: block.dayIndex,
+            startHour: block.startHour,
+            startMinute: block.startMinute,
+            duration: block.duration,
+            createdAt: block.createdAt,
+            setId: block.setId,
+            number: block.number,
+            sessionTypeId: null, // 명시적으로 null 설정
+          );
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
     
@@ -1515,12 +1522,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
       try {
         // 🔄 삭제 후 재추가 방식으로 안전하게 처리
         final blockIdsToDelete = orphanedBlocks.map((b) => b.id).toList();
-        final updatedBlocks = orphanedBlocks.map((block) {
+        final updatedBlocks = orphanedBlocks.map<StudentTimeBlock>((block) {
           // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
           return StudentTimeBlock(
             id: block.id,
             studentId: block.studentId,
-            groupId: block.groupId,
             dayIndex: block.dayIndex,
             startHour: block.startHour,
             startMinute: block.startMinute,
@@ -1535,12 +1541,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
         print('[DEBUG][cleanupOrphanedSessionTypeIds] 삭제할 블록 ID들: ${blockIdsToDelete.take(5)}${blockIdsToDelete.length > 5 ? '... 외 ${blockIdsToDelete.length - 5}개' : ''}');
         
         // 1. 기존 블록들 삭제
-        await DataManager.instance.bulkDeleteStudentTimeBlocks(blockIdsToDelete);
+                           await DataManager.instance.bulkDeleteStudentTimeBlocks(blockIdsToDelete);
         print('[DEBUG][cleanupOrphanedSessionTypeIds] 삭제 완료');
         
         // 2. sessionTypeId가 null로 설정된 새 블록들 추가
         print('[DEBUG][cleanupOrphanedSessionTypeIds] 재추가할 블록들의 sessionTypeId: ${updatedBlocks.take(3).map((b) => b.sessionTypeId)}');
-        await DataManager.instance.bulkAddStudentTimeBlocks(updatedBlocks);
+                           await DataManager.instance.bulkAddStudentTimeBlocks(updatedBlocks);
         print('[DEBUG][cleanupOrphanedSessionTypeIds] 재추가 완료');
         
         print('[DEBUG][cleanupOrphanedSessionTypeIds] 완료: ${orphanedBlocks.length}개 블록 정리됨 (삭제 후 재추가)');

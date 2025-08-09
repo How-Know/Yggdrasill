@@ -4,7 +4,6 @@ import 'package:uuid/uuid.dart';
 class StudentTimeBlock {
   final String id;
   final String studentId;
-  final String? groupId;
   final int dayIndex; // 0: 월요일 ~ 6: 일요일
   final int startHour;
   final int startMinute;
@@ -13,11 +12,11 @@ class StudentTimeBlock {
   final String? setId; // 같은 셋에 속한 블록끼리 공유
   final int? number;   // 1, 2, 3... 넘버링
   final String? sessionTypeId; // 수업카드 드롭시 등록되는 수업명(또는 고유값)
+  final int? weeklyOrder; // 주간 내 n번째 수업(요일/시간 순 정렬 결과)
 
   StudentTimeBlock({
     required this.id,
     required this.studentId,
-    this.groupId,
     required this.dayIndex,
     required this.startHour,
     required this.startMinute,
@@ -26,13 +25,13 @@ class StudentTimeBlock {
     this.setId,
     this.number,
     this.sessionTypeId,
+    this.weeklyOrder,
   });
 
   factory StudentTimeBlock.fromJson(Map<String, dynamic> json) {
     return StudentTimeBlock(
       id: json['id'] as String,
       studentId: json['student_id'] as String? ?? json['studentId'] as String,
-      groupId: json['group_id'] as String? ?? json['groupId'] as String?,
       dayIndex: json['day_index'] as int? ?? json['dayIndex'] as int,
       startHour: json['start_hour'] as int,
       startMinute: json['start_minute'] as int,
@@ -41,6 +40,7 @@ class StudentTimeBlock {
       setId: json['set_id'] as String? ?? json['setId'] as String?,
       number: json['number'] as int?,
       sessionTypeId: json['session_type_id'] as String?,
+      weeklyOrder: json['weekly_order'] as int?,
     );
   }
 
@@ -55,12 +55,12 @@ class StudentTimeBlock {
     'set_id': setId,
     'number': number,
     'session_type_id': sessionTypeId,
+    'weekly_order': weeklyOrder,
   };
 
   StudentTimeBlock copyWith({
     String? id,
     String? studentId,
-    String? groupId,
     int? dayIndex,
     int? startHour,
     int? startMinute,
@@ -69,11 +69,11 @@ class StudentTimeBlock {
     String? setId,
     int? number,
     String? sessionTypeId,
+    int? weeklyOrder,
   }) {
     return StudentTimeBlock(
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
-      groupId: groupId ?? this.groupId,
       dayIndex: dayIndex ?? this.dayIndex,
       startHour: startHour ?? this.startHour,
       startMinute: startMinute ?? this.startMinute,
@@ -82,6 +82,7 @@ class StudentTimeBlock {
       setId: setId ?? this.setId,
       number: number ?? this.number,
       sessionTypeId: sessionTypeId ?? this.sessionTypeId,
+      weeklyOrder: weeklyOrder ?? this.weeklyOrder,
     );
   }
 }

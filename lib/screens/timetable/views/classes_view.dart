@@ -151,11 +151,21 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         );
         print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
         await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+        // 자동 종료(작은 경우): 현재 등록 set 수가 weekly_class_count에 도달하면 상위에서 ESC를 유도할 수 있도록 스낵바만 안내
+        if (widget.onSelectModeChanged != null && widget.selectedStudentWithInfo != null) {
+          final sid = widget.selectedStudentWithInfo!.student.id;
+          final registered = DataManager.instance.getStudentLessonSetCount(sid);
+          final total = DataManager.instance.getStudentWeeklyClassCount(sid);
+          if (registered >= total) {
+            showAppSnackBar(context, '목표 수업횟수에 도달했습니다. ESC로 종료하세요.', useRoot: true);
+          }
+        }
         print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 드래그 등록 setState 직전: isRegistrationMode=${widget.isRegistrationMode}');
         setState(() {
           print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
         });
         print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: isRegistrationMode=${widget.isRegistrationMode}');
+        // 자동 종료는 지원하지 않음. 상위(ESC)로 종료.
         if (widget.onCellStudentsSelected != null) {
           print('[DEBUG][_onCellPanEnd] 드래그 등록 콜백 호출');
           widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
@@ -172,11 +182,20 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       );
       print('[DEBUG][_onCellPanEnd] 클릭 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
       await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+      if (widget.onSelectModeChanged != null && widget.selectedStudentWithInfo != null) {
+        final sid = widget.selectedStudentWithInfo!.student.id;
+        final registered = DataManager.instance.getStudentLessonSetCount(sid);
+        final total = DataManager.instance.getStudentWeeklyClassCount(sid);
+        if (registered >= total) {
+          showAppSnackBar(context, '목표 수업횟수에 도달했습니다. ESC로 종료하세요.', useRoot: true);
+        }
+      }
       print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 클릭 등록 setState 직전: isRegistrationMode=${widget.isRegistrationMode}');
       setState(() {
         print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
       });
       print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: isRegistrationMode=${widget.isRegistrationMode}');
+      // 자동 종료는 지원하지 않음. 상위(ESC)로 종료.
       if (widget.onCellStudentsSelected != null) {
         print('[DEBUG][_onCellPanEnd] 클릭 등록 콜백 호출');
         widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
@@ -791,8 +810,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
                 final studentWithInfo = studentsWithInfo.firstWhere((s) => s.student.id == block.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ), basicInfo: StudentBasicInfo(studentId: '')));
-                final groupInfo = block.groupId != null ?
-                  groups.firstWhere((g) => g.id == block.groupId, orElse: () => GroupInfo(id: '', name: '', description: '', capacity: 0, duration: 60, color: Colors.grey)) : null;
+                // groupId는 StudentTimeBlock에서 제거됨. 학생의 현재 groupInfo를 사용.
+                final studentWI = studentsWithInfo.firstWhere(
+                  (s) => s.student.id == block.studentId,
+                  orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary), basicInfo: StudentBasicInfo(studentId: '')),
+                );
+                final groupInfo = studentWI.student.groupInfo;
                 // 삭제된 학생이면 카드 자체를 렌더링하지 않음
                 if (studentWithInfo.student.id.isEmpty) return const SizedBox.shrink();
                 return GestureDetector(

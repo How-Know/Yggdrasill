@@ -28,6 +28,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _schoolController;
   late final TextEditingController _phoneController;
   late final TextEditingController _parentPhoneController;
+  final TextEditingController _memoController = TextEditingController();
+  final TextEditingController _weeklyClassCountController = TextEditingController(text: '1');
 
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
@@ -55,6 +57,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _schoolController = TextEditingController(text: student?.school);
     _phoneController = TextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
     _parentPhoneController = TextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
+    _memoController.text = basicInfo?.memo ?? '';
     _registrationDate = DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
 
@@ -82,6 +85,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _parentPhoneController.dispose();
 
     _paymentCycleController.dispose();
+    _weeklyClassCountController.dispose();
+    _memoController.dispose();
     super.dispose();
   }
 
@@ -162,6 +167,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
       parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
       groupId: _selectedGroup?.id,
+      memo: _memoController.text.isEmpty ? null : _memoController.text,
     );
     
     // StudentPaymentInfo 생성 (등록일자와 지불방식을 여기에 저장)
@@ -170,6 +176,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       studentId: studentId,
       registrationDate: _registrationDate,
       paymentMethod: _paymentType,
+      weeklyClassCount: int.tryParse(_weeklyClassCountController.text.trim()) ?? 1,
       tuitionFee: 0, // 기본값
       latenessThreshold: 10, // 기본값
       scheduleNotification: false,
@@ -208,9 +215,11 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 1행: 이름(3) + 수업횟수(1)
             Row(
               children: [
                 Expanded(
+                  flex: 3,
                   child: TextField(
                     controller: _nameController,
                     style: const TextStyle(color: Colors.white),
@@ -228,6 +237,31 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
+                  flex: 1,
+                  child: TextField(
+                    controller: _weeklyClassCountController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: '수업 횟수 (매주)',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 2행: 학교(3) / 과정(2) / 학년(2)
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
                   child: TextField(
                     controller: _schoolController,
                     style: const TextStyle(color: Colors.white),
@@ -243,12 +277,9 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     ),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
+                const SizedBox(width: 16),
                 Expanded(
+                  flex: 2,
                   child: DropdownButtonFormField<EducationLevel>(
                     value: _educationLevel,
                     style: const TextStyle(color: Colors.white),
@@ -285,6 +316,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
+                  flex: 2,
                   child: DropdownButtonFormField<Grade>(
                     value: _grade,
                     style: const TextStyle(color: Colors.white),
@@ -316,6 +348,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
               ],
             ),
+            // 3행(중복)이던 과정/학년 Row는 제거됨
             const SizedBox(height: 16),
             Row(
               children: [
@@ -355,38 +388,41 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
               ],
             ),
             const SizedBox(height: 16),
-            InkWell(
-              onTap: () => _selectDate(context),
-              child: InputDecorator(
-                decoration: InputDecoration(
-                  labelText: '등록일자',
-                  labelStyle: const TextStyle(color: Colors.white70),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                  ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderSide: BorderSide(color: Color(0xFF1976D2)),
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      DateFormat('yyyy년 MM월 dd일').format(_registrationDate),
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    const Icon(
-                      Icons.calendar_today,
-                      color: Colors.white70,
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
+            // 4행: 등록일자(1) / 지불방식(1)
             Row(
               children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => _selectDate(context),
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: '등록일자',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF1976D2)),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            DateFormat('yyyy년 MM월 dd일').format(_registrationDate),
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          const Icon(
+                            Icons.calendar_today,
+                            color: Colors.white70,
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _paymentType,
@@ -421,27 +457,25 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     },
                   ),
                 ),
-                if (_paymentType == 'session') ...[
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextField(
-                      controller: _paymentCycleController,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        labelText: '결제 주기',
-                        labelStyle: const TextStyle(color: Colors.white70),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                        ),
-                        focusedBorder: const OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF1976D2)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                // 결제주기 필드는 삭제(요청사항)
               ],
+            ),
+            const SizedBox(height: 16),
+            // 5행: 메모
+            TextField(
+              controller: _memoController,
+              maxLines: 3,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: '메모',
+                labelStyle: const TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
+              ),
             ),
           ],
         ),

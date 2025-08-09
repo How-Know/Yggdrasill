@@ -132,6 +132,13 @@ class _OverrideTile extends StatelessWidget {
     final statusColor = _statusColor(item.status);
     final original = item.originalClassDateTime;
     final repl = item.replacementClassDateTime;
+    StudentWithInfo? student;
+    try {
+      student = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId);
+    } catch (_) {
+      student = null;
+    }
+    final studentName = student?.student.name ?? '학생정보 없음';
 
     return ListTile(
       tileColor: const Color(0xFF2A2A2A),
@@ -147,6 +154,14 @@ class _OverrideTile extends StatelessWidget {
             _Badge(text: '완료', color: statusColor)
           else
             _Badge(text: '취소', color: statusColor),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              studentName,
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
       subtitle: Padding(
@@ -174,13 +189,22 @@ class _OverrideTile extends StatelessWidget {
                   builder: (_) => _MakeupEditDialog(item: item),
                 );
                 if (updated != null) {
-                  await DataManager.instance.updateSessionOverride(updated);
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('보강이 수정되었습니다.'),
-                      backgroundColor: Color(0xFF1976D2),
-                      duration: Duration(milliseconds: 1400),
-                    ));
+                  try {
+                    await DataManager.instance.updateSessionOverride(updated);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('보강이 수정되었습니다.'),
+                        backgroundColor: Color(0xFF1976D2),
+                        duration: Duration(milliseconds: 1400),
+                      ));
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text('저장 실패: $e'),
+                        backgroundColor: const Color(0xFFE53E3E),
+                      ));
+                    }
                   }
                 }
               },

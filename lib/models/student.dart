@@ -90,6 +90,7 @@ class StudentBasicInfo {
   final String? parentPhoneNumber;
   final String? groupId;
   final DateTime? registrationDate;
+  final String? memo;
 
   StudentBasicInfo({
     required this.studentId,
@@ -97,6 +98,7 @@ class StudentBasicInfo {
     this.parentPhoneNumber,
     this.groupId,
     this.registrationDate,
+    this.memo,
   });
 
   StudentBasicInfo copyWith({
@@ -104,6 +106,7 @@ class StudentBasicInfo {
     String? parentPhoneNumber,
     String? groupId,
     DateTime? registrationDate,
+    String? memo,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
@@ -111,6 +114,7 @@ class StudentBasicInfo {
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
       groupId: groupId ?? this.groupId,
       registrationDate: registrationDate ?? this.registrationDate,
+      memo: memo ?? this.memo,
     );
   }
 
@@ -120,6 +124,7 @@ class StudentBasicInfo {
       phoneNumber: row['phone_number'] as String?,
       parentPhoneNumber: row['parent_phone_number'] as String?,
       groupId: row['group_id'] as String?,
+      memo: row['memo'] as String?,
     );
   }
 
@@ -129,6 +134,7 @@ class StudentBasicInfo {
       'phone_number': phoneNumber,
       'parent_phone_number': parentPhoneNumber,
       'group_id': groupId,
+      'memo': memo,
     };
   }
 
@@ -139,7 +145,7 @@ class StudentBasicInfo {
 
   @override
   String toString() {
-    return 'StudentBasicInfo(studentId: $studentId, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, groupId: $groupId)';
+    return 'StudentBasicInfo(studentId: $studentId, phoneNumber: $phoneNumber, parentPhoneNumber: $parentPhoneNumber, groupId: $groupId, memo: $memo)';
   }
 }
 

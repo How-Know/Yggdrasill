@@ -32,6 +32,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   // 스마트 슬라이딩을 위한 상태 변수들
   List<ClassSession> _allSessions = []; // 전체 세션 저장
   int _currentStartIndex = 0; // 현재 화면의 시작 인덱스
+  // 화면당 표시 카드 수 및 센터 인덱스(0-base)
+  static const int _visibleCount = 11;
+  static const int _halfCenter = _visibleCount ~/ 2; // 5
   int _blueBorderAbsoluteIndex = -1; // 파란 테두리의 절대 인덱스
   
   // 디바운싱을 위한 변수들
@@ -358,19 +361,19 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     print('  _allSessions.length: ${_allSessions.length}');
     print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
     
-    // 파란 테두리를 가운데(6번 인덱스)에 배치하도록 계산
-    if (_blueBorderAbsoluteIndex >= 4 && _blueBorderAbsoluteIndex < _allSessions.length - 4) {
+    // 파란 테두리를 가운데(_halfCenter) 인덱스에 배치하도록 계산
+    if (_blueBorderAbsoluteIndex >= _halfCenter && _blueBorderAbsoluteIndex < _allSessions.length - _halfCenter) {
       // 완벽한 센터링 가능
-      _currentStartIndex = _blueBorderAbsoluteIndex - 4;
-      print('[DEBUG][_setInitialView] 완벽한 센터링 - startIndex: $_currentStartIndex (파란테두리를 6번째에)');
-    } else if (_blueBorderAbsoluteIndex < 6) {
+      _currentStartIndex = _blueBorderAbsoluteIndex - _halfCenter;
+      print('[DEBUG][_setInitialView] 완벽한 센터링 - startIndex: $_currentStartIndex (파란테두리를 가운데에)');
+    } else if (_blueBorderAbsoluteIndex < _halfCenter) {
       // 과거 부족
       _currentStartIndex = 0;
       print('[DEBUG][_setInitialView] 과거 부족 - startIndex: $_currentStartIndex (처음부터 시작)');
     } else {
       // 미래 부족
-      _currentStartIndex = (_allSessions.length - 13).clamp(0, _allSessions.length);
-      print('[DEBUG][_setInitialView] 미래 부족 - startIndex: $_currentStartIndex (끝에서 13개)');
+      _currentStartIndex = (_allSessions.length - _visibleCount).clamp(0, _allSessions.length);
+      print('[DEBUG][_setInitialView] 미래 부족 - startIndex: $_currentStartIndex (끝에서 $_visibleCount개)');
     }
     
     print('[DEBUG][_setInitialView] 최종 _currentStartIndex: $_currentStartIndex');
@@ -386,7 +389,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final studentName = widget.selectedStudent?.student.name ?? "미선택";
     print('\n--- [UPDATE_DISPLAY_DEBUG] 학생: $studentName ---');
     
-    final endIndex = (_currentStartIndex + 9).clamp(0, _allSessions.length);
+    final endIndex = (_currentStartIndex + _visibleCount).clamp(0, _allSessions.length);
     final displayedSessions = _allSessions.sublist(_currentStartIndex, endIndex);
     
     print('[DEBUG][_updateDisplayedSessions] 화면 업데이트:');
@@ -434,7 +437,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     if (!mounted) return;
     
     final newHasPastRecords = _currentStartIndex > 0;
-    final newHasFutureCards = _currentStartIndex + 9 < _allSessions.length;
+    final newHasFutureCards = _currentStartIndex + _visibleCount < _allSessions.length;
     
     print('[DEBUG][_updateNavigationState] hasPast: $newHasPastRecords, hasFuture: $newHasFutureCards');
     
@@ -463,11 +466,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final leftCards = _currentStartIndex;
     print('[DEBUG][_moveLeft] 왼쪽 카드 수: $leftCards개');
     
-    if (leftCards >= 9) {
-      // 13개씩 점프
+    if (leftCards >= _visibleCount) {
+      // 화면당 개수만큼 점프
       final oldStartIndex = _currentStartIndex;
-      _currentStartIndex = (_currentStartIndex - 9).clamp(0, _allSessions.length);
-      print('[DEBUG][_moveLeft] 13칸 점프 - $oldStartIndex → $_currentStartIndex');
+      _currentStartIndex = (_currentStartIndex - _visibleCount).clamp(0, _allSessions.length);
+      print('[DEBUG][_moveLeft] $_visibleCount칸 점프 - $oldStartIndex → $_currentStartIndex');
     } else {
       // 1칸씩 슬라이딩
       final oldStartIndex = _currentStartIndex;
@@ -494,31 +497,31 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     print('  _blueBorderAbsoluteIndex: $_blueBorderAbsoluteIndex');
     print('  _allSessions.length: ${_allSessions.length}');
     
-    if (_currentStartIndex + 9 >= _allSessions.length) {
+    if (_currentStartIndex + _visibleCount >= _allSessions.length) {
       print('[DEBUG][_moveRight] 이동 불가 - 이미 끝점');
       return;
     }
     
-    // 13칸 점프 후에도 완전한 13개 화면을 만들 수 있는지 확인
-    final jumpTargetStartIndex = _currentStartIndex + 9;
-    final canMake13AfterJump = (jumpTargetStartIndex + 9) <= _allSessions.length;
+    // 점프 후에도 완전한 화면을 만들 수 있는지 확인
+    final jumpTargetStartIndex = _currentStartIndex + _visibleCount;
+    final canMakeFullAfterJump = (jumpTargetStartIndex + _visibleCount) <= _allSessions.length;
     
-    print('[DEBUG][_moveRight] 13칸 점프 가능성 분석:');
+    print('[DEBUG][_moveRight] $_visibleCount칸 점프 가능성 분석:');
     print('  현재 시작: $_currentStartIndex');
     print('  13칸 점프 목표: $jumpTargetStartIndex');
-    print('  점프 후 화면 끝: ${jumpTargetStartIndex + 9}');
+    print('  점프 후 화면 끝: ${jumpTargetStartIndex + _visibleCount}');
     print('  전체 세션 수: ${_allSessions.length}');
-    print('  점프 후 완전한 화면 가능: $canMake13AfterJump');
+    print('  점프 후 완전한 화면 가능: $canMakeFullAfterJump');
     
-    if (canMake13AfterJump) {
-      // 13개씩 점프 (점프 후에도 완전한 13개 화면 가능)
+    if (canMakeFullAfterJump) {
+      // 화면당 개수만큼 점프 (점프 후에도 완전한 화면 가능)
       final oldStartIndex = _currentStartIndex;
       _currentStartIndex = jumpTargetStartIndex;
-      print('[DEBUG][_moveRight] 13칸 점프 - $oldStartIndex → $_currentStartIndex');
+      print('[DEBUG][_moveRight] $_visibleCount칸 점프 - $oldStartIndex → $_currentStartIndex');
     } else {
       // 1칸씩 슬라이딩 (점프하면 마지막이 안 채워짐)
       final oldStartIndex = _currentStartIndex;
-      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - 9);
+      _currentStartIndex = (_currentStartIndex + 1).clamp(0, _allSessions.length - _visibleCount);
       print('[DEBUG][_moveRight] 1칸 슬라이딩 - $oldStartIndex → $_currentStartIndex (점프하면 화면이 안 채워짐)');
     }
     
@@ -1136,14 +1139,16 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           !dt.isBefore(rangeStart) && dt.isBefore(rangeEnd);
 
       if (ov.overrideType == OverrideType.skip || ov.overrideType == OverrideType.replace) {
-        if (ov.originalClassDateTime != null && inRange(ov.originalClassDateTime!)) {
-          final idx = indexOfDate(ov.originalClassDateTime!);
-          if (idx != -1) {
-            // replace 대비 원본 세션 정보 보관 및 표시용 고스트 추가
-            final originalSession = sessions[idx];
+        final bool hasOriginal = ov.originalClassDateTime != null && inRange(ov.originalClassDateTime!);
+        int originalIdx = -1;
+        ClassSession? originalSession;
+        if (hasOriginal) {
+          originalIdx = indexOfDate(ov.originalClassDateTime!);
+          if (originalIdx != -1) {
+            originalSession = sessions[originalIdx];
             if (ov.overrideType == OverrideType.replace) {
-              // 원래 회차도 희미하게 표시되도록 고스트 세션으로 유지
-              final ghost = ClassSession(
+              // 원래 회차는 고스트로 남김
+              sessions[originalIdx] = ClassSession(
                 dateTime: originalSession.dateTime,
                 className: originalSession.className,
                 dayOfWeek: originalSession.dayOfWeek,
@@ -1154,31 +1159,57 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 departureTime: originalSession.departureTime,
                 attendanceStatus: originalSession.attendanceStatus,
                 isOverrideOriginalGhost: true,
-                overrideOriginalDateTime: originalSession.dateTime,
+                overrideOriginalDateTime: originalSession.overrideOriginalDateTime ?? originalSession.dateTime,
               );
-              sessions[idx] = ghost; // 기존 자리에 고스트로 교체
             } else {
-              // skip은 완전히 제거
-              sessions.removeAt(idx);
+              // skip은 제거
+              sessions.removeAt(originalIdx);
+              originalSession = null;
             }
+          }
+        }
 
-            if (ov.overrideType == OverrideType.replace && ov.replacementClassDateTime != null && inRange(ov.replacementClassDateTime!)) {
-              final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
-              final newSession = ClassSession(
-                dateTime: ov.replacementClassDateTime!,
-                className: originalSession.className,
-                dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
-                duration: ov.durationMinutes ?? originalSession.duration,
-                setId: originalSession.setId,
-                isAttended: attendanceRecord?.isPresent ?? false,
-                arrivalTime: attendanceRecord?.arrivalTime,
-                departureTime: attendanceRecord?.departureTime,
-                attendanceStatus: _getAttendanceStatus(attendanceRecord),
-                isOverrideReplacement: true,
-                overrideOriginalDateTime: originalSession.dateTime,
-              );
-              sessions.add(newSession);
-            }
+        // replacement 처리: 원본이 화면에 없더라도 대체는 반드시 반영
+        if (ov.overrideType == OverrideType.replace && ov.replacementClassDateTime != null && inRange(ov.replacementClassDateTime!)) {
+          final int replacementIdx = indexOfDate(ov.replacementClassDateTime!);
+          final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
+          // 루트 원본 앵커 계산
+          final DateTime rootOriginalDateTime = (originalSession?.overrideOriginalDateTime ?? ov.originalClassDateTime) ?? ov.replacementClassDateTime!;
+
+          if (replacementIdx != -1) {
+            // 이미 생성된 기본 세션이 있으면 그것을 대체 세션으로 태깅
+            final base = sessions[replacementIdx];
+            sessions[replacementIdx] = ClassSession(
+              dateTime: base.dateTime,
+              className: base.className,
+              dayOfWeek: base.dayOfWeek,
+              duration: ov.durationMinutes ?? base.duration,
+              setId: base.setId,
+              isAttended: attendanceRecord?.isPresent ?? base.isAttended,
+              arrivalTime: attendanceRecord?.arrivalTime ?? base.arrivalTime,
+              departureTime: attendanceRecord?.departureTime ?? base.departureTime,
+              attendanceStatus: _getAttendanceStatus(attendanceRecord) == AttendanceStatus.none ? base.attendanceStatus : _getAttendanceStatus(attendanceRecord),
+              isOverrideReplacement: true,
+              overrideOriginalDateTime: rootOriginalDateTime,
+            );
+          } else {
+            // 없으면 새로 추가
+            final classNameForNew = originalSession?.className ?? defaultClassName;
+            final durationForNew = ov.durationMinutes ?? originalSession?.duration ?? defaultDuration;
+            final newSession = ClassSession(
+              dateTime: ov.replacementClassDateTime!,
+              className: classNameForNew,
+              dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
+              duration: durationForNew,
+              setId: originalSession?.setId,
+              isAttended: attendanceRecord?.isPresent ?? false,
+              arrivalTime: attendanceRecord?.arrivalTime,
+              departureTime: attendanceRecord?.departureTime,
+              attendanceStatus: _getAttendanceStatus(attendanceRecord),
+              isOverrideReplacement: true,
+              overrideOriginalDateTime: rootOriginalDateTime,
+            );
+            sessions.add(newSession);
           }
         }
       }
@@ -1281,8 +1312,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       centerIndex = 0;
     }
     
-    // 9개 수업만 선택 (가운데 수업 기준으로 앞뒤 4개씩)
-    if (allSessions.length <= 9) {
+    // 11개 수업만 선택 (가운데 수업 기준으로 앞뒤 5개씩)
+    if (allSessions.length <= 11) {
       // 전체 수업이 13개 이하면 모두 표시하고 가운데 인덱스 조정
       final actualCenterIndex = centerIndex.clamp(0, allSessions.length - 1);
       setState(() {
@@ -1295,8 +1326,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 현재 페이지에서도 스마트 페이징 적용
     // pageIndex == 0이면 기존 로직 (오늘 기준), pageIndex > 0이면 위에서 처리됨
     
-    // 9개씩 점프하는 스마트 페이징
-    final pageSize = 9;
+    // 11개씩 점프하는 스마트 페이징
+    final pageSize = 11;
     final totalPages = (allSessions.length / pageSize).ceil();
     
     print('[DEBUG][_applySessionSelection] 현재 페이지 - 총 세션: ${allSessions.length}개, 총 페이지: $totalPages');
@@ -1347,7 +1378,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     int startIndex;
     int actualCenterIndex = -1;
     
-    if (allSessions.length <= 9) {
+    if (allSessions.length <= 11) {
       // 전체 수업이 13개 이하면 모두 표시
       startIndex = 0;
       final selectedSessions = allSessions;
@@ -1356,12 +1387,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       }
       print('[DEBUG][_applySessionSelection] 13개 이하 - 전체 표시, centerIndex: $actualCenterIndex');
     } else {
-      // 9개보다 많을 때: 파란 테두리를 가운데(4번 인덱스)에 배치하도록 계산
-      if (todayOrNextSessionIndex >= 4 && todayOrNextSessionIndex < allSessions.length - 4) {
-        // 과거 기록이 6개 이상이고 미래 수업도 6개 이상 있는 경우
-        // 파란 테두리를 정확히 가운데(6번 인덱스)에 배치
-        startIndex = todayOrNextSessionIndex - 4;
-        actualCenterIndex = 4;
+      // 11개보다 많을 때: 파란 테두리를 가운데(5번 인덱스)에 배치하도록 계산
+      if (todayOrNextSessionIndex >= 5 && todayOrNextSessionIndex < allSessions.length - 5) {
+        // 과거/미래가 각각 5개 이상 있는 경우
+        // 파란 테두리를 정확히 가운데(5번 인덱스)에 배치
+        startIndex = todayOrNextSessionIndex - 5;
+        actualCenterIndex = 5;
         print('[DEBUG][_applySessionSelection] 완벽한 센터링 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex');
       } else if (todayOrNextSessionIndex < 6) {
         // 과거 기록이 부족한 경우 (6개 미만)
@@ -1370,7 +1401,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         print('[DEBUG][_applySessionSelection] 과거 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, actualCenterIndex: $actualCenterIndex');
       } else {
         // 미래 수업이 부족한 경우 (6개 미만)
-        startIndex = allSessions.length - 9;
+        startIndex = allSessions.length - 11;
         actualCenterIndex = todayOrNextSessionIndex - startIndex;
         print('[DEBUG][_applySessionSelection] 미래 부족 - todayOrNextSessionIndex: $todayOrNextSessionIndex, startIndex: $startIndex, actualCenterIndex: $actualCenterIndex');
       }
@@ -1491,27 +1522,35 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     
 
     
-    // 🔥 새로운 접근: 현재 생성된 모든 세션에서 같은 수업명인 것들만 필터링
-    final sameClassSessions = _classSessions
-        .where((session) => session.className == className)
-        .where((session) {
-          final sessionDateOnly = DateTime(session.dateTime.year, session.dateTime.month, session.dateTime.day);
-          return !sessionDateOnly.isBefore(cycleStartDate) && !sessionDateOnly.isAfter(cycleEndDate);
-        })
-        .toList();
+    // 같은 사이클 내의 동일 클래스의 '원본' 세션만 사용
+    // - 대체 세션은 제외(isOverrideReplacement)
+    // - 추가(보강 add) 세션은 제외(setId == null)
+    final List<ClassSession> sameClassSessions = _classSessions.where((s) {
+      final dateOnly = DateTime(s.dateTime.year, s.dateTime.month, s.dateTime.day);
+      final inCycle = !dateOnly.isBefore(cycleStartDate) && !dateOnly.isAfter(cycleEndDate);
+      return inCycle && s.className == className && !s.isOverrideReplacement && s.setId != null;
+    }).toList();
     
-    // 날짜순 정렬
-    sameClassSessions.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+    // 날짜/시간 순 정렬
+    sameClassSessions.sort((a, b) {
+      final da = DateTime(a.dateTime.year, a.dateTime.month, a.dateTime.day, a.dateTime.hour, a.dateTime.minute);
+      final db = DateTime(b.dateTime.year, b.dateTime.month, b.dateTime.day, b.dateTime.hour, b.dateTime.minute);
+      return da.compareTo(db);
+    });
     
 
     
     // 해당 수업이 몇 번째인지 찾기
     final sessionDateOnly = DateTime(sessionDate.year, sessionDate.month, sessionDate.day);
-    final sessionIndex = sameClassSessions.indexWhere((session) {
-      final sesDateOnly = DateTime(session.dateTime.year, session.dateTime.month, session.dateTime.day);
-      final sesTime = Duration(hours: session.dateTime.hour, minutes: session.dateTime.minute);
-      final targetTime = Duration(hours: sessionDate.hour, minutes: sessionDate.minute);
-      return sesDateOnly.isAtSameMomentAs(sessionDateOnly) && sesTime == targetTime;
+    // 루트 원본 기준으로 매칭: 이 함수는 카드 인스턴스를 받지 않으므로
+    // 세션 고유 앵커는 sessionDate 자체로 두고, 원본/대체 여부는 외부에서 넘겨주는 numberingAnchorDateTime으로 처리함.
+    final DateTime anchor = sessionDate;
+    final sessionIndex = sameClassSessions.indexWhere((s) {
+      final dateOnly = DateTime(s.dateTime.year, s.dateTime.month, s.dateTime.day);
+      final anchorDateOnly = DateTime(anchor.year, anchor.month, anchor.day);
+      final sTime = Duration(hours: s.dateTime.hour, minutes: s.dateTime.minute);
+      final anchorTime = Duration(hours: anchor.hour, minutes: anchor.minute);
+      return dateOnly.isAtSameMomentAs(anchorDateOnly) && sTime == anchorTime;
     });
     
 
@@ -1537,21 +1576,25 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       final registrationDate = widget.selectedStudent!.basicInfo.registrationDate;
       if (registrationDate != null) {
 
-        final cycleNumber = _calculateCycleNumber(registrationDate, session.dateTime);
-        final sessionNumber = _calculateSessionNumberInCycle(registrationDate, session.dateTime, session.className);
+        // 보강(대체) 카드의 사이클/회차 번호는 원본 기준으로 계산되도록 앵커 시간 사용
+        final DateTime numberingAnchorDateTime =
+            (session.overrideOriginalDateTime != null)
+                ? session.overrideOriginalDateTime!
+                : session.dateTime;
+        final cycleNumber = _calculateCycleNumber(registrationDate, numberingAnchorDateTime);
+        final sessionNumber = _calculateSessionNumberInCycle(registrationDate, numberingAnchorDateTime, session.className);
         classNumber = '$cycleNumber-$sessionNumber-${session.className}';
 
       }
     }
     
-    // 등원/하원 시간 정보가 있으면 툴팁 메시지 생성
+    // 툴팁 메시지 생성
     String tooltipMessage = '';
-    
-    // 수업 번호 추가
     if (classNumber.isNotEmpty) {
       tooltipMessage += '$classNumber';
     }
-    
+    // 원본/대체 표시는 상단 배지로 충분하므로, 툴팁은 번호/등하원만 단순 표기
+    // 등원/하원 시간
     if (session.arrivalTime != null || session.departureTime != null) {
       if (session.arrivalTime != null) {
         final arrivalTime = session.arrivalTime!;
@@ -1948,16 +1991,48 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   Future<void> _applyReplaceOverride(ClassSession session, DateTime replacementDateTime) async {
     try {
       final studentId = widget.selectedStudent!.student.id;
-      final ov = SessionOverride(
-        studentId: studentId,
-        overrideType: OverrideType.replace,
-        status: OverrideStatus.planned,
-        originalClassDateTime: session.dateTime,
-        replacementClassDateTime: replacementDateTime,
-        durationMinutes: session.duration,
-        reason: OverrideReason.makeup,
-      );
-      await DataManager.instance.addSessionOverride(ov);
+      // 보강 카드에 대해 또 "이번 회차만 변경"을 수행하면
+      // 새로운 대체를 추가하지 않고 기존 override의 replacement만 갱신한다.
+      if (session.isOverrideReplacement) {
+        final existing = DataManager.instance.sessionOverrides.firstWhere(
+          (o) => o.studentId == studentId &&
+                 o.overrideType == OverrideType.replace &&
+                 o.status == OverrideStatus.planned &&
+                 o.replacementClassDateTime != null &&
+                 o.replacementClassDateTime!.isAtSameMomentAs(session.dateTime),
+          orElse: () => null as SessionOverride,
+        );
+        if (existing != null) {
+          final updated = existing.copyWith(
+            replacementClassDateTime: replacementDateTime,
+            updatedAt: DateTime.now(),
+          );
+          await DataManager.instance.updateSessionOverride(updated);
+        } else {
+          // 안전망: 기존을 찾지 못하면 새 override 생성
+          final ov = SessionOverride(
+            studentId: studentId,
+            overrideType: OverrideType.replace,
+            status: OverrideStatus.planned,
+            originalClassDateTime: session.overrideOriginalDateTime ?? session.dateTime,
+            replacementClassDateTime: replacementDateTime,
+            durationMinutes: session.duration,
+            reason: OverrideReason.makeup,
+          );
+          await DataManager.instance.addSessionOverride(ov);
+        }
+      } else {
+        final ov = SessionOverride(
+          studentId: studentId,
+          overrideType: OverrideType.replace,
+          status: OverrideStatus.planned,
+          originalClassDateTime: session.dateTime,
+          replacementClassDateTime: replacementDateTime,
+          durationMinutes: session.duration,
+          reason: OverrideReason.makeup,
+        );
+        await DataManager.instance.addSessionOverride(ov);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('이번 회차 변경이 적용되었습니다.'),

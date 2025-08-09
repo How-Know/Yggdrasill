@@ -622,6 +622,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   studentCopy,
                                   basicInfoCopy,
                                 );
+                                // 수업 블록 삭제 후 주간 수업 횟수 감소 처리: 현재 등록된 set 개수로 동기화
+                                final sid = student.student.id;
+                                final registered = DataManager.instance.getStudentLessonSetCount(sid);
+                                DataManager.instance.setStudentWeeklyClassCount(sid, registered);
                                 setState(() {});
                                 // 그룹에서 제외되었을 때 스낵바 출력
                                 showAppSnackBar(context, '그룹에서 제외되었습니다.');
@@ -700,6 +704,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       child: Opacity(
                         opacity: 0.85,
                         child: StudentCard(
+                          key: ValueKey('studentCard_feedback_${student.student.id}'),
                           studentWithInfo: student,
                           onShowDetails: widget.onShowDetails, // 연결 복구
                           onDelete: widget.onDeleteStudent,
@@ -710,6 +715,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     childWhenDragging: Opacity(
                       opacity: 0.3,
                       child: StudentCard(
+                        key: ValueKey('studentCard_placeholder_${student.student.id}'),
                         studentWithInfo: student,
                         onShowDetails: widget.onShowDetails, // 연결 복구
                         onDelete: widget.onDeleteStudent,
@@ -717,6 +723,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ),
                     ),
                     child: StudentCard(
+                      key: ValueKey('studentCard_${student.student.id}'),
                       studentWithInfo: student,
                       onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent,
@@ -816,6 +823,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     spacing: 4,
                     runSpacing: 8,
                     children: gradeStudents.map((studentWithInfo) => StudentCard(
+                      key: ValueKey('studentCard_${studentWithInfo.student.id}'),
                       studentWithInfo: studentWithInfo,
                       onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent, // 삭제 콜백 연결

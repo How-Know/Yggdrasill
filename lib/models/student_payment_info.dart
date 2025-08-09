@@ -3,6 +3,7 @@ class StudentPaymentInfo {
   final String studentId;
   final DateTime registrationDate;
   final String paymentMethod;
+  final int weeklyClassCount; // 주간 수업 횟수 (매주)
   final int tuitionFee;
   final int latenessThreshold; // 지각 기준 (분 단위)
   final bool scheduleNotification; // 수강일자 안내
@@ -17,6 +18,7 @@ class StudentPaymentInfo {
     required this.studentId,
     required this.registrationDate,
     required this.paymentMethod,
+    this.weeklyClassCount = 1,
     required this.tuitionFee,
     this.latenessThreshold = 10, // 기본 10분
     this.scheduleNotification = false,
@@ -33,6 +35,7 @@ class StudentPaymentInfo {
       studentId: json['student_id'] as String,
       registrationDate: DateTime.parse(json['registration_date'] as String),
       paymentMethod: json['payment_method'] as String,
+      weeklyClassCount: (json['weekly_class_count'] as int?) ?? 1,
       tuitionFee: json['tuition_fee'] as int,
       latenessThreshold: json['lateness_threshold'] as int? ?? 10,
       scheduleNotification: (json['schedule_notification'] as int? ?? 0) == 1,
@@ -50,6 +53,7 @@ class StudentPaymentInfo {
       'student_id': studentId,
       'registration_date': registrationDate.toIso8601String(),
       'payment_method': paymentMethod,
+      'weekly_class_count': weeklyClassCount,
       'tuition_fee': tuitionFee,
       'lateness_threshold': latenessThreshold,
       'schedule_notification': scheduleNotification ? 1 : 0,
@@ -66,6 +70,7 @@ class StudentPaymentInfo {
     String? studentId,
     DateTime? registrationDate,
     String? paymentMethod,
+    int? weeklyClassCount,
     int? tuitionFee,
     int? latenessThreshold,
     bool? scheduleNotification,
@@ -80,6 +85,7 @@ class StudentPaymentInfo {
       studentId: studentId ?? this.studentId,
       registrationDate: registrationDate ?? this.registrationDate,
       paymentMethod: paymentMethod ?? this.paymentMethod,
+      weeklyClassCount: weeklyClassCount ?? this.weeklyClassCount,
       tuitionFee: tuitionFee ?? this.tuitionFee,
       latenessThreshold: latenessThreshold ?? this.latenessThreshold,
       scheduleNotification: scheduleNotification ?? this.scheduleNotification,

@@ -44,8 +44,9 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       _students = DataManager.instance.getSelfStudyEligibleStudents();
       print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     } else {
-      _students = DataManager.instance.getLessonEligibleStudents();
-      print('[DEBUG][StudentSearchDialog] 수업 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
+      // 추천 학생: weekly_class_count > set_id 개수(미만)인 학생들
+      _students = DataManager.instance.getRecommendedStudentsForWeeklyClassCount();
+      print('[DEBUG][StudentSearchDialog] 추천 학생(weekly_class_count 기준): ' + _students.map((s) => s.student.name).toList().toString());
     }
     _filteredStudents = _students;
     setState(() {});
@@ -59,16 +60,14 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   void _filterStudents(String query) {
     setState(() {
+      // 검색은 필터 없이 전체 학생 대상
+      final allStudents = DataManager.instance.students;
       if (query.trim().isEmpty) {
-        // 검색어가 없으면 기본 필터링된 리스트 사용
-        _refreshStudentList();
-        _filteredStudents = _students;
+        _filteredStudents = allStudents;
       } else {
-        // 검색어가 있으면 모든 학생을 대상으로 검색
-        final allStudents = DataManager.instance.students;
         _filteredStudents = allStudents.where((studentWithInfo) {
           final name = studentWithInfo.student.name.toLowerCase();
-          final school = studentWithInfo.student.school?.toLowerCase() ?? '';
+          final school = studentWithInfo.student.school.toLowerCase();
           final searchQuery = query.toLowerCase();
           return name.contains(searchQuery) || school.contains(searchQuery);
         }).toList();

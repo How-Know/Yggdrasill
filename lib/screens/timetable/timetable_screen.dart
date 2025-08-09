@@ -94,6 +94,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 자습 등록 모드 상태
   bool _isSelfStudyRegistrationMode = false;
   StudentWithInfo? _selectedSelfStudyStudent;
+  bool _isIncreasingWeeklyCount = false; // weekly_class_count 초과 등록 모드 여부
+  Set<String> _snapshotSetIds = {}; // 등록 시작 시점의 set_id 스냅샷 (취소 복구용)
 
   @override
   void initState() {
@@ -299,12 +301,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
             orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id)),
           );
         }
-        final classCount = studentWithInfo.basicInfo.weeklyClassCount;
-        // setId 기준 등록된 수업 차수 개수 계산
-        final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == selectedStudent.id).toList();
-        final setIds = blocks.map((b) => b.setId).toSet();
-        final registeredCount = setIds.length;
-        final remaining = classCount - registeredCount;
+        final studentId = selectedStudent.id;
+        // 시작 스냅샷 저장(취소 시 복구용)
+        final startBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null).toList();
+        _snapshotSetIds = startBlocks.map((b) => b.setId!).toSet();
+        final registeredCount = _snapshotSetIds.length;
+        final classCount = DataManager.instance.getStudentWeeklyClassCount(studentId);
+        // weekly_class_count를 이미 채운 경우 = 증가 모드
+        _isIncreasingWeeklyCount = registeredCount >= classCount;
         setState(() {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
@@ -632,20 +636,43 @@ class _TimetableScreenState extends State<TimetableScreen> {
       autofocus: true,
       onKey: (event) {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
-          if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+            if (_isStudentRegistrationMode || _isClassRegistrationMode) {
             final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
-            setState(() {
-              _isStudentRegistrationMode = false;
-              _isClassRegistrationMode = false;
-              _selectedStudentWithInfo = null;
-              _selectedDayIndex = null;
-              _selectedStartTimeHour = null;
-              _selectedStartTimeMinute = null;
-            });
-            // ESC 키로 등록모드 종료 시 스낵바 출력
-            if (mounted) {
-              showAppSnackBar(context, '$currentStudentName 학생의 수업등록이 완료되었습니다.', useRoot: true);
-            }
+              if (_selectedStudentWithInfo != null) {
+                final sid = _selectedStudentWithInfo!.student.id;
+                // 분기: 증가 모드면 완료+DB수정, 증가 모드가 아니면 취소(원복)
+                if (_isIncreasingWeeklyCount) {
+                  final registered = DataManager.instance.getStudentLessonSetCount(sid);
+                  DataManager.instance.setStudentWeeklyClassCount(sid, registered);
+                  if (mounted) {
+                    showAppSnackBar(context, '$currentStudentName 학생의 수업등록을 종료했습니다. (주간 수업횟수: $registered)', useRoot: true);
+                  }
+                } else {
+                  // 취소: 시작 스냅샷과 다르면, 스냅샷에 포함되지 않는 set들을 삭제하여 원복
+                  final nowSetIds = DataManager.instance.studentTimeBlocks
+                      .where((b) => b.studentId == sid && b.setId != null)
+                      .map((b) => b.setId!)
+                      .toSet();
+                  final newSetIds = nowSetIds.difference(_snapshotSetIds);
+                  if (newSetIds.isNotEmpty) {
+                    // 이 블록은 async가 아닌 컨텍스트이므로 await 사용 불가. 백그라운드로 처리 후 결과는 다음 빌드에서 반영됨.
+                    DataManager.instance.removeStudentTimeBlocksBySetIds(sid, newSetIds);
+                  }
+                  if (mounted) {
+                    showAppSnackBar(context, '$currentStudentName 학생의 수업등록을 취소했습니다.', useRoot: true);
+                  }
+                }
+              }
+              setState(() {
+                _isStudentRegistrationMode = false;
+                _isClassRegistrationMode = false;
+                _selectedStudentWithInfo = null;
+                _selectedDayIndex = null;
+                _selectedStartTimeHour = null;
+                _selectedStartTimeMinute = null;
+                _snapshotSetIds = {};
+                _isIncreasingWeeklyCount = false;
+              });
           }
         }
       },
@@ -766,12 +793,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       builder: (context) {
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final studentId = studentWithInfo.student.id;
-                        final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
-                        final setIds = blocks.map((b) => b.setId).toSet();
-                        final registeredCount = setIds.length;
+                        final registeredCount = DataManager.instance.getStudentLessonSetCount(studentId);
+                        final totalCount = DataManager.instance.getStudentWeeklyClassCount(studentId);
                         final nextLessonNumber = registeredCount + 1;
+                        final text = _isIncreasingWeeklyCount
+                          ? '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${registeredCount} 수업 등록 (현재 ${registeredCount}개 등록됨)'
+                          : '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${totalCount} 수업 등록 (현재 ${registeredCount}개 등록됨)';
                         return Text(
-                          '${studentWithInfo.student.name} 학생: ${nextLessonNumber}번째 수업시간 등록',
+                          text,
                           style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
                         );
                       },
@@ -803,6 +832,28 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
                         _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
                       });
+                      // 등록 결과에 따른 자동 종료(증가 모드 아님): 목표 도달 시 즉시 종료
+                      if (_isStudentRegistrationMode && _selectedStudentWithInfo != null && !_isIncreasingWeeklyCount) {
+                        final sid = _selectedStudentWithInfo!.student.id;
+                        final registered = DataManager.instance.getStudentLessonSetCount(sid);
+                        final total = DataManager.instance.getStudentWeeklyClassCount(sid);
+                        if (registered >= total) {
+                          if (mounted) {
+                            showAppSnackBar(context, '${_selectedStudentWithInfo!.student.name} 학생의 수업등록이 완료되었습니다.', useRoot: true);
+                          }
+                          setState(() {
+                            _isStudentRegistrationMode = false;
+                            _isClassRegistrationMode = false;
+                            _selectedStudentWithInfo = null;
+                            _selectedDayIndex = null;
+                            _selectedStartTimeHour = null;
+                            _selectedStartTimeMinute = null;
+                            _snapshotSetIds = {};
+                            _isIncreasingWeeklyCount = false;
+                          });
+                          return;
+                        }
+                      }
                       // 자습 등록 모드 처리
                       if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
                         print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
@@ -874,14 +925,26 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           final setIds = allBlocksAfter.map((b) => b.setId).toSet();
                           int usedCount = setIds.length;
                           print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
-                          
-                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                            (s) => s.student.id == student.id,
-                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
-                          );
-                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
-                          
+                          // weekly_class_count는 StudentPaymentInfo 기준으로 조회
+                          final maxCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
+                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount(DataManager): $maxCount');
+                          // 자동 종료: 증가 모드가 아니고, 목표 도달 시 즉시 종료
+                          if (!_isIncreasingWeeklyCount && usedCount >= maxCount) {
+                            if (mounted) {
+                              showAppSnackBar(context, '목표 수업횟수에 도달했습니다. 등록을 종료합니다.', useRoot: true);
+                            }
+                            setState(() {
+                              _isStudentRegistrationMode = false;
+                              _isClassRegistrationMode = false;
+                              _selectedStudentWithInfo = null;
+                              _selectedDayIndex = null;
+                              _selectedStartTimeHour = null;
+                              _selectedStartTimeMinute = null;
+                              _snapshotSetIds = {};
+                              _isIncreasingWeeklyCount = false;
+                            });
+                            return;
+                          }
                           print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           setState(() {
                     
@@ -946,12 +1009,26 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           final setIds = allBlocksAfter.map((b) => b.setId).toSet();
                           int usedCount = setIds.length;
                           print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
-                          final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                            (s) => s.student.id == student.id,
-                            orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
-                          );
-                          final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount: $maxCount');
+                          // weekly_class_count는 StudentPaymentInfo 기준으로 조회
+                          final maxCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
+                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount(DataManager): $maxCount');
+                          // 자동 종료: 증가 모드가 아니고, 목표 도달 시 즉시 종료
+                          if (!_isIncreasingWeeklyCount && usedCount >= maxCount) {
+                            if (mounted) {
+                              showAppSnackBar(context, '목표 수업횟수에 도달했습니다. 등록을 종료합니다.', useRoot: true);
+                            }
+                            setState(() {
+                              _isStudentRegistrationMode = false;
+                              _isClassRegistrationMode = false;
+                              _selectedStudentWithInfo = null;
+                              _selectedDayIndex = null;
+                              _selectedStartTimeHour = null;
+                              _selectedStartTimeMinute = null;
+                              _snapshotSetIds = {};
+                              _isIncreasingWeeklyCount = false;
+                            });
+                            return;
+                          }
                           
                           print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           setState(() {

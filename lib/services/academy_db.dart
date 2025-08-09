@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-      version: 14,
+      version: 17,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -69,6 +69,7 @@ class AcademyDbService {
             phone_number TEXT,
             parent_phone_number TEXT,
             group_id TEXT,
+            memo TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -95,7 +96,6 @@ class AcademyDbService {
           CREATE TABLE student_time_blocks (
             id TEXT PRIMARY KEY,
             student_id TEXT,
-            group_id TEXT,
             day_index INTEGER,
             start_hour INTEGER,
             start_minute INTEGER,
@@ -103,7 +103,8 @@ class AcademyDbService {
             created_at TEXT,
             set_id TEXT,
             number INTEGER,
-            session_type_id TEXT
+            session_type_id TEXT,
+            weekly_order INTEGER
           )
         ''');
         await db.execute('''
@@ -148,6 +149,24 @@ class AcademyDbService {
             notes TEXT,
             created_at TEXT,
             updated_at TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS student_payment_info (
+            id TEXT PRIMARY KEY,
+            student_id TEXT UNIQUE,
+            registration_date INTEGER,
+            payment_method TEXT,
+            weekly_class_count INTEGER DEFAULT 1,
+            tuition_fee INTEGER,
+            lateness_threshold INTEGER DEFAULT 10,
+            schedule_notification INTEGER DEFAULT 0,
+            attendance_notification INTEGER DEFAULT 0,
+            departure_notification INTEGER DEFAULT 0,
+            lateness_notification INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -200,6 +219,7 @@ class AcademyDbService {
               phone_number TEXT,
               parent_phone_number TEXT,
               group_id TEXT,
+              memo TEXT,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
@@ -319,6 +339,7 @@ class AcademyDbService {
               student_id TEXT UNIQUE,
               registration_date INTEGER,
               payment_method TEXT,
+              weekly_class_count INTEGER DEFAULT 1,
               tuition_fee INTEGER,
               lateness_threshold INTEGER DEFAULT 10,
               schedule_notification INTEGER DEFAULT 0,
@@ -351,6 +372,7 @@ class AcademyDbService {
                 phone_number TEXT,
                 parent_phone_number TEXT,
                 group_id TEXT,
+                memo TEXT,
                 FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
               )
             ''');
@@ -375,9 +397,18 @@ class AcademyDbService {
                 phone_number TEXT,
                 parent_phone_number TEXT,
                 group_id TEXT,
+                memo TEXT,
                 FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
               )
             ''');
+          }
+        }
+        // 버전 17: student_basic_info에 memo 컬럼 추가
+        if (oldVersion < 17) {
+          final columns = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+          final hasMemo = columns.any((col) => col['name'] == 'memo');
+          if (!hasMemo) {
+            await db.execute('ALTER TABLE student_basic_info ADD COLUMN memo TEXT');
           }
         }
         
@@ -399,7 +430,6 @@ class AcademyDbService {
             CREATE TABLE student_time_blocks (
               id TEXT PRIMARY KEY,
               student_id TEXT,
-              group_id TEXT,
               day_index INTEGER,
               start_hour INTEGER,
               start_minute INTEGER,
@@ -407,7 +437,8 @@ class AcademyDbService {
               created_at TEXT,
               set_id TEXT,
               number INTEGER,
-              session_type_id TEXT
+              session_type_id TEXT,
+              weekly_order INTEGER
             )
           ''');
           
@@ -429,7 +460,6 @@ class AcademyDbService {
             await db.insert('student_time_blocks', {
               'id': row['id'],
               'student_id': row['student_id'],
-              'group_id': row['group_id'],
               'day_index': row['day_index'],
               'start_hour': startHour,
               'start_minute': startMinute,
@@ -438,6 +468,7 @@ class AcademyDbService {
               'set_id': row['set_id'],
               'number': row['number'],
               'session_type_id': row['session_type_id'],
+              'weekly_order': row['weekly_order'],
             });
           }
           
@@ -477,6 +508,64 @@ class AcademyDbService {
             ON session_overrides(student_id, replacement_class_datetime)
           ''');
           print('[DB] 버전 14 마이그레이션 완료: session_overrides 테이블 생성');
+        }
+        // 버전 16: student_time_blocks에서 group_id 제거 및 weekly_order 컬럼 추가
+        if (oldVersion < 16) {
+          print('[DB] 버전 16 마이그레이션 시작: student_time_blocks 테이블 재구성 (group_id 제거, weekly_order 추가)');
+          // 1) 백업 테이블 생성
+          await db.execute('''
+            CREATE TABLE student_time_blocks_v16_backup AS
+            SELECT * FROM student_time_blocks
+          ''');
+          // 2) 기존 테이블 삭제
+          await db.execute('DROP TABLE student_time_blocks');
+          // 3) 새 구조로 테이블 생성 (group_id 제거, weekly_order 추가)
+          await db.execute('''
+            CREATE TABLE student_time_blocks (
+              id TEXT PRIMARY KEY,
+              student_id TEXT,
+              day_index INTEGER,
+              start_hour INTEGER,
+              start_minute INTEGER,
+              duration INTEGER,
+              created_at TEXT,
+              set_id TEXT,
+              number INTEGER,
+              session_type_id TEXT,
+              weekly_order INTEGER
+            )
+          ''');
+          // 4) 백업 데이터 읽어서 변환 삽입
+          final backupRows = await db.rawQuery('SELECT * FROM student_time_blocks_v16_backup');
+          for (final row in backupRows) {
+            // start_time -> start_hour/start_minute 변환은 v13에서 처리됨, 여기서는 그대로 사용
+            await db.insert('student_time_blocks', {
+              'id': row['id'],
+              'student_id': row['student_id'],
+              'day_index': row['day_index'],
+              'start_hour': row['start_hour'],
+              'start_minute': row['start_minute'],
+              'duration': row['duration'],
+              'created_at': row['created_at'],
+              'set_id': row['set_id'],
+              'number': row['number'],
+              'session_type_id': row['session_type_id'],
+              'weekly_order': null,
+            });
+          }
+          // 5) 백업 테이블 삭제
+          await db.execute('DROP TABLE student_time_blocks_v16_backup');
+          print('[DB] 버전 16 마이그레이션 완료: student_time_blocks 재구성');
+        }
+        // 버전 15: student_payment_info 테이블에 weekly_class_count 컬럼 추가
+        if (oldVersion < 15) {
+          print('[DB] 버전 15 마이그레이션 시작: student_payment_info.weekly_class_count 컬럼 추가');
+          final columns = await db.rawQuery("PRAGMA table_info(student_payment_info)");
+          final hasWeekly = columns.any((col) => col['name'] == 'weekly_class_count');
+          if (!hasWeekly) {
+            await db.execute('ALTER TABLE student_payment_info ADD COLUMN weekly_class_count INTEGER DEFAULT 1');
+          }
+          print('[DB] 버전 15 마이그레이션 완료: weekly_class_count 컬럼 추가');
         }
       },
     );
@@ -737,7 +826,7 @@ class AcademyDbService {
       {
         'id': block.id,
         'student_id': block.studentId,
-        'group_id': block.groupId,
+        
         'day_index': block.dayIndex,
         'start_hour': block.startHour,
         'start_minute': block.startMinute,
@@ -746,6 +835,7 @@ class AcademyDbService {
         'set_id': block.setId,
         'number': block.number,
         'session_type_id': block.sessionTypeId,
+        'weekly_order': block.weeklyOrder,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -757,7 +847,6 @@ class AcademyDbService {
     return result.map((row) => StudentTimeBlock(
       id: row['id'] as String,
       studentId: row['student_id'] as String,
-      groupId: row['group_id'] as String?,
       dayIndex: row['day_index'] as int? ?? 0,
       startHour: row['start_hour'] as int? ?? 0,
       startMinute: row['start_minute'] as int? ?? 0,
@@ -766,6 +855,7 @@ class AcademyDbService {
       setId: row['set_id'] as String?,
       number: row['number'] as int?,
       sessionTypeId: row['session_type_id'] as String?,
+      weeklyOrder: row['weekly_order'] as int?,
     )).toList();
   }
 
@@ -776,7 +866,7 @@ class AcademyDbService {
       await dbClient.insert('student_time_blocks', {
         'id': block.id,
         'student_id': block.studentId,
-        'group_id': block.groupId,
+        
         'day_index': block.dayIndex,
         'start_hour': block.startHour,
         'start_minute': block.startMinute,
@@ -785,6 +875,7 @@ class AcademyDbService {
         'set_id': block.setId,
         'number': block.number,
         'session_type_id': block.sessionTypeId,
+        'weekly_order': block.weeklyOrder,
       });
     }
   }
@@ -808,7 +899,7 @@ class AcademyDbService {
           {
             'id': block.id,
             'student_id': block.studentId,
-            'group_id': block.groupId,
+           
             'day_index': block.dayIndex,
             'start_hour': block.startHour,
             'start_minute': block.startMinute,
@@ -817,6 +908,7 @@ class AcademyDbService {
             'set_id': block.setId,
             'number': block.number,
             'session_type_id': block.sessionTypeId,
+            'weekly_order': block.weeklyOrder,
           },
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
@@ -1328,6 +1420,11 @@ class AcademyDbService {
   Future<void> deleteSessionOverride(String id) async {
     final dbClient = await db;
     await dbClient.delete('session_overrides', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteSessionOverridesByStudentId(String studentId) async {
+    final dbClient = await db;
+    await dbClient.delete('session_overrides', where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<List<Map<String, dynamic>>> getSessionOverridesForStudent(String studentId) async {

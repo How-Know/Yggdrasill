@@ -250,41 +250,46 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         borderRadius: BorderRadius.circular(8.0),
       ),
       child: AnimatedContainer(
-        width: widget.showCheckbox ? 144 : 112,
+        width: widget.showCheckbox ? 147 : 115,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,
         height: 50,
         onEnd: _onAnimEnd,
         padding: EdgeInsets.only(
-          left: student.groupInfo == null ? 15.0 : 4.0,
+          left: student.groupInfo == null ? 15.0 : 8.0,
           right: 4.0,
         ),
         child: SizedBox(
-          width: widget.showCheckbox ? 144 : 122,
+          width: widget.showCheckbox ? 147 : 125,
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.start,
             children: [
               if (student.groupInfo != null) ...[
                 Container(
                   width: 5,
-                  height: 20,
+                  height: 26,
                   decoration: BoxDecoration(
                     color: student.groupInfo!.color,
                     borderRadius: BorderRadius.circular(2.5),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 5),
               ],
-              Text(
-                student.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
+              Expanded(
+                child: Text(
+                  student.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
                 ),
               ),
-              const Spacer(),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
                 color: const Color(0xFF2A2A2A),

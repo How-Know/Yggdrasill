@@ -17,6 +17,7 @@ import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
 
 class StudentWithInfo {
   final Student student;
@@ -214,6 +215,7 @@ class DataManager {
           parentPhoneNumber: info['parent_phone_number'] as String?,
           groupId: info['group_id'] as String?,
           registrationDate: registrationDate,
+          memo: info['memo'] as String?,
         ));
       } else {
         // 부가 정보가 없으면 기본값으로 생성
@@ -525,6 +527,9 @@ class DataManager {
     // 학생의 모든 수업시간 블록도 함께 삭제
     await AcademyDbService.instance.deleteStudentTimeBlocksByStudentId(id);
     print('[DEBUG][deleteStudent] StudentTimeBlock 삭제 완료: id=$id');
+    // 학생의 보강/예외(SessionOverride)도 함께 삭제
+    await AcademyDbService.instance.deleteSessionOverridesByStudentId(id);
+    print('[DEBUG][deleteStudent] SessionOverrides 삭제 완료: id=$id');
     // 학생의 부가 정보도 함께 삭제
     await AcademyDbService.instance.deleteStudentBasicInfo(id);
     print('[DEBUG][deleteStudent] StudentBasicInfo 삭제 완료: id=$id');
@@ -637,6 +642,10 @@ class DataManager {
     _studentTimeBlocks.add(block);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.addStudentTimeBlock(block);
+    // 새 set_id 생성 시 주간 순번 재계산
+    if (block.setId != null) {
+      await _recalculateWeeklyOrderForStudent(block.studentId);
+    }
   }
 
   Future<void> removeStudentTimeBlock(String id) async {
@@ -677,6 +686,11 @@ class DataManager {
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
       });
     }
+    // 블록 추가 후 주간 순번 재계산 (대상 학생들만)
+    final affectedStudentIds = blocks.map((b) => b.studentId).toSet();
+    for (final studentId in affectedStudentIds) {
+      await _recalculateWeeklyOrderForStudent(studentId);
+    }
   }
 
   Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
@@ -696,6 +710,14 @@ class DataManager {
     await loadStudentTimeBlocks();
   }
 
+  // 특정 학생의 set_id 목록에 해당하는 모든 수업 블록 삭제
+  Future<void> removeStudentTimeBlocksBySetIds(String studentId, Set<String> setIds) async {
+    if (setIds.isEmpty) return;
+    final targets = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId!)).map((b) => b.id).toList();
+    if (targets.isEmpty) return;
+    await bulkDeleteStudentTimeBlocks(targets, immediate: true);
+  }
+
   Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
     final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
     if (index != -1) {
@@ -703,7 +725,56 @@ class DataManager {
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
       await AcademyDbService.instance.updateStudentTimeBlock(id, newBlock);
       await loadStudentTimeBlocks(); // DB 업데이트 후 메모리/상태 최신화
+      if (newBlock.setId != null) {
+        await _recalculateWeeklyOrderForStudent(newBlock.studentId);
+      }
     }
+  }
+
+  // 주간 순번 재계산: 학생의 모든 set_id를 대표시간(가장 이른 요일/시간) 기준으로 정렬하여 weekly_order=1..N 부여
+  Future<void> _recalculateWeeklyOrderForStudent(String studentId) async {
+    // 대상 학생 블록만 수집
+    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    if (blocks.isEmpty) return;
+    // setId가 있는 블록만 고려
+    final Map<String, List<StudentTimeBlock>> bySet = {};
+    for (final b in blocks) {
+      if (b.setId == null) continue;
+      bySet.putIfAbsent(b.setId!, () => []).add(b);
+    }
+    if (bySet.isEmpty) return;
+    // 각 set의 대표시간: 요일(0~6), 시간(시*60+분) 기준 최소값
+    List<MapEntry<String, DateTime>> setRepresentatives = [];
+    for (final entry in bySet.entries) {
+      final rep = entry.value.map((b) => DateTime(0, 1, 1, b.startHour, b.startMinute))
+          .reduce((a, b) => (a.hour * 60 + a.minute) <= (b.hour * 60 + b.minute) ? a : b);
+      // 요일까지 반영하기 위해 dayIndex를 분에 가중치로 반영
+      final minutesWithDay = (entry.value.map((b) => b.dayIndex).reduce((a, b) => a < b ? a : b)) * 24 * 60 + rep.hour * 60 + rep.minute;
+      // minutesWithDay를 DateTime으로 재구성(비교용)
+      final combined = DateTime(0, 1, 1).add(Duration(minutes: minutesWithDay));
+      setRepresentatives.add(MapEntry(entry.key, combined));
+    }
+    // 대표시간 기준 오름차순 정렬
+    setRepresentatives.sort((a, b) => a.value.compareTo(b.value));
+    // weekly_order 부여: 1..N
+    final Map<String, int> setToOrder = {};
+    for (int i = 0; i < setRepresentatives.length; i++) {
+      setToOrder[setRepresentatives[i].key] = i + 1;
+    }
+    // 적용 및 DB 업데이트
+    List<Future> futures = [];
+    for (int i = 0; i < _studentTimeBlocks.length; i++) {
+      final b = _studentTimeBlocks[i];
+      if (b.studentId != studentId || b.setId == null) continue;
+      final order = setToOrder[b.setId!];
+      if (order == null) continue;
+      if (b.weeklyOrder == order) continue;
+      final updated = b.copyWith(weeklyOrder: order);
+      _studentTimeBlocks[i] = updated;
+      futures.add(AcademyDbService.instance.updateStudentTimeBlock(updated.id, updated));
+    }
+    await Future.wait(futures);
+    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
   }
 
   // GroupSchedule 관련 메서드들
@@ -847,13 +918,30 @@ class DataManager {
 
   /// 수업 등록 가능 학생 리스트 반환 (수업이 등록되지 않은 학생들)
   List<StudentWithInfo> getLessonEligibleStudents() {
-    final eligible = students.where((s) {
+    // 기존 함수는 더 이상 사용하지 않음. 주석 유지하되, 추천 로직을 사용하도록 변경
+    return getRecommendedStudentsForWeeklyClassCount();
+  }
+
+  int getStudentWeeklyClassCount(String studentId) {
+    final info = getStudentPaymentInfo(studentId);
+    return info?.weeklyClassCount ?? 1;
+  }
+
+  // 추천 학생: weekly_class_count 대비 현재 set_id 개수가 미만인 학생 목록
+  List<StudentWithInfo> getRecommendedStudentsForWeeklyClassCount() {
+    final result = students.where((s) {
       final setCount = getStudentLessonSetCount(s.student.id);
-      print('[DEBUG][DataManager] getLessonEligibleStudents: ${s.student.name}, setCount=$setCount');
-      return setCount == 0; // 수업이 하나도 등록되지 않은 학생만
+      final weekly = getStudentWeeklyClassCount(s.student.id);
+      return setCount < weekly;
     }).toList();
-    print('[DEBUG][DataManager] getLessonEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
-    return eligible;
+    // 차이(remaining) 큰 순 또는 이름순 정렬 등 정책 선택 가능; 여기서는 remaining 내림차순→이름
+    result.sort((a, b) {
+      final ra = getStudentWeeklyClassCount(a.student.id) - getStudentLessonSetCount(a.student.id);
+      final rb = getStudentWeeklyClassCount(b.student.id) - getStudentLessonSetCount(b.student.id);
+      if (rb != ra) return rb.compareTo(ra);
+      return a.student.name.compareTo(b.student.name);
+    });
+    return result;
   }
 
   /// 자습 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 <= 0)
@@ -1355,6 +1443,31 @@ class DataManager {
       print('[ERROR] 학생 결제 정보 업데이트 실패: $e');
       rethrow;
     }
+  }
+
+  // 주간 수업 횟수 설정(증가/감소 모두 포함)
+  Future<void> setStudentWeeklyClassCount(String studentId, int newWeeklyCount) async {
+    // 기존 PaymentInfo 조회
+    final existing = getStudentPaymentInfo(studentId);
+    final now = DateTime.now();
+    if (existing != null) {
+      final updated = existing.copyWith(weeklyClassCount: newWeeklyCount, updatedAt: now);
+      await updateStudentPaymentInfo(updated);
+    } else {
+      // 존재하지 않으면 기본값으로 새로 생성
+      final info = StudentPaymentInfo(
+        id: const Uuid().v4(),
+        studentId: studentId,
+        registrationDate: now,
+        paymentMethod: 'monthly',
+        weeklyClassCount: newWeeklyCount,
+        tuitionFee: 0,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await addStudentPaymentInfo(info);
+    }
+    await loadStudentPaymentInfos();
   }
 
   // 학생 결제 정보 삭제
