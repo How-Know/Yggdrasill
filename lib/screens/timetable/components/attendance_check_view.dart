@@ -121,6 +121,18 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final border = _getCheckboxBorderColor(status);
     final icon = _getCheckboxIcon(status);
     final pillWidth = 84.0; // 너비 유지
+    final Color labelColor = () {
+      switch (status) {
+        case AttendanceStatus.completed:
+          return const Color(0xFF4CAF50);
+        case AttendanceStatus.absent:
+          return const Color(0xFFE53E3E);
+        case AttendanceStatus.arrived:
+        case AttendanceStatus.none:
+        default:
+          return Colors.white70;
+      }
+    }();
     return SizedBox(
       width: pillWidth,
       child: Container(
@@ -128,29 +140,29 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
           color: Colors.transparent,
-          border: Border.all(color: border, width: 1),
+          border: Border.all(color: border, width: 2),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Center(
-          child: (icon != null)
-              ? Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
-                      child: icon,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.0)),
-                  ],
-                )
-              : Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.0),
-                ),
+            child: (icon != null)
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
+                        child: icon,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(label, style: TextStyle(color: labelColor, fontSize: 13, height: 1.0)),
+                    ],
+                  )
+                : Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: labelColor, fontSize: 13, height: 1.0),
+                  ),
         ),
       ),
     );
@@ -208,6 +220,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                          onTap: () async {
                            // 리스트 아이템 클릭 시 출석체크 카드와 동일한 메뉴 제공
                            if (tapDownPosition == null) return;
+                           final now = DateTime.now();
                            final selected = await showMenu<String>(
                              context: context,
                              position: RelativeRect.fromLTRB(
@@ -217,15 +230,47 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                tapDownPosition!.dy,
                              ),
                              color: const Color(0xFF1F1F1F),
-                             items: [
-                               _menuItem('replace', '이번 회차만 변경'),
-                               _menuItem('skip', '이번 회차 건너뛰기'),
-                             ],
+                             items: isReplacement
+                                 ? [
+                                     _menuItem('replacement_change', '보강시간 변경'),
+                                     _menuItem('replacement_cancel', '보강 취소'),
+                                   ]
+                                 : [
+                                     _menuItem('replace', '이번 회차만 변경'),
+                                     _menuItem('skip', '이번 회차 건너뛰기'),
+                                   ],
                            );
+                           if (selected == null) return;
+                           if (isReplacement) {
+                             if (selected == 'replacement_change') {
+                               await _showChangeReplacementDialog(s);
+                             } else if (selected == 'replacement_cancel') {
+                               await _confirmAndCancelReplacement(s);
+                             }
+                             // UI 즉시 반영
+                             await Future.delayed(const Duration(milliseconds: 10));
+                             if (mounted) {
+                               setState(() {});
+                               setLocalState(() {});
+                             }
+                             return;
+                           }
                            if (selected == 'replace') {
+                             final isPast = s.dateTime.isBefore(now);
+                             final hasAttendance = s.attendanceStatus == AttendanceStatus.arrived || s.attendanceStatus == AttendanceStatus.completed;
+                             if (isPast && hasAttendance) {
+                               await _showInfoDialog('이미 지난 수업이며 출석이 기록된 회차는 보강을 생성할 수 없습니다.');
+                               return;
+                             }
                              await _showReplaceDialog(s);
                            } else if (selected == 'skip') {
                              await _applySkipOverride(s);
+                           }
+                           // UI 즉시 반영
+                           await Future.delayed(const Duration(milliseconds: 10));
+                           if (mounted) {
+                             setState(() {});
+                             setLocalState(() {});
                            }
                          },
                          child: Container(
@@ -256,7 +301,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                       ),
                                       if (isReplacement) ...[
                                         const SizedBox(width: 8),
-                                        _buildSmallBadge('보강', const Color(0xFFFFB74D)),
+                                        _buildSmallBadge('보강', const Color(0xFF1976D2)),
                                       ],
                                     ],
                                   ),
@@ -1414,6 +1459,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     final defaultClassName = _inferClassName();
 
     for (final ov in overrides) {
+      // 취소된 보강/예외는 무시
+      if (ov.status == OverrideStatus.canceled) {
+        // ignore canceled overrides
+        continue;
+      }
       // 범위 밖은 무시
       bool inRange(DateTime dt) =>
           !dt.isBefore(rangeStart) && dt.isBefore(rangeEnd);
@@ -1444,9 +1494,23 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 overrideOriginalDateTime: originalSession.overrideOriginalDateTime ?? originalSession.dateTime,
               );
             } else {
-              // skip은 제거
-              sessions.removeAt(originalIdx);
-              originalSession = null;
+              // skip은 제거하지 않고 휴강 카드로 표시
+              sessions[originalIdx] = ClassSession(
+                dateTime: originalSession.dateTime,
+                className: originalSession.className,
+                dayOfWeek: originalSession.dayOfWeek,
+                duration: originalSession.duration,
+                setId: originalSession.setId,
+                weeklyOrder: originalSession.weeklyOrder,
+                weekNumber: originalSession.weekNumber,
+                isAttended: false,
+                arrivalTime: null,
+                departureTime: null,
+                attendanceStatus: AttendanceStatus.none,
+                isOverrideOriginalGhost: true,
+                overrideOriginalDateTime: originalSession.dateTime,
+              );
+              originalSession = sessions[originalIdx];
             }
           } else if (ov.overrideType == OverrideType.replace) {
             // 원래 세션이 생성되지 않았더라도 고스트 세션을 강제로 추가하여 보존
@@ -1985,7 +2049,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // 상단 배지 (제거: 날짜 라인에서만 표시)
-          // 1행: 대체/원래 배지 + 날짜/요일 (한 줄)
+          // 1행: 보강/원래/휴강 배지 + 날짜/요일 (한 줄)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
@@ -1993,12 +2057,17 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               if (isReplacement)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
-                  child: _buildSmallBadge('대체', const Color(0xFF1976D2)),
+                  child: _buildSmallBadge('보강', const Color(0xFF1976D2)),
                 ),
               if (isGhost)
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: _buildSmallBadge('원래', Colors.white24),
+                ),
+              if (!isReplacement && isGhost && _hasSkipOverrideFor(session))
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: _buildSmallBadge('휴강', const Color(0xFFE53935)),
                 ),
               Text(
                 '${session.dateTime.month}/${session.dateTime.day} ${session.dayOfWeek}',
@@ -2065,16 +2134,42 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     tapDownPosition!.dy,
                   ),
                   color: const Color(0xFF1F1F1F),
-                  items: [
-                    _menuItem('replace', '이번 회차만 변경'),
-                    _menuItem('skip', '이번 회차 건너뛰기'),
-                  ],
+                  items: isReplacement
+                      ? [
+                          _menuItem('replacement_change', '보강시간 변경'),
+                          _menuItem('replacement_cancel', '보강 취소'),
+                        ]
+                      : [
+                          _menuItem('replace', '이번 회차만 변경'),
+                          _menuItem('skip', '이번 회차 건너뛰기'),
+                        ],
                 );
+                if (selected == null) return;
+                if (isReplacement) {
+                  if (selected == 'replacement_change') {
+                    await _showChangeReplacementDialog(session);
+                  } else if (selected == 'replacement_cancel') {
+                    await _confirmAndCancelReplacement(session);
+                  }
+                  // UI 즉시 반영
+                  await Future.delayed(const Duration(milliseconds: 10));
+                  if (mounted) setState(() {});
+                  return;
+                }
                 if (selected == 'replace') {
+                  final nowLocal = DateTime.now();
+                  final isPastLocal = session.dateTime.isBefore(nowLocal);
+                  final hasAttendanceLocal = session.attendanceStatus == AttendanceStatus.arrived || session.attendanceStatus == AttendanceStatus.completed;
+                  if (isPastLocal && hasAttendanceLocal) {
+                    await _showInfoDialog('이미 지난 수업이며 출석이 기록된 회차는 보강을 생성할 수 없습니다.');
+                    return;
+                  }
                   await _showReplaceDialog(session);
                 } else if (selected == 'skip') {
                   await _applySkipOverride(session);
                 }
+                await Future.delayed(const Duration(milliseconds: 10));
+                if (mounted) setState(() {});
               },
               child: cardWidget,
             ),
@@ -2149,6 +2244,143 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
   }
 
+  // 리스트/카드 공통: isReplacement 세션 클릭 시 보강 메뉴 처리
+  Future<void> _showChangeReplacementDialog(ClassSession replacementSession) async {
+    // 기존 보강을 취소하고 새 보강을 잡는 플로우: 새 시간 선택 후 업데이트
+    final result = await _pickDateTime(initial: replacementSession.dateTime);
+    if (result == null) return;
+
+    // 기존 planned replace override 찾아 업데이트
+    final studentId = widget.selectedStudent!.student.id;
+    final overrides = DataManager.instance.getSessionOverridesForStudent(studentId);
+    final target = overrides.firstWhere(
+      (o) => o.overrideType == OverrideType.replace &&
+             o.status == OverrideStatus.planned &&
+             o.replacementClassDateTime != null &&
+             o.replacementClassDateTime!.isAtSameMomentAs(replacementSession.dateTime),
+      orElse: () => null as SessionOverride,
+    );
+    if (target == null) {
+      await _showInfoDialog('변경할 보강을 찾지 못했습니다.');
+      return;
+    }
+    final updated = target.copyWith(
+      replacementClassDateTime: result,
+      updatedAt: DateTime.now(),
+    );
+    await DataManager.instance.updateSessionOverride(updated);
+    if (mounted) {
+      await Future.delayed(const Duration(milliseconds: 50));
+      _loadClassSessions();
+      setState(() {});
+    }
+  }
+
+  Future<void> _confirmAndCancelReplacement(ClassSession replacementSession) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        title: const Text('보강 취소', style: TextStyle(color: Colors.white)),
+        content: const Text('해당 보강을 취소하시겠습니까?', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('아니오', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('예', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final studentId = widget.selectedStudent!.student.id;
+    final overrides = DataManager.instance.getSessionOverridesForStudent(studentId);
+    final target = overrides.firstWhere(
+      (o) => o.overrideType == OverrideType.replace &&
+             o.status == OverrideStatus.planned &&
+             o.replacementClassDateTime != null &&
+             o.replacementClassDateTime!.isAtSameMomentAs(replacementSession.dateTime),
+      orElse: () => null as SessionOverride,
+    );
+    if (target == null) {
+      await _showInfoDialog('취소할 보강을 찾지 못했습니다.');
+      return;
+    }
+    print('[DEBUG][cancelReplacement] target.id=${target.id} original=${target.originalClassDateTime} replacement=${target.replacementClassDateTime}');
+
+    // 원래 수업이 미래면 원래 일정 복구, 과거면 이번 회차 건너뛰기 처리
+    final originalDt = target.originalClassDateTime;
+    if (originalDt != null) {
+      final isPast = originalDt.isBefore(DateTime.now());
+      if (isPast) {
+        // skip planned 생성
+        await _applySkipOverride(ClassSession(
+          dateTime: originalDt,
+          className: replacementSession.className,
+          dayOfWeek: replacementSession.dayOfWeek,
+          duration: replacementSession.duration,
+          setId: replacementSession.setId,
+          weeklyOrder: replacementSession.weeklyOrder,
+          weekNumber: replacementSession.weekNumber,
+        ));
+      } else {
+        print('[DEBUG][cancelReplacement] original is future → just cancel replacement');
+      }
+    }
+    await DataManager.instance.cancelSessionOverride(target.id);
+    if (mounted) {
+      // 데이터 소스 새로고침 유도
+      await Future.delayed(const Duration(milliseconds: 50));
+      print('[DEBUG][cancelReplacement] canceled override updated, reloading sessions');
+      _loadClassSessions();
+      setState(() {});
+    }
+  }
+
+  Future<DateTime?> _pickDateTime({required DateTime initial}) async {
+    DateTime selectedDate = initial;
+    TimeOfDay selectedTime = TimeOfDay.fromDateTime(initial);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: selectedDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime(DateTime.now().year + 2),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+          dialogBackgroundColor: const Color(0xFF18181A),
+        ),
+        child: child!,
+      ),
+    );
+    if (date == null) return null;
+    selectedDate = date;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: selectedTime,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+          dialogBackgroundColor: const Color(0xFF18181A),
+        ),
+        child: child!,
+      ),
+    );
+    if (time == null) return null;
+    selectedTime = time;
+    return DateTime(
+      selectedDate.year,
+      selectedDate.month,
+      selectedDate.day,
+      selectedTime.hour,
+      selectedTime.minute,
+    );
+  }
+
   // 체크박스 테두리 색상 계산
   Color _getCheckboxBorderColor(AttendanceStatus status) {
     switch (status) {
@@ -2192,12 +2424,45 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     );
   }
 
+  bool _hasSkipOverrideFor(ClassSession session) {
+    if (widget.selectedStudent == null) return false;
+    final sid = widget.selectedStudent!.student.id;
+    for (final o in DataManager.instance.getSessionOverridesForStudent(sid)) {
+      if (o.overrideType == OverrideType.skip && o.status == OverrideStatus.planned && o.originalClassDateTime != null) {
+        if (o.originalClassDateTime!.year == session.dateTime.year &&
+            o.originalClassDateTime!.month == session.dateTime.month &&
+            o.originalClassDateTime!.day == session.dateTime.day &&
+            o.originalClassDateTime!.hour == session.dateTime.hour &&
+            o.originalClassDateTime!.minute == session.dateTime.minute) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   PopupMenuItem<String> _menuItem(String value, String text) {
     return PopupMenuItem<String>(
       value: value,
       child: DefaultTextStyle(
         style: const TextStyle(color: Colors.white),
         child: Text(text),
+      ),
+    );
+  }
+
+  Future<void> _showInfoDialog(String message) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('확인', style: TextStyle(color: Colors.white70)),
+          )
+        ],
       ),
     );
   }
@@ -2694,28 +2959,26 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
         
         if (result['action'] == 'delete') {
-          // 출석 해제 - 무단결석으로 기록
-          await DataManager.instance.saveOrUpdateAttendance(
-            studentId: widget.selectedStudent!.student.id,
-            classDateTime: session.dateTime,
-            classEndTime: classEndTime,
-            className: session.className,
-            isPresent: false,
-            arrivalTime: null,
-            departureTime: null,
+          // 출석 해제 - 기록 자체를 삭제하여 '미기록' 상태로 복귀
+          final existing = DataManager.instance.getAttendanceRecord(
+            widget.selectedStudent!.student.id,
+            session.dateTime,
           );
+          if (existing != null && existing.id != null) {
+            await DataManager.instance.deleteAttendanceRecord(existing.id!);
+          }
 
           setState(() {
             session.isAttended = false;
             session.arrivalTime = null;
             session.departureTime = null;
-            session.attendanceStatus = AttendanceStatus.absent;
+            session.attendanceStatus = AttendanceStatus.none;
           });
 
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('출석이 해제되었습니다.'),
-              backgroundColor: Color(0xFFE53E3E),
+              content: Text('출석이 해제되어 미기록으로 변경되었습니다.'),
+              backgroundColor: Color(0xFF757575),
               duration: Duration(milliseconds: 1500),
             ),
           );
