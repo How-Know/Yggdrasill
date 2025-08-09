@@ -28,6 +28,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   int _centerIndex = 7; // 가운데 수업 인덱스 (0~14 중 7번째)
   bool _hasPastRecords = false;
   bool _hasFutureCards = false;
+  bool _isListView = false; // (미사용) 리스트는 다이얼로그로 표시
   
   // 스마트 슬라이딩을 위한 상태 변수들
   List<ClassSession> _allSessions = []; // 전체 세션 저장
@@ -72,6 +73,239 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     
     _isUpdating = false;
+  }
+
+  DateTime _toMonday(DateTime d) {
+    // DateTime.weekday: 1=Mon..7=Sun
+    final offset = d.weekday - DateTime.monday; // 0 for Monday, 6 for Sunday
+    return DateTime(d.year, d.month, d.day).subtract(Duration(days: offset));
+  }
+
+  int _computeWeekNumber(DateTime registrationDate, DateTime sessionDate) {
+    // 주차 기준: 월~일 고정. 등록 주의 월요일을 1주차로 간주하여 세션 주의 월요일까지의 주차를 계산
+    final regMon = _toMonday(registrationDate);
+    final sesMon = _toMonday(sessionDate);
+    final diff = sesMon.difference(regMon).inDays;
+    final weeks = diff >= 0 ? (diff ~/ 7) : 0;
+    return weeks + 1;
+  }
+
+  int? _getWeeklyOrderForSet(String? setId, List<StudentTimeBlock> blocks) {
+    if (setId == null) return null;
+    try {
+      return blocks.firstWhere((b) => b.setId == setId).weeklyOrder;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // 리스트용 상태 Pill
+  Widget _buildStatusPill(AttendanceStatus status) {
+    String label;
+    switch (status) {
+      case AttendanceStatus.completed:
+        label = '완료';
+        break;
+      case AttendanceStatus.arrived:
+        label = '등원';
+        break;
+      case AttendanceStatus.absent:
+        label = '결석';
+        break;
+      case AttendanceStatus.none:
+      default:
+        label = '미기록';
+        break;
+    }
+    final bg = _getCheckboxColor(status);
+    final border = _getCheckboxBorderColor(status);
+    final icon = _getCheckboxIcon(status);
+    final pillWidth = 84.0; // 너비 유지
+    return SizedBox(
+      width: pillWidth,
+      child: Container(
+        height: 36, // 기존의 2배 수준으로 확장
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          border: Border.all(color: border, width: 1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Center(
+          child: (icon != null)
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
+                      child: icon,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.0)),
+                  ],
+                )
+              : Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.0),
+                ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSessionListDialog() async {
+    final itemHeight = 76.0;
+    final totalCount = _allSessions.isNotEmpty ? _allSessions.length : _classSessions.length;
+    final visibleCount = totalCount < 8 ? totalCount : 8;
+    final dialogHeight = (visibleCount * itemHeight) + 28; // 여백 약간 증가
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            final sessions = _allSessions.isNotEmpty ? _allSessions : _classSessions;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
+              title: const Text('수업 일정', style: TextStyle(color: Colors.white)),
+              content: SizedBox(
+                width: 560,
+                height: dialogHeight,
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: ListView.separated(
+                    itemCount: sessions.length,
+                    separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
+                    itemBuilder: (context, idx) {
+                      final s = sessions[idx];
+                      final dateStr = '${s.dateTime.year}-${s.dateTime.month.toString().padLeft(2,'0')}-${s.dateTime.day.toString().padLeft(2,'0')} (${s.dayOfWeek})';
+
+                      // 고스트/보강 플래그
+                      final bool isGhost = s.isOverrideOriginalGhost;
+                      final bool isReplacement = s.isOverrideReplacement;
+
+                      // 주차/weekly_order 계산 (원본 앵커 시간 기준)
+                      final registrationDate = widget.selectedStudent?.basicInfo.registrationDate;
+                      final DateTime anchorDateTime = s.overrideOriginalDateTime ?? s.dateTime;
+                      final int? displayWeekNumber = registrationDate != null
+                          ? _computeWeekNumber(registrationDate, anchorDateTime)
+                          : s.weekNumber;
+                      int? displayWeeklyOrder = s.weeklyOrder;
+                      if (displayWeeklyOrder == null && s.setId != null && widget.selectedStudent != null) {
+                        final blocks = DataManager.instance.studentTimeBlocks
+                            .where((b) => b.studentId == widget.selectedStudent!.student.id)
+                            .toList();
+                        displayWeeklyOrder = _getWeeklyOrderForSet(s.setId, blocks);
+                      }
+
+                       Offset? tapDownPosition;
+                       return GestureDetector(
+                         behavior: HitTestBehavior.opaque,
+                         onTapDown: (details) => tapDownPosition = details.globalPosition,
+                         onTap: () async {
+                           // 리스트 아이템 클릭 시 출석체크 카드와 동일한 메뉴 제공
+                           if (tapDownPosition == null) return;
+                           final selected = await showMenu<String>(
+                             context: context,
+                             position: RelativeRect.fromLTRB(
+                               tapDownPosition!.dx,
+                               tapDownPosition!.dy,
+                               tapDownPosition!.dx,
+                               tapDownPosition!.dy,
+                             ),
+                             color: const Color(0xFF1F1F1F),
+                             items: [
+                               _menuItem('replace', '이번 회차만 변경'),
+                               _menuItem('skip', '이번 회차 건너뛰기'),
+                             ],
+                           );
+                           if (selected == 'replace') {
+                             await _showReplaceDialog(s);
+                           } else if (selected == 'skip') {
+                             await _applySkipOverride(s);
+                           }
+                         },
+                         child: Container(
+                        height: itemHeight,
+                        decoration: isGhost
+                            ? BoxDecoration(
+                                color: const Color(0xFF1F1F1F), // 다이얼로그 배경색과 일치
+                                borderRadius: BorderRadius.circular(8),
+                              )
+                            : null,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        dateStr,
+                                        style: TextStyle(
+                                          color: isGhost ? Colors.white70 : Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      if (isReplacement) ...[
+                                        const SizedBox(width: 8),
+                                        _buildSmallBadge('보강', const Color(0xFFFFB74D)),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '주차: ${displayWeekNumber ?? '-'}  ·  ${displayWeeklyOrder ?? '-'}  ·  ${s.className}',
+                                          style: TextStyle(color: isGhost ? Colors.white60 : Colors.white70, fontSize: 15),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () async {
+                                await _handleAttendanceClick(s);
+                                // 부모 상태 갱신으로 세션 재계산
+                                await Future.delayed(const Duration(milliseconds: 10));
+                                if (mounted) {
+                                  setState(() {});
+                                  setLocalState(() {});
+                                }
+                              },
+                              child: _buildStatusPill(s.attendanceStatus),
+                            ),
+                          ],
+                        ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   // 과거 출석 기록이 있는지 확인
@@ -662,12 +896,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         }
       }
 
+      final weeklyOrder = _getWeeklyOrderForSet(extractedSetId, DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList());
       final session = ClassSession(
         dateTime: startTime,
         className: firstRecord.className,
         dayOfWeek: _getDayOfWeekFromDate(startTime),
         duration: endTime.difference(startTime).inMinutes,
         setId: extractedSetId,
+        weeklyOrder: weeklyOrder,
+        weekNumber: _computeWeekNumber(registrationDate, startTime),
         isAttended: isAttended,
         arrivalTime: earliestArrival,
         departureTime: latestDeparture,
@@ -739,6 +976,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         dayOfWeek: _getDayOfWeekFromDate(classDateTime),
         duration: 50, // 기본값
         setId: null, // AttendanceRecord에는 setId가 없으므로 null
+        weeklyOrder: null,
+        weekNumber: _computeWeekNumber(registrationDate, classDateTime),
         isAttended: firstRecord.isPresent,
         arrivalTime: earliestArrival,
         departureTime: latestDeparture,
@@ -825,12 +1064,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
         final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
 
+        final registrationDate = widget.selectedStudent!.basicInfo.registrationDate ?? today;
         final session = ClassSession(
           dateTime: classDateTime,
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: totalDurationMinutes,
           setId: entry.key, // setId 포함
+          weeklyOrder: firstBlock.weeklyOrder,
+          weekNumber: _computeWeekNumber(registrationDate, classDateTime),
           isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
@@ -916,12 +1158,15 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         final lastBlockEndMinutes = lastBlock.startHour * 60 + lastBlock.startMinute + lastBlock.duration.inMinutes;
         final totalDurationMinutes = lastBlockEndMinutes - startMinutes;
 
+        final registrationDate = widget.selectedStudent!.basicInfo.registrationDate ?? today;
         final session = ClassSession(
           dateTime: classDateTime,
           className: className,
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: totalDurationMinutes,
           setId: entry.key,
+          weeklyOrder: firstBlock.weeklyOrder,
+          weekNumber: _computeWeekNumber(registrationDate, classDateTime),
           isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
@@ -1050,6 +1295,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           dayOfWeek: _getDayOfWeekFromDate(classDateTime),
           duration: totalDurationMinutes,
           setId: entry.key,
+          weeklyOrder: firstBlock.weeklyOrder,
+          weekNumber: _computeWeekNumber(registrationDate, classDateTime),
           isAttended: attendanceRecord?.isPresent ?? false,
           arrivalTime: attendanceRecord?.arrivalTime,
           departureTime: attendanceRecord?.departureTime,
@@ -1116,6 +1363,39 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       return DataManager.instance.academySettings.lessonDuration;
     }
 
+    int? _inferWeeklyOrderFromOriginal(DateTime? originalDateTime) {
+      if (originalDateTime == null) return null;
+      final blocks = DataManager.instance.studentTimeBlocks
+          .where((b) => b.studentId == studentId)
+          .toList();
+      if (blocks.isEmpty) return null;
+      // setId별 대표 시간(시:분)과 weekly_order 매핑
+      final Map<String, Map<String, int>> setIdToTimeAndOrder = {};
+      for (final b in blocks) {
+        if (b.setId == null) continue;
+        setIdToTimeAndOrder.putIfAbsent(b.setId!, () => {
+          'hour': b.startHour,
+          'minute': b.startMinute,
+          'order': b.weeklyOrder ?? 0,
+        });
+      }
+      if (setIdToTimeAndOrder.isEmpty) return null;
+      // original 시간과 가장 가까운 set 선택
+      final targetMinutes = originalDateTime.hour * 60 + originalDateTime.minute;
+      String? bestSetId;
+      int bestDiff = 1 << 30;
+      setIdToTimeAndOrder.forEach((setId, map) {
+        final minutes = (map['hour']! * 60) + map['minute']!;
+        final diff = (minutes - targetMinutes).abs();
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestSetId = setId;
+        }
+      });
+      if (bestSetId == null) return null;
+      return setIdToTimeAndOrder[bestSetId]!['order'];
+    }
+
     String _inferClassName() {
       try {
         // 첫 블록의 sessionTypeId로 클래스명 추정
@@ -1154,6 +1434,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 dayOfWeek: originalSession.dayOfWeek,
                 duration: originalSession.duration,
                 setId: originalSession.setId,
+                weeklyOrder: originalSession.weeklyOrder,
+                weekNumber: originalSession.weekNumber,
                 isAttended: originalSession.isAttended,
                 arrivalTime: originalSession.arrivalTime,
                 departureTime: originalSession.departureTime,
@@ -1166,11 +1448,56 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               sessions.removeAt(originalIdx);
               originalSession = null;
             }
+          } else if (ov.overrideType == OverrideType.replace) {
+            // 원래 세션이 생성되지 않았더라도 고스트 세션을 강제로 추가하여 보존
+            final registrationDateGhost = widget.selectedStudent?.basicInfo.registrationDate;
+            final ghostDuration = ov.durationMinutes ?? _inferDefaultDurationMinutes();
+            final ghostWeeklyOrder = originalSession?.weeklyOrder
+                ?? (ov.setId != null
+                    ? _getWeeklyOrderForSet(ov.setId, DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList())
+                    : _inferWeeklyOrderFromOriginal(ov.originalClassDateTime));
+            final ghostWeekNumber = (registrationDateGhost != null && ov.originalClassDateTime != null)
+                ? _computeWeekNumber(registrationDateGhost, ov.originalClassDateTime!)
+                : null;
+            final ghostClassName = _inferClassName();
+            final ghost = ClassSession(
+              dateTime: ov.originalClassDateTime!,
+              className: ghostClassName,
+              dayOfWeek: _getDayOfWeekFromDate(ov.originalClassDateTime!),
+              duration: ghostDuration,
+              setId: ov.setId,
+              weeklyOrder: ghostWeeklyOrder,
+              weekNumber: ghostWeekNumber,
+              isAttended: false,
+              arrivalTime: null,
+              departureTime: null,
+              attendanceStatus: AttendanceStatus.none,
+              isOverrideOriginalGhost: true,
+              overrideOriginalDateTime: ov.originalClassDateTime,
+            );
+            sessions.add(ghost);
           }
         }
 
         // replacement 처리: 원본이 화면에 없더라도 대체는 반드시 반영
         if (ov.overrideType == OverrideType.replace && ov.replacementClassDateTime != null && inRange(ov.replacementClassDateTime!)) {
+          // 주간 시간표 변경으로 생성된 "해당 주차의 기본 세션"은 제거하여 보강이 있는 주차는 영향을 받지 않도록 한다
+          final regDateForRemoval = widget.selectedStudent?.basicInfo.registrationDate;
+          final int? targetWeeklyOrderForRemoval = originalSession?.weeklyOrder
+              ?? (ov.setId != null
+                  ? _getWeeklyOrderForSet(ov.setId, DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList())
+                  : _inferWeeklyOrderFromOriginal(ov.originalClassDateTime));
+          final int? targetWeekNumberForRemoval = (regDateForRemoval != null && ov.originalClassDateTime != null)
+              ? _computeWeekNumber(regDateForRemoval, ov.originalClassDateTime!)
+              : null;
+          if (targetWeeklyOrderForRemoval != null && targetWeekNumberForRemoval != null) {
+            sessions.removeWhere((s) =>
+              s.weeklyOrder == targetWeeklyOrderForRemoval &&
+              s.weekNumber == targetWeekNumberForRemoval &&
+              !s.isOverrideReplacement &&
+              !s.isOverrideOriginalGhost
+            );
+          }
           final int replacementIdx = indexOfDate(ov.replacementClassDateTime!);
           final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
           // 루트 원본 앵커 계산
@@ -1185,6 +1512,12 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               dayOfWeek: base.dayOfWeek,
               duration: ov.durationMinutes ?? base.duration,
               setId: base.setId,
+              weeklyOrder: originalSession?.weeklyOrder
+                  ?? (ov.setId != null
+                      ? _getWeeklyOrderForSet(ov.setId, DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList())
+                      : _inferWeeklyOrderFromOriginal(ov.originalClassDateTime))
+                  ?? base.weeklyOrder,
+              weekNumber: originalSession?.weekNumber ?? base.weekNumber,
               isAttended: attendanceRecord?.isPresent ?? base.isAttended,
               arrivalTime: attendanceRecord?.arrivalTime ?? base.arrivalTime,
               departureTime: attendanceRecord?.departureTime ?? base.departureTime,
@@ -1196,12 +1529,18 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             // 없으면 새로 추가
             final classNameForNew = originalSession?.className ?? defaultClassName;
             final durationForNew = ov.durationMinutes ?? originalSession?.duration ?? defaultDuration;
+            final int? replacementWeeklyOrder = originalSession?.weeklyOrder
+                ?? (ov.setId != null
+                    ? _getWeeklyOrderForSet(ov.setId, DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList())
+                    : _inferWeeklyOrderFromOriginal(ov.originalClassDateTime));
             final newSession = ClassSession(
               dateTime: ov.replacementClassDateTime!,
               className: classNameForNew,
               dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
               duration: durationForNew,
-              setId: originalSession?.setId,
+              setId: originalSession?.setId ?? ov.setId,
+              weeklyOrder: replacementWeeklyOrder,
+              weekNumber: originalSession?.weekNumber,
               isAttended: attendanceRecord?.isPresent ?? false,
               arrivalTime: attendanceRecord?.arrivalTime,
               departureTime: attendanceRecord?.departureTime,
@@ -1225,6 +1564,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
               duration: ov.durationMinutes ?? defaultDuration,
               setId: null,
+              weeklyOrder: null,
+              weekNumber: null,
               isAttended: attendanceRecord?.isPresent ?? false,
               arrivalTime: attendanceRecord?.arrivalTime,
               departureTime: attendanceRecord?.departureTime,
@@ -2004,6 +2345,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         );
         if (existing != null) {
           final updated = existing.copyWith(
+            setId: session.setId ?? existing.setId,
             replacementClassDateTime: replacementDateTime,
             updatedAt: DateTime.now(),
           );
@@ -2012,6 +2354,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           // 안전망: 기존을 찾지 못하면 새 override 생성
           final ov = SessionOverride(
             studentId: studentId,
+            setId: session.setId,
             overrideType: OverrideType.replace,
             status: OverrideStatus.planned,
             originalClassDateTime: session.overrideOriginalDateTime ?? session.dateTime,
@@ -2024,6 +2367,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       } else {
         final ov = SessionOverride(
           studentId: studentId,
+          setId: session.setId,
           overrideType: OverrideType.replace,
           status: OverrideStatus.planned,
           originalClassDateTime: session.dateTime,
@@ -2050,7 +2394,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
   }
 
-  void _handleAttendanceClick(ClassSession session) async {
+  Future<void> _handleAttendanceClick(ClassSession session) async {
     if (widget.selectedStudent == null) return;
 
     final now = DateTime.now();
@@ -2629,69 +2973,48 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                         ),
                       ],
                     ),
-                    const Spacer(), // 범례와 화살표 사이 공간
-                    // 왼쪽 화살표 (과거로 이동)
-                    IconButton(
-                      onPressed: widget.pageIndex == 0 ? 
-                        (_hasPastRecords ? _moveLeft : null) :
-                        (widget.pageIndex > 0 && widget.onPageIndexChanged != null ? () {
-                          widget.onPageIndexChanged!(widget.pageIndex - 1);
-                        } : null),
-                      icon: Icon(
-                        Icons.arrow_back_ios,
-                        color: _hasPastRecords || widget.pageIndex > 0 ? Colors.white70 : Colors.white24,
-                        size: 20,
+                    const Spacer(),
+                    // 리스트 버튼 (다이얼로그)
+                    TextButton.icon(
+                      onPressed: () => _showSessionListDialog(),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        backgroundColor: const Color(0xFF2A2A2A),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.white24)),
                       ),
-                    ),
-                    // 오른쪽 화살표 (미래로 이동)
-                    IconButton(
-                      onPressed: widget.pageIndex == 0 ?
-                        (_hasFutureCards ? _moveRight : null) :
-                        (widget.onPageIndexChanged != null && widget.pageIndex < 2 && _hasFutureCards ? () {
-                          print('[DEBUG][AttendanceCheckView] 오른쪽 화살표 클릭 - pageIndex: ${widget.pageIndex} -> ${widget.pageIndex + 1}');
-                          print('[DEBUG][AttendanceCheckView] _hasFutureCards: $_hasFutureCards');
-                          widget.onPageIndexChanged!(widget.pageIndex + 1);
-                        } : null),
-                      icon: Icon(
-                        Icons.arrow_forward_ios,
-                        color: _hasFutureCards || (widget.pageIndex < 2 && _hasFutureCards) ? Colors.white70 : Colors.white24,
-                        size: 20,
-                      ),
+                      icon: const Icon(Icons.view_list, size: 18, color: Colors.white70),
+                      label: const Text('리스트', style: TextStyle(color: Colors.white70)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 16),
-                // 수업 목록
-                if (_classSessions.isEmpty)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Text(
-                        '등록된 수업이 없습니다',
-                        style: TextStyle(color: Colors.white54, fontSize: 17),
+                // 수업 목록 (카드)
+                (_classSessions.isEmpty)
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Text(
+                            '등록된 수업이 없습니다',
+                            style: TextStyle(color: Colors.white54, fontSize: 17),
+                          ),
+                        ),
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final totalWidth = constraints.maxWidth;
+                          final availableWidth = totalWidth;
+                          final cardMargin = 8; // 카드 간 마진
+                          final totalMarginWidth = cardMargin * (_classSessions.length - 1);
+                          final cardWidth = (availableWidth - totalMarginWidth) / _classSessions.length;
+                          final finalCardWidth = cardWidth.clamp(80.0, 200.0);
+                          return Row(
+                            children: _classSessions.asMap().entries.map((entry) {
+                              return _buildClassSessionCard(entry.value, entry.key, finalCardWidth);
+                            }).toList(),
+                          );
+                        },
                       ),
-                    ),
-                  )
-                else
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      // 전체 너비에서 패딩을 제외하고 카드로 나눔
-                      final totalWidth = constraints.maxWidth;
-                      final availableWidth = totalWidth;
-                      final cardMargin = 8; // 카드 간 마진
-                      final totalMarginWidth = cardMargin * (_classSessions.length - 1); // 카드 사이의 마진 (마지막 카드 제외)
-                      final cardWidth = (availableWidth - totalMarginWidth) / _classSessions.length;
-                      
-                      // 카드 너비가 너무 작아지지 않도록 최소값 설정
-                      final finalCardWidth = cardWidth.clamp(80.0, 200.0);
-                      
-                      return Row(
-                        children: _classSessions.asMap().entries.map((entry) {
-                          return _buildClassSessionCard(entry.value, entry.key, finalCardWidth);
-                        }).toList(),
-                      );
-                    },
-                  ),
               ],
             ),
           ),
@@ -2715,6 +3038,8 @@ class ClassSession {
   final String dayOfWeek;
   final int duration;
   final String? setId; // 수업 회차 계산을 위한 setId 추가
+  final int? weeklyOrder; // 주간 내 몇번째 수업인지
+  final int? weekNumber;  // 등록 기준 몇 주차인지(1부터)
   bool isAttended;
   DateTime? arrivalTime;
   DateTime? departureTime;
@@ -2730,6 +3055,8 @@ class ClassSession {
     required this.dayOfWeek,
     required this.duration,
     this.setId,
+    this.weeklyOrder,
+    this.weekNumber,
     this.isAttended = false,
     this.arrivalTime,
     this.departureTime,

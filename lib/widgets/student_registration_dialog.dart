@@ -6,6 +6,7 @@ import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mneme_flutter/models/student_payment_info.dart';
+import 'package:mneme_flutter/models/session_override.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
@@ -75,6 +76,16 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       _grade = grades.isNotEmpty ? grades.first : null;
     }
     _selectedGroup = student?.groupInfo;
+
+    // 기존 결제/주차 정보가 있으면 주간 수업횟수/등록일자 초기화
+    if (student != null) {
+      final paymentInfo = DataManager.instance.getStudentPaymentInfo(student.id);
+      if (paymentInfo != null) {
+        _weeklyClassCountController.text = (paymentInfo.weeklyClassCount).toString();
+        _registrationDate = paymentInfo.registrationDate;
+        _paymentType = paymentInfo.paymentMethod;
+      }
+    }
   }
 
   @override
@@ -170,13 +181,43 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       memo: _memoController.text.isEmpty ? null : _memoController.text,
     );
     
+    // 증가 방어: 보강(예정) 존재 시 주간 수업횟수 증가 불가
+    final newWeeklyCount = int.tryParse(_weeklyClassCountController.text.trim()) ?? 1;
+    if (widget.student != null) {
+      final existingInfo = DataManager.instance.getStudentPaymentInfo(studentId);
+      final oldWeeklyCount = existingInfo?.weeklyClassCount ?? 1;
+      if (newWeeklyCount > oldWeeklyCount) {
+        final hasPlannedMakeup = DataManager.instance.sessionOverrides.any((ov) =>
+            ov.studentId == studentId &&
+            ov.status == OverrideStatus.planned &&
+            (ov.overrideType == OverrideType.replace || ov.overrideType == OverrideType.add));
+        if (hasPlannedMakeup) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              title: const Text('증가 불가', style: TextStyle(color: Colors.white)),
+              content: const Text('보강을 취소한 뒤에 주간수업횟수를 늘려주세요.', style: TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('확인', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+      }
+    }
+
     // StudentPaymentInfo 생성 (등록일자와 지불방식을 여기에 저장)
     final paymentInfo = StudentPaymentInfo(
       id: const Uuid().v4(),
       studentId: studentId,
       registrationDate: _registrationDate,
       paymentMethod: _paymentType,
-      weeklyClassCount: int.tryParse(_weeklyClassCountController.text.trim()) ?? 1,
+      weeklyClassCount: newWeeklyCount,
       tuitionFee: 0, // 기본값
       latenessThreshold: 10, // 기본값
       scheduleNotification: false,
@@ -224,7 +265,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     controller: _nameController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      labelText: '이름',
+                      labelText: '이름 *',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
@@ -237,7 +278,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                  flex: 1,
+                  flex: 2,
                   child: TextField(
                     controller: _weeklyClassCountController,
                     keyboardType: TextInputType.number,
@@ -266,7 +307,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     controller: _schoolController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      labelText: '학교',
+                      labelText: '학교 *',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
