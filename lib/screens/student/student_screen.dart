@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../models/session_override.dart';
+import '../../models/attendance_record.dart';
 import '../../models/student.dart';
 import '../../models/group_info.dart';
 import '../../models/student_view_type.dart';
@@ -1291,7 +1293,7 @@ class StudentScreenState extends State<StudentScreen> {
                         ),
                       ),
                     ),
-                    // 출석 표시는 하단에 절대 위치로 배치 (선택된 학생이 있을 때만)
+                    // 하단 밑줄: 예정 수업 출결 상태 (추가수업 제외)
                     if (_selectedStudent != null)
                       Positioned(
                         bottom: 6,
@@ -1306,6 +1308,19 @@ class StudentScreenState extends State<StudentScreen> {
                           ),
                         ),
                       ),
+                    // 상단 점: 추가수업 출결 상태
+                    if (_selectedStudent != null)
+                      Positioned(
+                        top: 6,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: _AddOverrideDot(
+                            studentId: _selectedStudent!.student.id,
+                            date: date,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               );
@@ -1313,6 +1328,62 @@ class StudentScreenState extends State<StudentScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // 추가수업 점 표시 위젯
+  Widget _AddOverrideDot({required String studentId, required DateTime date}) {
+    final overrides = DataManager.instance.sessionOverrides;
+    final records = DataManager.instance.attendanceRecords;
+    final dateStart = DateTime(date.year, date.month, date.day);
+    final dateEnd = dateStart.add(const Duration(days: 1));
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+    final addOnDate = overrides.where((o) =>
+      o.studentId == studentId &&
+      o.overrideType == OverrideType.add &&
+      o.status != OverrideStatus.canceled &&
+      o.replacementClassDateTime != null &&
+      o.replacementClassDateTime!.isAfter(dateStart) &&
+      o.replacementClassDateTime!.isBefore(dateEnd)
+    ).toList();
+
+    if (addOnDate.isEmpty) return const SizedBox.shrink();
+
+    // 해당 추가수업에 연결된 출석 상태로 색상 결정
+    Color dotColor = Colors.white24; // 기본(예정)
+    for (final o in addOnDate) {
+      final rec = records.firstWhere(
+        (r) => r.studentId == studentId && sameMinute(r.classDateTime, o.replacementClassDateTime!),
+        orElse: () => AttendanceRecord(
+          id: null,
+          studentId: studentId,
+          classDateTime: dateStart,
+          classEndTime: dateStart,
+          className: '',
+          isPresent: false,
+          arrivalTime: null,
+          departureTime: null,
+          notes: null,
+          createdAt: dateStart,
+          updatedAt: dateStart,
+        ),
+      );
+      if (rec.id == null) continue; // 기록 없음 → 예정
+      if (!rec.isPresent) { dotColor = Colors.red; break; }
+      if (rec.arrivalTime != null) {
+        // 지각 기준: 학생별 설정을 쓰기엔 컨텍스트 부족하므로 기본 10분
+        final lateThreshold = rec.classDateTime.add(const Duration(minutes: 10));
+        if (rec.arrivalTime!.isAfter(lateThreshold)) { dotColor = const Color(0xFFFB8C00); }
+        else { dotColor = const Color(0xFF0C3A69); }
+      } else { dotColor = const Color(0xFF0C3A69); }
+    }
+
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
     );
   }
 

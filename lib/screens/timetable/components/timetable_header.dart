@@ -52,6 +52,8 @@ class _TimetableHeaderState extends State<TimetableHeader> {
     return '${date.year}년 ${date.month}월 ${date.day}일';
   }
 
+  // (삭제됨) 추가 수업 점 표시는 학생 달력에서만 처리합니다.
+
   @override
   Widget build(BuildContext context) {
     final weekDays = _getWeekDays();
@@ -212,7 +214,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              SizedBox(height: 15), // 요일 글자와 밑줄 사이 여백 추가
+                              SizedBox(height: 15), // 요일 글자와 밑줄 사이 여백 복구
                             ],
                           ),
                         ),

@@ -1693,7 +1693,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             final attendanceRecord = DataManager.instance.getAttendanceRecord(studentId, ov.replacementClassDateTime!);
             final newSession = ClassSession(
               dateTime: ov.replacementClassDateTime!,
-              className: defaultClassName,
+              className: '추가 수업',
               dayOfWeek: _getDayOfWeekFromDate(ov.replacementClassDateTime!),
               duration: ov.durationMinutes ?? defaultDuration,
               setId: null,

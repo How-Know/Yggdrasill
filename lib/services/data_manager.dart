@@ -440,6 +440,18 @@ class DataManager {
     }
   }
 
+  Future<void> deleteSessionOverride(String id) async {
+    try {
+      await AcademyDbService.instance.deleteSessionOverride(id);
+      _sessionOverrides.removeWhere((o) => o.id == id);
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      print('[DEBUG] session_override 삭제: id=$id');
+    } catch (e) {
+      print('[ERROR] deleteSessionOverride 실패: $e');
+      rethrow;
+    }
+  }
+
   List<SessionOverride> getSessionOverridesForStudent(String studentId) {
     return _sessionOverrides.where((o) => o.studentId == studentId).toList();
   }

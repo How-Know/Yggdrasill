@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../models/attendance_record.dart';
 import '../../../models/student_payment_info.dart';
 import '../../../services/data_manager.dart';
+import '../../../models/session_override.dart';
 
 /// 달력에 출석 상태를 표시하는 인디케이터 컴포넌트
 /// 
@@ -53,14 +54,36 @@ class AttendanceIndicator extends StatelessWidget {
   /// 해당 날짜의 출석 기록을 가져옵니다
   List<AttendanceRecord> _getAttendanceRecordsForDate() {
     final allRecords = DataManager.instance.attendanceRecords;
+    final overrides = DataManager.instance.sessionOverrides;
     final dateStart = DateTime(date.year, date.month, date.day);
     final dateEnd = dateStart.add(const Duration(days: 1));
 
-    return allRecords.where((record) {
+    // 기본: 해당 날짜의 모든 출석 기록
+    final dailyRecords = allRecords.where((record) {
       return record.studentId == studentId &&
              record.classDateTime.isAfter(dateStart) &&
              record.classDateTime.isBefore(dateEnd);
     }).toList();
+
+    // 밑줄은 "예정 수업" 기준으로만 표기: 추가수업(OverrideType.add)에 해당하는 출석 기록은 제외
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+    final addOverrides = overrides.where((o) =>
+      o.studentId == studentId &&
+      o.overrideType == OverrideType.add &&
+      o.status != OverrideStatus.canceled &&
+      o.replacementClassDateTime != null &&
+      o.replacementClassDateTime!.isAfter(dateStart) &&
+      o.replacementClassDateTime!.isBefore(dateEnd)
+    ).toList();
+
+    final filtered = dailyRecords.where((record) {
+      final isAddRecord = addOverrides.any((o) => sameMinute(o.replacementClassDateTime!, record.classDateTime));
+      return !isAddRecord; // 추가수업 기록은 제외 → 하단 밑줄은 순수 예정 수업만
+    }).toList();
+
+    return filtered;
   }
 
   /// 출석 기록을 기반으로 표시할 색상을 결정합니다

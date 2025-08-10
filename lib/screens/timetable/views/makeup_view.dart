@@ -10,7 +10,15 @@ class MakeupView extends StatefulWidget {
 }
 
 class _MakeupViewState extends State<MakeupView> {
-  int _segmentIndex = 0; // 0: 예정, 1: 완료, 2: 취소
+  int _segmentIndex = 0; // 0: 예정, 1: 삭제
+  late DateTime _selectedMonthStart; // 리스트 상단 월 선택(시작 월)
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _selectedMonthStart = DateTime(now.year, now.month, 1);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,8 +52,7 @@ class _MakeupViewState extends State<MakeupView> {
                       child: SegmentedButton<int>(
                         segments: const [
                           ButtonSegment(value: 0, label: Text('예정')),
-                          ButtonSegment(value: 1, label: Text('완료')),
-                          ButtonSegment(value: 2, label: Text('취소')),
+                          ButtonSegment(value: 1, label: Text('삭제')),
                         ],
                         selected: {_segmentIndex},
                         onSelectionChanged: (selection) => setState(() => _segmentIndex = selection.first),
@@ -64,7 +71,7 @@ class _MakeupViewState extends State<MakeupView> {
                 ElevatedButton.icon(
                   onPressed: _onAddMakeupPressed,
                   icon: const Icon(Icons.add, size: 26),
-                  label: const Text('보강 추가', style: TextStyle(fontSize: 17)),
+                  label: const Text('추가 수업', style: TextStyle(fontSize: 17)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1976D2),
                     foregroundColor: Colors.white,
@@ -79,39 +86,127 @@ class _MakeupViewState extends State<MakeupView> {
               child: ValueListenableBuilder<List<SessionOverride>>(
                 valueListenable: DataManager.instance.sessionOverridesNotifier,
                 builder: (context, overrides, _) {
-                  final filtered = overrides.where((o) {
-                    switch (_segmentIndex) {
-                      case 0:
-                        return o.status == OverrideStatus.planned;
-                      case 1:
-                        return o.status == OverrideStatus.completed;
-                      case 2:
-                        return o.status == OverrideStatus.canceled;
-                      default:
-                        return true;
-                    }
-                  }).toList()
-                    ..sort((a, b) {
-                      // replacement 우선 정렬, 없으면 original 기준
-                      final aTime = a.replacementClassDateTime ?? a.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-                      final bTime = b.replacementClassDateTime ?? b.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-                      return aTime.compareTo(bTime);
-                    });
+                  // 보강(reason: makeup)만 대상으로 함
+                  final makeups = overrides
+                      .where((o) => o.reason == OverrideReason.makeup)
+                      .toList();
 
-                  if (filtered.isEmpty) {
-                    return const Center(
-                      child: Text('항목이 없습니다', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                  if (_segmentIndex == 0) {
+                    // 예정 탭: 좌우 2분할(좌: 예정/비활성화 포함, 우: 완료)
+                    DateTime monthStart = _selectedMonthStart;
+                    // monthStart 이후(해당 월 포함) 보강만
+                    final rows = makeups
+                        .where((o) =>
+                            o.replacementClassDateTime != null &&
+                            (o.replacementClassDateTime!.isAfter(monthStart) || _isSameMonthDay(o.replacementClassDateTime!, monthStart)) &&
+                            o.status != OverrideStatus.canceled)
+                        .toList()
+                      ..sort((a, b) {
+                        final aTime = a.replacementClassDateTime ?? a.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        final bTime = b.replacementClassDateTime ?? b.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        return aTime.compareTo(bTime);
+                      });
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _MonthToolbar(
+                          monthStart: monthStart,
+                          onPrev: () => setState(() {
+                            _selectedMonthStart = DateTime(monthStart.year, monthStart.month - 1, 1);
+                          }),
+                          onNext: () => setState(() {
+                            _selectedMonthStart = DateTime(monthStart.year, monthStart.month + 1, 1);
+                          }),
+                          onThisMonth: () => setState(() {
+                            final now = DateTime.now();
+                            _selectedMonthStart = DateTime(now.year, now.month, 1);
+                          }),
+                        ),
+                        const SizedBox(height: 8),
+                        // 컬럼 헤더
+                        Row(
+                          children: const [
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
+                                child: Text('예정', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
+                                child: Text('완료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        if (rows.isEmpty)
+                          const Expanded(
+                            child: Center(
+                              child: Text('항목이 없습니다', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                            ),
+                          )
+                        else
+                          Expanded(
+                            child: ListView.separated(
+                              itemCount: rows.length,
+                              separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                              itemBuilder: (context, index) {
+                                final item = rows[index];
+                                final number = index + 1; // 번호 매기기
+                                final isCompleted = item.status == OverrideStatus.completed;
+                                return Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // 왼쪽: 예정(완료 시 비활성화 처리)
+                                    Expanded(
+                                      child: Opacity(
+                                        opacity: isCompleted ? 0.45 : 1.0,
+                                        child: _PlannedTile(number: number, item: item),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    // 오른쪽: 완료(없는 경우 비워둠)
+                                    Expanded(
+                                      child: isCompleted
+                                          ? _CompletedTile(item: item)
+                                          : const SizedBox.shrink(),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                      ],
+                    );
+                  } else {
+                    // 삭제 탭: 취소 상태 목록
+                    final canceled = makeups
+                        .where((o) => o.status == OverrideStatus.canceled)
+                        .toList()
+                      ..sort((a, b) {
+                        final aTime = a.replacementClassDateTime ?? a.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        final bTime = b.replacementClassDateTime ?? b.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+                        return aTime.compareTo(bTime);
+                      });
+
+                    if (canceled.isEmpty) {
+                      return const Center(
+                        child: Text('항목이 없습니다', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                      );
+                    }
+                    return ListView.separated(
+                      itemCount: canceled.length,
+                      separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                      itemBuilder: (context, idx) {
+                        final item = canceled[idx];
+                        return _OverrideTile(item: item);
+                      },
                     );
                   }
-
-                  return ListView.separated(
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
-                    itemBuilder: (context, idx) {
-                      final item = filtered[idx];
-                      return _OverrideTile(item: item);
-                    },
-                  );
                 },
               ),
             ),
@@ -120,6 +215,326 @@ class _MakeupViewState extends State<MakeupView> {
       ),
     );
   }
+}
+
+class _MonthToolbar extends StatelessWidget {
+  final DateTime monthStart;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onThisMonth;
+  const _MonthToolbar({required this.monthStart, required this.onPrev, required this.onNext, required this.onThisMonth});
+
+  String _label(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          onPressed: onPrev,
+          icon: const Icon(Icons.chevron_left, color: Colors.white70),
+          tooltip: '이전 달',
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(_label(monthStart), style: const TextStyle(color: Colors.white)),
+        ),
+        IconButton(
+          onPressed: onNext,
+          icon: const Icon(Icons.chevron_right, color: Colors.white70),
+          tooltip: '다음 달',
+        ),
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: onThisMonth,
+          child: const Text('이번달', style: TextStyle(color: Colors.white)),
+          style: TextButton.styleFrom(backgroundColor: const Color(0xFF1976D2), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+        ),
+      ],
+    );
+  }
+}
+
+bool _isSameMonthDay(DateTime a, DateTime b) {
+  return a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+// 전역 헬퍼: 타일 공용 사용
+String _fmt(DateTime dt) {
+  final h = dt.hour.toString().padLeft(2, '0');
+  final m = dt.minute.toString().padLeft(2, '0');
+  return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} $h:$m';
+}
+
+String _typeLabel(OverrideType t) {
+  switch (t) {
+    case OverrideType.skip:
+      return '건너뛰기';
+    case OverrideType.replace:
+      return '대체';
+    case OverrideType.add:
+      return '추가';
+  }
+}
+
+Color _typeColor(OverrideType t) {
+  switch (t) {
+    case OverrideType.skip:
+      return const Color(0xFFFF9800);
+    case OverrideType.replace:
+      return const Color(0xFF1976D2);
+    case OverrideType.add:
+      return const Color(0xFF4CAF50);
+  }
+}
+
+Color _statusColor(OverrideStatus s) {
+  switch (s) {
+    case OverrideStatus.planned:
+      return const Color(0xFF1976D2);
+    case OverrideStatus.completed:
+      return const Color(0xFF4CAF50);
+    case OverrideStatus.canceled:
+      return const Color(0xFFE53E3E);
+  }
+}
+
+class _PlannedTile extends StatelessWidget {
+  final int number;
+  final SessionOverride item;
+  const _PlannedTile({required this.number, required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final typeLabel = _typeLabel(item.overrideType);
+    final statusColor = _statusColor(item.status);
+    final original = item.originalClassDateTime;
+    final repl = item.replacementClassDateTime;
+    StudentWithInfo? student;
+    try {
+      student = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId);
+    } catch (_) {
+      student = null;
+    }
+    final studentName = student?.student.name ?? '학생정보 없음';
+
+    return ListTile(
+      tileColor: const Color(0xFF2A2A2A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      title: Row(
+        children: [
+          _NumberBadge(number: number),
+          const SizedBox(width: 8),
+          _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
+          const SizedBox(width: 8),
+          if (item.status == OverrideStatus.planned)
+            _Badge(text: '예정', color: statusColor)
+          else if (item.status == OverrideStatus.completed)
+            _Badge(text: '완료', color: statusColor)
+          else
+            _Badge(text: '취소', color: statusColor),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              studentName,
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (original != null)
+              Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
+            if (repl != null)
+              Text('대체: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
+            if (item.durationMinutes != null)
+              Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
+          ],
+        ),
+      ),
+      trailing: item.status == OverrideStatus.planned
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 수정(편집): 수강탭과 동일한 보강시간 변경 다이얼로그
+                TextButton(
+                  onPressed: () async {
+                    final result = await _pickDateTimeForEdit(context, initial: item.replacementClassDateTime ?? DateTime.now());
+                    if (result == null) return;
+                    final updated = item.copyWith(replacementClassDateTime: result, updatedAt: DateTime.now());
+                    try {
+                      await DataManager.instance.updateSessionOverride(updated);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('보강시간이 변경되었습니다.'),
+                          backgroundColor: Color(0xFF1976D2),
+                          duration: Duration(milliseconds: 1400),
+                        ));
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('변경 실패: $e'),
+                          backgroundColor: const Color(0xFFE53E3E),
+                        ));
+                      }
+                    }
+                  },
+                  child: const Text('수정(편집)'),
+                ),
+                // 취소: 보강 취소 버튼과 동일
+                TextButton(
+                  onPressed: () async {
+                    await DataManager.instance.cancelSessionOverride(item.id);
+                  },
+                  child: const Text('취소'),
+                ),
+                // 삭제: 실제 레코드 삭제
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await DataManager.instance.deleteSessionOverride(item.id);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('보강이 삭제되었습니다.'),
+                          backgroundColor: Color(0xFFE53E3E),
+                          duration: Duration(milliseconds: 1200),
+                        ));
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('삭제 실패: $e'),
+                          backgroundColor: const Color(0xFFE53E3E),
+                        ));
+                      }
+                    }
+                  },
+                  child: const Text('삭제', style: TextStyle(color: Color(0xFFE53E3E))),
+                ),
+              ],
+            )
+          : null,
+    );
+  }
+}
+
+class _CompletedTile extends StatelessWidget {
+  final SessionOverride item;
+  const _CompletedTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final typeLabel = _typeLabel(item.overrideType);
+    final original = item.originalClassDateTime;
+    final repl = item.replacementClassDateTime;
+    StudentWithInfo? student;
+    try {
+      student = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId);
+    } catch (_) {
+      student = null;
+    }
+    final studentName = student?.student.name ?? '학생정보 없음';
+
+    return ListTile(
+      tileColor: const Color(0xFF2A2A2A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      title: Row(
+        children: [
+          _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
+          const SizedBox(width: 8),
+          _Badge(text: '완료', color: _statusColor(OverrideStatus.completed)),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              studentName,
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (original != null)
+              Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
+            if (repl != null)
+              Text('대체: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
+            if (item.durationMinutes != null)
+              Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NumberBadge extends StatelessWidget {
+  final int number;
+  const _NumberBadge({required this.number});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      number.toString(),
+      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+    );
+  }
+}
+
+// 수강 탭의 보강시간 변경 UX를 그대로 재현한 날짜/시간 선택 다이얼로그
+Future<DateTime?> _pickDateTimeForEdit(BuildContext context, {required DateTime initial}) async {
+  DateTime selectedDate = initial;
+  TimeOfDay selectedTime = TimeOfDay.fromDateTime(initial);
+  final date = await showDatePicker(
+    context: context,
+    initialDate: selectedDate,
+    firstDate: DateTime.now().subtract(const Duration(days: 1)),
+    lastDate: DateTime(DateTime.now().year + 2),
+    builder: (context, child) => Theme(
+      data: Theme.of(context).copyWith(
+        colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+        dialogBackgroundColor: const Color(0xFF18181A),
+      ),
+      child: child!,
+    ),
+  );
+  if (date == null) return null;
+  selectedDate = date;
+  final time = await showTimePicker(
+    context: context,
+    initialTime: selectedTime,
+    builder: (context, child) => Theme(
+      data: Theme.of(context).copyWith(
+        colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+        dialogBackgroundColor: const Color(0xFF18181A),
+      ),
+      child: child!,
+    ),
+  );
+  if (time == null) return null;
+  selectedTime = time;
+  return DateTime(
+    selectedDate.year,
+    selectedDate.month,
+    selectedDate.day,
+    selectedTime.hour,
+    selectedTime.minute,
+  );
 }
 
 class _OverrideTile extends StatelessWidget {
@@ -222,44 +637,6 @@ class _OverrideTile extends StatelessWidget {
     );
   }
 
-  String _fmt(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} $h:$m';
-  }
-
-  String _typeLabel(OverrideType t) {
-    switch (t) {
-      case OverrideType.skip:
-        return '건너뛰기';
-      case OverrideType.replace:
-        return '대체';
-      case OverrideType.add:
-        return '추가';
-    }
-  }
-
-  Color _typeColor(OverrideType t) {
-    switch (t) {
-      case OverrideType.skip:
-        return const Color(0xFFFF9800);
-      case OverrideType.replace:
-        return const Color(0xFF1976D2);
-      case OverrideType.add:
-        return const Color(0xFF4CAF50);
-    }
-  }
-
-  Color _statusColor(OverrideStatus s) {
-    switch (s) {
-      case OverrideStatus.planned:
-        return const Color(0xFF1976D2);
-      case OverrideStatus.completed:
-        return const Color(0xFF4CAF50);
-      case OverrideStatus.canceled:
-        return const Color(0xFFE53E3E);
-    }
-  }
 }
 
 extension on _MakeupViewState {
@@ -302,7 +679,7 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('보강 추가', style: TextStyle(color: Colors.white, fontSize: 18)),
+      title: const Text('추가 수업', style: TextStyle(color: Colors.white, fontSize: 18)),
       content: SizedBox(
         width: 380,
         child: Column(
