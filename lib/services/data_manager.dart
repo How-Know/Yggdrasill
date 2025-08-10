@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
+import '../models/memo.dart';
 
 class StudentWithInfo {
   final Student student;
@@ -144,11 +145,43 @@ class DataManager {
       await loadClasses(); // 수업 정보 로딩 추가
       await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
       await loadAttendanceRecords(); // 출석 기록 로딩 추가
+      await loadMemos();
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
       _initializeDefaults();
     }
+  }
+
+  // ======== MEMOS ========
+  List<Memo> _memos = [];
+  final ValueNotifier<List<Memo>> memosNotifier = ValueNotifier<List<Memo>>([]);
+
+  Future<void> loadMemos() async {
+    final rows = await AcademyDbService.instance.getMemos();
+    _memos = rows.map((m) => Memo.fromMap(m)).toList();
+    memosNotifier.value = List.unmodifiable(_memos);
+  }
+
+  Future<void> addMemo(Memo memo) async {
+    _memos.insert(0, memo);
+    memosNotifier.value = List.unmodifiable(_memos);
+    await AcademyDbService.instance.addMemo(memo.toMap());
+  }
+
+  Future<void> updateMemo(Memo memo) async {
+    final idx = _memos.indexWhere((m) => m.id == memo.id);
+    if (idx != -1) {
+      _memos[idx] = memo;
+      memosNotifier.value = List.unmodifiable(_memos);
+      await AcademyDbService.instance.updateMemo(memo.id, memo.toMap());
+    }
+  }
+
+  Future<void> deleteMemo(String id) async {
+    _memos.removeWhere((m) => m.id == id);
+    memosNotifier.value = List.unmodifiable(_memos);
+    await AcademyDbService.instance.deleteMemo(id);
   }
 
   void _initializeDefaults() {

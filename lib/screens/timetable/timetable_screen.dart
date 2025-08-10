@@ -22,6 +22,12 @@ import 'package:flutter/services.dart';
 import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart'; // Added for firstWhereOrNull
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 
 enum TimetableViewType {
@@ -39,6 +45,18 @@ enum TimetableViewType {
         return '일정';
     }
   }
+}
+
+class MemoItem {
+  final String id;
+  final String original;
+  final String summary;
+  const MemoItem({required this.id, required this.original, required this.summary});
+  MemoItem copyWith({String? id, String? original, String? summary}) => MemoItem(
+    id: id ?? this.id,
+    original: original ?? this.original,
+    summary: summary ?? this.summary,
+  );
 }
 
 class TimetableScreen extends StatefulWidget {
@@ -96,6 +114,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
   StudentWithInfo? _selectedSelfStudyStudent;
   bool _isIncreasingWeeklyCount = false; // weekly_class_count 초과 등록 모드 여부
   Set<String> _snapshotSetIds = {}; // 등록 시작 시점의 set_id 스냅샷 (취소 복구용)
+
+  // 메모 슬라이드 상태
+  final ValueNotifier<bool> _isMemoOpen = ValueNotifier(false);
+  final ValueNotifier<List<MemoItem>> _memos = ValueNotifier<List<MemoItem>>([]);
 
   @override
   void initState() {
@@ -697,41 +719,180 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
           }
         },
-        child: Scaffold(
-          backgroundColor: const Color(0xFF1F1F1F),
-          appBar: const AppBarTitle(title: '시간'),
-          body: Container(
-            color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
-            child: Column(
-              children: [
-                SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
-                CustomTabBar(
-                  selectedIndex: TimetableViewType.values.indexOf(_viewType),
-                  tabs: TimetableViewType.values.map((e) => e.name).toList(),
-                  onTabSelected: (i) {
-                    setState(() {
-                      _viewType = TimetableViewType.values[i];
-                    });
-                    
-                    // 수업 탭 클릭 시에만 스크롤
-                    if (TimetableViewType.values[i] == TimetableViewType.classes && 
-                        !_hasScrolledOnTabClick) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
-                      _hasScrolledOnTabClick = true;
-                    }
-                  },
+        child: Stack(
+          children: [
+            Scaffold(
+              backgroundColor: const Color(0xFF1F1F1F),
+              appBar: const AppBarTitle(title: '시간'),
+              body: Container(
+                color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
+                child: Column(
+                  children: [
+                    SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
+                    CustomTabBar(
+                      selectedIndex: TimetableViewType.values.indexOf(_viewType),
+                      tabs: TimetableViewType.values.map((e) => e.name).toList(),
+                      onTabSelected: (i) {
+                        setState(() {
+                          _viewType = TimetableViewType.values[i];
+                        });
+                        
+                        // 수업 탭 클릭 시에만 스크롤
+                        if (TimetableViewType.values[i] == TimetableViewType.classes && 
+                            !_hasScrolledOnTabClick) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+                          _hasScrolledOnTabClick = true;
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    Expanded(
+                      child: _buildContent(),
+                    ),
+                    const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
+                  ],
                 ),
-                const SizedBox(height: 24),
-                Expanded(
-                  child: _buildContent(),
-                ),
-                const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
-              ],
+              ),
             ),
-          ),
+            // 메모 전역 오버레이가 main.dart에서 렌더링되므로 여기선 제거
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _onAddMemo(BuildContext context) async {
+    final text = await showDialog<String>(
+      context: context,
+      builder: (context) => const _MemoInputDialog(),
+    );
+    if (text == null || text.trim().isEmpty) return;
+    // 1) 즉시 로컬에 임시 추가(요약 대기 표시)
+    final pending = MemoItem(
+      id: UniqueKey().toString(),
+      original: text.trim(),
+      summary: '요약 중...'
+    );
+    _memos.value = [pending, ..._memos.value];
+    // 2) 요약 호출
+    try {
+      final summary = await _summarize(text.trim());
+      _memos.value = _memos.value.map((m) => m.id == pending.id ? m.copyWith(summary: summary) : m).toList();
+    } catch (e) {
+      _memos.value = _memos.value.map((m) => m.id == pending.id ? m.copyWith(summary: '(요약 실패) ${m.original}') : m).toList();
+    }
+  }
+
+  Future<void> _onEditMemo(BuildContext context, MemoItem item) async {
+    final edited = await showDialog<_MemoEditResult>(
+      context: context,
+      builder: (context) => _MemoEditDialog(initial: item.original),
+    );
+    if (edited == null) return;
+    // 저장
+    if (edited.action == _MemoEditAction.delete) {
+      _memos.value = _memos.value.where((m) => m.id != item.id).toList();
+      return;
+    }
+    if (edited.text.trim().isEmpty) return;
+    final newOriginal = edited.text.trim();
+    // 일단 즉시 반영(요약은 비동기)
+    _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(original: newOriginal, summary: '요약 중...') : m).toList();
+    try {
+      final summary = await _summarize(newOriginal);
+      _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(summary: summary) : m).toList();
+    } catch (_) {
+      _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(summary: '(요약 실패) $newOriginal') : m).toList();
+    }
+  }
+
+  Future<String> _summarize(String text) async {
+    // 1) 설정(SharedPreferences) 우선
+    final prefs = await SharedPreferences.getInstance();
+    final persisted = prefs.getString('openai_api_key') ?? '';
+    // 2) 빌드타임 define 보조
+    final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
+    final apiKey = persisted.isNotEmpty ? persisted : defined;
+    if (apiKey.isEmpty) {
+      // 오프라인/키 미설정 시, 간단 요약 대체
+      return _toSingleSentence(text, maxChars: 60);
+    }
+    final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+    final body = jsonEncode({
+      'model': 'gpt-4o-mini',
+      'messages': [
+        {
+          'role': 'system',
+          'content': '너는 텍스트를 한 문장으로 간결하게 요약하는 비서다. 한국어로 한 문장만 출력하고, 줄바꿈 없이 60자 이내로 핵심만 담아라.'
+        },
+        {
+          'role': 'user',
+          'content': '다음 텍스트를 한 문장(최대 60자)으로 간결하게 요약해줘. 불필요한 수식어/군더더기 금지:\n$text'
+        }
+      ],
+      'temperature': 0.2,
+      'max_tokens': 80,
+    });
+    final res = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+      },
+      body: body,
+    );
+    if (res.statusCode != 200) {
+      throw Exception('GPT 요약 실패(${res.statusCode})');
+    }
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    final choices = json['choices'] as List<dynamic>?;
+    final content = choices != null && choices.isNotEmpty
+        ? (choices.first['message']?['content'] as String? ?? '')
+        : '';
+    if (content.isEmpty) return _toSingleSentence(text, maxChars: 60);
+    return _toSingleSentence(content, maxChars: 60);
+  }
+
+  String _toSingleSentence(String raw, {int maxChars = 60}) {
+    // 1) 줄바꿈 제거 및 공백 정리
+    var s = raw.replaceAll('\n', ' ').replaceAll('\r', ' ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // 2) 한 문장만: 종결부호가 여러 번이면 첫 종결까지만
+    final endIdx = _firstSentenceEndIndex(s);
+    if (endIdx != -1) s = s.substring(0, endIdx + 1);
+    // 3) 길이 제한: 종결부호 이전으로 우선 자르기, 없으면 말줄임
+    if (s.runes.length <= maxChars) return s;
+    final clipped = _clipRunes(s, maxChars);
+    // 종결부호가 있으면 거기까지, 없으면 …
+    final clippedEnd = _firstSentenceEndIndex(clipped);
+    if (clippedEnd != -1) return clipped.substring(0, clippedEnd + 1);
+    return clipped + '…';
+  }
+
+  int _firstSentenceEndIndex(String s) {
+    // 한국어 문장 종결부호/패턴 우선 탐색
+    final patterns = ['다.', '요.', '니다.', '함.', '.', '!', '?'];
+    int best = -1;
+    for (final p in patterns) {
+      final idx = s.indexOf(p);
+      if (idx != -1) {
+        final end = idx + p.length - 1; // 마지막 문자 인덱스
+        if (best == -1 || end < best) best = end;
+      }
+    }
+    return best;
+  }
+
+  String _clipRunes(String s, int maxChars) {
+    final it = s.runes.iterator;
+    final buf = StringBuffer();
+    int count = 0;
+    while (it.moveNext()) {
+      buf.writeCharCode(it.current);
+      count++;
+      if (count >= maxChars) break;
+    }
+    return buf.toString();
   }
 
   Widget _buildContent() {
@@ -1564,6 +1725,320 @@ class _TimetableScreenState extends State<TimetableScreen> {
     });
   }
 }
+
+class _MemoSlideOverlay extends StatefulWidget {
+  final ValueListenable<bool> isOpenListenable;
+  final ValueListenable<List<MemoItem>> memosListenable;
+  final Future<void> Function(BuildContext context) onAddMemo;
+  final Future<void> Function(BuildContext context, MemoItem item) onEditMemo;
+  const _MemoSlideOverlay({
+    Key? key,
+    required this.isOpenListenable,
+    required this.memosListenable,
+    required this.onAddMemo,
+    required this.onEditMemo,
+  }) : super(key: key);
+
+  @override
+  State<_MemoSlideOverlay> createState() => _MemoSlideOverlayState();
+}
+
+class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
+  bool _hoveringEdge = false;
+  bool _panelHovered = false;
+  Timer? _closeTimer;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double panelWidth = 75;
+        return Stack(
+          children: [
+            // 우측 24px 호버 감지영역
+            Positioned(
+              right: 0,
+              top: kToolbarHeight, // 상단 앱바 영역 비차단
+              bottom: 0, // 하단까지 확장
+              width: 24,
+              child: MouseRegion(
+                onEnter: (_) {
+                  _hoveringEdge = true;
+                  _setOpen(true);
+                  _cancelCloseTimer();
+                },
+                onExit: (_) {
+                  _hoveringEdge = false;
+                  _scheduleMaybeClose();
+                },
+                child: const SizedBox.shrink(),
+              ),
+            ),
+            // 패널 본체
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.isOpenListenable,
+              builder: (context, open, _) {
+                return AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeInOut,
+                  right: open ? 0 : -panelWidth,
+                  top: kToolbarHeight,
+                  bottom: 0,
+                  width: panelWidth,
+                  child: MouseRegion(
+                    onEnter: (_) {
+                      _panelHovered = true;
+                      _cancelCloseTimer();
+                    },
+                    onExit: (_) {
+                      _panelHovered = false;
+                      _scheduleMaybeClose();
+                    },
+                    child: _MemoPanel(
+                      memosListenable: widget.memosListenable,
+                      onAddMemo: () => widget.onAddMemo(context),
+                      onEditMemo: (item) => widget.onEditMemo(context, item),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _setOpen(bool value) {
+    if (widget.isOpenListenable is ValueNotifier<bool>) {
+      (widget.isOpenListenable as ValueNotifier<bool>).value = value;
+    }
+  }
+
+  void _scheduleMaybeClose() {
+    _closeTimer?.cancel();
+    _closeTimer = Timer(const Duration(milliseconds: 220), () {
+      if (!_hoveringEdge && !_panelHovered) {
+        _setOpen(false);
+      }
+    });
+  }
+
+  void _cancelCloseTimer() {
+    _closeTimer?.cancel();
+    _closeTimer = null;
+  }
+}
+
+class _MemoPanel extends StatelessWidget {
+  final ValueListenable<List<MemoItem>> memosListenable;
+  final VoidCallback onAddMemo;
+  final void Function(MemoItem item) onEditMemo;
+  const _MemoPanel({required this.memosListenable, required this.onAddMemo, required this.onEditMemo});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF18181A),
+        border: Border(left: BorderSide(color: Color(0xFF2A2A2A), width: 1)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          // 상단 + 버튼
+          SizedBox(
+            height: 40,
+            child: IconButton(
+              onPressed: onAddMemo,
+              icon: const Icon(Icons.add, color: Colors.white, size: 22),
+              tooltip: '+ 메모 추가',
+            ),
+          ),
+          const Divider(height: 1, color: Colors.white10),
+          // 메모 리스트
+          Expanded(
+            child: ValueListenableBuilder<List<MemoItem>>(
+              valueListenable: memosListenable,
+              builder: (context, memos, _) {
+                if (memos.isEmpty) {
+                  return const Center(
+                    child: Text('메모 없음', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                  );
+                }
+                return ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: memos.length,
+                  itemBuilder: (context, index) {
+                    final m = memos[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+                      child: Tooltip(
+                        message: m.summary, // 호버: 요약본 표시
+                        waitDuration: const Duration(milliseconds: 200),
+                        child: InkWell(
+                          onTap: () => onEditMemo(m),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2A2A2A),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              m.original,
+                              maxLines: 6,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MemoInputDialog extends StatefulWidget {
+  const _MemoInputDialog();
+  @override
+  State<_MemoInputDialog> createState() => _MemoInputDialogState();
+}
+
+class _MemoInputDialogState extends State<_MemoInputDialog> {
+  final TextEditingController _controller = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      title: const Text('메모 추가', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 380,
+        child: TextField(
+          controller: _controller,
+          minLines: 4,
+          maxLines: 8,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: '메모를 입력하세요',
+            hintStyle: TextStyle(color: Colors.white38),
+            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+        ),
+        FilledButton(
+          onPressed: _saving
+              ? null
+              : () async {
+                  final text = _controller.text.trim();
+                  if (text.isEmpty) return;
+                  setState(() => _saving = true);
+                  // 다이얼로그는 텍스트 반환만, 실제 저장은 상위에서 처리
+                  Navigator.of(context).pop(text);
+                },
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          child: const Text('저장'),
+        ),
+      ],
+    );
+  }
+}
+
+enum _MemoEditAction { save, delete }
+class _MemoEditResult {
+  final _MemoEditAction action;
+  final String text;
+  const _MemoEditResult(this.action, this.text);
+}
+
+class _MemoEditDialog extends StatefulWidget {
+  final String initial;
+  const _MemoEditDialog({required this.initial});
+  @override
+  State<_MemoEditDialog> createState() => _MemoEditDialogState();
+}
+
+class _MemoEditDialogState extends State<_MemoEditDialog> {
+  late TextEditingController _controller;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      title: const Text('메모 보기/수정', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 420,
+        child: TextField(
+          controller: _controller,
+          minLines: 6,
+          maxLines: 12,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+        ),
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(const _MemoEditResult(_MemoEditAction.delete, '')),
+          style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: Colors.red),
+          child: const Text('삭제'),
+        ),
+        FilledButton(
+          onPressed: _saving
+              ? null
+              : () async {
+                  setState(() => _saving = true);
+                  final text = _controller.text;
+                  Navigator.of(context).pop(_MemoEditResult(_MemoEditAction.save, text));
+                },
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          child: const Text('저장'),
+        ),
+      ],
+    );
+  }
+}
+
 
 class SelfStudyRegistrationDialog extends StatefulWidget {
   final ValueChanged<StudentWithInfo> onStudentSelected;

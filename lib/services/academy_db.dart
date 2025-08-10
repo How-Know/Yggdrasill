@@ -28,9 +28,9 @@ class AcademyDbService {
   Future<Database> _initDb() async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, 'academy.db');
-    return await openDatabaseWithLog(
+      return await openDatabaseWithLog(
       path,
-      version: 17,
+        version: 18,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -197,6 +197,17 @@ class AcademyDbService {
         await db.execute('''
           CREATE INDEX idx_session_overrides_lookup
           ON session_overrides(student_id, replacement_class_datetime)
+        ''');
+        await db.execute('''
+          CREATE TABLE memos (
+            id TEXT PRIMARY KEY,
+            original TEXT,
+            summary TEXT,
+            scheduled_at TEXT,
+            dismissed INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+          )
         ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
@@ -411,6 +422,19 @@ class AcademyDbService {
             await db.execute('ALTER TABLE student_basic_info ADD COLUMN memo TEXT');
           }
         }
+        if (oldVersion < 18) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS memos (
+              id TEXT PRIMARY KEY,
+              original TEXT,
+              summary TEXT,
+              scheduled_at TEXT,
+              dismissed INTEGER,
+              created_at TEXT,
+              updated_at TEXT
+            )
+          ''');
+        }
         
         // 버전 13: student_time_blocks 테이블 컬럼 구조 수정
         if (oldVersion < 13) {
@@ -612,6 +636,46 @@ class AcademyDbService {
     } catch (e, st) {
       print('[DB][ERROR] saveAcademySettings: $e\n$st');
       rethrow;
+    }
+  }
+
+  // ======== MEMO CRUD ========
+  Future<void> addMemo(Map<String, dynamic> map) async {
+    final dbClient = await db;
+    await ensureMemosTable();
+    await dbClient.insert('memos', map, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+  Future<void> updateMemo(String id, Map<String, dynamic> map) async {
+    final dbClient = await db;
+    await ensureMemosTable();
+    await dbClient.update('memos', map, where: 'id = ?', whereArgs: [id]);
+  }
+  Future<void> deleteMemo(String id) async {
+    final dbClient = await db;
+    await ensureMemosTable();
+    await dbClient.delete('memos', where: 'id = ?', whereArgs: [id]);
+  }
+  Future<List<Map<String, dynamic>>> getMemos() async {
+    final dbClient = await db;
+    await ensureMemosTable();
+    return await dbClient.query('memos', orderBy: 'updated_at DESC');
+  }
+
+  Future<void> ensureMemosTable() async {
+    final dbClient = await db;
+    final result = await dbClient.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='memos'");
+    if (result.isEmpty) {
+      await dbClient.execute('''
+        CREATE TABLE IF NOT EXISTS memos (
+          id TEXT PRIMARY KEY,
+          original TEXT,
+          summary TEXT,
+          scheduled_at TEXT,
+          dismissed INTEGER,
+          created_at TEXT,
+          updated_at TEXT
+        )
+      ''');
     }
   }
 

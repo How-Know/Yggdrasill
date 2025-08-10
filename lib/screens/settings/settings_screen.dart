@@ -219,6 +219,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // OpenAI API 키 섹션
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: Text(
+                    'AI 요약',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FutureBuilder<String?>(
+                  future: SharedPreferences.getInstance().then((p) => p.getString('openai_api_key')),
+                  builder: (context, snapshot) {
+                    final initial = snapshot.data ?? '';
+                    final controller = TextEditingController(text: initial);
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            style: const TextStyle(color: Colors.white),
+                            obscureText: true,
+                            decoration: InputDecoration(
+                              labelText: 'OpenAI API Key',
+                              labelStyle: TextStyle(color: Colors.white70),
+                              hintText: 'sk-로 시작하는 키를 입력하세요',
+                              hintStyle: TextStyle(color: Colors.white24),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Colors.white24),
+                              ),
+                              focusedBorder: const OutlineInputBorder(
+                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final value = controller.text.trim();
+                            if (value.isEmpty) {
+                              await prefs.remove('openai_api_key');
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('API 키가 제거되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            } else {
+                              await prefs.setString('openai_api_key', value);
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('API 키가 저장되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            }
+                          },
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: const Text('저장'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 28),
                 // 테마 설정
                 const Padding(
                   padding: EdgeInsets.only(top: 24),

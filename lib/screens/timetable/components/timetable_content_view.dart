@@ -54,6 +54,7 @@ class TimetableContentView extends StatefulWidget {
 }
 
 class TimetableContentViewState extends State<TimetableContentView> {
+  // 메모 오버레이가 사용할 전역 키 등을 두려면 이곳에 배치 가능 (현재 오버레이는 TimetableScreen에서 처리)
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
