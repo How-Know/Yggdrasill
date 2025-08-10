@@ -419,12 +419,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     if (attended.isEmpty)
-                                      Center(
+                                      const Center(
                                         child: Text(
-                                          DataManager.instance.academySettings.name.isNotEmpty
-                                              ? DataManager.instance.academySettings.name
-                                              : '학원명',
-                                          style: const TextStyle(
+                                          '출석',
+                                          style: TextStyle(
                                             color: Color(0xFF0F467D),
                                             fontSize: 22,
                                             fontWeight: FontWeight.bold,

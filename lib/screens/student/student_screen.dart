@@ -593,19 +593,21 @@ class StudentScreenState extends State<StudentScreen> {
               ),
               // 오른쪽 영역: (학생정보 + 달력) + 수강료 납부
               Expanded(
-                child: Column(
+                child: Stack(
                   children: [
-                    // 상단: 학생정보 + 달력 통합 컨테이너
-                    Container(
-                      height: MediaQuery.of(context).size.height * 0.4,
-                      margin: const EdgeInsets.only(top: 16, right: 24),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1F1F1F),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.transparent, width: 1),
-                      ),
-                      child: Row(
-                        children: [
+                    Column(
+                      children: [
+                        // 상단: 학생정보 + 달력 통합 컨테이너
+                        Container(
+                          height: MediaQuery.of(context).size.height * 0.4,
+                          margin: const EdgeInsets.only(top: 16, right: 24),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1F1F1F),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.transparent, width: 1),
+                          ),
+                          child: Row(
+                            children: [
                           // 학생 정보 영역
                           Expanded(
                             flex: 1,
@@ -692,54 +694,64 @@ class StudentScreenState extends State<StudentScreen> {
                             ),
                           ),
                         ],
-                      ),
-                    ),
-                    // 하단: 수강료 납부 + 출석체크
-                    const SizedBox(height: 16),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          // 수강료 납부
-                          Container(
-                            height: 220,
-                            margin: const EdgeInsets.only(bottom: 24, right: 24),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF18181A),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFF18181A), width: 1),
-                            ),
-                            child: _selectedStudent != null
-                                ? _buildPaymentSchedule(_selectedStudent!)
-                                : const Center(
-                                    child: Text(
-                                      '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
-                                      style: TextStyle(color: Colors.white54, fontSize: 16),
-                                    ),
-                                  ),
                           ),
-                          // 출석 체크
-                          Container(
-                            height: 260,
-                            margin: const EdgeInsets.only(bottom: 24, right: 24),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF18181A),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFF18181A), width: 1),
-                            ),
-                            child: AttendanceCheckView(
-                              selectedStudent: _selectedStudent,
-                              pageIndex: _attendancePageIndex,
-                              onPageIndexChanged: (newIndex) {
-                                setState(() {
-                                  _attendancePageIndex = newIndex;
-                                });
-                              },
-                            ),
+                        ),
+                        // 하단: 수강료 납부 + 출석체크
+                        const SizedBox(height: 16),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              // 수강료 납부
+                              Container(
+                                height: 220,
+                                margin: const EdgeInsets.only(bottom: 24, right: 24),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF18181A),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF18181A), width: 1),
+                                ),
+                                child: _selectedStudent != null
+                                    ? _buildPaymentSchedule(_selectedStudent!)
+                                    : const Center(
+                                        child: Text(
+                                          '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
+                                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                                        ),
+                                      ),
+                              ),
+                              // 출석 체크
+                              Container(
+                                height: 260,
+                                margin: const EdgeInsets.only(bottom: 24, right: 24),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF18181A),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF18181A), width: 1),
+                                ),
+                                child: AttendanceCheckView(
+                                  selectedStudent: _selectedStudent,
+                                  pageIndex: _attendancePageIndex,
+                                  onPageIndexChanged: (newIndex) {
+                                    setState(() {
+                                      _attendancePageIndex = newIndex;
+                                    });
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                           ),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
+                    if (_selectedStudent == null)
+                      Positioned.fill(
+                        child: Container(
+                          color: const Color(0xFF1F1F1F),
+                          padding: const EdgeInsets.only(top: 16),
+                          child: _buildInitialDashboard(),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -755,6 +767,224 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // ========== 출석 관리 헬퍼 메서드들 ==========
+  
+  // 초기 대시보드(학생 미선택시): 어제 출결, 오늘 출결, 이번달 납입, 오늘 납입 + 하단 리스트
+  Widget _buildInitialDashboard() {
+    final DateTime now = DateTime.now();
+    final DateTime todayStart = DateTime(now.year, now.month, now.day);
+    final DateTime todayEnd = todayStart.add(const Duration(days: 1));
+    final DateTime yesterdayStart = todayStart.subtract(const Duration(days: 1));
+    final DateTime yesterdayEnd = todayStart;
+
+    // 전체 학생 기준 요약 (삭제된 학생 제외)
+    final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+
+    int yPresent = 0, yLate = 0, yAbsent = 0;
+    int tPresent = 0, tLate = 0, tAbsent = 0;
+
+    // 지각 임계는 학생별 다를 수 있으나, 초기 대시보드는 보수적으로 10분 기본 사용
+    const int defaultLateMinutes = 10;
+
+    for (final r in DataManager.instance.attendanceRecords) {
+      if (!activeStudentIds.contains(r.studentId)) continue;
+      final dt = r.classDateTime;
+      final isYesterday = dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd);
+      final isToday = dt.isAfter(todayStart) && dt.isBefore(todayEnd);
+      if (!isYesterday && !isToday) continue;
+
+      if (!r.isPresent) {
+        if (isYesterday) yAbsent++; else tAbsent++;
+      } else {
+        final threshold = r.classDateTime.add(const Duration(minutes: defaultLateMinutes));
+        final isLate = r.arrivalTime != null && r.arrivalTime!.isAfter(threshold);
+        if (isYesterday) {
+          if (isLate) yLate++; else yPresent++;
+        } else {
+          if (isLate) tLate++; else tPresent++;
+        }
+      }
+    }
+
+    // 납부 요약(이번달/오늘)
+    final DateTime monthStart = DateTime(now.year, now.month, 1);
+    final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
+    int monthPaid = 0, monthDue = 0, todayPaid = 0, todayDue = 0;
+    for (final pr in DataManager.instance.paymentRecords) {
+      if (!activeStudentIds.contains(pr.studentId)) continue;
+      final due = pr.dueDate;
+      final paid = pr.paidDate;
+      final isThisMonth = due.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) && due.isBefore(nextMonthStart);
+      final isTodayDue = due.isAfter(todayStart.subtract(const Duration(milliseconds: 1))) && due.isBefore(todayEnd);
+      if (isThisMonth) {
+        if (paid != null) monthPaid++; else monthDue++;
+      }
+      if (isTodayDue) {
+        if (paid != null) todayPaid++; else todayDue++;
+      }
+    }
+
+    Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9)}) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF212A31),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF2A2A2A)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(title, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(big, style: TextStyle(color: accent, fontSize: 22, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+          ],
+        ),
+      );
+    }
+
+    // 리스트 데이터: 어제/오늘 출석, 이번달/오늘 납입
+    final Map<String, DateTime?> yesterdayAttendanceByStudent = {};
+    final Map<String, DateTime?> todayAttendanceByStudent = {};
+    for (final r in DataManager.instance.attendanceRecords) {
+      if (!activeStudentIds.contains(r.studentId)) continue;
+      if (!r.isPresent) continue;
+      final dt = r.classDateTime;
+      if (dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd)) {
+        yesterdayAttendanceByStudent[r.studentId] = r.arrivalTime;
+      } else if (dt.isAfter(todayStart) && dt.isBefore(todayEnd)) {
+        todayAttendanceByStudent[r.studentId] = r.arrivalTime;
+      }
+    }
+
+    // 위에서 선언한 monthStart/nextMonthStart 재사용
+    final Map<String, DateTime> monthPaidByStudent = {};
+    final Map<String, DateTime> todayPaidByStudent = {};
+    for (final pr in DataManager.instance.paymentRecords) {
+      if (!activeStudentIds.contains(pr.studentId)) continue;
+      if (pr.paidDate == null) continue;
+      final paid = pr.paidDate!;
+      if (paid.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) && paid.isBefore(nextMonthStart)) {
+        monthPaidByStudent[pr.studentId] = paid;
+      }
+      if (paid.isAfter(todayStart) && paid.isBefore(todayEnd)) {
+        todayPaidByStudent[pr.studentId] = paid;
+      }
+    }
+
+    String _nameOf(String studentId) {
+      try {
+        return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+      } catch (_) {
+        return studentId;
+      }
+    }
+
+    Widget _simpleRow(String left, String right) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1F1F1F),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF2A2A2A)),
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(left, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
+            Text(right, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          ],
+        ),
+      );
+    }
+
+    // 각 타일별 개별 리스트를 같은 칼럼에 배치
+    Widget listFor(Map<String, DateTime?> data, {required bool isAttendance}) {
+      // 부모 컨테이너(타일과 동일 너비/여백)로 래핑하여 너비 일치
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF212A31),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF2A2A2A)),
+        ),
+        child: (data.isEmpty)
+            ? const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('기록 없음', style: TextStyle(color: Colors.white54, fontSize: 13)),
+              )
+            : Column(
+                children: data.entries.map((e) {
+                  final name = _nameOf(e.key);
+                  final dt = e.value;
+                  String right;
+                  if (isAttendance) {
+                    right = dt != null
+                        ? '등원 ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}'
+                        : '등원시간 없음';
+                  } else {
+                    // 수강료는 날짜만 표시
+                    right = dt != null ? '납부 ${dt.month}/${dt.day}' : '날짜 없음';
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _simpleRow(name, right),
+                  );
+                }).toList(),
+              ),
+      );
+    }
+
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.only(right: 16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  tile('어제 출결', '출석 ${yPresent + yLate} · 결석 $yAbsent', '지각 $yLate', accent: const Color(0xFF64B5F6)),
+                  listFor(yesterdayAttendanceByStudent, isAttendance: true),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  tile('오늘 출결', '출석 ${tPresent + tLate} · 결석 $tAbsent', '지각 $tLate', accent: const Color(0xFF64B5F6)),
+                  listFor(todayAttendanceByStudent, isAttendance: true),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  tile('이번달 납입', '완료 $monthPaid · 예정 $monthDue', '${now.month}월 납부 현황', accent: const Color(0xFF90CAF9)),
+                  listFor(monthPaidByStudent.map((k, v) => MapEntry(k, v)), isAttendance: false),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  tile('오늘 납입', '완료 $todayPaid · 예정 $todayDue', '오늘(${now.month}/${now.day}) 납부', accent: const Color(0xFF90CAF9)),
+                  listFor(todayPaidByStudent.map((k, v) => MapEntry(k, v)), isAttendance: false),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   
   // 학생 리스트 학년별 그룹핑
   Map<String, List<StudentWithInfo>> _groupStudentsByGrade(List<StudentWithInfo> students) {
@@ -1330,27 +1560,44 @@ class StudentScreenState extends State<StudentScreen> {
       }
     }
     final int totalAttendance = countPresent + countLate + countAbsent;
-    final double tardinessRate = totalAttendance > 0 ? (countLate / totalAttendance) * 100.0 : 0.0;
+    final int attendedCount = countPresent + countLate;
+    final double tardinessRate = attendedCount > 0 ? (countLate / attendedCount) * 100.0 : 0.0;
 
-    // 수강료 통계 (등록월 ~ 현재월+2)
+    // 수강료 통계 수정: 분모=등록월~현재월 예정 개수, 이전/다음 납부일 계산
     final DateTime? registrationDate = studentWithInfo.basicInfo.registrationDate;
     int paidCycles = 0;
     int totalCycles = 0;
+    DateTime? previousPaidDate;
     DateTime? nextDueDate;
     if (registrationDate != null) {
       final DateTime currentMonth = DateTime(now.year, now.month);
-      DateTime month = DateTime(registrationDate.year, registrationDate.month);
-      while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
-        totalCycles++;
-        final DateTime defaultDue = DateTime(month.year, month.month, registrationDate.day);
-        final int cycle = _calculateCycleNumber(registrationDate, defaultDue);
+      final int cyclesUntilCurrent = _calculateCycleNumber(
+        registrationDate,
+        DateTime(currentMonth.year, currentMonth.month, registrationDate.day),
+      );
+      totalCycles = cyclesUntilCurrent;
+
+      for (int c = 1; c <= cyclesUntilCurrent; c++) {
+        final record = DataManager.instance.getPaymentRecord(studentId, c);
+        if (record?.paidDate != null) paidCycles++;
+      }
+
+      final paidRecords = DataManager.instance
+          .getPaymentRecordsForStudent(studentId)
+          .where((r) => r.paidDate != null)
+          .toList();
+      if (paidRecords.isNotEmpty) {
+        paidRecords.sort((a, b) => a.paidDate!.compareTo(b.paidDate!));
+        previousPaidDate = paidRecords.last.paidDate;
+      }
+
+      DateTime probe = currentMonth;
+      for (int i = 0; i < 12; i++) {
+        final due = _getActualPaymentDateForMonth(studentId, registrationDate, probe);
+        final cycle = _calculateCycleNumber(registrationDate, due);
         final record = DataManager.instance.getPaymentRecord(studentId, cycle);
-        if (record?.paidDate != null) {
-          paidCycles++;
-        } else {
-          nextDueDate ??= (record?.dueDate ?? defaultDue);
-        }
-        month = DateTime(month.year, month.month + 1);
+        if (record?.paidDate == null) { nextDueDate = due; break; }
+        probe = DateTime(probe.year, probe.month + 1);
       }
     }
 
@@ -1379,33 +1626,21 @@ class StudentScreenState extends State<StudentScreen> {
           children: [
             Text(title, style: const TextStyle(color: Colors.white70, fontSize: 16.2, fontWeight: FontWeight.w600)),
             const SizedBox(height: 9),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: Text(
-                    mainText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: accent, fontSize: 24.3, fontWeight: FontWeight.w800, height: 1.0),
-                  ),
-                ),
-                if (subText != null) ...[
-                  const SizedBox(width: 9),
-                  Flexible(
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 2.7),
-                      child: Text(
-                        subText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white60, fontSize: 16.2),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+            Text(
+              mainText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: accent, fontSize: 24.3, fontWeight: FontWeight.w800, height: 1.0),
             ),
+            if (subText != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                subText,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white60, fontSize: 16.2, height: 1.2),
+              ),
+            ],
           ],
         ),
       );
@@ -1424,7 +1659,10 @@ class StudentScreenState extends State<StudentScreen> {
             _statCard(
               title: '수강료',
               mainText: registrationDate != null ? '$paidCycles/$totalCycles 납부' : '-',
-              subText: nextDueDate != null ? '다음 납부: ${nextDueDate!.month}/${nextDueDate!.day}' : '미납 없음',
+              subText: registrationDate != null
+                  ? '${previousPaidDate != null ? '이전 ${previousPaidDate!.year}/${previousPaidDate!.month}/${previousPaidDate!.day}' : '이전 없음'} · '
+                    '${nextDueDate != null ? '다음 ${nextDueDate!.year}/${nextDueDate!.month}/${nextDueDate!.day}' : '다음 없음'}'
+                  : '정보 없음',
               accent: const Color(0xFF90CAF9),
             ),
             const SizedBox(height: 9),
