@@ -12,6 +12,7 @@ import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
 import '../../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart';
+import '../../../models/session_override.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -30,6 +31,7 @@ class ClassesView extends StatefulWidget {
   final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
   final StudentWithInfo? selectedSelfStudyStudent;
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
+  final DateTime weekStartDate; // 월요일 날짜(해당 주 시작)
 
   const ClassesView({
     super.key,
@@ -46,6 +48,7 @@ class ClassesView extends StatefulWidget {
     this.selectedStudentWithInfo, // 변경
     this.selectedSelfStudyStudent,
     this.onSelectModeChanged, // 추가
+    required this.weekStartDate,
   });
 
   @override
@@ -341,7 +344,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                       return false;
                     }).toList();
               // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
-              return Listener(
+               return Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (event) {
                   if (!widget.isRegistrationMode) return;
@@ -444,13 +447,42 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             ...List.generate(7, (dayIdx) {
                               final cellKey = '$dayIdx-$blockIdx';
                               _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                              final activeBlocks = _getActiveStudentBlocks(
+                              List<StudentTimeBlock> activeBlocks = _getActiveStudentBlocks(
                                 filteredStudentBlocks, // 반드시 StudentTimeBlock만!
                                 dayIdx,
                                 timeBlocks[blockIdx].startTime,
                                 lessonDuration,
                               );
-                              final cellStudentWithInfos = activeBlocks.map((b) => studentsWithInfo.firstWhere(
+                              // 선택 주 시작/끝 및 셀 절대 시간 계산
+                              final DateTime _weekStart = DateTime(
+                                widget.weekStartDate.year,
+                                widget.weekStartDate.month,
+                                widget.weekStartDate.day,
+                              );
+                              final DateTime _weekEnd = _weekStart.add(const Duration(days: 7));
+                              final DateTime _cellDate = _weekStart.add(
+                                Duration(
+                                  days: dayIdx,
+                                  hours: timeBlocks[blockIdx].startTime.hour,
+                                  minutes: timeBlocks[blockIdx].startTime.minute,
+                                ),
+                              );
+                              // replace 보강의 원래 회차는 임시로 가림 처리 (DB 변경 없음)
+                              final Set<String> _hiddenOriginalStudentIds = {};
+                              for (final ov in DataManager.instance.sessionOverrides) {
+                                if (ov.reason != OverrideReason.makeup) continue;
+                                if (ov.overrideType != OverrideType.replace) continue;
+                                if (ov.status == OverrideStatus.canceled) continue;
+                                final orig = ov.originalClassDateTime;
+                                if (orig == null) continue;
+                                if (orig.isBefore(_weekStart) || !orig.isBefore(_weekEnd)) continue;
+                                if (orig.year == _cellDate.year && orig.month == _cellDate.month && orig.day == _cellDate.day &&
+                                    orig.hour == _cellDate.hour && orig.minute == _cellDate.minute) {
+                                  _hiddenOriginalStudentIds.add(ov.studentId);
+                                }
+                              }
+                              final filteredActiveBlocks = activeBlocks.where((b) => !_hiddenOriginalStudentIds.contains(b.studentId)).toList();
+                              final cellStudentWithInfos = filteredActiveBlocks.map((b) => studentsWithInfo.firstWhere(
                                 (s) => s.student.id == b.studentId,
                                 orElse: () => StudentWithInfo(
                                   student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ),
@@ -460,6 +492,23 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               // 디버깅용 프린트 추가
                               // print('[DEBUG][셀] blockIdx= [36m$blockIdx [0m, dayIdx=$dayIdx, activeBlocks=${activeBlocks.map((b) => b.studentId).toList()}');
                               // print('[DEBUG][셀] cellStudentWithInfos=${cellStudentWithInfos.map((s) => s.student.name).toList()}');
+                              // --- 보강/추가수업 오버레이 계산 ---
+                              final List<OverlayLabel> makeupOverlays = [];
+                              // add/replace 모두, 선택 주에 해당하는 것만 오버레이로 표시
+                              for (final ov in DataManager.instance.sessionOverrides) {
+                                if (ov.reason != OverrideReason.makeup) continue;
+                                if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+                                if (ov.status == OverrideStatus.completed || ov.status == OverrideStatus.canceled) continue;
+                                final rep = ov.replacementClassDateTime;
+                                if (rep == null) continue;
+                                if (rep.isBefore(_weekStart) || !rep.isBefore(_weekEnd)) continue;
+                                if (!(rep.weekday - 1 == dayIdx && rep.hour == timeBlocks[blockIdx].startTime.hour && rep.minute == timeBlocks[blockIdx].startTime.minute)) continue;
+                                final student = DataManager.instance.students.firstWhereOrNull((s) => s.student.id == ov.studentId);
+                                final name = student?.student.name ?? '학생';
+                                final label = ov.overrideType == OverrideType.add ? '$name 추가수업' : '$name 보강';
+                                makeupOverlays.add(OverlayLabel(text: label, type: ov.overrideType));
+                              }
+
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
                               bool isBreakTime = false;
@@ -497,7 +546,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   isSameTime(b, timeBlocks[blockIdx].startTime)
                                 )
                                 .map((b) => b.studentId)
-                                .toSet();
+                                .toSet()
+                                .difference(_hiddenOriginalStudentIds);
                               final activeStudentCount = activeStudentIds.length;
                               Color? countColor;
                               if (activeStudentCount > 0) {
@@ -604,7 +654,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       cellKey: cellKey,
                                       startTime: timeBlocks[blockIdx].startTime,
                                       endTime: timeBlocks[blockIdx].endTime,
-                                      students: activeBlocks,
+                                       students: filteredActiveBlocks,
                                       isBreakTime: isBreakTime,
                                       isExpanded: isExpanded,
                                       isDragHighlight: isDragHighlight,
@@ -616,6 +666,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       cellWidth: 0, // 필요시 전달
                                       registrationModeType: widget.registrationModeType,
                                       operatingHours: widget.operatingHours,
+                                       makeupOverlays: makeupOverlays,
                                     ),
                                   ),
                                 ),

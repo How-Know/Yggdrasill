@@ -20,6 +20,13 @@ import 'package:mneme_flutter/widgets/class_student_card.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
+import '../../../../models/session_override.dart';
+
+class OverlayLabel {
+  final String text;
+  final OverrideType type; // add 또는 replace
+  const OverlayLabel({required this.text, required this.type});
+}
 
 class TimetableCell extends StatelessWidget {
   final int dayIdx;
@@ -41,6 +48,7 @@ class TimetableCell extends StatelessWidget {
   final double cellWidth;
   final String? registrationModeType;
   final List<OperatingHours> operatingHours;
+  final List<OverlayLabel> makeupOverlays; // 보강/추가수업 오버레이 항목들
 
   const TimetableCell({
     super.key,
@@ -63,6 +71,7 @@ class TimetableCell extends StatelessWidget {
     this.cellWidth = 0,
     this.registrationModeType,
     required this.operatingHours,
+    this.makeupOverlays = const [],
   });
 
   // [추가] 운영시간/휴식시간 체크 함수 (ClassesViewState에서 복사)
@@ -308,6 +317,40 @@ class TimetableCell extends StatelessWidget {
                       color: Colors.grey.shade300,
                       child: Center(child: Text(s.student.name, style: TextStyle(color: Colors.black))),
                     )).toList(),
+                  ),
+                ),
+              if (makeupOverlays.isNotEmpty)
+                Positioned(
+                  left: 26, // 좌측 카운트 바를 피해서 표시
+                  top: 4,
+                  right: 4,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: makeupOverlays.map((item) {
+                      final bool isReplace = item.type == OverrideType.replace;
+                      final Color bg = isReplace
+                          ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
+                          : const Color(0xFF4CAF50).withOpacity(0.18); // 초록 형광펜 (추가수업)
+                      return Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 2.0),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: bg,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          item.text,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }).toList(),
                   ),
                 ),
             ],

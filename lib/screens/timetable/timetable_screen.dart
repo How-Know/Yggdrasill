@@ -1066,6 +1066,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         print('[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
                       });
                     },
+                    weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
                   ),
                 ),
                 SizedBox(height: 24), // 시간표 위젯 하단 내부 여백 추가
@@ -1189,6 +1190,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             operatingHours: _operatingHours,
             breakTimeColor: const Color(0xFF424242),
             isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+            weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
             selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
             onTimeSelected: (int dayIdx, DateTime startTime) {
               print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');

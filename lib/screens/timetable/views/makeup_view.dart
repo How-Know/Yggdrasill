@@ -94,12 +94,24 @@ class _MakeupViewState extends State<MakeupView> {
                   if (_segmentIndex == 0) {
                     // 예정 탭: 좌우 2분할(좌: 예정/비활성화 포함, 우: 완료)
                     DateTime monthStart = _selectedMonthStart;
-                    // monthStart 이후(해당 월 포함) 보강만
+
+                    // 필터링 방식
+                    // - 이번달: 해당 달 이후 전체
+                    // - 다른 달 선택 시: 해당 달만
+                    final nowForFilter = DateTime.now();
+                    final bool isThisMonth = monthStart.year == nowForFilter.year && monthStart.month == nowForFilter.month;
+                    final DateTime monthEnd = DateTime(monthStart.year, monthStart.month + 1, 1);
                     final rows = makeups
-                        .where((o) =>
-                            o.replacementClassDateTime != null &&
-                            (o.replacementClassDateTime!.isAfter(monthStart) || _isSameMonthDay(o.replacementClassDateTime!, monthStart)) &&
-                            o.status != OverrideStatus.canceled)
+                        .where((o) {
+                          final dt = o.replacementClassDateTime;
+                          if (dt == null) return false;
+                          if (o.status == OverrideStatus.canceled) return false;
+                          if (isThisMonth) {
+                            return !dt.isBefore(monthStart);
+                          } else {
+                            return !dt.isBefore(monthStart) && dt.isBefore(monthEnd);
+                          }
+                        })
                         .toList()
                       ..sort((a, b) {
                         final aTime = a.replacementClassDateTime ?? a.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -124,25 +136,26 @@ class _MakeupViewState extends State<MakeupView> {
                           }),
                         ),
                         const SizedBox(height: 8),
-                        // 컬럼 헤더
-                        Row(
-                          children: const [
-                            Expanded(
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
-                                child: Text('예정', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                        // 컬럼 헤더 (글자 크기 2배, 가운데 세로 구분선)
+                        IntrinsicHeight(
+                          child: Row(
+                            children: const [
+                              Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
+                                  child: Text('예정', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 28)),
+                                ),
                               ),
-                            ),
-                            SizedBox(width: 12),
-                            Expanded(
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
-                                child: Text('완료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                              Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
+                                  child: Text('완료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 28)),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 8),
                         if (rows.isEmpty)
                           const Expanded(
                             child: Center(
@@ -153,29 +166,31 @@ class _MakeupViewState extends State<MakeupView> {
                           Expanded(
                             child: ListView.separated(
                               itemCount: rows.length,
-                              separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                              separatorBuilder: (_, __) => const SizedBox(height: 16),
                               itemBuilder: (context, index) {
                                 final item = rows[index];
                                 final number = index + 1; // 번호 매기기
                                 final isCompleted = item.status == OverrideStatus.completed;
-                                return Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    // 왼쪽: 예정(완료 시 비활성화 처리)
-                                    Expanded(
-                                      child: Opacity(
-                                        opacity: isCompleted ? 0.45 : 1.0,
-                                        child: _PlannedTile(number: number, item: item),
+                                return IntrinsicHeight(
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      // 왼쪽: 예정(완료 시 비활성화 처리)
+                                      Expanded(
+                                        child: Opacity(
+                                          opacity: isCompleted ? 0.45 : 1.0,
+                                          child: _PlannedTile(number: number, item: item),
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    // 오른쪽: 완료(없는 경우 비워둠)
-                                    Expanded(
-                                      child: isCompleted
-                                          ? _CompletedTile(item: item)
-                                          : const SizedBox.shrink(),
-                                    ),
-                                  ],
+                                      const SizedBox(width: 12),
+                                      // 오른쪽: 완료(없는 경우 비워둠)
+                                      Expanded(
+                                        child: isCompleted
+                                            ? _CompletedTile(item: item)
+                                            : const SizedBox.shrink(),
+                                      ),
+                                    ],
+                                  ),
                                 );
                               },
                             ),
@@ -200,7 +215,7 @@ class _MakeupViewState extends State<MakeupView> {
                     }
                     return ListView.separated(
                       itemCount: canceled.length,
-                      separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                      separatorBuilder: (_, __) => const SizedBox(height: 16),
                       itemBuilder: (context, idx) {
                         final item = canceled[idx];
                         return _OverrideTile(item: item);
@@ -275,7 +290,7 @@ String _typeLabel(OverrideType t) {
     case OverrideType.skip:
       return '건너뛰기';
     case OverrideType.replace:
-      return '대체';
+      return '보강';
     case OverrideType.add:
       return '추가';
   }
@@ -314,6 +329,7 @@ class _PlannedTile extends StatelessWidget {
     final statusColor = _statusColor(item.status);
     final original = item.originalClassDateTime;
     final repl = item.replacementClassDateTime;
+    final String replLabel = (item.overrideType == OverrideType.add) ? '날짜' : '보강';
     StudentWithInfo? student;
     try {
       student = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId);
@@ -322,51 +338,56 @@ class _PlannedTile extends StatelessWidget {
     }
     final studentName = student?.student.name ?? '학생정보 없음';
 
-    return ListTile(
-      tileColor: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      title: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _NumberBadge(number: number),
-          const SizedBox(width: 8),
-          _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
-          const SizedBox(width: 8),
-          if (item.status == OverrideStatus.planned)
-            _Badge(text: '예정', color: statusColor)
-          else if (item.status == OverrideStatus.completed)
-            _Badge(text: '완료', color: statusColor)
-          else
-            _Badge(text: '취소', color: statusColor),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              studentName,
-              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    _NumberBadge(number: number),
+                    const SizedBox(width: 8),
+                    _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
+                    const SizedBox(width: 8),
+                    if (item.status == OverrideStatus.planned)
+                      _Badge(text: '예정', color: Colors.grey, outlined: true)
+                    else if (item.status == OverrideStatus.completed)
+                      _Badge(text: '완료', color: Colors.grey, outlined: true)
+                    else
+                      _Badge(text: '취소', color: statusColor),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        studentName,
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (original != null)
+                  Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
+                if (repl != null)
+                  Text('$replLabel: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
+                if (item.durationMinutes != null)
+                  Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
+              ],
             ),
           ),
-        ],
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (original != null)
-              Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
-            if (repl != null)
-              Text('대체: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
-            if (item.durationMinutes != null)
-              Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
-          ],
-        ),
-      ),
-      trailing: item.status == OverrideStatus.planned
-          ? Row(
+          if (item.status == OverrideStatus.planned)
+            Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 수정(편집): 수강탭과 동일한 보강시간 변경 다이얼로그
                 TextButton(
                   onPressed: () async {
                     final result = await _pickDateTimeForEdit(context, initial: item.replacementClassDateTime ?? DateTime.now());
@@ -390,16 +411,16 @@ class _PlannedTile extends StatelessWidget {
                       }
                     }
                   },
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
                   child: const Text('수정(편집)'),
                 ),
-                // 취소: 보강 취소 버튼과 동일
                 TextButton(
                   onPressed: () async {
                     await DataManager.instance.cancelSessionOverride(item.id);
                   },
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
                   child: const Text('취소'),
                 ),
-                // 삭제: 실제 레코드 삭제
                 TextButton(
                   onPressed: () async {
                     try {
@@ -420,11 +441,18 @@ class _PlannedTile extends StatelessWidget {
                       }
                     }
                   },
-                  child: const Text('삭제', style: TextStyle(color: Color(0xFFE53E3E))),
+                  style: TextButton.styleFrom(
+                    backgroundColor: const Color(0xFFE53E3E),
+                    foregroundColor: Colors.white,
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  child: const Text('삭제'),
                 ),
               ],
-            )
-          : null,
+            ),
+        ],
+      ),
     );
   }
 }
@@ -438,6 +466,7 @@ class _CompletedTile extends StatelessWidget {
     final typeLabel = _typeLabel(item.overrideType);
     final original = item.originalClassDateTime;
     final repl = item.replacementClassDateTime;
+    final String replLabel = (item.overrideType == OverrideType.add) ? '날짜' : '보강';
     StudentWithInfo? student;
     try {
       student = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId);
@@ -446,38 +475,46 @@ class _CompletedTile extends StatelessWidget {
     }
     final studentName = student?.student.name ?? '학생정보 없음';
 
-    return ListTile(
-      tileColor: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      title: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
-          const SizedBox(width: 8),
-          _Badge(text: '완료', color: _statusColor(OverrideStatus.completed)),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              studentName,
-              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
+                    const SizedBox(width: 8),
+                    _Badge(text: '완료', color: Colors.grey, outlined: true),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        studentName,
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (original != null)
+                  Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
+                if (repl != null)
+                  Text('$replLabel: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
+                if (item.durationMinutes != null)
+                  Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
+              ],
             ),
           ),
         ],
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (original != null)
-              Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
-            if (repl != null)
-              Text('대체: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
-            if (item.durationMinutes != null)
-              Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
-          ],
-        ),
       ),
     );
   }
@@ -555,83 +592,93 @@ class _OverrideTile extends StatelessWidget {
     }
     final studentName = student?.student.name ?? '학생정보 없음';
 
-    return ListTile(
-      tileColor: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      title: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
-          const SizedBox(width: 8),
-          if (item.status == OverrideStatus.planned)
-            _Badge(text: '예정', color: statusColor)
-          else if (item.status == OverrideStatus.completed)
-            _Badge(text: '완료', color: statusColor)
-          else
-            _Badge(text: '취소', color: statusColor),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              studentName,
-              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    _Badge(text: typeLabel, color: _typeColor(item.overrideType)),
+                    const SizedBox(width: 8),
+                    if (item.status == OverrideStatus.planned)
+                      _Badge(text: '예정', color: Colors.grey, outlined: true)
+                    else if (item.status == OverrideStatus.completed)
+                      _Badge(text: '완료', color: Colors.grey, outlined: true)
+                    else
+                      _Badge(text: '취소', color: statusColor),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        studentName,
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (original != null)
+                  Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
+                if (repl != null)
+                  Text('${(item.overrideType == OverrideType.add) ? '날짜' : '보강'}: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
+                if (item.durationMinutes != null)
+                  Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
+              ],
             ),
           ),
-        ],
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (original != null)
-              Text('원본: ${_fmt(original)}', style: const TextStyle(color: Colors.white70)),
-            if (repl != null)
-              Text('대체: ${_fmt(repl)}', style: const TextStyle(color: Colors.white70)),
-            if (item.durationMinutes != null)
-              Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white70)),
-          ],
-        ),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (item.status == OverrideStatus.planned)
-            TextButton(
-              onPressed: () async {
-                final updated = await showDialog<SessionOverride>(
-                  context: context,
-                  builder: (_) => _MakeupEditDialog(item: item),
-                );
-                if (updated != null) {
-                  try {
-                    await DataManager.instance.updateSessionOverride(updated);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                        content: Text('보강이 수정되었습니다.'),
-                        backgroundColor: Color(0xFF1976D2),
-                        duration: Duration(milliseconds: 1400),
-                      ));
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (item.status == OverrideStatus.planned)
+                TextButton(
+                  onPressed: () async {
+                    final updated = await showDialog<SessionOverride>(
+                      context: context,
+                      builder: (_) => _MakeupEditDialog(item: item),
+                    );
+                    if (updated != null) {
+                      try {
+                        await DataManager.instance.updateSessionOverride(updated);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            content: Text('보강이 수정되었습니다.'),
+                            backgroundColor: Color(0xFF1976D2),
+                            duration: Duration(milliseconds: 1400),
+                          ));
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('저장 실패: $e'),
+                            backgroundColor: const Color(0xFFE53E3E),
+                          ));
+                        }
+                      }
                     }
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text('저장 실패: $e'),
-                        backgroundColor: const Color(0xFFE53E3E),
-                      ));
-                    }
-                  }
-                }
-              },
-              child: const Text('편집'),
-            ),
-          if (item.status == OverrideStatus.planned)
-            TextButton(
-              onPressed: () async {
-                await DataManager.instance.cancelSessionOverride(item.id);
-              },
-              child: const Text('취소', style: TextStyle(color: Color(0xFFE53E3E))),
-            ),
+                  },
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                  child: const Text('편집'),
+                ),
+              if (item.status == OverrideStatus.planned)
+                TextButton(
+                  onPressed: () async {
+                    await DataManager.instance.cancelSessionOverride(item.id);
+                  },
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                  child: const Text('취소'),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -955,17 +1002,26 @@ class _StudentListState extends State<_StudentList> {
 class _Badge extends StatelessWidget {
   final String text;
   final Color color;
-  const _Badge({required this.text, required this.color});
+  final bool outlined;
+  const _Badge({required this.text, required this.color, this.outlined = false});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color,
+        color: outlined ? Colors.transparent : color,
         borderRadius: BorderRadius.circular(6),
+        border: outlined ? Border.all(color: Colors.grey) : null,
       ),
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: outlined ? Colors.grey : Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }
@@ -1057,7 +1113,10 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
               children: [
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('대체 일정', style: TextStyle(color: Colors.white70)),
+                  child: Text(
+                    widget.item.overrideType == OverrideType.add ? '날짜' : '보강 일정',
+                    style: TextStyle(color: Colors.white70),
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Row(
