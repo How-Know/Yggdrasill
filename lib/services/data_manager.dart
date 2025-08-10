@@ -1169,12 +1169,19 @@ class DataManager {
     
     if (existing != null) {
       print('[DEBUG] 기존 출석 기록 업데이트 - ID: ${existing.id}');
-      // 업데이트
-      final updated = existing.copyWith(
+      // copyWith는 null로 덮어쓰지 못하므로 명시적으로 새 레코드를 구성한다
+      final updated = AttendanceRecord(
+        id: existing.id,
+        studentId: existing.studentId,
+        classDateTime: existing.classDateTime,
+        classEndTime: classEndTime,
+        className: className,
         isPresent: isPresent,
-        arrivalTime: arrivalTime,
-        departureTime: departureTime,
+        arrivalTime: arrivalTime, // null 허용(명시적 클리어)
+        departureTime: departureTime, // null 허용(명시적 클리어)
         notes: notes,
+        createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
       );
       await updateAttendanceRecord(updated);
       // 보강 planned → completed 자동 연결 시도 (replace/add 대상)
@@ -1285,7 +1292,16 @@ class DataManager {
     // 모든 학생의 수업 시간 블록을 확인
     for (final student in _studentsWithInfo) {
       final studentId = student.student.id;
-          final registrationDate = DateTime.now().subtract(Duration(days: 30)); // 기본 30일 전부터
+      // 백필 시작일: 학생 등록일(자정) 기준, 없으면 안전 기본값(30일 전)
+      final DateTime todayStart = DateTime(now.year, now.month, now.day);
+      final DateTime registrationStart = student.basicInfo.registrationDate != null
+          ? DateTime(
+              student.basicInfo.registrationDate!.year,
+              student.basicInfo.registrationDate!.month,
+              student.basicInfo.registrationDate!.day,
+            )
+          : todayStart.subtract(const Duration(days: 30));
+      final DateTime registrationDate = registrationStart;
 
       // 해당 학생의 time blocks 가져오기
       final timeBlocks = studentTimeBlocks

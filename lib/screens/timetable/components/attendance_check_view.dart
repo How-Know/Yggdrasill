@@ -179,16 +179,68 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         return StatefulBuilder(
           builder: (context, setLocalState) {
             final sessions = _allSessions.isNotEmpty ? _allSessions : _classSessions;
+            final ScrollController _listController = ScrollController();
+            Future<void> _selectMonthAndJump() async {
+              final DateTime now = DateTime.now();
+              final DateTime? picked = await showDatePicker(
+                context: context,
+                initialDate: DateTime(now.year, now.month, 1),
+                firstDate: DateTime(now.year - 5, 1, 1),
+                lastDate: DateTime(now.year + 5, 12, 31),
+                locale: const Locale('ko', 'KR'),
+                builder: (context, child) {
+                  return Theme(
+                    data: Theme.of(context).copyWith(
+                      colorScheme: const ColorScheme.dark(
+                        primary: Color(0xFF1976D2),
+                        onPrimary: Colors.white,
+                        surface: Color(0xFF2A2A2A),
+                        onSurface: Colors.white,
+                      ),
+                    ),
+                    child: child!,
+                  );
+                },
+              );
+              if (picked == null) return;
+              final int targetIndex = sessions.indexWhere((s) =>
+                  s.dateTime.year == picked.year && s.dateTime.month == picked.month);
+              if (targetIndex == -1) return;
+              const double separatorHeight = 12.0;
+              final double offset = targetIndex * (itemHeight + separatorHeight);
+              if (_listController.hasClients) {
+                _listController.animateTo(
+                  offset,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                );
+              }
+            }
             return AlertDialog(
               backgroundColor: const Color(0xFF1F1F1F),
               contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
-              title: const Text('수업 일정', style: TextStyle(color: Colors.white)),
+              title: Row(
+                children: [
+                  const Text('수업 일정', style: TextStyle(color: Colors.white)),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _selectMonthAndJump,
+                    icon: const Icon(Icons.event, color: Colors.white70, size: 18),
+                    label: const Text('년월 이동', style: TextStyle(color: Colors.white70)),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      foregroundColor: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
               content: SizedBox(
                 width: 560,
                 height: dialogHeight,
                 child: Scrollbar(
                   thumbVisibility: true,
                   child: ListView.separated(
+                    controller: _listController,
                     itemCount: sessions.length,
                     separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
                     itemBuilder: (context, idx) {
@@ -230,15 +282,19 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                tapDownPosition!.dy,
                              ),
                              color: const Color(0xFF1F1F1F),
-                             items: isReplacement
-                                 ? [
-                                     _menuItem('replacement_change', '보강시간 변경'),
-                                     _menuItem('replacement_cancel', '보강 취소'),
-                                   ]
-                                 : [
-                                     _menuItem('replace', '이번 회차만 변경'),
-                                     _menuItem('skip', '이번 회차 건너뛰기'),
-                                   ],
+                              items: isReplacement
+                                  ? [
+                                      _menuItem('replacement_change', '보강시간 변경'),
+                                      _menuItem('replacement_cancel', '보강 취소'),
+                                    ]
+                                  : (isGhost && _hasSkipOverrideFor(s))
+                                      ? [
+                                          _menuItem('skip_cancel', '휴강 취소'),
+                                        ]
+                                      : [
+                                          _menuItem('replace', '이번 회차만 변경'),
+                                          _menuItem('skip', '이번 회차 건너뛰기'),
+                                        ],
                            );
                            if (selected == null) return;
                            if (isReplacement) {
@@ -255,7 +311,17 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                              }
                              return;
                            }
-                           if (selected == 'replace') {
+                            if (isGhost && _hasSkipOverrideFor(s)) {
+                              if (selected == 'skip_cancel') {
+                                await _confirmAndCancelSkip(s);
+                              }
+                              await Future.delayed(const Duration(milliseconds: 10));
+                              if (mounted) {
+                                setState(() {});
+                                setLocalState(() {});
+                              }
+                              return;
+                            } else if (selected == 'replace') {
                              final isPast = s.dateTime.isBefore(now);
                              final hasAttendance = s.attendanceStatus == AttendanceStatus.arrived || s.attendanceStatus == AttendanceStatus.completed;
                              if (isPast && hasAttendance) {
@@ -302,6 +368,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                       if (isReplacement) ...[
                                         const SizedBox(width: 8),
                                         _buildSmallBadge('보강', const Color(0xFF1976D2)),
+                                      ] else if (isGhost && _hasSkipOverrideFor(s)) ...[
+                                        const SizedBox(width: 8),
+                                        _buildSmallBadge('휴강', Colors.black),
                                       ],
                                     ],
                                   ),
@@ -2059,15 +2128,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                   padding: const EdgeInsets.only(right: 6),
                   child: _buildSmallBadge('보강', const Color(0xFF1976D2)),
                 ),
-              if (isGhost)
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: _buildSmallBadge('원래', Colors.white24),
-                ),
               if (!isReplacement && isGhost && _hasSkipOverrideFor(session))
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
-                  child: _buildSmallBadge('휴강', const Color(0xFFE53935)),
+                  child: _buildSmallBadge('휴강', Colors.black),
                 ),
               Text(
                 '${session.dateTime.month}/${session.dateTime.day} ${session.dayOfWeek}',
@@ -2110,7 +2174,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     );
     
     // 카드 탭으로 메뉴 열기 (버튼 제거 대체)
-    final bool canShowMenu = !isGhost && !isPast;
+    // 기본: 원본 카드만 메뉴 허용. 단, 휴강 고스트 카드는 미래 일정에 한해 '휴강 취소' 허용
+    final bool isSkipGhost = !isReplacement && isGhost && _hasSkipOverrideFor(session);
+    final bool canShowMenu = (!isGhost && !isPast) || (isSkipGhost && !isPast);
     Offset? tapDownPosition;
     // 카드(1~3행)만 탭 영역으로, 체크박스(4행)는 카드 아래에 분리된 영역
     final interactive = Container(
@@ -2139,10 +2205,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                           _menuItem('replacement_change', '보강시간 변경'),
                           _menuItem('replacement_cancel', '보강 취소'),
                         ]
-                      : [
-                          _menuItem('replace', '이번 회차만 변경'),
-                          _menuItem('skip', '이번 회차 건너뛰기'),
-                        ],
+                      : isSkipGhost
+                          ? [
+                              _menuItem('skip_cancel', '휴강 취소'),
+                            ]
+                          : [
+                              _menuItem('replace', '이번 회차만 변경'),
+                              _menuItem('skip', '이번 회차 건너뛰기'),
+                            ],
                 );
                 if (selected == null) return;
                 if (isReplacement) {
@@ -2152,6 +2222,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                     await _confirmAndCancelReplacement(session);
                   }
                   // UI 즉시 반영
+                  await Future.delayed(const Duration(milliseconds: 10));
+                  if (mounted) setState(() {});
+                  return;
+                }
+                if (isSkipGhost) {
+                  if (selected == 'skip_cancel') {
+                    await _confirmAndCancelSkip(session);
+                  }
                   await Future.delayed(const Duration(milliseconds: 10));
                   if (mounted) setState(() {});
                   return;
@@ -2441,6 +2519,48 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     return false;
   }
 
+  Future<void> _confirmAndCancelSkip(ClassSession ghostSession) async {
+    // 과거 일정은 취소 불가
+    if (ghostSession.dateTime.isBefore(DateTime.now())) {
+      await _showInfoDialog('이미 지난 일정의 휴강은 취소할 수 없습니다.');
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        title: const Text('휴강 취소', style: TextStyle(color: Colors.white)),
+        content: const Text('이 회차의 휴강을 취소하고 원래 일정을 복구할까요?', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('아니오', style: TextStyle(color: Colors.white70))),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('예', style: TextStyle(color: Colors.white))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final sid = widget.selectedStudent!.student.id;
+    final overrides = DataManager.instance.getSessionOverridesForStudent(sid);
+    final target = overrides.firstWhere(
+      (o) => o.overrideType == OverrideType.skip &&
+             o.status == OverrideStatus.planned &&
+             o.originalClassDateTime != null &&
+             o.originalClassDateTime!.isAtSameMomentAs(ghostSession.dateTime),
+      orElse: () => null as SessionOverride,
+    );
+    if (target == null) {
+      await _showInfoDialog('취소할 휴강을 찾지 못했습니다.');
+      return;
+    }
+    await DataManager.instance.cancelSessionOverride(target.id);
+    if (mounted) {
+      await Future.delayed(const Duration(milliseconds: 50));
+      _loadClassSessions();
+      setState(() {});
+    }
+  }
+
   PopupMenuItem<String> _menuItem(String value, String text) {
     return PopupMenuItem<String>(
       value: value,
@@ -2470,6 +2590,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   Future<void> _applySkipOverride(ClassSession session) async {
     try {
       final studentId = widget.selectedStudent!.student.id;
+      final isPast = session.dateTime.isBefore(DateTime.now());
       final ov = SessionOverride(
         studentId: studentId,
         overrideType: OverrideType.skip,
@@ -2479,6 +2600,21 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         reason: OverrideReason.makeup,
       );
       await DataManager.instance.addSessionOverride(ov);
+      if (isPast) {
+        // 과거 회차의 휴강: 기존 출석 기록이 있으면 제거하여 상태를 비움
+        final existing = DataManager.instance.getAttendanceRecord(studentId, session.dateTime);
+        if (existing != null && existing.id != null) {
+          await DataManager.instance.deleteAttendanceRecord(existing.id!);
+        }
+        // 과거 회차의 휴강은 취소 불가 안내
+        await _showInfoDialog('이미 지난 수업의 휴강은 취소할 수 없습니다.');
+      }
+      // 즉시 UI에 반영
+      if (mounted) {
+        await Future.delayed(const Duration(milliseconds: 30));
+        _loadClassSessions();
+        setState(() {});
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('이번 회차가 건너뛰기로 설정되었습니다.'),
@@ -2959,26 +3095,28 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         final classEndTime = session.dateTime.add(Duration(minutes: session.duration));
         
         if (result['action'] == 'delete') {
-          // 출석 해제 - 기록 자체를 삭제하여 '미기록' 상태로 복귀
-          final existing = DataManager.instance.getAttendanceRecord(
-            widget.selectedStudent!.student.id,
-            session.dateTime,
+          // 출석 해제 - 무단결석으로 변경
+          await DataManager.instance.saveOrUpdateAttendance(
+            studentId: widget.selectedStudent!.student.id,
+            classDateTime: session.dateTime,
+            classEndTime: classEndTime,
+            className: session.className,
+            isPresent: false,
+            arrivalTime: null,
+            departureTime: null,
           );
-          if (existing != null && existing.id != null) {
-            await DataManager.instance.deleteAttendanceRecord(existing.id!);
-          }
 
           setState(() {
             session.isAttended = false;
             session.arrivalTime = null;
             session.departureTime = null;
-            session.attendanceStatus = AttendanceStatus.none;
+            session.attendanceStatus = AttendanceStatus.absent;
           });
 
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('출석이 해제되어 미기록으로 변경되었습니다.'),
-              backgroundColor: Color(0xFF757575),
+              content: Text('출석이 해제되어 무단결석으로 변경되었습니다.'),
+              backgroundColor: Color(0xFFE53E3E),
               duration: Duration(milliseconds: 1500),
             ),
           );
@@ -3237,16 +3375,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                       ],
                     ),
                     const Spacer(),
-                    // 리스트 버튼 (다이얼로그)
+                    // 리스트 버튼 (다이얼로그) - 크기 10% 키움
                     TextButton.icon(
                       onPressed: () => _showSessionListDialog(),
                       style: TextButton.styleFrom(
                         foregroundColor: Colors.white70,
-                        backgroundColor: const Color(0xFF2A2A2A),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.white24)),
+                        padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
                       ),
-                      icon: const Icon(Icons.view_list, size: 18, color: Colors.white70),
+                      icon: const Icon(Icons.list, size: 19.8, color: Colors.white70),
                       label: const Text('리스트', style: TextStyle(color: Colors.white70)),
                     ),
                   ],
