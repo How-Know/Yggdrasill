@@ -184,13 +184,25 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         children: [
                           Padding(
                             padding: const EdgeInsets.only(left: 0),
-                            child: Text(
-                              '학생 리스트',
-                              style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 27,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            child: Row(
+                              children: [
+                                Text(
+                                  '학생 리스트',
+                                  style: TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 27,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  ' ${widget.students.length}명',
+                                  style: const TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 20, // 타이틀보다 3pt 작게
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           Padding(

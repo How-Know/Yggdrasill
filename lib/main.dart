@@ -216,6 +216,8 @@ class _GlobalMemoFloatingBanners extends StatefulWidget {
 
 class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> {
   Timer? _ticker;
+  // 세션 내에서만 유지되는 닫힘 기록 (앱 재시작 시 초기화)
+  final Set<String> _sessionDismissed = <String>{};
 
   @override
   void initState() {
@@ -245,7 +247,7 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
           final now = DateTime.now();
           // 일정 시간이 도래(또는 지남)했고 닫지 않은 메모만 표시
           final upcoming = memos
-              .where((m) => m.scheduledAt != null && !m.dismissed && _isSameDay(m.scheduledAt!, now))
+              .where((m) => m.scheduledAt != null && !m.dismissed && !_sessionDismissed.contains(m.id) && _isSameDay(m.scheduledAt!, now))
               .toList()
             ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
           if (upcoming.isEmpty) return const SizedBox.shrink();
@@ -256,7 +258,15 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: upcoming.take(3).map((m) {
-              return _MemoBanner(memo: m);
+              return _MemoBanner(
+                memo: m,
+                onClose: () async {
+                  // X 클릭 시: DB flag는 유지(dismissed=false)하고 세션만 닫음
+                  setState(() {
+                    _sessionDismissed.add(m.id);
+                  });
+                },
+              );
             }).toList(),
             ),
           );
@@ -606,7 +616,8 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
 
 class _MemoBanner extends StatelessWidget {
   final Memo memo;
-  const _MemoBanner({required this.memo});
+  final VoidCallback? onClose;
+  const _MemoBanner({required this.memo, this.onClose});
 
   @override
   Widget build(BuildContext context) {
@@ -648,10 +659,7 @@ class _MemoBanner extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           InkWell(
-            onTap: () async {
-              final updated = memo.copyWith(dismissed: true, updatedAt: DateTime.now());
-              await DataManager.instance.updateMemo(updated);
-            },
+            onTap: onClose,
             child: const Padding(
               padding: EdgeInsets.all(4.0),
               child: Icon(Icons.close, color: Colors.white54, size: 18),
