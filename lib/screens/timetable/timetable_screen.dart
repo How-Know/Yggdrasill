@@ -1159,10 +1159,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             duration: Duration(minutes: blockMinutes),
                           );
                           print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
-                          for (final block in blocks) {
-                            print('[DEBUG][onCellStudentsSelected] addStudentTimeBlock 호출: ${block.toJson()}');
-                            await DataManager.instance.addStudentTimeBlock(block);
-                          }
+                          // 한번에 추가하여 UI가 동시에 갱신되도록 처리
+                          await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
                           print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
                           await DataManager.instance.loadStudentTimeBlocks();
                           final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
@@ -1438,10 +1436,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     duration: Duration(minutes: blockMinutes),
                   );
                   print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
-                  for (final block in blocks) {
-                    print('[DEBUG][onCellStudentsSelected] 클릭 등록 addStudentTimeBlock 호출: ${block.toJson()}');
-                    await DataManager.instance.addStudentTimeBlock(block);
-                  }
+                  // 한번에 추가하여 UI가 동시에 갱신되도록 처리
+                  await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
                   print('[DEBUG][onCellStudentsSelected] 클릭 등록 loadStudentTimeBlocks 호출');
                   await DataManager.instance.loadStudentTimeBlocks();
                   final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();

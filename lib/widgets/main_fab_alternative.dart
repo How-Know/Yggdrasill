@@ -21,6 +21,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   bool _isFabExpanded = false;
   double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
+  OverlayEntry? _menuOverlay; // FAB 확장 시 드롭다운 버튼을 오버레이로 표시
 
   @override
   void initState() {
@@ -99,6 +100,74 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     });
   }
 
+  void _insertMenuOverlay(BuildContext context) {
+    _menuOverlay?.remove();
+    _menuOverlay = OverlayEntry(
+      builder: (ctx) {
+        // FAB 위치 기준: 오른쪽 16, 아래쪽(_fabBottomPadding + FAB 높이 56 + 간격 12)
+        final double bottomOffset = _fabBottomPadding + 56 + 12;
+        return Positioned(
+          right: 16,
+          bottom: bottomOffset,
+          child: IgnorePointer(
+            ignoring: !_isFabExpanded,
+            child: Material(
+              color: Colors.transparent,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // 위에서부터: 상담 -> 보강 -> 수강
+                  _buildMenuButton(
+                    label: '상담',
+                    icon: Icons.chat_outlined,
+                    slideAnimation: _slideAnimation3,
+                    onTap: () {
+                      _showFloatingSnackBar(context, '상담 기능');
+                    },
+                  ),
+                  _buildMenuButton(
+                    label: '보강',
+                    icon: Icons.event_repeat_rounded,
+                    slideAnimation: _slideAnimation2,
+                    onTap: () {
+                      _showFloatingSnackBar(context, '보강 기능');
+                    },
+                  ),
+                  _buildMenuButton(
+                    label: '수강',
+                    icon: Icons.credit_card,
+                    slideAnimation: _slideAnimation1,
+                    onTap: () {
+                      showDialog(
+                        context: context,
+                        builder: (context) => PaymentManagementDialog(
+                          onClose: () {
+                            setState(() {
+                              _isFabExpanded = false;
+                              _fabController.reverse();
+                              _removeMenuOverlay();
+                            });
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    Overlay.of(context).insert(_menuOverlay!);
+  }
+
+  void _removeMenuOverlay() {
+    _menuOverlay?.remove();
+    _menuOverlay = null;
+  }
+
   Widget _buildMenuButton({
     required String label,
     required IconData icon,
@@ -158,45 +227,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (_isFabExpanded) ...[
-            // 🎯 아래에서 위로 튀어나오는 메뉴 버튼들 (위에서부터: 상담 -> 보강 -> 수강)
-            _buildMenuButton(
-              label: '상담',
-              icon: Icons.chat_outlined,
-              slideAnimation: _slideAnimation3, // 마지막에 나타남 (가장 위)
-              onTap: () {
-                _showFloatingSnackBar(context, '상담 기능');
-              },
-            ),
-            _buildMenuButton(
-              label: '보강',
-              icon: Icons.event_repeat_rounded,
-              slideAnimation: _slideAnimation2, // 두 번째로 나타남 (중간)
-              onTap: () {
-                _showFloatingSnackBar(context, '보강 기능');
-              },
-            ),
-            _buildMenuButton(
-              label: '수강',
-              icon: Icons.credit_card, // 💳 신용카드(결제) 아이콘으로 변경
-              slideAnimation: _slideAnimation1, // 첫 번째로 나타남 (가장 아래)
-              onTap: () {
-                // 🎯 결제 관리 다이얼로그 표시
-                showDialog(
-                  context: context,
-                  builder: (context) => PaymentManagementDialog(
-                    onClose: () {
-                      // 다이얼로그 닫힐 때 FAB도 접기
-                      setState(() {
-                        _isFabExpanded = false;
-                        _fabController.reverse();
-                      });
-                    },
-                  ),
-                );
-              },
-            ),
-          ],
+          // 메뉴 버튼들은 오버레이에서 렌더링 (항상 최상단)
           // 🎯 메인 FAB 버튼 (직사각형 -> 원형 모양 변화)
           AnimatedBuilder(
             animation: _fabController,
@@ -207,8 +238,10 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     _isFabExpanded = !_isFabExpanded;
                     if (_isFabExpanded) {
                       _fabController.forward();
+                      _insertMenuOverlay(context);
                     } else {
                       _fabController.reverse();
+                      _removeMenuOverlay();
                     }
                   });
                 },

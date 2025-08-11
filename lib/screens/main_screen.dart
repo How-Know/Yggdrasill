@@ -12,9 +12,11 @@ import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
 import '../models/class_info.dart';
+import '../models/session_override.dart';
 import '../models/student_time_block.dart';
 import 'dart:collection';
 import '../models/education_level.dart';
+import 'package:collection/collection.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -63,7 +65,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         setMap.putIfAbsent(b.setId!, () => []).add(b);
       }
     }
-    final result = <_AttendanceTarget>[];
+    final Map<String, _AttendanceTarget> byKey = {}; // key -> target
     for (final entry in setMap.entries) {
       final block = entry.value.first;
       final studentList = DataManager.instance.students
@@ -77,18 +79,53 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           : [];
       final ClassInfo? classInfo = classList.isNotEmpty ? classList.first : null;
       if (student != null) {
-        result.add(_AttendanceTarget(
+        final key = '${student.student.id}@${now.year}-${now.month}-${now.day} ${block.startHour}:${block.startMinute}';
+        byKey[key] = _AttendanceTarget(
           setId: entry.key,
           student: student.student,
           classInfo: classInfo,
           startHour: block.startHour,
           startMinute: block.startMinute,
           duration: block.duration,
-        ));
+          overrideType: null,
+        );
       }
     }
+
+    // 보강/추가수업(오버라이드)도 대상에 포함: 오늘 날짜의 replacementClassDateTime 기준
+    final overrides = DataManager.instance.sessionOverridesNotifier.value;
+    for (final ov in overrides) {
+      if (ov.status == OverrideStatus.canceled) continue;
+      if (ov.reason != OverrideReason.makeup) continue; // 보강만 대상
+      if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+      final repl = ov.replacementClassDateTime;
+      if (repl == null) continue;
+      if (!(repl.year == now.year && repl.month == now.month && repl.day == now.day)) continue;
+
+      // 학생/수업 조회
+      final student = DataManager.instance.students.firstWhereOrNull((s) => s.student.id == ov.studentId);
+      if (student == null) continue;
+      final ClassInfo? classInfo = ov.sessionTypeId != null
+          ? DataManager.instance.classes.firstWhereOrNull((c) => c.id == ov.sessionTypeId)
+          : null;
+
+      final startHour = repl.hour;
+      final startMinute = repl.minute;
+      final duration = Duration(minutes: ov.durationMinutes ?? DataManager.instance.academySettings.lessonDuration);
+      final key = '${ov.studentId}@${repl.year}-${repl.month}-${repl.day} ${startHour}:${startMinute}';
+      // 보강/추가수업이 같은 학생/시간이면 override로 대체하여 언더라인 표시
+      byKey[key] = _AttendanceTarget(
+        setId: ov.id, // 고유 식별자로 사용
+        student: student.student,
+        classInfo: classInfo,
+        startHour: startHour,
+        startMinute: startMinute,
+        duration: duration,
+        overrideType: ov.overrideType,
+      );
+    }
     // 시작시간 기준 정렬
-    result.sort((a, b) => a.startTime.compareTo(b.startTime));
+    final result = byKey.values.toList()..sort((a, b) => a.startTime.compareTo(b.startTime));
     return result;
   }
 
@@ -325,7 +362,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final attendanceTargets = getTodayAttendanceTargets();
               // 상태별 분류
               final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
-              final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
+              final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList()
+                ..sort((a, b) {
+                  final ta = _attendTimes[a.setId];
+                  final tb = _attendTimes[b.setId];
+                  if (ta == null && tb == null) return 0;
+                  if (ta == null) return 1; // 시간이 없는 항목은 뒤로
+                  if (tb == null) return -1;
+                  return ta.compareTo(tb); // 이른 등원 시간이 위로
+                });
               final waiting = attendanceTargets.where((t) => !_attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
               // 출석 전 학생카드: 시작시간별 그룹핑
               final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
@@ -472,55 +517,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           spacing: _cardSpacing,
                                           runSpacing: _cardSpacing,
                                           children: entry.value
-                                              .map((t) => GestureDetector(
-                                                    onTap: () async {
-                                                      final now = DateTime.now();
-                                                      setState(() {
-                                                        _attendedSetIds.add(t.setId);
-                                                        _attendTimes[t.setId] = now;
-                                                      });
-                                                      
-                                                      // 출석 기록 생성
-                                                      try {
-                                                        final today = DateTime(now.year, now.month, now.day);
-                                                        final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
-                                                        
-                                                        await DataManager.instance.saveOrUpdateAttendance(
-                                                          studentId: t.student.id,
-                                                          classDateTime: classDateTime,
-                                                          classEndTime: classDateTime.add(t.duration),
-                                                          className: t.classInfo?.name ?? '수업',
-                                                          isPresent: true,
-                                                          arrivalTime: now,
-                                                        );
-                                                      } catch (e) {
-                                                        print('[ERROR] 등원 체크 출석 기록 실패: $e');
-                                                      }
-                                                    },
-                                                    child: MouseRegion(
-                                                      onEnter: (event) {
-                                                        final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-                                                        final offset = overlay.globalToLocal(event.position);
-                                                        String tooltip = '${t.student.school}\n${_MainScreenState._educationLevelToKorean(t.student.educationLevel)} / ${t.student.grade}학년';
-                                                        _showTooltip(offset, tooltip);
-                                                      },
-                                                      onExit: (_) => _removeTooltip(),
-                                                      child: AnimatedContainer(
-                                                        duration: const Duration(milliseconds: 200),
-                                                        margin: EdgeInsets.zero,
-                                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.transparent,
-                                                          border: Border.all(color: Colors.grey, width: 2),
-                                                          borderRadius: BorderRadius.circular(25),
-                                                        ),
-                                                        child: Text(
-                                                          t.student.name,
-                                                          style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ))
+                                              .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}')))
                                               .toList(),
                                         ),
                                       ),
@@ -576,24 +573,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key}) {
     Color borderColor;
     Color textColor = Colors.white70;
-    Widget child;
+    Widget nameWidget;
+    // 밑줄 색상 결정 (보강=파란색, 추가수업=초록색)
+    final Color? underlineColor = t.overrideType == OverrideType.replace
+        ? const Color(0xFF1976D2)
+        : (t.overrideType == OverrideType.add ? const Color(0xFF4CAF50) : null);
     switch (status) {
       case 'attended':
         borderColor = t.classInfo?.color ?? const Color(0xFF0F467D);
         textColor = Colors.white.withOpacity(0.9); // 파란네모 안은 톤을 살짝 낮춘 흰색
-        child = Text(
+        nameWidget = Text(
           t.student.name,
           style: TextStyle(
             color: textColor,
             fontSize: 16,
             fontWeight: FontWeight.w500,
+            decoration: underlineColor != null ? TextDecoration.underline : null,
+            decorationColor: underlineColor,
+            decorationThickness: underlineColor != null ? 2 : null,
           ),
         );
         break;
       case 'leaved':
         borderColor = Colors.grey.shade700;
         textColor = Colors.white70;
-        child = MouseRegion(
+        nameWidget = MouseRegion(
           onEnter: (event) {
             final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
             final offset = overlay.globalToLocal(event.position);
@@ -613,18 +617,34 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           onExit: (_) => _removeTooltip(),
           child: Text(
             t.student.name,
-            style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              color: textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              decoration: underlineColor != null ? TextDecoration.underline : null,
+              decorationColor: underlineColor,
+              decorationThickness: underlineColor != null ? 2 : null,
+            ),
           ),
         );
         break;
       default:
         borderColor = Colors.grey;
         textColor = Colors.white70;
-        child = Text(
+        nameWidget = Text(
           t.student.name,
-          style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
+          style: TextStyle(
+            color: textColor,
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            decoration: underlineColor != null ? TextDecoration.underline : null,
+            decorationColor: underlineColor,
+            decorationThickness: underlineColor != null ? 2 : null,
+          ),
         );
     }
+    // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
+    final Widget child = nameWidget;
     return GestureDetector(
       key: key,
       onTap: () async {
@@ -689,7 +709,8 @@ class _AttendanceTarget {
   final int startHour;
   final int startMinute;
   final Duration duration;
-  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute, required this.duration});
+  final OverrideType? overrideType; // null이면 일반 수업, replace=보강(파란줄), add=추가수업(초록줄)
+  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute, required this.duration, this.overrideType});
 
   DateTime get startTime => DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, startHour, startMinute);
 }
