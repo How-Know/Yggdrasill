@@ -3446,6 +3446,158 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   }
 }
 
+// 공개 유틸: 출석 시간 수정 다이얼로그 (학생 화면 등 외부에서도 사용 가능)
+Future<void> showAttendanceEditDialog({
+  required BuildContext context,
+  required String studentId,
+  required DateTime classDateTime,
+  required int durationMinutes,
+  required String className,
+}) async {
+  DateTime selectedDate = classDateTime;
+  TimeOfDay selectedArrivalTime = TimeOfDay.fromDateTime(classDateTime);
+  TimeOfDay selectedDepartureTime = TimeOfDay.fromDateTime(
+    classDateTime.add(Duration(minutes: durationMinutes)),
+  );
+
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1F1F1F),
+            title: const Text('출석 시간 수정', style: TextStyle(color: Colors.white, fontSize: 18)),
+            content: SizedBox(
+              width: 300,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.calendar_today, color: Colors.white70),
+                    title: Text(
+                      '날짜: ${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    onTap: () async {
+                      final DateTime? picked = await showDatePicker(
+                        context: context,
+                        initialDate: selectedDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                        builder: (BuildContext context, Widget? child) {
+                          return Theme(
+                            data: Theme.of(context).copyWith(
+                              colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                              dialogBackgroundColor: const Color(0xFF18181A),
+                            ),
+                            child: child!,
+                          );
+                        },
+                      );
+                      if (picked != null) {
+                        setDialogState(() {
+                          selectedDate = DateTime(
+                            picked.year,
+                            picked.month,
+                            picked.day,
+                            selectedDate.hour,
+                            selectedDate.minute,
+                          );
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  ListTile(
+                    leading: const Icon(Icons.login, color: Colors.white70),
+                    title: Text('등원 시간: ${selectedArrivalTime.format(context)}', style: const TextStyle(color: Colors.white)),
+                    onTap: () async {
+                      final TimeOfDay? picked = await showTimePicker(
+                        context: context,
+                        initialTime: selectedArrivalTime,
+                        builder: (context, child) => Theme(
+                          data: Theme.of(context).copyWith(
+                            colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                            dialogBackgroundColor: const Color(0xFF18181A),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) setDialogState(() => selectedArrivalTime = picked);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    leading: const Icon(Icons.logout, color: Colors.white70),
+                    title: Text('하원 시간: ${selectedDepartureTime.format(context)}', style: const TextStyle(color: Colors.white)),
+                    onTap: () async {
+                      final TimeOfDay? picked = await showTimePicker(
+                        context: context,
+                        initialTime: selectedDepartureTime,
+                        builder: (context, child) => Theme(
+                          data: Theme.of(context).copyWith(
+                            colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                            dialogBackgroundColor: const Color(0xFF18181A),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) setDialogState(() => selectedDepartureTime = picked);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('취소', style: TextStyle(color: Colors.grey))),
+              TextButton(onPressed: () => Navigator.of(context).pop({'action': 'delete'}), child: const Text('출석 해제', style: TextStyle(color: Color(0xFFE53E3E)))),
+              TextButton(
+                onPressed: () {
+                  final arrivalDateTime = DateTime(
+                    selectedDate.year, selectedDate.month, selectedDate.day, selectedArrivalTime.hour, selectedArrivalTime.minute,
+                  );
+                  final departureDateTime = DateTime(
+                    selectedDate.year, selectedDate.month, selectedDate.day, selectedDepartureTime.hour, selectedDepartureTime.minute,
+                  );
+                  Navigator.of(context).pop({'action': 'update', 'arrivalTime': arrivalDateTime, 'departureTime': departureDateTime});
+                },
+                child: const Text('확인', style: TextStyle(color: Color(0xFF1976D2))),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+
+  if (result != null) {
+    final classEndTime = classDateTime.add(Duration(minutes: durationMinutes));
+    if (result['action'] == 'delete') {
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: studentId,
+        classDateTime: classDateTime,
+        classEndTime: classEndTime,
+        className: className,
+        isPresent: false,
+        arrivalTime: null,
+        departureTime: null,
+      );
+    } else {
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: studentId,
+        classDateTime: classDateTime,
+        classEndTime: classEndTime,
+        className: className,
+        isPresent: true,
+        arrivalTime: result['arrivalTime'],
+        departureTime: result['departureTime'],
+      );
+    }
+  }
+
+}
+
 enum AttendanceStatus {
   none,       // 기록 없음
   arrived,    // 등원만 완료

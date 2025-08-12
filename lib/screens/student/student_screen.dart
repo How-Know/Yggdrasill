@@ -772,14 +772,17 @@ class StudentScreenState extends State<StudentScreen> {
   
   // 초기 대시보드(학생 미선택시): 어제 출결, 오늘 출결, 이번달 납입, 오늘 납입 + 하단 리스트
   Widget _buildInitialDashboard() {
-    final DateTime now = DateTime.now();
-    final DateTime todayStart = DateTime(now.year, now.month, now.day);
-    final DateTime todayEnd = todayStart.add(const Duration(days: 1));
-    final DateTime yesterdayStart = todayStart.subtract(const Duration(days: 1));
-    final DateTime yesterdayEnd = todayStart;
+    return ValueListenableBuilder<List<AttendanceRecord>>(
+      valueListenable: DataManager.instance.attendanceRecordsNotifier,
+      builder: (context, _records, __) {
+        final DateTime now = DateTime.now();
+        final DateTime todayStart = DateTime(now.year, now.month, now.day);
+        final DateTime todayEnd = todayStart.add(const Duration(days: 1));
+        final DateTime yesterdayStart = todayStart.subtract(const Duration(days: 1));
+        final DateTime yesterdayEnd = todayStart;
 
-    // 전체 학생 기준 요약 (삭제된 학생 제외)
-    final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+        // 전체 학생 기준 요약 (삭제된 학생 제외)
+        final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
 
     int yPresent = 0, yLate = 0, yAbsent = 0;
     int tPresent = 0, tLate = 0, tAbsent = 0;
@@ -808,8 +811,8 @@ class StudentScreenState extends State<StudentScreen> {
     }
 
     // 납부 요약(이번달/오늘)
-    final DateTime monthStart = DateTime(now.year, now.month, 1);
-    final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
+        final DateTime monthStart = DateTime(now.year, now.month, 1);
+        final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
     int monthPaid = 0, monthDue = 0, todayPaid = 0, todayDue = 0;
     for (final pr in DataManager.instance.paymentRecords) {
       if (!activeStudentIds.contains(pr.studentId)) continue;
@@ -825,8 +828,8 @@ class StudentScreenState extends State<StudentScreen> {
       }
     }
 
-    Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9)}) {
-      return Container(
+        Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9)}) {
+          return Container(
         margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -845,27 +848,38 @@ class StudentScreenState extends State<StudentScreen> {
             Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 13)),
           ],
         ),
-      );
-    }
+          );
+        }
 
     // 리스트 데이터: 어제/오늘 출석, 이번달/오늘 납입
-    final Map<String, DateTime?> yesterdayAttendanceByStudent = {};
-    final Map<String, DateTime?> todayAttendanceByStudent = {};
-    for (final r in DataManager.instance.attendanceRecords) {
+        final Map<String, _AttendanceInfo> yesterdayAttendanceByStudent = {};
+        final Map<String, _AttendanceInfo> todayAttendanceByStudent = {};
+        for (final r in DataManager.instance.attendanceRecords) {
       if (!activeStudentIds.contains(r.studentId)) continue;
-      if (!r.isPresent) continue;
       final dt = r.classDateTime;
       if (dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd)) {
-        yesterdayAttendanceByStudent[r.studentId] = r.arrivalTime;
+        yesterdayAttendanceByStudent[r.studentId] = _AttendanceInfo(
+          arrival: r.arrivalTime,
+          departure: r.departureTime,
+          isPresent: r.isPresent,
+          isLate: r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(const Duration(minutes: defaultLateMinutes))),
+          classDateTime: r.classDateTime,
+        );
       } else if (dt.isAfter(todayStart) && dt.isBefore(todayEnd)) {
-        todayAttendanceByStudent[r.studentId] = r.arrivalTime;
+        todayAttendanceByStudent[r.studentId] = _AttendanceInfo(
+          arrival: r.arrivalTime,
+          departure: r.departureTime,
+          isPresent: r.isPresent,
+          isLate: r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(const Duration(minutes: defaultLateMinutes))),
+          classDateTime: r.classDateTime,
+        );
       }
     }
 
     // 위에서 선언한 monthStart/nextMonthStart 재사용
-    final Map<String, DateTime> monthPaidByStudent = {};
-    final Map<String, DateTime> todayPaidByStudent = {};
-    for (final pr in DataManager.instance.paymentRecords) {
+        final Map<String, DateTime> monthPaidByStudent = {};
+        final Map<String, DateTime> todayPaidByStudent = {};
+        for (final pr in DataManager.instance.paymentRecords) {
       if (!activeStudentIds.contains(pr.studentId)) continue;
       if (pr.paidDate == null) continue;
       final paid = pr.paidDate!;
@@ -877,16 +891,16 @@ class StudentScreenState extends State<StudentScreen> {
       }
     }
 
-    String _nameOf(String studentId) {
-      try {
-        return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
-      } catch (_) {
-        return studentId;
-      }
-    }
+        String _nameOf(String studentId) {
+          try {
+            return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+          } catch (_) {
+            return studentId;
+          }
+        }
 
-    Widget _simpleRow(String left, String right) {
-      return Container(
+        Widget _simpleRow(String left, Widget rightWidget) {
+          return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: const Color(0xFF1F1F1F),
@@ -896,16 +910,16 @@ class StudentScreenState extends State<StudentScreen> {
         child: Row(
           children: [
             Expanded(child: Text(left, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
-            Text(right, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                rightWidget,
           ],
         ),
-      );
-    }
+          );
+        }
 
     // 각 타일별 개별 리스트를 같은 칼럼에 배치
-    Widget listFor(Map<String, DateTime?> data, {required bool isAttendance}) {
-      // 부모 컨테이너(타일과 동일 너비/여백)로 래핑하여 너비 일치
-      return Container(
+        Widget listFor(Map<String, _AttendanceInfo> data, {required bool isAttendance}) {
+          // 부모 컨테이너(타일과 동일 너비/여백)로 래핑하여 너비 일치
+          return Container(
         margin: const EdgeInsets.symmetric(horizontal: 10),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -921,31 +935,56 @@ class StudentScreenState extends State<StudentScreen> {
             : Column(
                 children: data.entries.map((e) {
                   final name = _nameOf(e.key);
-                  final dt = e.value;
-                  String right;
+                  final info = e.value;
+                      Widget rightWidget;
                   if (isAttendance) {
-                    right = dt != null
-                        ? '등원 ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}'
-                        : '등원시간 없음';
+                    if (!info.isPresent) {
+                          rightWidget = const Text('무단결석', style: TextStyle(color: Color(0xFFE53E3E), fontSize: 13, fontWeight: FontWeight.w700));
+                    } else {
+                      final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
+                      final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
+                          rightWidget = RichText(
+                            text: TextSpan(
+                              style: const TextStyle(fontSize: 13),
+                              children: [
+                                TextSpan(text: '등원 $arr · 하원 $dep', style: const TextStyle(color: Colors.white70)),
+                                if (info.isLate) const TextSpan(text: ' · ', style: TextStyle(color: Colors.white70)),
+                                if (info.isLate) const TextSpan(text: '지각', style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w700)),
+                              ],
+                            ),
+                          );
+                    }
                   } else {
                     // 수강료는 날짜만 표시
-                    right = dt != null ? '납부 ${dt.month}/${dt.day}' : '날짜 없음';
+                        rightWidget = Text(
+                          info.arrival != null ? '납부 ${info.arrival!.month}/${info.arrival!.day}' : '날짜 없음',
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        );
                   }
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: _simpleRow(name, right),
+                    child: InkWell(
+                      onTap: isAttendance
+                          ? () async {
+                              // 출석체크 카드의 체크박스 동작과 동일한 액션 연결
+                              // 바로 출석시간 수정/무단결석 토글로 진입
+                              await _jumpToAttendanceEdit(e.key, info.classDateTime, info.isPresent);
+                            }
+                          : null,
+                          child: _simpleRow(name, rightWidget),
+                    ),
                   );
                 }).toList(),
               ),
-      );
-    }
+          );
+        }
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.only(right: 16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -969,7 +1008,19 @@ class StudentScreenState extends State<StudentScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   tile('이번달 납입', '완료 $monthPaid · 예정 $monthDue', '${now.month}월 납부 현황', accent: const Color(0xFF90CAF9)),
-                  listFor(monthPaidByStudent.map((k, v) => MapEntry(k, v)), isAttendance: false),
+                  listFor(
+                    monthPaidByStudent.map((k, v) => MapEntry(
+                      k,
+                      _AttendanceInfo(
+                        arrival: v,
+                        departure: null,
+                        isPresent: true,
+                        isLate: false,
+                        classDateTime: v,
+                      ),
+                    )),
+                    isAttendance: false,
+                  ),
                 ],
               ),
             ),
@@ -978,13 +1029,27 @@ class StudentScreenState extends State<StudentScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   tile('오늘 납입', '완료 $todayPaid · 예정 $todayDue', '오늘(${now.month}/${now.day}) 납부', accent: const Color(0xFF90CAF9)),
-                  listFor(todayPaidByStudent.map((k, v) => MapEntry(k, v)), isAttendance: false),
+                  listFor(
+                    todayPaidByStudent.map((k, v) => MapEntry(
+                      k,
+                      _AttendanceInfo(
+                        arrival: v,
+                        departure: null,
+                        isPresent: true,
+                        isLate: false,
+                        classDateTime: v,
+                      ),
+                    )),
+                    isAttendance: false,
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
   
@@ -2180,6 +2245,47 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => StudentPaymentSettingsDialog(studentWithInfo: studentWithInfo),
     );
   }
+
+  Future<void> _jumpToAttendanceEdit(String studentId, DateTime classDateTime, bool isPresent) async {
+    try {
+      final record = DataManager.instance.getAttendanceRecord(studentId, classDateTime);
+      final int duration = DataManager.instance.academySettings.lessonDuration;
+      final String className = '-';
+      if (record == null || !record.isPresent) {
+        // 무단결석 → 정상 출석(시작~종료)으로 전환
+        await DataManager.instance.saveOrUpdateAttendance(
+          studentId: studentId,
+          classDateTime: classDateTime,
+          classEndTime: classDateTime.add(Duration(minutes: duration)),
+          className: className,
+          isPresent: true,
+          arrivalTime: classDateTime,
+          departureTime: classDateTime.add(Duration(minutes: duration)),
+        );
+      } else {
+        // 출석 있음 → 출석 시간 수정 다이얼로그 (공개 유틸) 호출
+        await showAttendanceEditDialog(
+          context: context,
+          studentId: studentId,
+          classDateTime: classDateTime,
+          durationMinutes: duration,
+          className: className,
+        );
+      }
+    } catch (e) {
+      // noop
+    }
+  }
+
+}
+
+class _AttendanceInfo {
+  final DateTime? arrival;
+  final DateTime? departure;
+  final bool isPresent;
+  final bool isLate;
+  final DateTime classDateTime;
+  _AttendanceInfo({required this.arrival, required this.departure, required this.isPresent, required this.isLate, required this.classDateTime});
 }
 
 // 학생 리스트 카드

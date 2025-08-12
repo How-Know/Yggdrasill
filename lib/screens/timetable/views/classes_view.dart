@@ -467,8 +467,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   minutes: timeBlocks[blockIdx].startTime.minute,
                                 ),
                               );
-                              // replace 보강의 원래 회차는 임시로 가림 처리 (DB 변경 없음)
+                              // replace 보강의 원래 회차는 "원래 수업 종료 시간"까지 가림 처리
                               final Set<String> _hiddenOriginalStudentIds = {};
+                              final DateTime _now = DateTime.now();
+                              final int _defaultLessonMinutes = DataManager.instance.academySettings.lessonDuration;
                               for (final ov in DataManager.instance.sessionOverrides) {
                                 if (ov.reason != OverrideReason.makeup) continue;
                                 if (ov.overrideType != OverrideType.replace) continue;
@@ -478,7 +480,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 if (orig.isBefore(_weekStart) || !orig.isBefore(_weekEnd)) continue;
                                 if (orig.year == _cellDate.year && orig.month == _cellDate.month && orig.day == _cellDate.day &&
                                     orig.hour == _cellDate.hour && orig.minute == _cellDate.minute) {
-                                  _hiddenOriginalStudentIds.add(ov.studentId);
+                                  final int minutes = ov.durationMinutes ?? _defaultLessonMinutes;
+                                  final DateTime origEnd = DateTime(orig.year, orig.month, orig.day, orig.hour, orig.minute)
+                                      .add(Duration(minutes: minutes));
+                                  if (_now.isBefore(origEnd)) {
+                                    _hiddenOriginalStudentIds.add(ov.studentId);
+                                  }
                                 }
                               }
                               final filteredActiveBlocks = activeBlocks.where((b) => !_hiddenOriginalStudentIds.contains(b.studentId)).toList();
