@@ -9,6 +9,7 @@ import '../../models/group_schedule.dart';
 import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
 import 'views/makeup_view.dart';
+import 'views/schedule_view.dart';
 import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
@@ -28,6 +29,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/schedule_store.dart';
 
 
 enum TimetableViewType {
@@ -124,6 +126,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
     super.initState();
     _loadData();
     _loadOperatingHours();
+    // 일정 스토어 초기화
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ScheduleStore.instance.load();
+    });
   }
 
   @override
@@ -1289,7 +1295,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
       case TimetableViewType.makeup:
         return const MakeupView();
       case TimetableViewType.schedule:
-        return Container(); // TODO: Implement ScheduleView
+        return ScheduleView(
+          selectedDate: _selectedDate,
+          onDateSelected: (d) => _handleDateChanged(d),
+        );
     }
   }
 

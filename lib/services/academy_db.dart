@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
       return await openDatabaseWithLog(
       path,
-        version: 18,
+        version: 19,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -205,6 +205,24 @@ class AcademyDbService {
             summary TEXT,
             scheduled_at TEXT,
             dismissed INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE schedule_events (
+            id TEXT PRIMARY KEY,
+            group_id TEXT, -- 같은 등록 묶음 식별자(범위 등록 시 동일)
+            date TEXT,
+            title TEXT,
+            note TEXT,
+            start_hour INTEGER,
+            start_minute INTEGER,
+            end_hour INTEGER,
+            end_minute INTEGER,
+            color INTEGER,
+            tags TEXT, -- JSON 배열 문자열
+            icon_key TEXT,
             created_at TEXT,
             updated_at TEXT
           )
@@ -430,6 +448,26 @@ class AcademyDbService {
               summary TEXT,
               scheduled_at TEXT,
               dismissed INTEGER,
+              created_at TEXT,
+              updated_at TEXT
+            )
+          ''');
+        }
+        if (oldVersion < 19) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS schedule_events (
+              id TEXT PRIMARY KEY,
+              group_id TEXT,
+              date TEXT,
+              title TEXT,
+              note TEXT,
+              start_hour INTEGER,
+              start_minute INTEGER,
+              end_hour INTEGER,
+              end_minute INTEGER,
+              color INTEGER,
+              tags TEXT,
+              icon_key TEXT,
               created_at TEXT,
               updated_at TEXT
             )
