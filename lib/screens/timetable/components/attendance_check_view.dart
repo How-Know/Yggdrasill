@@ -11,12 +11,18 @@ class AttendanceCheckView extends StatefulWidget {
   final StudentWithInfo? selectedStudent;
   final int pageIndex;
   final Function(int)? onPageIndexChanged;
+  final bool autoOpenListOnStart;
+  final Future<void> Function(ClassSession session)? onReplaceSelected;
+  final bool listOnly; // 리스트 다이얼로그만 사용하고 본문 UI는 렌더링하지 않음
 
   const AttendanceCheckView({
     super.key,
     required this.selectedStudent,
     this.pageIndex = 0,
     this.onPageIndexChanged,
+    this.autoOpenListOnStart = false,
+    this.onReplaceSelected,
+    this.listOnly = false,
   });
 
   @override
@@ -49,6 +55,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     DataManager.instance.attendanceRecordsNotifier.addListener(_onAttendanceRecordsChanged);
     // 보강/예외 변경 시 자동 새로고침
     DataManager.instance.sessionOverridesNotifier.addListener(_onAttendanceRecordsChanged);
+    if (widget.autoOpenListOnStart && widget.selectedStudent != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showSessionListDialog();
+      });
+    }
   }
 
   @override
@@ -238,6 +249,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                 width: 560,
                 height: dialogHeight,
                 child: Scrollbar(
+                  controller: _listController,
                   thumbVisibility: true,
                   child: ListView.separated(
                     controller: _listController,
@@ -328,7 +340,13 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                await _showInfoDialog('이미 지난 수업이며 출석이 기록된 회차는 보강을 생성할 수 없습니다.');
                                return;
                              }
-                             await _showReplaceDialog(s);
+                              if (widget.onReplaceSelected != null) {
+                                // 리스트 다이얼로그를 먼저 닫고 외부 콜백 호출
+                                Navigator.of(context).pop();
+                                await widget.onReplaceSelected!(s);
+                              } else {
+                                await _showReplaceDialog(s);
+                              }
                            } else if (selected == 'skip') {
                              await _applySkipOverride(s);
                            }
@@ -3218,6 +3236,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.listOnly) {
+      // 리스트만 띄우는 용도일 때는 본문 UI를 렌더링하지 않음
+      return const SizedBox.shrink();
+    }
     return IntrinsicHeight(
       child: ValueListenableBuilder<List<AttendanceRecord>>(
       valueListenable: DataManager.instance.attendanceRecordsNotifier,

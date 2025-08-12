@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'payment_management_dialog.dart';
+import 'makeup_quick_dialog.dart';
 
 class MainFabAlternative extends StatefulWidget {
   const MainFabAlternative({Key? key}) : super(key: key);
@@ -131,7 +132,17 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     icon: Icons.event_repeat_rounded,
                     slideAnimation: _slideAnimation2,
                     onTap: () {
-                      _showFloatingSnackBar(context, '보강 기능');
+                      showDialog(
+                        context: context,
+                        barrierDismissible: true,
+                        builder: (context) => const MakeupQuickDialog(),
+                      ).then((_) {
+                        setState(() {
+                          _isFabExpanded = false;
+                          _fabController.reverse();
+                          _removeMenuOverlay();
+                        });
+                      });
                     },
                   ),
                   _buildMenuButton(
