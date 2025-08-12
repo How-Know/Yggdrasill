@@ -120,15 +120,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
     Overlay.of(context).insert(_dropdownOverlay!);
   }
 
-  void _removeDropdownMenu() {
+  void _removeDropdownMenu([bool notify = true]) {
     _dropdownOverlay?.remove();
     _dropdownOverlay = null;
-    widget.onDropdownOpenChanged(false);
+    if (notify) {
+      widget.onDropdownOpenChanged(false);
+    }
   }
 
   @override
   void dispose() {
-    _removeDropdownMenu();
+    // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
+    _removeDropdownMenu(false);
     super.dispose();
   }
 

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/schedule_store.dart';
 import '../../../services/summary_service.dart';
+import '../../../services/data_manager.dart';
+import '../../../models/memo.dart';
+import '../../../services/ai_summary.dart';
 
 class ScheduleView extends StatefulWidget {
   final DateTime selectedDate;
@@ -103,7 +106,7 @@ class _ScheduleViewState extends State<ScheduleView> {
           child: Column(
             children: [
               Expanded(
-                flex: 4,
+                flex: 11,
                 child: Container(
                   margin: const EdgeInsets.only(top: 8),
                   child: _MonthlyCalendar(
@@ -136,7 +139,7 @@ class _ScheduleViewState extends State<ScheduleView> {
                 ),
               const SizedBox(height: 12),
               Expanded(
-                flex: 1,
+                flex: 2,
                 child: Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -238,37 +241,66 @@ class _ScheduleViewState extends State<ScheduleView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Todo 리스트', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w600)),
+                      const Text('Todo 리스트', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700)),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 32,
+                        child: TextButton.icon(
+                          style: TextButton.styleFrom(
+                            backgroundColor: Colors.white12,
+                            foregroundColor: Colors.white70,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            shape: const StadiumBorder(),
+                          ),
+                          onPressed: () => _openMemoAddDialog(context),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('추가', style: TextStyle(fontSize: 13)),
+                        ),
+                      ),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: ListView.separated(
-                          itemCount: 8,
-                          separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
-                          itemBuilder: (context, index) {
-                            return Row(
-                              children: [
-                                Checkbox(
-                                  value: index.isEven,
-                                  onChanged: (_) {},
-                                  checkColor: Colors.white,
-                                  activeColor: const Color(0xFF1976D2),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    '할 일 ${index + 1}',
-                                    style: const TextStyle(color: Colors.white70),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.edit, color: Colors.white54, size: 18),
-                                  onPressed: () {},
-                                ),
-                              ],
+                        child: ValueListenableBuilder(
+                          valueListenable: DataManager.instance.memosNotifier,
+                          builder: (context, memos, _) {
+                            final list = _expandMemosNextMonths(memos as List<Memo>, months: 3)
+                              .where((m) => !m.dismissed)
+                              .toList();
+                            if (list.isEmpty) {
+                              return const Center(child: Text('할 일이 없습니다.', style: TextStyle(color: Colors.white38)));
+                            }
+                            return ListView.separated(
+                              itemCount: list.length,
+                              separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
+                              itemBuilder: (context, index) {
+                                final m = list[index];
+                                final title = m.summary.isNotEmpty ? m.summary : (m.original.length > 20 ? m.original.substring(0, 20) + '…' : m.original);
+                                return Row(
+                                  children: [
+                                    Checkbox(
+                                      value: false,
+                                      onChanged: (_) {},
+                                      checkColor: Colors.white,
+                                      activeColor: const Color(0xFF1976D2),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.edit, color: Colors.white54, size: 18),
+                                      onPressed: () async {
+                                        await _openMemoAddDialog(context, initial: m.original);
+                                      },
+                                    ),
+                                  ],
+                                );
+                              },
                             );
                           },
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
@@ -280,6 +312,57 @@ class _ScheduleViewState extends State<ScheduleView> {
       ),
     );
   }
+}
+
+List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
+  final now = DateTime.now();
+  final end = DateTime(now.year, now.month + months, now.day);
+  // 간단: 반복 미구현 상태에서는 기존 메모 그대로 반환
+  return memos;
+}
+
+Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
+  // 기존 전역 메모 다이얼로그와 동일한 UX를 가정: AiSummaryService로 요약 저장
+  final controller = TextEditingController(text: initial ?? '');
+  final text = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: const Text('메모 추가', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 500,
+        child: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          minLines: 3,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: '할 일을 입력하세요',
+            hintStyle: TextStyle(color: Colors.white38),
+            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
+      ],
+    ),
+  );
+  if (text == null || text.isEmpty) return;
+  final summary = await AiSummaryService.summarize(text, maxChars: 40);
+  final memo = Memo(
+    id: const Uuid().v4(),
+    original: text,
+    summary: summary,
+    scheduledAt: await AiSummaryService.extractDateTime(text),
+    dismissed: false,
+    createdAt: DateTime.now(),
+    updatedAt: DateTime.now(),
+  );
+  await DataManager.instance.addMemo(memo);
 }
 
 Future<String?> _showNoteDialog(BuildContext context) async {
@@ -1006,6 +1089,13 @@ class _MonthlyCalendar extends StatelessWidget {
                         alignment: Alignment.topLeft,
                         child: Text('${date.day}', style: textStyle),
                       ),
+                      const SizedBox.shrink(),
+                      Positioned(
+                        left: 6,
+                        right: 6,
+                        top: 44,
+                        child: const SizedBox(height: 2),
+                      ),
                       if (addMode && _inRange(date, previewStart, previewEnd))
                         Positioned.fill(
                           child: Container(
@@ -1071,15 +1161,15 @@ class _DayEventsOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final events = ScheduleStore.instance.eventsOn(date);
     if (events.isEmpty) return const SizedBox.shrink();
-    // 최대 2개만 표시 + 더보기 점3
-    final toShow = events.take(2).toList();
+    // 셀 높이를 고려하여 최대 3개까지 채운 후 초과분에 점3 표시
+    final toShow = events.take(3).toList();
     return Padding(
       padding: const EdgeInsets.only(left: 2, right: 2, top: 20, bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ...toShow.map((e) => _EventStripe(title: e.title, color: e.color)),
-          if (events.length > 2)
+          ...toShow.map((e) => _EventStripe(title: e.title, color: e.color, iconKey: e.iconKey)),
+          if (events.length > toShow.length)
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Row(
@@ -1097,7 +1187,8 @@ class _DayEventsOverlay extends StatelessWidget {
 class _EventStripe extends StatelessWidget {
   final String title;
   final int? color;
-  const _EventStripe({required this.title, required this.color});
+  final String? iconKey;
+  const _EventStripe({required this.title, required this.color, this.iconKey});
 
   @override
   Widget build(BuildContext context) {
@@ -1106,8 +1197,8 @@ class _EventStripe extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 4,
-            height: 14,
+            width: 5,
+            height: 30,
             decoration: BoxDecoration(
               color: color != null ? Color(color!) : const Color(0xFF1976D2),
               borderRadius: BorderRadius.circular(2),
@@ -1115,16 +1206,40 @@ class _EventStripe extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_iconLabel(iconKey), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              ],
             ),
           ),
         ],
       ),
     );
+  }
+}
+String _iconLabel(String? key) {
+  switch (key) {
+    case 'holiday':
+      return '휴강';
+    case 'exam':
+      return '시험';
+    case 'vacation_start':
+      return '방학식';
+    case 'school_open':
+      return '개학식';
+    case 'special_lecture':
+      return '특강';
+    case 'counseling':
+      return '상담';
+    case 'notice':
+      return '공지';
+    case 'payment':
+      return '납부';
+    default:
+      return '일정';
   }
 }
 

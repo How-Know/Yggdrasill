@@ -28,9 +28,9 @@ class AcademyDbService {
   Future<Database> _initDb() async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, 'academy.db');
-      return await openDatabaseWithLog(
+    return await openDatabaseWithLog(
       path,
-        version: 19,
+        version: 22,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -41,7 +41,8 @@ class AcademyDbService {
             lesson_duration INTEGER,
             payment_type TEXT,
             logo BLOB,
-            session_cycle INTEGER DEFAULT 1 -- [추가] 수강 횟수
+            session_cycle INTEGER DEFAULT 1, -- [추가] 수강 횟수
+            openai_api_key TEXT
           )
         ''');
         await db.execute('''
@@ -206,7 +207,11 @@ class AcademyDbService {
             scheduled_at TEXT,
             dismissed INTEGER,
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            recurrence_type TEXT,
+            weekdays TEXT,
+            recurrence_end TEXT,
+            recurrence_count INTEGER
           )
         ''');
         await db.execute('''
@@ -472,6 +477,35 @@ class AcademyDbService {
               updated_at TEXT
             )
           ''');
+        }
+        if (oldVersion < 20) {
+          final columns = await db.rawQuery("PRAGMA table_info(academy_settings)");
+          final hasApiKey = columns.any((col) => col['name'] == 'openai_api_key');
+          if (!hasApiKey) {
+            await db.execute('ALTER TABLE academy_settings ADD COLUMN openai_api_key TEXT');
+          }
+        }
+        if (oldVersion < 21) {
+          final columns = await db.rawQuery("PRAGMA table_info(memos)");
+          final hasRecurrenceType = columns.any((c) => c['name'] == 'recurrence_type');
+          if (!hasRecurrenceType) {
+            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_type TEXT');
+          }
+          final hasWeekdays = columns.any((c) => c['name'] == 'weekdays');
+          if (!hasWeekdays) {
+            await db.execute('ALTER TABLE memos ADD COLUMN weekdays TEXT');
+          }
+          final hasRecurrenceEnd = columns.any((c) => c['name'] == 'recurrence_end');
+          if (!hasRecurrenceEnd) {
+            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_end TEXT');
+          }
+        }
+        if (oldVersion < 22) {
+          final columns = await db.rawQuery("PRAGMA table_info(memos)");
+          final hasCount = columns.any((c) => c['name'] == 'recurrence_count');
+          if (!hasCount) {
+            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
+          }
         }
         
         // 버전 13: student_time_blocks 테이블 컬럼 구조 수정

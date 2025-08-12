@@ -265,12 +265,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             final value = controller.text.trim();
                             if (value.isEmpty) {
                               await prefs.remove('openai_api_key');
+                              // DB에도 반영
+                              final db = await AcademyDbService.instance.db;
+                              await db.update('academy_settings', {'openai_api_key': null}, where: 'id = ?', whereArgs: [1]);
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('API 키가 제거되었습니다.', style: TextStyle(color: Colors.white)),
                                 backgroundColor: Color(0xFF1976D2),
                               ));
                             } else {
                               await prefs.setString('openai_api_key', value);
+                              // DB에도 반영(없으면 insert)
+                              final db = await AcademyDbService.instance.db;
+                              final exists = await db.query('academy_settings', where: 'id = ?', whereArgs: [1]);
+                              if (exists.isEmpty) {
+                                await db.insert('academy_settings', {'id': 1, 'openai_api_key': value});
+                              } else {
+                                await db.update('academy_settings', {'openai_api_key': value}, where: 'id = ?', whereArgs: [1]);
+                              }
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('API 키가 저장되었습니다.', style: TextStyle(color: Colors.white)),
                                 backgroundColor: Color(0xFF1976D2),
