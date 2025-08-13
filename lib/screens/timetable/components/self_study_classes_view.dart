@@ -150,9 +150,11 @@ class _SelfStudyClassesViewState extends State<SelfStudyClassesView> {
     print('[DEBUG][SelfStudyClassesView.build] widget.selectedStudent=${widget.selectedStudent}');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
+    // 테스트 전용 플래그로 autofocus를 제어 (기본 동작은 유지)
+    const bool kDisableSelfStudyKbAutofocus = bool.fromEnvironment('DISABLE_SELFSTUDY_KB_AUTOFOCUS', defaultValue: false);
     return RawKeyboardListener(
       focusNode: _focusNode!,
-      autofocus: true,
+      autofocus: !kDisableSelfStudyKbAutofocus,
       onKey: (event) {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
           if (widget.onSelfStudyBlocksRegistered != null) {

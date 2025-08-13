@@ -16,6 +16,9 @@ import 'models/memo.dart';
 import 'services/ai_summary.dart';
 import 'dart:async';
 
+// 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
+const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
+
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
@@ -53,7 +56,7 @@ class MyApp extends StatelessWidget {
     });
     return RawKeyboardListener(
       focusNode: FocusNode(),
-      autofocus: true,
+      autofocus: !kDisableGlobalKbAutofocus,
       onKey: (event) async {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.f11) {
           bool isFull = await windowManager.isFullScreen();

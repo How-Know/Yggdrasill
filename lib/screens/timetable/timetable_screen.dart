@@ -659,9 +659,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   Widget build(BuildContext context) {
     print('[DEBUG][TimetableScreen][${DateTime.now().toIso8601String()}] build: _isStudentRegistrationMode=$_isStudentRegistrationMode, _isClassRegistrationMode=$_isClassRegistrationMode, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
+    // 테스트 전용 플래그로 autofocus를 제어 (기본 동작은 유지)
+    const bool kDisableTimetableKbAutofocus = bool.fromEnvironment('DISABLE_TIMETABLE_KB_AUTOFOCUS', defaultValue: false);
     return RawKeyboardListener(
       focusNode: _focusNode,
-      autofocus: true,
+      autofocus: !kDisableTimetableKbAutofocus,
       onKey: (event) {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
             if (_isStudentRegistrationMode || _isClassRegistrationMode) {

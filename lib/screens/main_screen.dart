@@ -7,6 +7,7 @@ import '../models/attendance_record.dart';
 import 'student/student_screen.dart';
 import 'timetable/timetable_screen.dart';
 import 'settings/settings_screen.dart';
+import 'resources/resources_screen.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
@@ -321,7 +322,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 3:
         return const Center(child: Text('학습', style: TextStyle(color: Colors.white, fontSize: 24)));
       case 4:
-        return const Center(child: Text('자료', style: TextStyle(color: Colors.white, fontSize: 24)));
+        return const ResourcesScreen();
       default:
         return const SizedBox();
     }
