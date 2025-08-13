@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import 'package:uuid/uuid.dart';
 import '../../../services/schedule_store.dart';
 import '../../../services/summary_service.dart';
+import '../../../services/holiday_service.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/memo.dart';
 import '../../../services/ai_summary.dart';
@@ -25,6 +27,42 @@ class _ScheduleViewState extends State<ScheduleView> {
   DateTime? _previewStart;
   DateTime? _previewEnd;
   String _todoFilter = 'all'; // all | incomplete | complete
+  final Set<int> _loadedHolidayYears = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureHolidaysForYear(DateTime.now().year);
+  }
+
+  Future<void> _ensureHolidaysForYear(int year) async {
+    if (_loadedHolidayYears.contains(year)) return;
+    try {
+      final holidays = await HolidayService.fetchKoreanPublicHolidays(year);
+      for (final h in holidays) {
+        final date = DateTime(h.year, h.month, h.day);
+        final exists = ScheduleStore.instance
+            .eventsOn(date)
+            .any((e) => (e.tags.contains('KR_HOLIDAY') && (e.note ?? '').contains(h.name)));
+        if (exists) continue;
+        final id = const Uuid().v4();
+        final event = ScheduleEvent(
+          id: id,
+          groupId: 'kr_holidays_$year',
+          date: date,
+          title: '휴일',
+          note: h.name,
+          color: 0xFF546E7A,
+          tags: const ['KR_HOLIDAY'],
+          iconKey: 'holiday',
+        );
+        await ScheduleStore.instance.addEvent(event);
+      }
+      _loadedHolidayYears.add(year);
+    } catch (_) {
+      // 네트워크 실패 시 조용히 무시
+    }
+  }
 
   void _handleDatePick(DateTime date) async {
     if (!_isAddMode) {
@@ -148,10 +186,7 @@ class _ScheduleViewState extends State<ScheduleView> {
                     color: const Color(0xFF18181A),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('다가올 일정 타임라인(가로)', style: TextStyle(color: Colors.white70)),
-                  ),
+                  child: const _ScheduleTimeline(),
                 ),
               ),
             ],
@@ -251,31 +286,22 @@ class _ScheduleViewState extends State<ScheduleView> {
                       const SizedBox(height: 8),
                       Row(
                         children: [
-                          ChoiceChip(
-                            label: const Text('전체'),
+                          _TodoFilterButton(
+                            label: '전체',
                             selected: _todoFilter == 'all',
-                            selectedColor: const Color(0xFF1976D2),
-                            backgroundColor: const Color(0xFF2A2A2A),
-                            labelStyle: TextStyle(color: _todoFilter == 'all' ? Colors.white : Colors.white70, fontSize: 12),
-                            onSelected: (_) => setState(() => _todoFilter = 'all'),
+                            onTap: () { if (_todoFilter != 'all') setState(() => _todoFilter = 'all'); },
                           ),
                           const SizedBox(width: 8),
-                          ChoiceChip(
-                            label: const Text('미완료'),
+                          _TodoFilterButton(
+                            label: '미완료',
                             selected: _todoFilter == 'incomplete',
-                            selectedColor: const Color(0xFF1976D2),
-                            backgroundColor: const Color(0xFF2A2A2A),
-                            labelStyle: TextStyle(color: _todoFilter == 'incomplete' ? Colors.white : Colors.white70, fontSize: 12),
-                            onSelected: (_) => setState(() => _todoFilter = 'incomplete'),
+                            onTap: () { if (_todoFilter != 'incomplete') setState(() => _todoFilter = 'incomplete'); },
                           ),
                           const SizedBox(width: 8),
-                          ChoiceChip(
-                            label: const Text('완료'),
+                          _TodoFilterButton(
+                            label: '완료',
                             selected: _todoFilter == 'complete',
-                            selectedColor: const Color(0xFF1976D2),
-                            backgroundColor: const Color(0xFF2A2A2A),
-                            labelStyle: TextStyle(color: _todoFilter == 'complete' ? Colors.white : Colors.white70, fontSize: 12),
-                            onSelected: (_) => setState(() => _todoFilter = 'complete'),
+                            onTap: () { if (_todoFilter != 'complete') setState(() => _todoFilter = 'complete'); },
                           ),
                           const Spacer(),
                           TextButton.icon(
@@ -1204,11 +1230,24 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                     spacing: 6,
                     runSpacing: 6,
                     children: tags
-                        .map((t) => Chip(
-                              label: Text(t, style: const TextStyle(color: Colors.white70)),
-                              backgroundColor: Colors.white12,
-                              deleteIcon: const Icon(Icons.close, size: 16, color: Colors.white54),
-                              onDeleted: () => setState(() => tags.remove(t)),
+                        .map((t) => Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2A2A2A),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('#$t', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: () => setState(() => tags.remove(t)),
+                                    child: const Icon(Icons.close, size: 14, color: Colors.white60),
+                                  ),
+                                ],
+                              ),
                             ))
                         .toList(),
                   ),
@@ -1519,8 +1558,8 @@ class _MonthlyCalendar extends StatelessWidget {
       return DateTime(month.year, month.month, 1 + dayOffset);
     });
 
-    const textStyleDim = TextStyle(color: Colors.white30, fontSize: 19, fontWeight: FontWeight.w600);
-    const textStyleNorm = TextStyle(color: Colors.white70, fontSize: 19, fontWeight: FontWeight.w700);
+    const textStyleDim = TextStyle(color: Colors.white30, fontSize: 21, fontWeight: FontWeight.w600);
+    const textStyleNorm = TextStyle(color: Colors.white70, fontSize: 21, fontWeight: FontWeight.w700);
     const dowStyle = TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600);
     const monthTitleStyle = TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700);
 
@@ -1561,8 +1600,8 @@ class _MonthlyCalendar extends StatelessWidget {
             Expanded(child: Center(child: Text('수', style: dowStyle))),
             Expanded(child: Center(child: Text('목', style: dowStyle))),
             Expanded(child: Center(child: Text('금', style: dowStyle))),
-            Expanded(child: Center(child: Text('토', style: dowStyle))),
-            Expanded(child: Center(child: Text('일', style: dowStyle))),
+            Expanded(child: Center(child: Text('토', style: TextStyle(color: Color(0xFF64A6DD), fontSize: 15, fontWeight: FontWeight.w600)))),
+            Expanded(child: Center(child: Text('일', style: TextStyle(color: Color(0xFFEF6E6E), fontSize: 15, fontWeight: FontWeight.w600)))),
           ],
         ),
         const SizedBox(height: 8),
@@ -1579,7 +1618,7 @@ class _MonthlyCalendar extends StatelessWidget {
               final date = cells[index];
               final isCurrentMonth = date.month == month.month;
               final isSelected = date.year == selectedDate.year && date.month == selectedDate.month && date.day == selectedDate.day;
-              final textStyle = isCurrentMonth ? textStyleNorm : textStyleDim;
+                final textStyle = isCurrentMonth ? textStyleNorm : textStyleDim;
               final count = ScheduleStore.instance.eventsCountOn(date);
               return MouseRegion(
                 onHover: (_) { if (addMode && onHoverDate != null) onHoverDate!(date); },
@@ -1592,12 +1631,15 @@ class _MonthlyCalendar extends StatelessWidget {
                     border: Border.all(color: isSelected ? const Color(0xFF1976D2) : Colors.white12, width: isSelected ? 1.6 : 1),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                   padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                   padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                   child: Stack(
                     children: [
                       Align(
                         alignment: Alignment.topLeft,
-                        child: Text('${date.day}', style: textStyle),
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 5),
+                          child: _buildDayNumber(date, textStyle),
+                        ),
                       ),
                       const SizedBox.shrink(),
                       Positioned(
@@ -1663,6 +1705,141 @@ class _EventBadge extends StatelessWidget {
   }
 }
 
+class _TodoFilterButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _TodoFilterButton({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = selected ? const Color(0xFF1976D2) : Colors.white24;
+    final bgColor = const Color(0xFF2A2A2A); // 컨테이너 배경색
+    final fgColor = selected ? Colors.white : Colors.white70;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: ShapeDecoration(
+          color: bgColor,
+          shape: StadiumBorder(side: BorderSide(color: borderColor, width: 2)),
+        ),
+        child: Text(label, style: TextStyle(color: fgColor, fontSize: 12)),
+      ),
+    );
+  }
+}
+
+class _ScheduleTimeline extends StatefulWidget {
+  const _ScheduleTimeline();
+
+  @override
+  State<_ScheduleTimeline> createState() => _ScheduleTimelineState();
+}
+
+class _ScheduleTimelineState extends State<_ScheduleTimeline> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  Widget build(BuildContext context) {
+    final all = ScheduleStore.instance.events.value;
+    if (all.isEmpty) {
+      return const Center(child: Text('표시할 일정이 없습니다.', style: TextStyle(color: Colors.white38)));
+    }
+    final now = DateTime.now();
+    final items = List<ScheduleEvent>.from(all)
+      ..sort((a, b) => a.date.compareTo(b.date));
+    final today = DateTime(now.year, now.month, now.day);
+    int centerIndex = items.indexWhere((e) {
+      final d = DateTime(e.date.year, e.date.month, e.date.day);
+      return d == today;
+    });
+    if (centerIndex == -1) {
+      centerIndex = items.indexWhere((e) => !DateTime(e.date.year, e.date.month, e.date.day).isBefore(today));
+    }
+    if (centerIndex == -1) centerIndex = items.length - 1;
+
+    // Window: ±10
+    final start = (centerIndex - 10).clamp(0, items.length - 1);
+    final end = (centerIndex + 10).clamp(0, items.length - 1);
+    final window = items.sublist(start, end + 1);
+    final localCenter = (centerIndex - start).clamp(0, window.length - 1);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const double cardWidth = 200.0;
+        const double gap = 12.0;
+        final double viewport = constraints.maxWidth;
+        final double totalWidth = window.length * cardWidth + math.max(0, window.length - 1) * gap;
+        double target = localCenter * (cardWidth + gap) - (viewport - cardWidth) / 2;
+        target = target.clamp(0.0, math.max(0.0, totalWidth - viewport));
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_controller.hasClients) {
+            _controller.jumpTo(target);
+          }
+        });
+
+        return ListView.builder(
+          scrollDirection: Axis.horizontal,
+          controller: _controller,
+          itemCount: window.length,
+          itemBuilder: (context, i) {
+            final e = window[i];
+            final eventDate = DateTime(e.date.year, e.date.month, e.date.day);
+            final isUpcoming = !eventDate.isBefore(today);
+            final isCenter = i == localCenter;
+            return Container(
+              width: cardWidth,
+              margin: EdgeInsets.only(right: i == window.length - 1 ? 0 : gap),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF202024),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: e.tags.contains('KR_HOLIDAY')
+                      ? const Color(0xFFF06666)
+                      : (isCenter ? const Color(0xFF4D95D8) : (isUpcoming ? const Color(0xFF64A6DD) : Colors.white12)),
+                  width: isCenter ? 3 : 2,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(width: 6, height: 6, decoration: BoxDecoration(color: e.color != null ? Color(e.color!) : const Color(0xFF64A6DD), shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Text('${e.date.month}.${e.date.day}', style: TextStyle(color: isCenter ? Colors.white : (isUpcoming ? Colors.white70 : Colors.white38), fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      Icon(_iconFromKey(e.iconKey), color: isCenter ? Colors.white70 : Colors.white38, size: 16),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(_singleWord(e.title), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isCenter ? Colors.white : (isUpcoming ? Colors.white : Colors.white38), fontSize: 14, fontWeight: FontWeight.w700)),
+                  if (e.note != null && e.note!.trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _clipToChars(_oneSentence(e.note!.trim()), 60),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: isCenter ? Colors.white70 : (isUpcoming ? Colors.white70 : Colors.white38), fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class _DayEventsOverlay extends StatelessWidget {
   final DateTime date;
   const _DayEventsOverlay({required this.date});
@@ -1671,32 +1848,45 @@ class _DayEventsOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final events = ScheduleStore.instance.eventsOn(date);
     if (events.isEmpty) return const SizedBox.shrink();
-    // 셀 높이를 고려하여 최대 3개까지 표시 후 초과분에 점3 표시
-    final toShow = events.take(3).toList();
     return Padding(
-      padding: const EdgeInsets.only(left: 2, right: 2, top: 32, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ...toShow.map((e) => _EventStripe(
-                title: _singleWord(e.title),
-                subtitle: (e.note != null && e.note!.trim().isNotEmpty) ? _clipToChars(_oneSentence(e.note!.trim()), 40) : null,
-                color: e.color,
-                iconKey: e.iconKey,
-              )),
-          if (events.length > toShow.length)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _showDayEventsModal(date),
-                    child: const Icon(Icons.more_horiz, color: Colors.white38, size: 16),
+      padding: const EdgeInsets.only(left: 2, right: 2, top: 30, bottom: 2),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 대략적인 한 이벤트 스트라이프의 높이를 계산하여 표시 가능한 개수 산정
+          // 제목 1줄(약 18) + 요약 2줄(약 30) + 패딩/간격(약 12) ≈ 60
+          const double estimatedEventHeight = 60;
+          const double moreIconHeight = 20;
+          double available = constraints.maxHeight;
+          int maxCount = (available - moreIconHeight) ~/ estimatedEventHeight;
+          if (maxCount < 1) maxCount = 1;
+          if (maxCount > 3) maxCount = 3;
+          final toShow = events.take(maxCount).toList();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...toShow.map((e) => _EventStripe(
+                    title: _singleWord(e.title),
+                    subtitle: (e.note != null && e.note!.trim().isNotEmpty)
+                        ? e.note!.trim()
+                        : null,
+                    color: e.color,
+                    iconKey: e.iconKey,
+                  )),
+              if (events.length > toShow.length)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: GestureDetector(
+                      onTap: () => _showDayEventsModal(date),
+                      child: const Icon(Icons.more_horiz, color: Colors.white38, size: 16),
+                    ),
                   ),
-                ],
-              ),
-            ),
-        ],
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1711,6 +1901,12 @@ class _EventStripe extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Color indicatorColor = iconKey == 'holiday'
+        ? const Color(0xFFF06666)
+        : (color != null ? Color(color!) : const Color(0xFF64A6DD));
+    final BoxDecoration? holidayDeco = iconKey == 'holiday'
+        ? BoxDecoration(color: const Color(0x22F06666), borderRadius: BorderRadius.circular(6))
+        : null;
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
       child: IntrinsicHeight(
@@ -1719,29 +1915,30 @@ class _EventStripe extends StatelessWidget {
           children: [
             Container(
               width: 5,
-              decoration: BoxDecoration(
-                color: color != null ? Color(color!) : const Color(0xFF1976D2),
-                borderRadius: BorderRadius.circular(2),
-              ),
+              decoration: BoxDecoration(color: indicatorColor, borderRadius: BorderRadius.circular(2)),
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-                  if (subtitle != null && subtitle!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        _clipToChars(_oneSentence(subtitle!)),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white60, fontSize: 12),
+              child: Container(
+                decoration: holidayDeco,
+                padding: holidayDeco != null ? const EdgeInsets.symmetric(horizontal: 6, vertical: 4) : EdgeInsets.zero,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    if (subtitle != null && subtitle!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          subtitle!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white60, fontSize: 12),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -1806,6 +2003,17 @@ String _clipToChars(String s, [int maxChars = 40]) {
 
 String _formatDateYMD(DateTime d) {
   return '${d.year}.${d.month}.${d.day}';
+}
+
+Widget _buildDayNumber(DateTime date, TextStyle base) {
+  Color color = base.color ?? Colors.white70;
+  // 월=1..일=7
+  if (date.weekday == DateTime.saturday) {
+    color = const Color(0xFF4D95D8); // 살짝 채도/명도 업
+  } else if (date.weekday == DateTime.sunday) {
+    color = const Color(0xFFF06666); // 살짝 채도/명도 업
+  }
+  return Text('${date.day}', style: base.copyWith(color: color));
 }
 
 String _cleanSummary(String summary, String? iconLabel) {

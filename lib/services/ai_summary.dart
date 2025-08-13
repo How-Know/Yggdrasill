@@ -12,16 +12,16 @@ class AiSummaryService {
       return toSingleSentence(text, maxChars: maxChars);
     }
     final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-    final body = jsonEncode({
+      final body = jsonEncode({
       'model': 'gpt-4o-mini',
       'messages': [
         {
           'role': 'system',
-          'content': '너는 텍스트를 한 문장으로 간결하게 요약하는 비서다. 한국어로 한 문장만 출력하고, 줄바꿈 없이 ${maxChars}자 이내로 핵심만 담아라.'
+          'content': '너는 텍스트를 한 줄 키워드로 요약하는 비서다. 한국어로 명사/명사구 중심의 한 줄만 출력하라. 문장부호(.,!?)와 불필요한 조사/수식어를 제거하고, 줄바꿈 없이 ${maxChars}자 이내로 핵심 키워드만 제공하라.'
         },
         {
           'role': 'user',
-          'content': '다음 텍스트를 한 문장(최대 ${maxChars}자)으로 간결하게 요약해줘. 불필요한 수식어/군더더기 금지:\n$text'
+          'content': '다음 텍스트에서 핵심 키워드를 한 줄(최대 ${maxChars}자)로 요약해줘. 문장은 금지, 쉼표 없이 간결한 명사구로:\n$text'
         }
       ],
       'temperature': 0.2,
