@@ -923,6 +923,18 @@ class AcademyDbService {
     return result;
   }
 
+  Future<void> deleteResourceFile(String fileId) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.delete('resource_files', where: 'id = ?', whereArgs: [fileId]);
+  }
+
+  Future<void> deleteResourceFileLinksByFileId(String fileId) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.delete('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+  }
+
   // ======== RESOURCE GRADES ========
   Future<List<Map<String, dynamic>>> getResourceGrades() async {
     final dbClient = await db;

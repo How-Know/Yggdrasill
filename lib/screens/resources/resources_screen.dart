@@ -22,6 +22,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   OverlayEntry? _dropdownOverlay;
   bool _isDropdownOpen = false;
   bool _resizeMode = false;
+  bool _editMode = false;
 
   final List<_ResourceFolder> _folders = [];
   final List<_ResourceFile> _files = [];
@@ -748,6 +749,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      editMode: _editMode,
                       currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
@@ -829,11 +831,28 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           });
                         }
                       },
+                      onEditFolder: (folder) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                      },
+                      onEditFile: (file) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEditDialog: id=${file.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FileEditDialog(initial: file),
+                        );
+                      },
                     ),
-                    _ResourcesCanvas(
+                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
-                      resizeMode: _resizeMode,
+                       resizeMode: _resizeMode,
+                       editMode: _editMode,
                       currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
@@ -915,11 +934,28 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           });
                         }
                       },
+                      onEditFolder: (folder) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                      },
+                      onEditFile: (file) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEditDialog: id=${file.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FileEditDialog(initial: file),
+                        );
+                      },
                     ),
-                    _ResourcesCanvas(
+                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
-                      resizeMode: _resizeMode,
+                       resizeMode: _resizeMode,
+                       editMode: _editMode,
                       currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
@@ -961,6 +997,22 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       },
                       onMoveEnd: _saveLayout,
                       onResizeEnd: _saveLayout,
+                      onEditFolder: (folder) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                      },
+                      onEditFile: (file) {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEditDialog: id=${file.id}');
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => _FileEditDialog(initial: file),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -1082,11 +1134,27 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       width: 44,
                       height: 44,
                       child: Material(
+                        color: _editMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () => setState(() { _editMode = !_editMode; if (_editMode) _resizeMode = false; }),
+                          child: const Center(
+                            child: Icon(Icons.edit, color: Colors.white, size: 18),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: Material(
                         color: _resizeMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
                         shape: const CircleBorder(),
                         child: InkWell(
                           customBorder: const CircleBorder(),
-                          onTap: () => setState(() => _resizeMode = !_resizeMode),
+                          onTap: () => setState(() { _resizeMode = !_resizeMode; if (_resizeMode) _editMode = false; }),
                           child: const Center(
                             child: Icon(Icons.open_in_full, color: Colors.white, size: 18),
                           ),
@@ -1108,6 +1176,7 @@ class _ResourcesCanvas extends StatefulWidget {
   final List<_ResourceFolder> folders;
   final List<_ResourceFile> files;
   final bool resizeMode;
+  final bool editMode;
   final String? currentGrade;
   final void Function(String id, Offset position, Size canvasSize) onFolderMoved;
   final void Function(String id, Size newSize, Size canvasSize)? onFolderResized;
@@ -1117,7 +1186,11 @@ class _ResourcesCanvas extends StatefulWidget {
   final void Function(String id, Offset position, Size canvasSize)? onFileMoved;
   final void Function(String id, Size newSize, Size canvasSize)? onFileResized;
   final void Function(int delta)? onScrollGrade;
-  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.currentGrade, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized, this.onScrollGrade});
+  final void Function(String folderId)? onDeleteFolder;
+  final void Function(String fileId)? onDeleteFile;
+  final void Function(_ResourceFolder folder)? onEditFolder;
+  final void Function(_ResourceFile file)? onEditFile;
+  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.editMode, required this.currentGrade, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized, this.onScrollGrade, this.onDeleteFolder, this.onDeleteFile, this.onEditFolder, this.onEditFile});
 
   @override
   State<_ResourcesCanvas> createState() => _ResourcesCanvasState();
@@ -1222,8 +1295,8 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
           },
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onPanDown: (_) {}, // 다른 제스쳐와 충돌 방지용 no-op
-            onScaleUpdate: (_) {}, // 스크롤 외 제스쳐 캡쳐 방지 no-op
+            onPanDown: widget.editMode ? null : (_) { /* canvas panDown */ },
+            onScaleUpdate: widget.editMode ? null : (_) { /* canvas scaleUpdate */ },
             child: Stack(
           key: _stackKey,
           children: [
@@ -1242,6 +1315,9 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   },
                   globalToCanvasLocal: _globalToCanvasLocal,
                   resizeMode: widget.resizeMode,
+                  editMode: widget.editMode,
+                  onDeleteRequested: widget.onDeleteFolder,
+                  onEditRequested: widget.onEditFolder,
                   onResize: (size) {
                     if (widget.onFolderResized != null) widget.onFolderResized!(f.id, size, _canvasSize);
                   },
@@ -1259,6 +1335,9 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   resizeMode: widget.resizeMode,
                   globalToCanvasLocal: _globalToCanvasLocal,
                   currentGrade: widget.currentGrade,
+                  editMode: widget.editMode,
+                  onDeleteRequested: widget.onDeleteFile,
+                  onEditRequested: widget.onEditFile,
                   onMoved: (pos) {
                     if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, pos, _canvasSize);
                   },
@@ -1287,10 +1366,13 @@ class _DraggableFolderCard extends StatefulWidget {
   final void Function(Offset newPosition)? onEndMoved;
   final Offset Function(Offset global) globalToCanvasLocal;
   final bool resizeMode;
+  final bool editMode;
+  final void Function(String folderId)? onDeleteRequested;
+  final void Function(_ResourceFolder folder)? onEditRequested;
   final void Function(Size newSize)? onResize;
   final VoidCallback? onBackgroundTap;
   final VoidCallback? onResizeEnd;
-  const _DraggableFolderCard({super.key, required this.folder, required this.onMoved, this.onEndMoved, required this.globalToCanvasLocal, required this.resizeMode, this.onResize, this.onBackgroundTap, this.onResizeEnd});
+  const _DraggableFolderCard({super.key, required this.folder, required this.onMoved, this.onEndMoved, required this.globalToCanvasLocal, required this.resizeMode, required this.editMode, this.onDeleteRequested, this.onEditRequested, this.onResize, this.onBackgroundTap, this.onResizeEnd});
 
   @override
   State<_DraggableFolderCard> createState() => _DraggableFolderCardState();
@@ -1312,28 +1394,41 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
       left: effectivePos.dx,
       top: effectivePos.dy,
       child: GestureDetector(
-        onPanStart: (details) {
-          if (!_resizing && !widget.resizeMode) {
-            setState(() {
-              _dragging = true;
-              _dragStartLocal = details.localPosition;
-              _tempPosition = widget.folder.position;
-            });
-          }
-        },
-        onPanUpdate: (details) {
-          if (_dragging && !_resizing && !widget.resizeMode) {
-            final local = details.localPosition;
-            final newPos = Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
-            setState(() => _tempPosition = newPos);
-          }
-        },
-        onPanEnd: (details) {
-          setState(() => _dragging = false);
-          final endPos = _tempPosition ?? widget.folder.position;
-          if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
-          _tempPosition = null;
-        },
+        onTap: widget.editMode
+            ? () {
+                // debug
+                // ignore: avoid_print
+                print('[EDIT] Folder tap -> open edit dialog: id=${widget.folder.id}');
+                if (widget.onEditRequested != null) widget.onEditRequested!(widget.folder);
+              }
+            : null,
+        onPanStart: widget.editMode
+            ? null
+            : (details) {
+                if (!_resizing && !widget.resizeMode) {
+                  setState(() {
+                    _dragging = true;
+                    _dragStartLocal = details.localPosition;
+                    _tempPosition = widget.folder.position;
+                  });
+                }
+              },
+        onPanUpdate: widget.editMode
+            ? null
+            : (details) {
+                if (_dragging && !_resizing && !widget.resizeMode) {
+                  final newPos = Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
+                  setState(() => _tempPosition = newPos);
+                }
+              },
+        onPanEnd: widget.editMode
+            ? null
+            : (details) {
+                setState(() => _dragging = false);
+                final endPos = _tempPosition ?? widget.folder.position;
+                if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
+                _tempPosition = null;
+              },
         // 리사이즈 모드 종료는 버튼으로만 수행: 배경 탭 종료 제거
         behavior: HitTestBehavior.translucent,
         child: AnimatedOpacity(
@@ -1342,7 +1437,19 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
           child: Stack(
             children: [
               _FolderCard(folder: widget.folder.copyWith(position: effectivePos, size: effectiveSize)),
-              if (widget.resizeMode)
+              if (widget.editMode)
+                Positioned(
+                  right: 6,
+                  top: 6,
+                  child: InkWell(
+                    onTap: () async {
+                      if (widget.onDeleteRequested != null) widget.onDeleteRequested!(widget.folder.id);
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: const Icon(Icons.close, size: 18, color: Colors.white70),
+                  ),
+                ),
+              if (widget.resizeMode && !widget.editMode)
                 Positioned(
                   right: 10,
                   bottom: 10,
@@ -1511,10 +1618,123 @@ class _FolderCreateDialog extends StatefulWidget {
   State<_FolderCreateDialog> createState() => _FolderCreateDialogState();
 }
 
+class _FolderEditDialog extends StatefulWidget {
+  final _ResourceFolder initial;
+  const _FolderEditDialog({required this.initial});
+  @override
+  State<_FolderEditDialog> createState() => _FolderEditDialogState();
+}
+
+class _FolderEditDialogState extends State<_FolderEditDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _desc;
+  Color? _color;
+  String _shape = 'rect';
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.initial.name);
+    _desc = TextEditingController(text: widget.initial.description);
+    _color = widget.initial.color;
+    _shape = widget.initial.shape;
+  }
+  @override
+  void dispose() {
+    _name.dispose();
+    _desc.dispose();
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('폴더 수정', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _name,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: '폴더명',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _desc,
+              style: const TextStyle(color: Colors.white),
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: '설명',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('폴더 색상', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [null, ...Colors.primaries].map((c) {
+                final selected = _color == c;
+                return GestureDetector(
+                  onTap: () => setState(() => _color = c),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: c ?? Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: selected ? Colors.white : Colors.white24, width: selected ? 2 : 1),
+                    ),
+                    child: c == null ? const Center(child: Icon(Icons.close_rounded, size: 14, color: Colors.white54)) : null,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
+            const Text('모양', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(label: const Text('직사각형'), selected: _shape == 'rect', onSelected: (_) => setState(() => _shape = 'rect')),
+                ChoiceChip(label: const Text('평행사변형'), selected: _shape == 'parallelogram', onSelected: (_) => setState(() => _shape = 'parallelogram')),
+                ChoiceChip(label: const Text('알약'), selected: _shape == 'pill', onSelected: (_) => setState(() => _shape = 'pill')),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          onPressed: () {
+            Navigator.pop(context, widget.initial.copyWith(name: _name.text.trim(), description: _desc.text.trim(), color: _color, shape: _shape));
+          },
+          child: const Text('저장'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ResourceFile {
   final String id;
   final String name;
   final Color? color; // filled style
+  final IconData? icon; // file icon
   final String? parentId; // for nesting
   final Offset position;
   final Size size;
@@ -1523,6 +1743,7 @@ class _ResourceFile {
     required this.id,
     required this.name,
     required this.color,
+    this.icon,
     this.parentId,
     required this.position,
     required this.size,
@@ -1533,6 +1754,7 @@ class _ResourceFile {
     String? id,
     String? name,
     Color? color,
+    IconData? icon,
     String? parentId,
     Offset? position,
     Size? size,
@@ -1542,6 +1764,7 @@ class _ResourceFile {
       id: id ?? this.id,
       name: name ?? this.name,
       color: color ?? this.color,
+      icon: icon ?? this.icon,
       parentId: parentId ?? this.parentId,
       position: position ?? this.position,
       size: size ?? this.size,
@@ -1566,6 +1789,247 @@ class _FileCreateDialog extends StatefulWidget {
   const _FileCreateDialog();
   @override
   State<_FileCreateDialog> createState() => _FileCreateDialogState();
+}
+
+class _FileEditDialog extends StatefulWidget {
+  final _ResourceFile initial;
+  const _FileEditDialog({required this.initial});
+  @override
+  State<_FileEditDialog> createState() => _FileEditDialogState();
+}
+
+class _FileEditDialogState extends State<_FileEditDialog> {
+  late final TextEditingController _nameController;
+  Color? _selectedColor;
+  IconData? _selectedIcon;
+  List<String> _grades = [];
+  late final Map<String, TextEditingController> _gradeUrlControllers;
+  final List<Color?> _colors = [null, ...Colors.primaries];
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initial.name);
+    _selectedColor = widget.initial.color;
+    _selectedIcon = widget.initial.icon ?? Icons.insert_drive_file;
+    _initGrades();
+  }
+  Future<void> _initGrades() async {
+    final rows = await DataManager.instance.getResourceGrades();
+    final list = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
+    _grades = list.isEmpty ? ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'] : list;
+    final currentLinks = await DataManager.instance.loadResourceFileLinks(widget.initial.id);
+    _gradeUrlControllers = { for (final g in _grades) g: TextEditingController(text: currentLinks[g] ?? '') };
+    if (mounted) setState(() {});
+  }
+  @override
+  void dispose() {
+    _nameController.dispose();
+    for (final c in _gradeUrlControllers.values) { c.dispose(); }
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('파일 수정', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameController,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: '파일 이름',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // 아이콘 선택
+            const Text('아이콘', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: const [
+                Icons.insert_drive_file,
+                Icons.description,
+                Icons.picture_as_pdf,
+                Icons.table_chart,
+                Icons.link,
+                Icons.folder,
+                Icons.image,
+                Icons.movie,
+              ].map((ico) {
+                return _IconChoice(iconData: ico);
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            StatefulBuilder(
+              builder: (context, setSB) {
+                return Row(
+                  children: [
+                    const Text('선택됨: ', style: TextStyle(color: Colors.white60)),
+                    Icon(_selectedIcon, color: Colors.white70, size: 18),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            const Text('과정별 링크', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _grades.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final grade = _grades[index];
+                  return Row(
+                    children: [
+                      SizedBox(width: 64, child: Text(grade, style: const TextStyle(color: Colors.white70))),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 36,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+                            final file = await openFile(acceptedTypeGroups: [typeGroup]);
+                            if (file != null) {
+                              _gradeUrlControllers[grade]!.text = file.path;
+                              if (_nameController.text.trim().isEmpty) {
+                                _nameController.text = file.name;
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.folder_open, size: 16),
+                          label: const Text('찾기'),
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 36,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('해당 행에 파일을 드래그해서 놓으면 등록됩니다.')),
+                            );
+                          },
+                          icon: const Icon(Icons.file_download, size: 16),
+                          label: const Text('드롭'),
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 36,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('PDF 편집기는 다음 단계에서 구현됩니다.')),
+                            );
+                          },
+                          icon: const Icon(Icons.picture_as_pdf, size: 16),
+                          label: const Text('편집'),
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _gradeUrlControllers[grade],
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            hintText: 'https:// 또는 파일 경로',
+                            hintStyle: TextStyle(color: Colors.white38),
+                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('색상 (가득찬 스타일)', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _colors.map((c) {
+                final sel = _selectedColor == c;
+                return GestureDetector(
+                  onTap: () => setState(() => _selectedColor = c),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: c ?? Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: sel ? Colors.white : Colors.white24, width: sel ? 2 : 1),
+                    ),
+                    child: c == null ? const Center(child: Icon(Icons.close_rounded, size: 14, color: Colors.white54)) : null,
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          onPressed: () {
+            final links = <String, String>{};
+            for (final g in _grades) {
+              final v = _gradeUrlControllers[g]!.text.trim();
+              if (v.isNotEmpty) links[g] = v;
+            }
+            Navigator.pop(context, {
+              'file': widget.initial.copyWith(name: _nameController.text.trim(), color: _selectedColor, icon: _selectedIcon),
+              'links': links,
+            });
+          },
+          child: const Text('저장'),
+        ),
+      ],
+    );
+  }
+}
+
+class _IconChoice extends StatelessWidget {
+  final IconData iconData;
+  const _IconChoice({required this.iconData});
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_FileEditDialogState>();
+    final isSelected = state?._selectedIcon == iconData;
+    return InkWell(
+      onTap: () => state?.setState(() => state._selectedIcon = iconData),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSelected == true ? Colors.white : Colors.white24, width: isSelected == true ? 2.0 : 1.0),
+        ),
+        child: Icon(iconData, size: 18, color: Colors.white70),
+      ),
+    );
+  }
 }
 
 class _FileCreateDialogState extends State<_FileCreateDialog> {
@@ -2005,7 +2469,10 @@ class _DraggableFileCard extends StatefulWidget {
   final VoidCallback? onResizeEnd;
   final VoidCallback? onAddChild;
   final String? currentGrade;
-  const _DraggableFileCard({super.key, required this.file, required this.resizeMode, required this.globalToCanvasLocal, required this.onMoved, this.onEndMoved, this.onResize, this.onResizeEnd, this.onAddChild, this.currentGrade});
+  final bool editMode;
+  final void Function(String fileId)? onDeleteRequested;
+  final void Function(_ResourceFile file)? onEditRequested;
+  const _DraggableFileCard({super.key, required this.file, required this.resizeMode, required this.globalToCanvasLocal, required this.onMoved, this.onEndMoved, this.onResize, this.onResizeEnd, this.onAddChild, this.currentGrade, required this.editMode, this.onDeleteRequested, this.onEditRequested});
 
   @override
   State<_DraggableFileCard> createState() => _DraggableFileCardState();
@@ -2025,7 +2492,15 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
       left: effectivePos.dx,
       top: effectivePos.dy,
       child: GestureDetector(
+        onTap: widget.editMode
+            ? () {
+                // ignore: avoid_print
+                print('[EDIT] File tap -> open edit dialog: id=${widget.file.id}');
+                if (widget.onEditRequested != null) widget.onEditRequested!(widget.file);
+              }
+            : null,
         onPanStart: (_) {
+          if (widget.editMode) return; // 편집 모드에서는 이동 금지
           if (!_resizing && !widget.resizeMode) {
             setState(() {
               _dragging = true;
@@ -2033,7 +2508,7 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
             });
           }
         },
-        onDoubleTap: () async {
+        onDoubleTap: widget.editMode ? null : () async {
           final grade = widget.file.primaryGrade;
           if (grade == null) return;
           final link = widget.file.linksByGrade[grade]?.trim() ?? '';
@@ -2046,11 +2521,13 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           }
         },
         onPanUpdate: (d) {
+          if (widget.editMode) return;
           if (_dragging && !_resizing && !widget.resizeMode) {
             setState(() => _tempPosition = Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy));
           }
         },
         onPanEnd: (_) {
+          if (widget.editMode) return;
           setState(() => _dragging = false);
           final endPos = _tempPosition ?? widget.file.position;
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
@@ -2063,7 +2540,19 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           child: Stack(
             children: [
               _FileCard(file: widget.file.copyWith(position: effectivePos, size: effectiveSize)),
-              if (widget.resizeMode)
+              if (widget.editMode)
+                Positioned(
+                  right: 6,
+                  top: 6,
+                  child: InkWell(
+                    onTap: () async {
+                      if (widget.onDeleteRequested != null) widget.onDeleteRequested!(widget.file.id);
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: const Icon(Icons.close, size: 18, color: Colors.white70),
+                  ),
+                ),
+              if (widget.resizeMode && !widget.editMode)
                 Positioned(
                   right: 8,
                   bottom: 8,
@@ -2123,7 +2612,7 @@ class _FileCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-           Icon(Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
+           Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

@@ -1572,6 +1572,11 @@ class DataManager {
     return await AcademyDbService.instance.loadResourceFileLinks(fileId);
   }
 
+  Future<void> deleteResourceFile(String fileId) async {
+    await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
+    await AcademyDbService.instance.deleteResourceFile(fileId);
+  }
+
   // ======== RESOURCE GRADES (학년 목록/순서) ========
   Future<List<Map<String, dynamic>>> getResourceGrades() async {
     return await AcademyDbService.instance.getResourceGrades();
