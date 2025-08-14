@@ -6,6 +6,8 @@ import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:open_filex/open_filex.dart';
 
 class ResourcesScreen extends StatefulWidget {
   const ResourcesScreen({super.key});
@@ -746,6 +748,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
@@ -831,6 +834,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
@@ -916,6 +920,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
@@ -1103,6 +1108,7 @@ class _ResourcesCanvas extends StatefulWidget {
   final List<_ResourceFolder> folders;
   final List<_ResourceFile> files;
   final bool resizeMode;
+  final String? currentGrade;
   final void Function(String id, Offset position, Size canvasSize) onFolderMoved;
   final void Function(String id, Size newSize, Size canvasSize)? onFolderResized;
   final VoidCallback? onExitResizeMode;
@@ -1111,7 +1117,7 @@ class _ResourcesCanvas extends StatefulWidget {
   final void Function(String id, Offset position, Size canvasSize)? onFileMoved;
   final void Function(String id, Size newSize, Size canvasSize)? onFileResized;
   final void Function(int delta)? onScrollGrade;
-  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized, this.onScrollGrade});
+  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.currentGrade, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized, this.onScrollGrade});
 
   @override
   State<_ResourcesCanvas> createState() => _ResourcesCanvasState();
@@ -1252,6 +1258,7 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                 , file: fi,
                   resizeMode: widget.resizeMode,
                   globalToCanvasLocal: _globalToCanvasLocal,
+                  currentGrade: widget.currentGrade,
                   onMoved: (pos) {
                     if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, pos, _canvasSize);
                   },
@@ -1997,7 +2004,8 @@ class _DraggableFileCard extends StatefulWidget {
   final void Function(Size newSize)? onResize;
   final VoidCallback? onResizeEnd;
   final VoidCallback? onAddChild;
-  const _DraggableFileCard({super.key, required this.file, required this.resizeMode, required this.globalToCanvasLocal, required this.onMoved, this.onEndMoved, this.onResize, this.onResizeEnd, this.onAddChild});
+  final String? currentGrade;
+  const _DraggableFileCard({super.key, required this.file, required this.resizeMode, required this.globalToCanvasLocal, required this.onMoved, this.onEndMoved, this.onResize, this.onResizeEnd, this.onAddChild, this.currentGrade});
 
   @override
   State<_DraggableFileCard> createState() => _DraggableFileCardState();
@@ -2023,6 +2031,18 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
               _dragging = true;
               _tempPosition = widget.file.position;
             });
+          }
+        },
+        onDoubleTap: () async {
+          final grade = widget.file.primaryGrade;
+          if (grade == null) return;
+          final link = widget.file.linksByGrade[grade]?.trim() ?? '';
+          if (link.isEmpty) return;
+          if (link.startsWith('http://') || link.startsWith('https://')) {
+            final uri = Uri.parse(link);
+            await launchUrl(uri, mode: LaunchMode.platformDefault);
+          } else {
+            await OpenFilex.open(link);
           }
         },
         onPanUpdate: (d) {
@@ -2086,29 +2106,31 @@ class _FileCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = file.color ?? const Color(0xFF2D2D2D);
-    final primary = file.primaryGrade;
+    final primaryGrade = (context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade) ?? file.primaryGrade;
+    final hasForCurrent = primaryGrade != null && (file.linksByGrade[primaryGrade]?.trim().isNotEmpty ?? false);
+    final bg = (hasForCurrent ? (file.color ?? const Color(0xFF2D2D2D)) : const Color(0xFF2D2D2D).withOpacity(0.5));
+    final primary = primaryGrade;
     return Container(
       width: file.size.width,
       height: file.size.height,
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white24, width: 1.2),
+         border: Border.all(color: hasForCurrent ? Colors.white24 : Colors.white10, width: 1.2),
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Icon(Icons.insert_drive_file, color: Colors.white70, size: 18),
+           Icon(Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               file.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w600),
+              style: TextStyle(color: hasForCurrent ? Colors.white : Colors.white38, fontSize: 14.5, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 8),
