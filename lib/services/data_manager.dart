@@ -1546,4 +1546,51 @@ class DataManager {
       rethrow;
     }
   }
+
+  // ======== RESOURCES (FOLDERS/FILES) ========
+  Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
+    await AcademyDbService.instance.saveResourceFolders(rows);
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFolders() async {
+    return await AcademyDbService.instance.loadResourceFolders();
+  }
+
+  Future<void> saveResourceFile(Map<String, dynamic> row) async {
+    await AcademyDbService.instance.saveResourceFile(row);
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFiles() async {
+    return await AcademyDbService.instance.loadResourceFiles();
+  }
+
+  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
+    await AcademyDbService.instance.saveResourceFileLinks(fileId, links);
+  }
+
+  Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
+    return await AcademyDbService.instance.loadResourceFileLinks(fileId);
+  }
+
+  // ======== RESOURCE GRADES (학년 목록/순서) ========
+  Future<List<Map<String, dynamic>>> getResourceGrades() async {
+    return await AcademyDbService.instance.getResourceGrades();
+  }
+
+  Future<void> saveResourceGrades(List<String> names) async {
+    await AcademyDbService.instance.saveResourceGrades(names);
+  }
+
+  // ======== RESOURCE GRADE ICONS ========
+  Future<Map<String, int>> getResourceGradeIcons() async {
+    return await AcademyDbService.instance.getResourceGradeIcons();
+  }
+
+  Future<void> setResourceGradeIcon(String name, int icon) async {
+    await AcademyDbService.instance.setResourceGradeIcon(name, icon);
+  }
+
+  Future<void> deleteResourceGradeIcon(String name) async {
+    await AcademyDbService.instance.deleteResourceGradeIcon(name);
+  }
 } 

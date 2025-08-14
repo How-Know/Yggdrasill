@@ -232,6 +232,49 @@ class AcademyDbService {
             updated_at TEXT
           )
         ''');
+        // Resources tables (folders/files)
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_folders (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            description TEXT,
+            color INTEGER,
+            pos_x REAL,
+            pos_y REAL,
+            width REAL,
+            height REAL,
+            shape TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_files (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            url TEXT,
+            color INTEGER,
+            grade TEXT,
+            parent_id TEXT,
+            pos_x REAL,
+            pos_y REAL,
+            width REAL,
+            height REAL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_file_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT,
+            grade TEXT,
+            url TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_grades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            order_index INTEGER
+          )
+        ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -507,6 +550,22 @@ class AcademyDbService {
             await db.execute('ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
           }
         }
+        // ensure new resources-related tables (links, grades)
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_file_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT,
+            grade TEXT,
+            url TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_grades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            order_index INTEGER
+          )
+        ''');
         
         // 버전 13: student_time_blocks 테이블 컬럼 구조 수정
         if (oldVersion < 13) {
@@ -749,6 +808,169 @@ class AcademyDbService {
         )
       ''');
     }
+  }
+
+  // ======== RESOURCES (FOLDERS/FILES) ========
+  Future<void> ensureResourceTables() async {
+    final dbClient = await db;
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_folders (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        description TEXT,
+        color INTEGER,
+        pos_x REAL,
+        pos_y REAL,
+        width REAL,
+        height REAL,
+        shape TEXT
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_files (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        url TEXT,
+        color INTEGER,
+        grade TEXT,
+        parent_id TEXT,
+        pos_x REAL,
+        pos_y REAL,
+        width REAL,
+        height REAL
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_file_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id TEXT,
+        grade TEXT,
+        url TEXT
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_grades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        order_index INTEGER
+      )
+    ''');
+    // 아이콘 매핑 테이블 (이름별 아이콘 코드포인트 저장)
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_grade_icons (
+        name TEXT PRIMARY KEY,
+        icon INTEGER
+      )
+    ''');
+  }
+
+  Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      for (final row in rows) {
+        await txn.insert('resource_folders', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFolders() async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    return await dbClient.query('resource_folders');
+  }
+
+  Future<void> saveResourceFile(Map<String, dynamic> row) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.insert('resource_files', row, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFiles() async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    return await dbClient.query('resource_files');
+  }
+
+  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+      for (final entry in links.entries) {
+        final grade = entry.key;
+        final url = entry.value.trim();
+        if (url.isEmpty) continue;
+        await txn.insert('resource_file_links', {
+          'file_id': fileId,
+          'grade': grade,
+          'url': url,
+        });
+      }
+    });
+  }
+
+  Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    final rows = await dbClient.query('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+    final Map<String, String> result = {};
+    for (final r in rows) {
+      final grade = (r['grade'] as String?) ?? '';
+      final url = (r['url'] as String?) ?? '';
+      if (grade.isNotEmpty && url.isNotEmpty) result[grade] = url;
+    }
+    return result;
+  }
+
+  // ======== RESOURCE GRADES ========
+  Future<List<Map<String, dynamic>>> getResourceGrades() async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    return await dbClient.query('resource_grades', orderBy: 'order_index ASC');
+  }
+
+  Future<void> saveResourceGrades(List<String> names) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('resource_grades');
+      for (int i = 0; i < names.length; i++) {
+        await txn.insert('resource_grades', {
+          'name': names[i],
+          'order_index': i,
+        });
+      }
+    });
+  }
+
+  // ======== RESOURCE GRADE ICONS ========
+  Future<Map<String, int>> getResourceGradeIcons() async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    final rows = await dbClient.query('resource_grade_icons');
+    final Map<String, int> result = {};
+    for (final r in rows) {
+      final name = (r['name'] as String?) ?? '';
+      final icon = (r['icon'] as int?) ?? 0;
+      if (name.isNotEmpty && icon != 0) result[name] = icon;
+    }
+    return result;
+  }
+
+  Future<void> setResourceGradeIcon(String name, int icon) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.insert('resource_grade_icons', {
+      'name': name,
+      'icon': icon,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> deleteResourceGradeIcon(String name) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.delete('resource_grade_icons', where: 'name = ?', whereArgs: [name]);
   }
 
   Future<Map<String, dynamic>?> getAcademySettings() async {

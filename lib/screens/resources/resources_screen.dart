@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
 import '../../services/data_manager.dart';
@@ -21,6 +22,14 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   final List<_ResourceFolder> _folders = [];
   final List<_ResourceFile> _files = [];
 
+  // 학년 관리 상태
+  final GlobalKey _gradeButtonKey = GlobalKey();
+  OverlayEntry? _gradeOverlay;
+  bool _isGradeMenuOpen = false;
+  List<String> _grades = [];
+  int _selectedGradeIndex = 0;
+  int _lastGradeScrollMs = 0;
+
   static const Size _defaultFolderSize = Size(220, 120);
   static const List<String> kFolderShapes = ['rect', 'parallelogram', 'pill'];
   String _addType = '폴더';
@@ -33,6 +42,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       if (candidate.overlaps(_rectOfFolder(other))) return true;
     }
     return false;
+  }
+
+  void _changeGradeByDelta(int delta) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastGradeScrollMs < 60) return; // 간단 디바운스로 중복 처리 방지
+    _lastGradeScrollMs = now;
+    if (_grades.isEmpty) return;
+    final before = _selectedGradeIndex;
+    final next = (_selectedGradeIndex + delta).clamp(0, _grades.length - 1);
+    if (before != next) {
+      setState(() => _selectedGradeIndex = next as int);
+      // ignore: avoid_print
+      print('[GRADE] scroll -> index: $_selectedGradeIndex, name: ${_grades[_selectedGradeIndex]}');
+    }
   }
 
   Offset _clampPosition(Offset pos, Size size, Size canvasSize) {
@@ -49,12 +72,13 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     final Offset buttonPosition = buttonRenderBox.localToGlobal(Offset.zero);
     final Size buttonSize = buttonRenderBox.size;
     _dropdownOverlay = OverlayEntry(
-      builder: (context) => Positioned(
-        left: buttonPosition.dx,
-        top: buttonPosition.dy - 8 - 80, // 버튼 위쪽 살짝
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
+      builder: (context) {
+        return Positioned(
+          left: buttonPosition.dx,
+          top: buttonPosition.dy - 8 - 80, // 버튼 위쪽 살짝
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
             width: 160,
             decoration: BoxDecoration(
               color: const Color(0xFF2A2A2A),
@@ -92,7 +116,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
             ),
           ),
         ),
-      ),
+      );
+      },
     );
     Overlay.of(context).insert(_dropdownOverlay!);
     setState(() => _isDropdownOpen = true);
@@ -104,6 +129,430 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     if (mounted) {
       setState(() => _isDropdownOpen = false);
     }
+  }
+
+  Future<void> _ensureGradesLoaded() async {
+    try {
+      final rows = await DataManager.instance.getResourceGrades();
+      final list = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
+      if (list.isEmpty) {
+        final defaults = ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'];
+        await DataManager.instance.saveResourceGrades(defaults);
+        _grades = defaults;
+      } else {
+        _grades = list;
+      }
+      _selectedGradeIndex = _selectedGradeIndex.clamp(0, _grades.isEmpty ? 0 : _grades.length - 1);
+    } catch (_) {
+      _grades = [];
+      _selectedGradeIndex = 0;
+    }
+  }
+
+  void _openGradeMenu() {
+    if (_isGradeMenuOpen) return;
+    final box = _gradeButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    _gradeOverlay = OverlayEntry(
+      builder: (context) {
+        return Stack(children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _closeGradeMenu,
+          ),
+        ),
+        Positioned(
+          left: pos.dx,
+          top: pos.dy + size.height + 6,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+            width: 252,
+            constraints: const BoxConstraints(maxHeight: 360),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white10, width: 1),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 18, offset: const Offset(0,8))],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      const Text('과정', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: '추가',
+                        onPressed: () async {
+                          if (_isGradeMenuOpen) {
+                            // ignore: avoid_print
+                            print('[GRADE] + 버튼: 먼저 오버레이 닫기');
+                            _closeGradeMenu();
+                          }
+                          final result = await showDialog<Map<String, dynamic>>(
+                            context: context,
+                            barrierDismissible: true,
+                            builder: (ctx) {
+                              final controller = TextEditingController();
+                              final icons = <IconData>[
+                                Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
+                                Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
+                                Icons.calculate, Icons.science, Icons.psychology, Icons.code,
+                                Icons.draw, Icons.piano, Icons.sports_basketball, Icons.public,
+                                Icons.attach_file, Icons.folder, Icons.create, Icons.edit_note,
+                              ];
+                              int selectedIconIndex = 0;
+                              return AlertDialog(
+                                backgroundColor: const Color(0xFF1F1F1F),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                title: const Text('학년 추가', style: TextStyle(color: Colors.white, fontSize: 20)),
+                                content: SizedBox(
+                                  width: 520,
+                                  child: SingleChildScrollView(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                    TextField(
+                                      controller: controller,
+                                      style: const TextStyle(color: Colors.white),
+                                      decoration: const InputDecoration(
+                                        hintText: '과정명을 입력하세요',
+                                        hintStyle: TextStyle(color: Colors.white38),
+                                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                  // 아이콘 선택 그리드
+                                        SizedBox(
+                                          height: 120,
+                                          child: StatefulBuilder(
+                                            builder: (ctx2, setState2) => GridView.builder(
+                                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                                crossAxisCount: 10,
+                                                mainAxisSpacing: 6,
+                                                crossAxisSpacing: 6,
+                                              ),
+                                              itemCount: icons.length,
+                                              shrinkWrap: true,
+                                              primary: false,
+                                              physics: const NeverScrollableScrollPhysics(),
+                                              itemBuilder: (c, i) {
+                                                final selected = i == selectedIconIndex;
+                                                return InkWell(
+                                                  onTap: () => setState2(() => selectedIconIndex = i),
+                                                  borderRadius: BorderRadius.circular(8),
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      color: selected ? const Color(0xFF1976D2).withOpacity(0.25) : const Color(0xFF2A2A2A),
+                                                      borderRadius: BorderRadius.circular(8),
+                                                      border: Border.all(color: selected ? const Color(0xFF1976D2) : Colors.white24),
+                                                    ),
+                                                    alignment: Alignment.center,
+                                                    child: Icon(icons[i], color: Colors.white70, size: 18),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                                  const SizedBox(width: 8),
+                                  FilledButton(
+                                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                    onPressed: () => Navigator.pop(ctx, {
+                                      'name': controller.text.trim(),
+                                      'icon': icons[selectedIconIndex].codePoint,
+                                    }),
+                                    child: const Text('추가'),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                          if (result != null) {
+                            final name = (result['name'] as String?)?.trim() ?? '';
+                            final icon = (result['icon'] as int?) ?? 0;
+                            if (name.isNotEmpty) {
+                              setState(() => _grades.add(name));
+                              await DataManager.instance.saveResourceGrades(_grades);
+                              if (icon != 0) {
+                                await DataManager.instance.setResourceGradeIcon(name, icon);
+                              }
+                              Overlay.of(context).setState(() {});
+                              // 다이얼로그 종료 후 다시 메뉴를 열어 사용 흐름 유지
+                              _openGradeMenu();
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.add, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, color: Colors.white12),
+                SizedBox(
+                  height: 280,
+                  child: ReorderableListView.builder(
+                    shrinkWrap: true,
+                    itemCount: _grades.length,
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    buildDefaultDragHandles: false,
+                    proxyDecorator: (child, index, animation) {
+                      return Material(
+                        color: Colors.transparent,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2A2A2A),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white10, width: 1),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 12, offset: const Offset(0, 6)),
+                            ],
+                          ),
+                          child: child,
+                        ),
+                      );
+                    },
+                    onReorder: (oldIndex, newIndex) async {
+                      if (newIndex > oldIndex) newIndex -= 1;
+                      setState(() {
+                        final item = _grades.removeAt(oldIndex);
+                        _grades.insert(newIndex, item);
+                        _selectedGradeIndex = _selectedGradeIndex.clamp(0, _grades.length - 1);
+                      });
+                      await DataManager.instance.saveResourceGrades(_grades);
+                    },
+                    itemBuilder: (context, index) {
+                      final g = _grades[index];
+                      final selected = index == _selectedGradeIndex;
+                      return ListTile(
+                        key: ValueKey('grade_${index}_$g'),
+                        onTap: () {
+                          setState(() => _selectedGradeIndex = index);
+                          _closeGradeMenu();
+                        },
+                dense: true,
+                selected: selected,
+                selectedTileColor: const Color(0xFF333333),
+                        title: FutureBuilder<Map<String, int>>(
+                          future: DataManager.instance.getResourceGradeIcons(),
+                          builder: (context, snapshot) {
+                            final map = snapshot.data ?? const {};
+                            final code = map[g];
+                            final icon = code != null ? IconData(code, fontFamily: 'MaterialIcons') : null;
+                            return Row(
+                              children: [
+                                if (icon != null) ...[
+                                  Icon(icon, color: Colors.white60, size: 16),
+                                  const SizedBox(width: 8),
+                                ],
+                                Expanded(
+                                  child: Text(
+                                    g,
+                                    style: TextStyle(
+                                      color: selected ? Colors.white : Colors.white70,
+                                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: '이름 변경',
+                              icon: const Icon(Icons.edit, color: Colors.white54, size: 18),
+                              onPressed: () async {
+                                final controller = TextEditingController(text: g);
+                                final icons = <IconData>[
+                                  Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
+                                  Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
+                                  Icons.calculate, Icons.science, Icons.psychology, Icons.code,
+                                  Icons.draw, Icons.piano, Icons.sports_basketball, Icons.public,
+                                  Icons.attach_file, Icons.folder, Icons.create, Icons.edit_note,
+                                ];
+                                if (_isGradeMenuOpen) {
+                                  // ignore: avoid_print
+                                  print('[GRADE] 수정 다이얼로그: 먼저 오버레이 닫기');
+                                  _closeGradeMenu();
+                                }
+                                final newResult = await showDialog<Map<String, dynamic>>(
+                                  context: context,
+                                  barrierDismissible: true,
+                                  builder: (ctx) => StatefulBuilder(
+                                    builder: (ctx2, setState2) {
+                                      int selectedIconIndex = 0;
+                                      return AlertDialog(
+                                        backgroundColor: const Color(0xFF1F1F1F),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        title: const Text('학년 정보 수정', style: TextStyle(color: Colors.white, fontSize: 20)),
+                                        content: SizedBox(
+                                          width: 520,
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                            TextField(
+                                              controller: controller,
+                                              style: const TextStyle(color: Colors.white),
+                                              decoration: const InputDecoration(
+                                                hintText: '새 학년명',
+                                                hintStyle: TextStyle(color: Colors.white38),
+                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            SizedBox(
+                                              height: 120,
+                                              child: GridView.builder(
+                                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                                  crossAxisCount: 10,
+                                                  mainAxisSpacing: 6,
+                                                  crossAxisSpacing: 6,
+                                                ),
+                                                itemCount: icons.length,
+                                                shrinkWrap: true,
+                                                primary: false,
+                                                physics: const NeverScrollableScrollPhysics(),
+                                                itemBuilder: (c, i) {
+                                                  final selected = i == selectedIconIndex;
+                                                  return InkWell(
+                                                    onTap: () => setState2(() => selectedIconIndex = i),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                    child: Container(
+                                                      decoration: BoxDecoration(
+                                                        color: selected ? const Color(0xFF1976D2).withOpacity(0.25) : const Color(0xFF2A2A2A),
+                                                        borderRadius: BorderRadius.circular(8),
+                                                        border: Border.all(color: selected ? const Color(0xFF1976D2) : Colors.white24),
+                                                      ),
+                                                      alignment: Alignment.center,
+                                                      child: Icon(icons[i], color: Colors.white70, size: 18),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        actions: [
+                                          TextButton(onPressed: () => Navigator.pop(ctx2), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                                          FilledButton(
+                                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                            onPressed: () => Navigator.pop(ctx2, {
+                                              'name': controller.text.trim(),
+                                              'icon': icons[selectedIconIndex].codePoint,
+                                            }),
+                                            child: const Text('저장'),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                );
+                                if (newResult != null) {
+                                  final newName = (newResult['name'] as String?)?.trim() ?? '';
+                                  final icon = (newResult['icon'] as int?) ?? 0;
+                                  if (newName.isNotEmpty) {
+                                    setState(() => _grades[index] = newName);
+                                    await DataManager.instance.saveResourceGrades(_grades);
+                                    if (icon != 0) {
+                                      await DataManager.instance.setResourceGradeIcon(newName, icon);
+                                    }
+                                    Overlay.of(context).setState(() {});
+                                  }
+                                }
+                              },
+                            ),
+                            IconButton(
+                              tooltip: '삭제',
+                              icon: const Icon(Icons.delete_outline, color: Colors.white54, size: 18),
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    backgroundColor: const Color(0xFF1F1F1F),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    title: const Text('삭제 확인', style: TextStyle(color: Colors.white, fontSize: 20)),
+                                    content: Text('"$g" 학년을 삭제할까요?', style: const TextStyle(color: Colors.white70)),
+                                    actions: [
+                                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                                      FilledButton(
+                                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                        onPressed: () => Navigator.pop(ctx, true),
+                                        child: const Text('삭제'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  setState(() {
+                                    _grades.removeAt(index);
+                                    if (_grades.isEmpty) {
+                                      _selectedGradeIndex = 0;
+                                    } else {
+                                      _selectedGradeIndex = _selectedGradeIndex.clamp(0, _grades.length - 1);
+                                    }
+                                  });
+                                  await DataManager.instance.saveResourceGrades(_grades);
+                                  Overlay.of(context).setState(() {});
+                                }
+                              },
+                            ),
+                            const SizedBox(width: 6),
+                            ReorderableDragStartListener(
+                              index: index,
+                              child: const Icon(Icons.drag_handle, color: Colors.white38),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        ),
+      ]);
+      },
+    );
+    Overlay.of(context).insert(_gradeOverlay!);
+    setState(() => _isGradeMenuOpen = true);
+    // 외부 클릭/포커스 이동 시 자동 닫기
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      FocusScope.of(context).unfocus();
+      // Route 변화 감지하여 닫기
+      ModalRoute.of(context)?.addLocalHistoryEntry(LocalHistoryEntry(onRemove: () {
+        if (_isGradeMenuOpen) _closeGradeMenu();
+      }));
+    });
+  }
+
+  void _closeGradeMenu() {
+    _gradeOverlay?.remove();
+    _gradeOverlay = null;
+    setState(() => _isGradeMenuOpen = false);
   }
 
   Future<void> _onAddFolder() async {
@@ -151,18 +600,21 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       builder: (context) => const _FileCreateDialog(),
     );
     if (result != null) {
+      // 파일 메타 저장
       await DataManager.instance.saveResourceFile({
         'id': result.id,
         'name': result.name,
-        'url': result.url,
+        'url': result.linksByGrade[result.primaryGrade ?? ''] ?? '',
         'color': result.color?.value,
-        'grade': result.grade,
+        'grade': result.primaryGrade ?? '',
         'parent_id': result.parentId,
         'pos_x': result.position.dx,
         'pos_y': result.position.dy,
         'width': result.size.width,
         'height': result.size.height,
       });
+      // 학년별 링크 저장
+      await DataManager.instance.saveResourceFileLinks(result.id, result.linksByGrade);
     }
   }
 
@@ -170,6 +622,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   void initState() {
     super.initState();
     _loadLayout();
+    _ensureGradesLoaded();
   }
 
   Future<void> _saveLayout() async {
@@ -205,16 +658,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         shape: (r['shape'] as String?) ?? 'rect',
       )).toList();
       final fileRows = await DataManager.instance.loadResourceFiles();
-      final loadedFiles = fileRows.map<_ResourceFile>((r) => _ResourceFile(
-        id: r['id'] as String,
-        name: (r['name'] as String?) ?? '',
-        url: (r['url'] as String?) ?? '',
-        color: (r['color'] as int?) != null ? Color(r['color'] as int) : null,
-        grade: (r['grade'] as String?) ?? '초1',
-        parentId: r['parent_id'] as String?,
-        position: Offset((r['pos_x'] as num?)?.toDouble() ?? 0.0, (r['pos_y'] as num?)?.toDouble() ?? 0.0),
-        size: Size((r['width'] as num?)?.toDouble() ?? 200.0, (r['height'] as num?)?.toDouble() ?? 60.0),
-      )).toList();
+      final List<_ResourceFile> loadedFiles = [];
+      for (final r in fileRows) {
+        final id = r['id'] as String;
+        final links = await DataManager.instance.loadResourceFileLinks(id);
+        loadedFiles.add(_ResourceFile(
+          id: id,
+          name: (r['name'] as String?) ?? '',
+          color: (r['color'] as int?) != null ? Color(r['color'] as int) : null,
+          parentId: r['parent_id'] as String?,
+          position: Offset((r['pos_x'] as num?)?.toDouble() ?? 0.0, (r['pos_y'] as num?)?.toDouble() ?? 0.0),
+          size: Size((r['width'] as num?)?.toDouble() ?? 200.0, (r['height'] as num?)?.toDouble() ?? 60.0),
+          linksByGrade: links,
+        ));
+      }
       if (mounted) {
         setState(() {
           _folders
@@ -246,11 +703,39 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 tabs: const ['교재', '시험', '기타'],
                 onTabSelected: (i) {
                   setState(() {
+                    // 탭 전환 시에는 드롭다운을 닫되, 탭 전환 직후 build 전에 닫기 로직이 다시 먹지 않도록 여기만 처리
+                    if (_isGradeMenuOpen) _closeGradeMenu();
                     _customTabIndex = i;
                   });
                 },
               ),
               const SizedBox(height: 1),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: OutlinedButton.icon(
+                    key: _gradeButtonKey,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white38, width: 1.4),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15.4),
+                    ),
+                    onPressed: () async {
+                      // 버튼 연속 클릭 시만 닫기. 닫혀있으면 열기만 수행
+                      if (_isGradeMenuOpen) _closeGradeMenu();
+                      await _ensureGradesLoaded();
+                      // 오픈만 수행
+                      _openGradeMenu();
+                    },
+                    icon: const Icon(Icons.school, size: 20),
+                    label: Text(
+                      _grades.isEmpty ? '' : _grades[_selectedGradeIndex],
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ),
               Expanded(
                 child: IndexedStack(
                   index: _customTabIndex,
@@ -259,6 +744,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
@@ -307,9 +793,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
                             'name': _files[i].name,
-                            'url': _files[i].url,
+                            'url': (_files[i].primaryGrade != null) ? (_files[i].linksByGrade[_files[i].primaryGrade!] ?? '') : '',
                             'color': _files[i].color?.value,
-                            'grade': _files[i].grade,
+                            'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
                             'pos_x': pos.dx,
                             'pos_y': pos.dy,
@@ -327,9 +813,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
                             'name': _files[i].name,
-                            'url': _files[i].url,
+                            'url': (_files[i].primaryGrade != null) ? (_files[i].linksByGrade[_files[i].primaryGrade!] ?? '') : '',
                             'color': _files[i].color?.value,
-                            'grade': _files[i].grade,
+                            'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
                             'pos_x': _files[i].position.dx,
                             'pos_y': _files[i].position.dy,
@@ -343,6 +829,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
@@ -391,9 +878,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
                             'name': _files[i].name,
-                            'url': _files[i].url,
+                            'url': (_files[i].primaryGrade != null) ? (_files[i].linksByGrade[_files[i].primaryGrade!] ?? '') : '',
                             'color': _files[i].color?.value,
-                            'grade': _files[i].grade,
+                            'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
                             'pos_x': pos.dx,
                             'pos_y': pos.dy,
@@ -411,9 +898,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
                             'name': _files[i].name,
-                            'url': _files[i].url,
+                            'url': (_files[i].primaryGrade != null) ? (_files[i].linksByGrade[_files[i].primaryGrade!] ?? '') : '',
                             'color': _files[i].color?.value,
-                            'grade': _files[i].grade,
+                            'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
                             'pos_x': _files[i].position.dx,
                             'pos_y': _files[i].position.dy,
@@ -427,6 +914,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
                       onFolderMoved: (id, pos, canvasSize) {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
@@ -620,7 +1108,8 @@ class _ResourcesCanvas extends StatefulWidget {
   final VoidCallback? onResizeEnd;
   final void Function(String id, Offset position, Size canvasSize)? onFileMoved;
   final void Function(String id, Size newSize, Size canvasSize)? onFileResized;
-  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized});
+  final void Function(int delta)? onScrollGrade;
+  const _ResourcesCanvas({required this.folders, required this.files, required this.resizeMode, required this.onFolderMoved, this.onFolderResized, this.onExitResizeMode, this.onMoveEnd, this.onResizeEnd, this.onFileMoved, this.onFileResized, this.onScrollGrade});
 
   @override
   State<_ResourcesCanvas> createState() => _ResourcesCanvasState();
@@ -712,8 +1201,22 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
       builder: (context, constraints) {
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
         return Listener(
-          onPointerSignal: (_) {},
-          child: Stack(
+          behavior: HitTestBehavior.translucent,
+          onPointerSignal: (signal) {
+            if (signal is PointerScrollEvent) {
+              // ignore: avoid_print
+              print('[GRADE] pointer signal dy=${signal.scrollDelta.dy}');
+              if (widget.onScrollGrade != null) {
+                final dy = signal.scrollDelta.dy;
+                if (dy != 0) widget.onScrollGrade!(dy > 0 ? 1 : -1);
+              }
+            }
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onPanDown: (_) {}, // 다른 제스쳐와 충돌 방지용 no-op
+            onScaleUpdate: (_) {}, // 스크롤 외 제스쳐 캡쳐 방지 no-op
+            child: Stack(
           key: _stackKey,
           children: [
             if (widget.folders.isEmpty && widget.files.isEmpty)
@@ -761,6 +1264,7 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   onResizeEnd: () { if (widget.onResizeEnd != null) widget.onResizeEnd!(); },
                 )),
           ],
+            ),
           ),
         );
       },
@@ -1001,25 +1505,51 @@ class _FolderCreateDialog extends StatefulWidget {
 class _ResourceFile {
   final String id;
   final String name;
-  final String url; // hyperlink or path
   final Color? color; // filled style
-  final String grade; // 초1..고3
   final String? parentId; // for nesting
   final Offset position;
   final Size size;
-  const _ResourceFile({required this.id, required this.name, required this.url, required this.color, required this.grade, this.parentId, required this.position, required this.size});
+  final Map<String, String> linksByGrade; // 학년별 링크 맵
+  const _ResourceFile({
+    required this.id,
+    required this.name,
+    required this.color,
+    this.parentId,
+    required this.position,
+    required this.size,
+    this.linksByGrade = const {},
+  });
 
-  _ResourceFile copyWith({String? id, String? name, String? url, Color? color, String? grade, String? parentId, Offset? position, Size? size}) {
+  _ResourceFile copyWith({
+    String? id,
+    String? name,
+    Color? color,
+    String? parentId,
+    Offset? position,
+    Size? size,
+    Map<String, String>? linksByGrade,
+  }) {
     return _ResourceFile(
       id: id ?? this.id,
       name: name ?? this.name,
-      url: url ?? this.url,
       color: color ?? this.color,
-      grade: grade ?? this.grade,
       parentId: parentId ?? this.parentId,
       position: position ?? this.position,
       size: size ?? this.size,
+      linksByGrade: linksByGrade ?? this.linksByGrade,
     );
+  }
+
+  String? get primaryGrade {
+    for (final g in const ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3']) {
+      final url = linksByGrade[g]?.trim();
+      if (url != null && url.isNotEmpty) return g;
+    }
+    // 아무거나 첫번째
+    for (final e in linksByGrade.entries) {
+      if (e.value.trim().isNotEmpty) return e.key;
+    }
+    return null;
   }
 }
 
@@ -1031,49 +1561,58 @@ class _FileCreateDialog extends StatefulWidget {
 
 class _FileCreateDialogState extends State<_FileCreateDialog> {
   late final TextEditingController _nameController;
-  late final TextEditingController _urlController;
   Color? _selectedColor;
-  String _grade = '초1';
-  final List<String> _grades = [
-    '초1','초2','초3','초4','초5','초6',
-    '중1','중2','중3',
-    '고1','고2','고3',
-  ];
+  List<String> _grades = [];
   final List<Color?> _colors = [null, ...Colors.primaries];
+  late final Map<String, TextEditingController> _gradeUrlControllers;
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController();
-    _urlController = TextEditingController();
+    _initGrades();
+  }
+
+  Future<void> _initGrades() async {
+    final rows = await DataManager.instance.getResourceGrades();
+    setState(() {
+      _grades = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
+      if (_grades.isEmpty) {
+        _grades = ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'];
+      }
+      _gradeUrlControllers = { for (final g in _grades) g: TextEditingController() };
+    });
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _urlController.dispose();
+    for (final c in _gradeUrlControllers.values) { c.dispose(); }
     super.dispose();
   }
 
   void _handleSave() {
     final name = _nameController.text.trim();
-    final url = _urlController.text.trim();
-    if (name.isEmpty || url.isEmpty) {
+    if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('이름과 위치(하이퍼링크)를 입력하세요.')),
+        const SnackBar(content: Text('이름을 입력하세요.')),
       );
       return;
+    }
+    final Map<String, String> links = {};
+    for (final g in _grades) {
+      final u = _gradeUrlControllers[g]!.text.trim();
+      if (u.isNotEmpty) links[g] = u;
     }
     Navigator.of(context).pop(
       _ResourceFile(
         id: UniqueKey().toString(),
         name: name,
-        url: url,
         color: _selectedColor,
-        grade: _grade,
         parentId: null,
         position: const Offset(0, 0),
         size: const Size(200, 60),
+        linksByGrade: links,
       ),
     );
   }
@@ -1085,7 +1624,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('파일 추가', style: TextStyle(color: Colors.white)),
       content: SizedBox(
-        width: 420,
+        width: 520,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1105,44 +1644,55 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _urlController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: '위치(하이퍼링크)',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white24),
+            const Text('과정별 링크 (비워둘 수 있음)', style: TextStyle(color: Colors.white70, fontSize: 14)),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _grades.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final grade = _grades[index];
+                  return Row(
+                    children: [
+                      SizedBox(width: 64, child: Text(grade, style: const TextStyle(color: Colors.white70))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _gradeUrlControllers[grade],
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            hintText: 'https:// 또는 파일 경로',
+                            hintStyle: TextStyle(color: Colors.white38),
+                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                          ),
+                        ),
                       ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 40,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+                            final file = await openFile(acceptedTypeGroups: [typeGroup]);
+                            if (file != null) {
+                              _gradeUrlControllers[grade]!.text = file.path;
+                              if (_nameController.text.trim().isEmpty) {
+                                _nameController.text = file.name;
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.folder_open, size: 16),
+                          label: const Text('찾기'),
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24)),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  height: 48,
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
-                      final file = await openFile(acceptedTypeGroups: [typeGroup]);
-                      if (file != null) {
-                        _urlController.text = file.path;
-                        if (_nameController.text.trim().isEmpty) {
-                          _nameController.text = file.name;
-                        }
-                      }
-                    },
-                    icon: const Icon(Icons.folder_open, size: 18),
-                    label: const Text('찾기'),
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24)),
-                  ),
-                ),
-              ],
+                    ],
+                  );
+                },
+              ),
             ),
             const SizedBox(height: 18),
             const Text('색상 (가득찬 스타일)', style: TextStyle(color: Colors.white70, fontSize: 15)),
@@ -1173,18 +1723,6 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
               }).toList(),
             ),
             const SizedBox(height: 18),
-            const Text('학년', style: TextStyle(color: Colors.white70, fontSize: 15)),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              value: _grade,
-              dropdownColor: const Color(0xFF2A2A2A),
-              items: _grades.map((g) => DropdownMenuItem(value: g, child: Text(g, style: const TextStyle(color: Colors.white)))).toList(),
-              onChanged: (v) => setState(() => _grade = v ?? _grade),
-              decoration: const InputDecoration(
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-              ),
-            ),
           ],
         ),
       ),
@@ -1502,6 +2040,7 @@ class _FileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = file.color ?? const Color(0xFF2D2D2D);
+    final primary = file.primaryGrade;
     return Container(
       width: file.size.width,
       height: file.size.height,
@@ -1526,17 +2065,18 @@ class _FileCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(999),
+          if (primary != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                primary,
+                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+              ),
             ),
-            child: Text(
-              file.grade,
-              style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
-            ),
-          ),
         ],
       ),
     );
