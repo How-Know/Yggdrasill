@@ -4,6 +4,8 @@ import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
 import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:path/path.dart' as p;
 
 class ResourcesScreen extends StatefulWidget {
   const ResourcesScreen({super.key});
@@ -1629,6 +1631,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 다이얼로그 상단 토글 제거, 행 단위로 버튼 배치 요구사항 반영
             TextField(
               controller: _nameController,
               style: const TextStyle(color: Colors.white),
@@ -1654,42 +1657,86 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
                   final grade = _grades[index];
-                  return Row(
-                    children: [
-                      SizedBox(width: 64, child: Text(grade, style: const TextStyle(color: Colors.white70))),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: _gradeUrlControllers[grade],
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: 'https:// 또는 파일 경로',
-                            hintStyle: TextStyle(color: Colors.white38),
-                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                  return DropTarget(
+                    onDragDone: (detail) {
+                      if (detail.files.isEmpty) return;
+                      final xf = detail.files.first;
+                      final path = xf.path;
+                      if (path != null && path.isNotEmpty) {
+                        _gradeUrlControllers[grade]!.text = path;
+                        if (_nameController.text.trim().isEmpty) {
+                          _nameController.text = p.basename(path);
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('드롭된 파일을 $grade에 등록했습니다.')),
+                        );
+                      }
+                    },
+                    child: Row(
+                      children: [
+                        SizedBox(width: 64, child: Text(grade, style: const TextStyle(color: Colors.white70))),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 40,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+                              final file = await openFile(acceptedTypeGroups: [typeGroup]);
+                              if (file != null) {
+                                _gradeUrlControllers[grade]!.text = file.path;
+                                if (_nameController.text.trim().isEmpty) {
+                                  _nameController.text = file.name;
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.folder_open, size: 16),
+                            label: const Text('찾기'),
+                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        height: 40,
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
-                            final file = await openFile(acceptedTypeGroups: [typeGroup]);
-                            if (file != null) {
-                              _gradeUrlControllers[grade]!.text = file.path;
-                              if (_nameController.text.trim().isEmpty) {
-                                _nameController.text = file.name;
-                              }
-                            }
-                          },
-                          icon: const Icon(Icons.folder_open, size: 16),
-                          label: const Text('찾기'),
-                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24)),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 40,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('해당 행에 파일을 바로 드래그해서 놓으면 등록됩니다.')),
+                              );
+                            },
+                            icon: const Icon(Icons.file_download, size: 16),
+                            label: const Text('드래그앤드롭'),
+                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 40,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('PDF 편집기는 다음 단계에서 구현됩니다.')),
+                              );
+                            },
+                            icon: const Icon(Icons.picture_as_pdf, size: 16),
+                            label: const Text('편집'),
+                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _gradeUrlControllers[grade],
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              hintText: 'https:// 또는 파일 경로',
+                              hintStyle: TextStyle(color: Colors.white38),
+                              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   );
                 },
               ),
