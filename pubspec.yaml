@@ -58,7 +58,7 @@ dependencies:
   open_filex: ^4.5.0
   url_launcher: ^6.3.0
   syncfusion_flutter_pdf: ^24.1.41
-  pdf_render: ^1.4.7
+  pdfrx: ^1.0.77
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

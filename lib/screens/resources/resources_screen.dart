@@ -10,8 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
-import 'package:pdf_render/pdf_render.dart';
-import 'package:pdf_render/pdf_render_widgets.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 
@@ -657,8 +656,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     if (linksResult == null) return; // 취소 시 생성 중단 (버그 수정)
     final finalLinks = linksResult['links'] ?? <String, String>{};
     final merged = meta.copyWith(linksByGrade: finalLinks);
-    // 파일 메타 저장
-    await DataManager.instance.saveResourceFile({
+      // 파일 메타 저장
+      await DataManager.instance.saveResourceFile({
       'id': merged.id,
       'name': merged.name,
       'url': '',
@@ -672,8 +671,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       'text_color': merged.textColor?.value,
       'icon_image_path': merged.iconImagePath,
       'description': merged.description,
-    });
-    // 학년별 링크 저장
+      });
+      // 학년별 링크 저장
     await DataManager.instance.saveResourceFileLinks(merged.id, merged.linksByGrade);
     // 상태 반영
     setState(() {
@@ -2902,6 +2901,7 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
   bool _resizing = false;
   Offset? _tempPosition;
   Size? _tempSize;
+  Offset? _dragAnchor;
 
   @override
   Widget build(BuildContext context) {
@@ -2918,17 +2918,20 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
                 if (widget.onEditRequested != null) widget.onEditRequested!(widget.file);
               }
             : null,
-        onPanStart: (_) {
+        onPanStart: (details) {
           if (widget.editMode) return; // 편집 모드에서는 이동 금지
           if (!_resizing && !widget.resizeMode) {
             setState(() {
               _dragging = true;
               _tempPosition = widget.file.position;
+              // 캔버스 좌표 기준 앵커 계산 (마우스가 카드 내부 어디를 잡았는지)
+              final canvasPos = widget.globalToCanvasLocal(details.globalPosition);
+              _dragAnchor = canvasPos - widget.file.position;
             });
           }
         },
         onDoubleTap: widget.editMode ? null : () async {
-          final grade = widget.file.primaryGrade;
+          final grade = widget.currentGrade ?? widget.file.primaryGrade;
           if (grade == null) return;
           final link = widget.file.linksByGrade['$grade#body']?.trim() ?? '';
           if (link.isEmpty) return;
@@ -2942,7 +2945,12 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
         onPanUpdate: (d) {
           if (widget.editMode) return;
           if (_dragging && !_resizing && !widget.resizeMode) {
-            setState(() => _tempPosition = Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy));
+            if (_dragAnchor != null) {
+              final canvasPos = widget.globalToCanvasLocal(d.globalPosition);
+              setState(() => _tempPosition = canvasPos - _dragAnchor!);
+            } else {
+              setState(() => _tempPosition = Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy));
+            }
           }
         },
         onPanEnd: (_) {
@@ -2951,6 +2959,7 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           final endPos = _tempPosition ?? widget.file.position;
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
           _tempPosition = null;
+          _dragAnchor = null;
         },
         behavior: HitTestBehavior.translucent,
         child: AnimatedOpacity(
@@ -2959,6 +2968,15 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           child: Stack(
             children: [
               _FileCard(file: widget.file.copyWith(position: effectivePos, size: effectiveSize)),
+              if (_dragging)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: 0.25,
+                      child: _FileCard(file: widget.file.copyWith(position: effectivePos, size: effectiveSize)),
+                    ),
+                  ),
+                ),
               if (widget.editMode)
                 Positioned(
                   right: 6,
@@ -3015,7 +3033,7 @@ class _FileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primaryGrade = (context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade) ?? file.primaryGrade;
-    final hasForCurrent = primaryGrade != null && (file.linksByGrade[primaryGrade]?.trim().isNotEmpty ?? false);
+    final hasForCurrent = primaryGrade != null && (file.linksByGrade['$primaryGrade#body']?.trim().isNotEmpty ?? false);
     final bg = (hasForCurrent ? (file.color ?? const Color(0xFF2D2D2D)) : const Color(0xFF2D2D2D).withOpacity(0.5));
     final primary = primaryGrade;
     return Container(
@@ -3024,7 +3042,7 @@ class _FileCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(10),
-         border: Border.all(color: hasForCurrent ? Colors.white24 : Colors.white10, width: 1.2),
+         border: Border.all(color: const Color(0xFF1F1F1F), width: 1.2),
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -3142,6 +3160,18 @@ class _BookmarkButtonState extends State<_BookmarkButton> {
       items: <PopupMenuEntry<void>>[
         ...bookmarks.map<PopupMenuEntry<void>>((b) => PopupMenuItem<void>(
           enabled: true,
+          onTap: () async {
+            final path = (b['path'] as String?)?.trim() ?? '';
+            if (path.isEmpty) return;
+            try {
+              if (path.startsWith('http://') || path.startsWith('https://')) {
+                final uri = Uri.parse(path);
+                await launchUrl(uri, mode: LaunchMode.platformDefault);
+              } else {
+                await OpenFilex.open(path);
+              }
+            } catch (_) {}
+          },
           child: Row(
             children: [
               const Icon(Icons.drag_indicator, color: Colors.white60, size: 16),
@@ -3182,7 +3212,7 @@ class _BookmarkButtonState extends State<_BookmarkButton> {
         const PopupMenuDivider(),
         PopupMenuItem<void>(
           enabled: true,
-          child: Row(children: const [Icon(Icons.settings, size: 16), SizedBox(width: 8), Text('관리...')]),
+          child: Row(children: const [Icon(Icons.settings, size: 16, color: Colors.white70), SizedBox(width: 8), Text('관리...', style: TextStyle(color: Colors.white))]),
           onTap: () async {
             await Future.delayed(const Duration(milliseconds: 0));
             await showDialog(
@@ -3195,7 +3225,7 @@ class _BookmarkButtonState extends State<_BookmarkButton> {
         const PopupMenuDivider(),
         PopupMenuItem<void>(
           enabled: true,
-          child: Row(children: const [Icon(Icons.add, size: 16), SizedBox(width: 8), Text('추가')]),
+          child: Row(children: const [Icon(Icons.add, size: 16, color: Colors.white70), SizedBox(width: 8), Text('추가', style: TextStyle(color: Colors.white))]),
           onTap: () async {
             await Future.delayed(const Duration(milliseconds: 0));
             final created = await showDialog<Map<String, dynamic>>(
@@ -3212,6 +3242,8 @@ class _BookmarkButtonState extends State<_BookmarkButton> {
         ),
       ],
       color: const Color(0xFF2A2A2A),
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF3A3A3A))),
     );
   }
   @override
@@ -3543,6 +3575,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
   Offset? _dragStart;
   final GlobalKey _previewKey = GlobalKey();
   int _currentPreviewPage = 1;
+  PdfDocument? _previewDoc;
   @override
   void initState() {
     super.initState();
@@ -3590,22 +3623,31 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('PDF 편집기', style: TextStyle(color: Colors.white)),
+      title: const Text('PDF 편집기', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
       content: SizedBox(
-        width: 560,
+        width: 760,
         child: DefaultTabController(
           length: 2,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const TabBar(tabs: [
-                Tab(text: '범위 입력'),
-                Tab(text: '미리보기 선택'),
-              ]),
+              Theme(
+                data: Theme.of(context).copyWith(
+                  tabBarTheme: const TabBarThemeData(
+                    indicatorColor: Color(0xFF1976D2),
+                    labelColor: Colors.white,
+                    unselectedLabelColor: Colors.white54,
+                  ),
+                ),
+                child: const TabBar(tabs: [
+                  Tab(text: '범위 입력'),
+                  Tab(text: '미리보기 선택'),
+                ]),
+              ),
               const SizedBox(height: 8),
               SizedBox(
-                height: 380,
+                height: 520,
                 child: TabBarView(children: <Widget>[
                   // Tab 1: 텍스트 범위 입력
                   SingleChildScrollView(
@@ -3624,7 +3666,13 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                             final suffix = widget.kindKey == 'body' ? '본문' : widget.kindKey == 'ans' ? '정답' : '해설';
                             _fileName.text = '${base}_${widget.grade}_$suffix.pdf';
                           });
-                        }, icon: const Icon(Icons.folder_open, size: 16), label: const Text('찾기'))),
+                        }, icon: const Icon(Icons.folder_open, size: 16), label: const Text('찾기'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white70,
+                          side: const BorderSide(color: Colors.white24),
+                          shape: const StadiumBorder(),
+                          backgroundColor: const Color(0xFF2A2A2A),
+                        ))),
                       ]),
                       const SizedBox(height: 12),
                       const Text('페이지 범위 (예: 1-3,5,7-9)', style: TextStyle(color: Colors.white70)),
@@ -3652,7 +3700,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                     return const Center(child: CircularProgressIndicator());
                                   }
                                   final doc = snapshot.data!;
-                                  final pageCount = doc.pageCount;
+                                  final pageCount = doc.pages.length;
                                   _currentPreviewPage = _currentPreviewPage.clamp(1, pageCount).toInt();
                                   return Row(
                                     children: [
@@ -3671,7 +3719,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                                     border: Border.all(color: Colors.white24),
                                                     borderRadius: BorderRadius.circular(6),
                                                   ),
-                                                  child: PdfPageView(pdfDocument: doc, pageNumber: i + 1),
+                                                  child: PdfPageView(document: doc, pageNumber: i + 1),
                                                 ),
                                               ),
                                             ),
@@ -3696,8 +3744,8 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                                 setState(() { _dragRect = Rect.fromPoints(_dragStart!, d.localPosition); });
                                               },
                                               onPanEnd: (_) {
-                                                final size = _previewKey.currentContext?.size;
-                                                if (size != null && _dragRect != null) {
+                                                final Size size = constraints.biggest;
+                                                if (_dragRect != null) {
                                                   final r = _dragRect!;
                                                   final norm = Rect.fromLTWH(
                                                     (r.left / size.width).clamp(0.0, 1.0),
@@ -3721,12 +3769,12 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                                 children: [
                                                   Container(
                                                     decoration: BoxDecoration(border: Border.all(color: Colors.white24)),
-                                                    child: PdfPageView(pdfDocument: doc, pageNumber: showPage),
+                                                    child: PdfPageView(document: doc, pageNumber: showPage),
                                                   ),
                                                   Positioned.fill(
                                                     child: Builder(
                                                       builder: (context) {
-                                                        final size = _previewKey.currentContext?.size ?? Size.zero;
+                                                        final Size size = constraints.biggest;
                                                         return Stack(
                                                           children: [
                                                             for (final nr in regions)
@@ -3789,6 +3837,8 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                       ),
                       const SizedBox(width: 8),
                       Text('선택: ${_selectedPages.join(', ')}', style: const TextStyle(color: Colors.white60)),
+                      const SizedBox(width: 12),
+                      if (_previewDoc != null) Text('페이지: $_currentPreviewPage/${_previewDoc!.pages.length}', style: const TextStyle(color: Colors.white54)),
                     ]),
                       const SizedBox(height: 8),
                       SizedBox(
@@ -3801,12 +3851,21 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                             Container(
                               key: ValueKey('sel_$i'),
                               margin: const EdgeInsets.only(right: 8),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                               decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
                               child: Row(mainAxisSize: MainAxisSize.min, children: [
                                 ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_indicator, color: Colors.white60)),
                                 const SizedBox(width: 6),
-                                Text('p${_selectedPages[i]}', style: const TextStyle(color: Colors.white)),
+                                SizedBox(
+                                  width: 56,
+                                  height: 78,
+                                  child: _previewDoc == null
+                                      ? const SizedBox()
+                                      : ClipRRect(
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: PdfPageView(document: _previewDoc!, pageNumber: _selectedPages[i]),
+                                        ),
+                                ),
                                 const SizedBox(width: 6),
                                 InkWell(onTap: () => setState(() { _selectedPages.removeAt(i); }), child: const Icon(Icons.close, size: 16, color: Colors.white54)),
                               ]),
@@ -3858,46 +3917,15 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
             final src = sf.PdfDocument(inputBytes: inputBytes);
             final selected = _selectedPages.isNotEmpty ? List<int>.from(_selectedPages) : _parseRanges(ranges, src.pages.count);
 
-            // 선택된 페이지를 이미지로 렌더링하여 새 PDF에 삽입 (대안2, 영역 크롭 포함)
-            final dst = sf.PdfDocument();
-            final pdfDoc = await PdfDocument.openFile(inPath);
-            for (final p in selected) {
-              if (p < 1 || p > src.pages.count) continue;
-              final pageImage = await pdfDoc.getPage(p);
-              final pageWidth = pageImage.width.toDouble();
-              final pageHeight = pageImage.height.toDouble();
-
-              final regions = _regionsByPage[p];
-              final effectiveRegions = (regions == null || regions.isEmpty)
-                  ? [const Rect.fromLTWH(0, 0, 1, 1)]
-                  : regions;
-
-              for (final nr in effectiveRegions) {
-                final cropLeft = (nr.left * pageWidth).clamp(0.0, pageWidth).toInt();
-                final cropTop = (nr.top * pageHeight).clamp(0.0, pageHeight).toInt();
-                final cropW = (nr.width * pageWidth).clamp(1.0, pageWidth).toInt();
-                final cropH = (nr.height * pageHeight).clamp(1.0, pageHeight).toInt();
-
-                final img = await pageImage.render(
-                  x: cropLeft,
-                  y: cropTop,
-                  width: cropW,
-                  height: cropH,
-                );
-                // pdf_render 1.4.x: PdfPageImage has imageIfAvailable (ui.Image?)
-                final ui.Image uiImg = img.imageIfAvailable ?? await img.createImageIfNotAvailable();
-                final byteData = await uiImg.toByteData(format: ui.ImageByteFormat.png);
-                final data = byteData!.buffer.asUint8List();
-                final bitmap = sf.PdfBitmap(data);
-                final page = dst.pages.add();
-                page.graphics.drawImage(bitmap, Rect.fromLTWH(0, 0, cropW.toDouble(), cropH.toDouble()));
+            // 임시: pdfrx API 정착 전까지는 선택된 페이지만 유지해 저장 (벡터 보존)
+            final keep = selected.toSet();
+            for (int i = src.pages.count - 1; i >= 0; i--) {
+              if (!keep.contains(i + 1)) {
+                src.pages.removeAt(i);
               }
-              // 일부 버전에서는 명시적 해제 API가 없음. 문서 해제로 충분.
             }
-            // pdf_render 1.4.x는 명시적 close API를 제공하지 않을 수 있음
-            final outBytes = await dst.save();
+            final outBytes = await src.save();
             src.dispose();
-            dst.dispose();
             await File(outPath).writeAsBytes(outBytes, flush: true);
             setState(() => _outputPath = outPath);
             if (context.mounted) {
