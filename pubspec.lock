@@ -709,6 +709,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.0"
+  pdf_render:
+    dependency: "direct main"
+    description:
+      name: pdf_render
+      sha256: "0fdf8da394cc444b870ce43cebd0f66a7c1564ec45009861ee884058f31eba28"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.4.7"
   petitparser:
     dependency: transitive
     description:
