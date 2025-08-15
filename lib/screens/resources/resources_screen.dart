@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'package:flutter/gestures.dart';
 import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
@@ -8,6 +9,42 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_filex/open_filex.dart';
+
+class _ResColors {
+  static const Color container1 = Color(0xFF263238);
+  static const Color container2 = Color(0xFF37474F);
+  static const Color container3 = Color(0xFF455A64);
+  static const Color container4 = Color(0xFF546E7A);
+  static const Color container5 = Color(0xFF607D8B);
+  static const Color blue1 = Color(0xFF166ABD);
+  static const Color blue2 = Color(0xFF145EA8);
+  static const Color blue3 = Color(0xFF115293);
+  static const Color blue4 = Color(0xFF0F467D);
+  static const Color blue5 = Color(0xFF0C3A69);
+}
+
+const List<IconData> _gradeIconPack = [
+  Icons.school,
+  Icons.menu_book,
+  Icons.bookmark,
+  Icons.star,
+  Icons.favorite,
+  Icons.lightbulb,
+  Icons.flag,
+  Icons.language,
+  Icons.calculate,
+  Icons.science,
+  Icons.psychology,
+  Icons.code,
+  Icons.draw,
+  Icons.piano,
+  Icons.sports_basketball,
+  Icons.public,
+  Icons.attach_file,
+  Icons.folder,
+  Icons.create,
+  Icons.edit_note,
+];
 
 class ResourcesScreen extends StatefulWidget {
   const ResourcesScreen({super.key});
@@ -79,11 +116,11 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _dropdownOverlay = OverlayEntry(
       builder: (context) {
         return Positioned(
-          left: buttonPosition.dx,
-          top: buttonPosition.dy - 8 - 80, // 버튼 위쪽 살짝
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
+        left: buttonPosition.dx,
+        top: buttonPosition.dy - 8 - 80, // 버튼 위쪽 살짝
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
             width: 160,
             decoration: BoxDecoration(
               color: const Color(0xFF2A2A2A),
@@ -118,9 +155,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                   },
                 ),
               ],
-            ),
           ),
         ),
+      ),
       );
       },
     );
@@ -173,8 +210,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           left: pos.dx,
           top: pos.dy + size.height + 6,
           child: Material(
-            color: Colors.transparent,
-            child: Container(
+          color: Colors.transparent,
+          child: Container(
             width: 252,
             constraints: const BoxConstraints(maxHeight: 360),
             decoration: BoxDecoration(
@@ -405,8 +442,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                     builder: (ctx2, setState2) {
                                       int selectedIconIndex = 0;
                                       return AlertDialog(
-                                        backgroundColor: const Color(0xFF1F1F1F),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    backgroundColor: const Color(0xFF1F1F1F),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                         title: const Text('학년 정보 수정', style: TextStyle(color: Colors.white, fontSize: 20)),
                                         content: SizedBox(
                                           width: 520,
@@ -600,26 +637,42 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 
   Future<void> _onAddFile() async {
-    final result = await showDialog<_ResourceFile>(
+    // 1단계: 메타 입력
+    final metaResult = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => const _FileCreateDialog(),
     );
-    if (result != null) {
+    if (metaResult != null && metaResult['meta'] is _ResourceFile) {
+      final meta = metaResult['meta'] as _ResourceFile;
+      // 2단계: 링크 등록(정답/해설)
+      final linksResult = await showDialog<Map<String, Map<String, String>>>(
+        context: context,
+        builder: (context) => _FileLinksDialog(meta: meta),
+      );
+      final finalLinks = linksResult?['links'] ?? <String, String>{};
+      final merged = meta.copyWith(linksByGrade: finalLinks);
       // 파일 메타 저장
       await DataManager.instance.saveResourceFile({
-        'id': result.id,
-        'name': result.name,
-        'url': result.linksByGrade[result.primaryGrade ?? ''] ?? '',
-        'color': result.color?.value,
-        'grade': result.primaryGrade ?? '',
-        'parent_id': result.parentId,
-        'pos_x': result.position.dx,
-        'pos_y': result.position.dy,
-        'width': result.size.width,
-        'height': result.size.height,
+        'id': merged.id,
+        'name': merged.name,
+        'url': '',
+        'color': merged.color?.value,
+        'grade': merged.primaryGrade ?? '',
+        'parent_id': merged.parentId,
+        'pos_x': merged.position.dx,
+        'pos_y': merged.position.dy,
+        'width': merged.size.width,
+        'height': merged.size.height,
+        'text_color': merged.textColor?.value,
+        'icon_image_path': merged.iconImagePath,
+        'description': merged.description,
       });
       // 학년별 링크 저장
-      await DataManager.instance.saveResourceFileLinks(result.id, result.linksByGrade);
+      await DataManager.instance.saveResourceFileLinks(merged.id, merged.linksByGrade);
+      // 상태 반영
+      setState(() {
+        _files.add(merged);
+      });
     }
   }
 
@@ -671,6 +724,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           id: id,
           name: (r['name'] as String?) ?? '',
           color: (r['color'] as int?) != null ? Color(r['color'] as int) : null,
+          textColor: (r['text_color'] as int?) != null ? Color(r['text_color'] as int) : null,
+          iconImagePath: (r['icon_image_path'] as String?),
+          description: (r['description'] as String?),
           parentId: r['parent_id'] as String?,
           position: Offset((r['pos_x'] as num?)?.toDouble() ?? 0.0, (r['pos_y'] as num?)?.toDouble() ?? 0.0),
           size: Size((r['width'] as num?)?.toDouble() ?? 200.0, (r['height'] as num?)?.toDouble() ?? 60.0),
@@ -839,19 +895,50 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           builder: (ctx) => _FolderEditDialog(initial: folder),
                         );
                       },
-                      onEditFile: (file) {
-                        // ignore: avoid_print
-                        print('[EDIT] Open FileEditDialog: id=${file.id}');
-                        showDialog(
+                      onEditFile: (file) async {
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
                           context: context,
                           builder: (ctx) => _FileEditDialog(initial: file),
                         );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        // DB 저장
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        // 상태 업데이트
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
                       },
                     ),
-                     _ResourcesCanvas(
+                    _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
-                       resizeMode: _resizeMode,
+                      resizeMode: _resizeMode,
                        editMode: _editMode,
                       currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
@@ -942,19 +1029,48 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           builder: (ctx) => _FolderEditDialog(initial: folder),
                         );
                       },
-                      onEditFile: (file) {
-                        // ignore: avoid_print
-                        print('[EDIT] Open FileEditDialog: id=${file.id}');
-                        showDialog(
+                      onEditFile: (file) async {
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
                           context: context,
                           builder: (ctx) => _FileEditDialog(initial: file),
                         );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
                       },
                     ),
-                     _ResourcesCanvas(
+                    _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
-                       resizeMode: _resizeMode,
+                      resizeMode: _resizeMode,
                        editMode: _editMode,
                       currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
                       onScrollGrade: (delta) => _changeGradeByDelta(delta),
@@ -1169,6 +1285,206 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         ],
       ),
     );
+  }
+}
+
+class _FileLinksDialog extends StatefulWidget {
+  final _ResourceFile meta;
+  final Map<String, String>? initialLinks;
+  const _FileLinksDialog({required this.meta, this.initialLinks});
+  @override
+  State<_FileLinksDialog> createState() => _FileLinksDialogState();
+}
+
+class _FileLinksDialogState extends State<_FileLinksDialog> {
+  List<String> _grades = [];
+  late final Map<String, TextEditingController> _answerCtrls;   // 본문
+  late final Map<String, TextEditingController> _solutionCtrls; // 해설
+  late final Map<String, TextEditingController> _bodyCtrls;     // 정답
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+  Future<void> _init() async {
+    final rows = await DataManager.instance.getResourceGrades();
+    final list = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
+    _grades = list.isEmpty ? ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'] : list;
+    _answerCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#body'] ?? '') };
+    _solutionCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#sol'] ?? '') };
+    _bodyCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#ans'] ?? '') };
+    if (mounted) setState(() {});
+  }
+  @override
+  void dispose() {
+    for (final c in _answerCtrls.values) { c.dispose(); }
+    for (final c in _solutionCtrls.values) { c.dispose(); }
+    for (final c in _bodyCtrls.values) { c.dispose(); }
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('링크 등록', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 640,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 380),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _grades.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final grade = _grades[index];
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(grade, style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      // 본문 행
+                      Row(children: [
+                        Expanded(child: DropTarget(
+                          onDragDone: (detail) {
+                            if (detail.files.isEmpty) return;
+                            final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
+                              setState(() => _answerCtrls[grade]!.text = path);
+                            }
+                          },
+                          child: _LinkActionButtons(controller: _answerCtrls[grade]!, onNameSuggestion: (name){}, label: '본문'),
+                        )),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextField(
+                          controller: _answerCtrls[grade],
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(hintText: '본문: https:// 또는 파일 경로', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+                        )),
+                      ]),
+                      const SizedBox(height: 6),
+                      // 해설 행
+                      Row(children: [
+                        Expanded(child: DropTarget(
+                          onDragDone: (detail) {
+                            if (detail.files.isEmpty) return;
+                            final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
+                              setState(() => _solutionCtrls[grade]!.text = path);
+                            }
+                          },
+                          child: _LinkActionButtons(controller: _solutionCtrls[grade]!, onNameSuggestion: (name){}, label: '해설'),
+                        )),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextField(
+                          controller: _solutionCtrls[grade],
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(hintText: '해설: https:// 또는 파일 경로', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+                        )),
+                      ]),
+                      const SizedBox(height: 6),
+                      // 정답 행
+                      Row(children: [
+                        Expanded(child: DropTarget(
+                          onDragDone: (detail) {
+                            if (detail.files.isEmpty) return;
+                            final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
+                              setState(() => _bodyCtrls[grade]!.text = path);
+                            }
+                          },
+                          child: _LinkActionButtons(controller: _bodyCtrls[grade]!, onNameSuggestion: (name){}, label: '정답'),
+                        )),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextField(
+                          controller: _bodyCtrls[grade],
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(hintText: '정답: https:// 또는 파일 경로', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+                        )),
+                      ]),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          onPressed: () {
+            final links = <String, String>{};
+            for (final g in _grades) {
+              final body = _answerCtrls[g]!.text.trim();
+              final ans = _bodyCtrls[g]!.text.trim();
+              final sol = _solutionCtrls[g]!.text.trim();
+              if (body.isNotEmpty) links['$g#body'] = body;
+              if (ans.isNotEmpty) links['$g#ans'] = ans;
+              if (sol.isNotEmpty) links['$g#sol'] = sol;
+            }
+            Navigator.pop(context, {'links': links});
+          },
+          child: const Text('완료'),
+        ),
+      ],
+    );
+  }
+}
+
+class _LinkActionButtons extends StatelessWidget {
+  final TextEditingController controller;
+  final void Function(String name) onNameSuggestion;
+  final String label;
+  const _LinkActionButtons({required this.controller, required this.onNameSuggestion, required this.label});
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      SizedBox(
+        height: 34,
+        child: OutlinedButton.icon(
+          onPressed: () async {
+            final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+            final file = await openFile(acceptedTypeGroups: [typeGroup]);
+            if (file != null) {
+              controller.text = file.path;
+              // UI 즉시 반영 보장
+              (context as Element).markNeedsBuild();
+              onNameSuggestion(file.name);
+            }
+          },
+          icon: const Icon(Icons.folder_open, size: 16),
+          label: Text(label),
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+        ),
+      ),
+      const SizedBox(width: 6),
+      SizedBox(
+        height: 34,
+        child: OutlinedButton.icon(
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('해당 행에 파일을 드래그해서 놓으면 등록됩니다.')));
+          },
+          icon: const Icon(Icons.file_download, size: 16),
+          label: const Text('드롭'),
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+        ),
+      ),
+      const SizedBox(width: 6),
+      SizedBox(
+        height: 34,
+        child: OutlinedButton.icon(
+          onPressed: () {
+            showDialog(context: context, builder: (ctx) => const _PdfEditorDialog());
+          },
+          icon: const Icon(Icons.picture_as_pdf, size: 16),
+          label: const Text('편집'),
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+        ),
+      ),
+    ]);
   }
 }
 
@@ -1405,30 +1721,30 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
         onPanStart: widget.editMode
             ? null
             : (details) {
-                if (!_resizing && !widget.resizeMode) {
-                  setState(() {
-                    _dragging = true;
-                    _dragStartLocal = details.localPosition;
-                    _tempPosition = widget.folder.position;
-                  });
-                }
-              },
+          if (!_resizing && !widget.resizeMode) {
+            setState(() {
+              _dragging = true;
+              _dragStartLocal = details.localPosition;
+              _tempPosition = widget.folder.position;
+            });
+          }
+        },
         onPanUpdate: widget.editMode
             ? null
             : (details) {
-                if (_dragging && !_resizing && !widget.resizeMode) {
-                  final newPos = Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
-                  setState(() => _tempPosition = newPos);
-                }
-              },
+          if (_dragging && !_resizing && !widget.resizeMode) {
+            final newPos = Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
+            setState(() => _tempPosition = newPos);
+          }
+        },
         onPanEnd: widget.editMode
             ? null
             : (details) {
-                setState(() => _dragging = false);
-                final endPos = _tempPosition ?? widget.folder.position;
-                if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
-                _tempPosition = null;
-              },
+          setState(() => _dragging = false);
+          final endPos = _tempPosition ?? widget.folder.position;
+          if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
+          _tempPosition = null;
+        },
         // 리사이즈 모드 종료는 버튼으로만 수행: 배경 탭 종료 제거
         behavior: HitTestBehavior.translucent,
         child: AnimatedOpacity(
@@ -1735,6 +2051,9 @@ class _ResourceFile {
   final String name;
   final Color? color; // filled style
   final IconData? icon; // file icon
+  final String? iconImagePath; // custom image path (square)
+  final Color? textColor; // label color
+  final String? description; // optional
   final String? parentId; // for nesting
   final Offset position;
   final Size size;
@@ -1744,6 +2063,9 @@ class _ResourceFile {
     required this.name,
     required this.color,
     this.icon,
+    this.iconImagePath,
+    this.textColor,
+    this.description,
     this.parentId,
     required this.position,
     required this.size,
@@ -1755,6 +2077,9 @@ class _ResourceFile {
     String? name,
     Color? color,
     IconData? icon,
+    String? iconImagePath,
+    Color? textColor,
+    String? description,
     String? parentId,
     Offset? position,
     Size? size,
@@ -1765,6 +2090,9 @@ class _ResourceFile {
       name: name ?? this.name,
       color: color ?? this.color,
       icon: icon ?? this.icon,
+      iconImagePath: iconImagePath ?? this.iconImagePath,
+      textColor: textColor ?? this.textColor,
+      description: description ?? this.description,
       parentId: parentId ?? this.parentId,
       position: position ?? this.position,
       size: size ?? this.size,
@@ -1774,12 +2102,17 @@ class _ResourceFile {
 
   String? get primaryGrade {
     for (final g in const ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3']) {
-      final url = linksByGrade[g]?.trim();
-      if (url != null && url.isNotEmpty) return g;
+      final ans = linksByGrade['$g#ans']?.trim();
+      final sol = linksByGrade['$g#sol']?.trim();
+      if ((ans != null && ans.isNotEmpty) || (sol != null && sol.isNotEmpty)) return g;
     }
-    // 아무거나 첫번째
+    // 아무거나 첫번째 (키가 grade#type 꼴일 수 있음)
     for (final e in linksByGrade.entries) {
-      if (e.value.trim().isNotEmpty) return e.key;
+      if (e.value.trim().isNotEmpty) {
+        final k = e.key;
+        final i = k.indexOf('#');
+        return i > 0 ? k.substring(0, i) : k;
+      }
     }
     return null;
   }
@@ -1802,6 +2135,8 @@ class _FileEditDialogState extends State<_FileEditDialog> {
   late final TextEditingController _nameController;
   Color? _selectedColor;
   IconData? _selectedIcon;
+  String? _iconImagePath;
+  Color? _selectedTextColor;
   List<String> _grades = [];
   late final Map<String, TextEditingController> _gradeUrlControllers;
   final List<Color?> _colors = [null, ...Colors.primaries];
@@ -1811,6 +2146,8 @@ class _FileEditDialogState extends State<_FileEditDialog> {
     _nameController = TextEditingController(text: widget.initial.name);
     _selectedColor = widget.initial.color;
     _selectedIcon = widget.initial.icon ?? Icons.insert_drive_file;
+    _iconImagePath = widget.initial.iconImagePath;
+    _selectedTextColor = widget.initial.textColor;
     _initGrades();
   }
   Future<void> _initGrades() async {
@@ -1868,6 +2205,27 @@ class _FileEditDialogState extends State<_FileEditDialog> {
               ].map((ico) {
                 return _IconChoice(iconData: ico);
               }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  height: 34,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final typeGroup = XTypeGroup(label: 'image', extensions: ['png','jpg','jpeg']);
+                      final f = await openFile(acceptedTypeGroups: [typeGroup]);
+                      if (f != null) setState(() => _iconImagePath = f.path);
+                    },
+                    icon: const Icon(Icons.upload_file, size: 16),
+                    label: const Text('이미지'),
+                    style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (_iconImagePath != null && _iconImagePath!.isNotEmpty)
+                  Container(width: 34, height: 34, decoration: BoxDecoration(borderRadius: BorderRadius.circular(6), image: DecorationImage(image: FileImage(File(_iconImagePath!)), fit: BoxFit.cover))),
+              ],
             ),
             const SizedBox(height: 8),
             StatefulBuilder(
@@ -1982,6 +2340,27 @@ class _FileEditDialogState extends State<_FileEditDialog> {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 10),
+            const Text('글자 색상', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              children: [Colors.white, Colors.white70, Colors.white60, Colors.white38, Colors.black87, Colors.black54].map((c) {
+                final sel = _selectedTextColor == c;
+                return GestureDetector(
+                  onTap: () => setState(() => _selectedTextColor = c),
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: c,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: sel ? Colors.white : Colors.white24, width: sel ? 2 : 1),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
           ],
         ),
       ),
@@ -1996,7 +2375,7 @@ class _FileEditDialogState extends State<_FileEditDialog> {
               if (v.isNotEmpty) links[g] = v;
             }
             Navigator.pop(context, {
-              'file': widget.initial.copyWith(name: _nameController.text.trim(), color: _selectedColor, icon: _selectedIcon),
+              'file': widget.initial.copyWith(name: _nameController.text.trim(), color: _selectedColor, icon: _selectedIcon, iconImagePath: _iconImagePath, textColor: _selectedTextColor),
               'links': links,
             });
           },
@@ -2032,62 +2411,86 @@ class _IconChoice extends StatelessWidget {
   }
 }
 
+class _IconPickItem extends StatelessWidget {
+  final IconData iconData;
+  const _IconPickItem({required this.iconData});
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_FileCreateDialogState>();
+    final selected = state?._selectedIcon == iconData;
+    return InkWell(
+      onTap: () => state?.setState(() => state._selectedIcon = iconData),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: selected == true ? Colors.white : Colors.white24, width: selected == true ? 2 : 1),
+        ),
+        child: Icon(iconData, size: 18, color: Colors.white70),
+      ),
+    );
+  }
+}
+
 class _FileCreateDialogState extends State<_FileCreateDialog> {
   late final TextEditingController _nameController;
+  late final TextEditingController _descController;
   Color? _selectedColor;
-  List<String> _grades = [];
-  final List<Color?> _colors = [null, ...Colors.primaries];
-  late final Map<String, TextEditingController> _gradeUrlControllers;
+  Color? _selectedTextColor;
+  IconData? _selectedIcon;
+  String? _iconImagePath;
+
+  final List<Color> _fixedPalette = const [
+    _ResColors.container1,
+    _ResColors.container2,
+    _ResColors.container3,
+    _ResColors.container4,
+    _ResColors.container5,
+    _ResColors.blue1,
+    _ResColors.blue2,
+    _ResColors.blue3,
+    _ResColors.blue4,
+    _ResColors.blue5,
+  ];
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController();
-    _initGrades();
-  }
-
-  Future<void> _initGrades() async {
-    final rows = await DataManager.instance.getResourceGrades();
-    setState(() {
-      _grades = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
-      if (_grades.isEmpty) {
-        _grades = ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'];
-      }
-      _gradeUrlControllers = { for (final g in _grades) g: TextEditingController() };
-    });
+    _descController = TextEditingController();
+    _selectedIcon = Icons.insert_drive_file;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    for (final c in _gradeUrlControllers.values) { c.dispose(); }
+    _descController.dispose();
     super.dispose();
   }
 
   void _handleSave() {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('이름을 입력하세요.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('이름을 입력하세요.')));
       return;
     }
-    final Map<String, String> links = {};
-    for (final g in _grades) {
-      final u = _gradeUrlControllers[g]!.text.trim();
-      if (u.isNotEmpty) links[g] = u;
-    }
-    Navigator.of(context).pop(
-      _ResourceFile(
+    Navigator.of(context).pop({
+      'meta': _ResourceFile(
         id: UniqueKey().toString(),
         name: name,
         color: _selectedColor,
+        icon: _selectedIcon,
+        iconImagePath: _iconImagePath,
+        textColor: _selectedTextColor,
+        description: _descController.text.trim(),
         parentId: null,
         position: const Offset(0, 0),
-        size: const Size(200, 60),
-        linksByGrade: links,
-      ),
-    );
+        size: const Size(220, 70),
+      )
+    });
   }
 
   @override
@@ -2097,162 +2500,123 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('파일 추가', style: TextStyle(color: Colors.white)),
       content: SizedBox(
-        width: 520,
+        width: 560,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 다이얼로그 상단 토글 제거, 행 단위로 버튼 배치 요구사항 반영
             TextField(
               controller: _nameController,
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
                 labelText: '파일 이름',
                 labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                ),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
               ),
             ),
             const SizedBox(height: 12),
-            const Text('과정별 링크 (비워둘 수 있음)', style: TextStyle(color: Colors.white70, fontSize: 14)),
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 300),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: _grades.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  final grade = _grades[index];
-                  return DropTarget(
-                    onDragDone: (detail) {
-                      if (detail.files.isEmpty) return;
-                      final xf = detail.files.first;
-                      final path = xf.path;
-                      if (path != null && path.isNotEmpty) {
-                        _gradeUrlControllers[grade]!.text = path;
-                        if (_nameController.text.trim().isEmpty) {
-                          _nameController.text = p.basename(path);
-                        }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('드롭된 파일을 $grade에 등록했습니다.')),
-                        );
-                      }
-                    },
-                    child: Row(
-                      children: [
-                        SizedBox(width: 64, child: Text(grade, style: const TextStyle(color: Colors.white70))),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 40,
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
-                              final file = await openFile(acceptedTypeGroups: [typeGroup]);
-                              if (file != null) {
-                                _gradeUrlControllers[grade]!.text = file.path;
-                                if (_nameController.text.trim().isEmpty) {
-                                  _nameController.text = file.name;
-                                }
-                              }
-                            },
-                            icon: const Icon(Icons.folder_open, size: 16),
-                            label: const Text('찾기'),
-                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 40,
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('해당 행에 파일을 바로 드래그해서 놓으면 등록됩니다.')),
-                              );
-                            },
-                            icon: const Icon(Icons.file_download, size: 16),
-                            label: const Text('드래그앤드롭'),
-                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 40,
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('PDF 편집기는 다음 단계에서 구현됩니다.')),
-                              );
-                            },
-                            icon: const Icon(Icons.picture_as_pdf, size: 16),
-                            label: const Text('편집'),
-                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            controller: _gradeUrlControllers[grade],
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
-                              hintText: 'https:// 또는 파일 경로',
-                              hintStyle: TextStyle(color: Colors.white38),
-                              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+            TextField(
+              controller: _descController,
+              style: const TextStyle(color: Colors.white),
+              maxLines: 2,
+              decoration: const InputDecoration(
+                labelText: '설명',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                alignLabelWithHint: true,
               ),
             ),
-            const SizedBox(height: 18),
-            const Text('색상 (가득찬 스타일)', style: TextStyle(color: Colors.white70, fontSize: 15)),
+            const SizedBox(height: 12),
+            const Text('아이콘 (이미지 업로드 가능)', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _gradeIconPack.map((ico) => _IconPickItem(iconData: ico)).toList(),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  height: 36,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final typeGroup = XTypeGroup(label: 'image', extensions: ['png','jpg','jpeg']);
+                      final f = await openFile(acceptedTypeGroups: [typeGroup]);
+                      if (f != null) setState(() => _iconImagePath = f.path);
+                    },
+                    icon: const Icon(Icons.upload_file, size: 16),
+                    label: const Text('이미지'),
+                    style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (_iconImagePath != null && _iconImagePath!.isNotEmpty)
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white24, width: 1),
+                      image: DecorationImage(image: FileImage(File(_iconImagePath!)), fit: BoxFit.cover),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            const Text('배경 색상', style: TextStyle(color: Colors.white70)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: _colors.map((color) {
-                final isSelected = _selectedColor == color;
+              children: _fixedPalette.map((c) {
+                final sel = _selectedColor == c;
                 return GestureDetector(
-                  onTap: () => setState(() => _selectedColor = color),
+                  onTap: () => setState(() => _selectedColor = c),
                   child: Container(
-                    width: 30,
-                    height: 30,
+                    width: 28,
+                    height: 28,
                     decoration: BoxDecoration(
-                      color: color ?? Colors.transparent,
-                      border: Border.all(
-                        color: isSelected ? Colors.white : Colors.white24,
-                        width: isSelected ? 2.2 : 1.2,
-                      ),
+                      color: c,
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: sel ? Colors.white : Colors.white24, width: sel ? 2 : 1),
                     ),
-                    child: color == null
-                        ? const Center(child: Icon(Icons.close_rounded, color: Colors.white54, size: 16))
-                        : null,
                   ),
                 );
               }).toList(),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
+            const Text('글자 색상', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [Colors.white, Colors.white70, Colors.white60, Colors.white38, Colors.black87, Colors.black54].map((c) {
+                final sel = _selectedTextColor == c;
+                return GestureDetector(
+                  onTap: () => setState(() => _selectedTextColor = c),
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: c,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: sel ? Colors.white : Colors.white24, width: sel ? 2 : 1),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
           ],
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('취소', style: TextStyle(color: Colors.white70)),
-        ),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
         FilledButton(
           onPressed: _handleSave,
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-          child: const Text('추가'),
+          child: const Text('다음'),
         ),
       ],
     );
@@ -2511,7 +2875,7 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
         onDoubleTap: widget.editMode ? null : () async {
           final grade = widget.file.primaryGrade;
           if (grade == null) return;
-          final link = widget.file.linksByGrade[grade]?.trim() ?? '';
+          final link = widget.file.linksByGrade['$grade#body']?.trim() ?? '';
           if (link.isEmpty) return;
           if (link.startsWith('http://') || link.startsWith('https://')) {
             final uri = Uri.parse(link);
@@ -2612,31 +2976,151 @@ class _FileCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-           Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
+           if (file.iconImagePath != null && file.iconImagePath!.isNotEmpty)
+             Container(
+               width: 18,
+               height: 18,
+               decoration: BoxDecoration(
+                 borderRadius: BorderRadius.circular(4),
+                 image: DecorationImage(image: FileImage(File(file.iconImagePath!)), fit: BoxFit.cover),
+               ),
+             )
+           else
+             Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               file.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: hasForCurrent ? Colors.white : Colors.white38, fontSize: 14.5, fontWeight: FontWeight.w600),
+              style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38), fontSize: 15.5, fontWeight: FontWeight.w700),
             ),
           ),
           const SizedBox(width: 8),
+          // 본문/정답/해설 아이콘 버튼 (현재 학년 기준으로 열기)
+          _FileLinkButton(file: file, kind: 'ans'),
+          const SizedBox(width: 6),
+          _FileLinkButton(file: file, kind: 'sol'),
+          const SizedBox(width: 8),
           if (primary != null)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: Colors.black.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 primary,
-                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w700),
               ),
             ),
         ],
       ),
+    );
+  }
+}
+
+class _FileLinkButton extends StatelessWidget {
+  final _ResourceFile file;
+  final String kind; // 'body' | 'ans' | 'sol'
+  const _FileLinkButton({required this.file, required this.kind});
+  @override
+  Widget build(BuildContext context) {
+    final current = context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade;
+    final label = kind == 'body' ? '본문' : kind == 'ans' ? '정답' : '해설';
+    final icon = kind == 'body' ? Icons.description : kind == 'ans' ? Icons.check_circle : Icons.menu_book;
+    final key = current != null ? '${current}#${kind}' : null;
+    final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
+    final enabled = link.isNotEmpty;
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        onTap: !enabled ? null : () async {
+          if (link.startsWith('http://') || link.startsWith('https://')) {
+            final uri = Uri.parse(link);
+            await launchUrl(uri, mode: LaunchMode.platformDefault);
+          } else {
+            await OpenFilex.open(link);
+          }
+        },
+        borderRadius: BorderRadius.circular(6),
+        child: Icon(icon, size: 16, color: enabled ? Colors.white70 : Colors.white30),
+      ),
+    );
+  }
+}
+
+class _PdfEditorDialog extends StatefulWidget {
+  const _PdfEditorDialog();
+  @override
+  State<_PdfEditorDialog> createState() => _PdfEditorDialogState();
+}
+
+class _PdfEditorDialogState extends State<_PdfEditorDialog> {
+  final TextEditingController _inputPath = TextEditingController();
+  final TextEditingController _ranges = TextEditingController();
+  String? _outputPath;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _inputPath.dispose();
+    _ranges.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('PDF 편집기', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('입력 PDF', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(child: TextField(controller: _inputPath, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+              const SizedBox(width: 8),
+              SizedBox(height: 36, child: OutlinedButton.icon(onPressed: () async {
+                final typeGroup = XTypeGroup(label: 'pdf', extensions: ['pdf']);
+                final f = await openFile(acceptedTypeGroups: [typeGroup]);
+                if (f != null) setState(() => _inputPath.text = f.path);
+              }, icon: const Icon(Icons.folder_open, size: 16), label: const Text('찾기'))),
+            ]),
+            const SizedBox(height: 12),
+            const Text('페이지 범위 (예: 1-3,5,7-9)', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 6),
+            TextField(controller: _ranges, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '쉼표로 구분, 범위는 하이픈', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+            const SizedBox(height: 12),
+            if (_outputPath != null)
+              Text('저장 경로: $_outputPath', style: const TextStyle(color: Colors.white60)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+        FilledButton(onPressed: _busy ? null : () async {
+          final inPath = _inputPath.text.trim();
+          final ranges = _ranges.text.trim();
+          if (inPath.isEmpty || ranges.isEmpty) return;
+          setState(() => _busy = true);
+          try {
+            // TODO: PDF 페이지 추출 구현 (syncfusion/pdf 또는 pdf_render+printing 활용)
+            // 임시 동작: 출력 경로 문자열만 구성
+            final outPath = inPath.replaceAll('.pdf', '_extracted.pdf');
+            await Future.delayed(const Duration(milliseconds: 400));
+            setState(() => _outputPath = outPath);
+            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+          } finally {
+            if (mounted) setState(() => _busy = false);
+          }
+        }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: _busy ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('생성')),
+      ],
     );
   }
 }

@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 22,
+        version: 23,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -257,7 +257,10 @@ class AcademyDbService {
             pos_x REAL,
             pos_y REAL,
             width REAL,
-            height REAL
+            height REAL,
+            text_color INTEGER,
+            icon_image_path TEXT,
+            description TEXT
           )
         ''');
         await db.execute('''
@@ -548,6 +551,21 @@ class AcademyDbService {
           final hasCount = columns.any((c) => c['name'] == 'recurrence_count');
           if (!hasCount) {
             await db.execute('ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
+          }
+        }
+        if (oldVersion < 23) {
+          final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
+          final hasTextColor = cols.any((c) => c['name'] == 'text_color');
+          if (!hasTextColor) {
+            await db.execute('ALTER TABLE resource_files ADD COLUMN text_color INTEGER');
+          }
+          final hasIconImage = cols.any((c) => c['name'] == 'icon_image_path');
+          if (!hasIconImage) {
+            await db.execute('ALTER TABLE resource_files ADD COLUMN icon_image_path TEXT');
+          }
+          final hasDesc = cols.any((c) => c['name'] == 'description');
+          if (!hasDesc) {
+            await db.execute('ALTER TABLE resource_files ADD COLUMN description TEXT');
           }
         }
         // ensure new resources-related tables (links, grades)
