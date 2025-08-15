@@ -9,6 +9,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -1356,7 +1357,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                               setState(() => _answerCtrls[grade]!.text = path);
                             }
                           },
-                          child: _LinkActionButtons(controller: _answerCtrls[grade]!, onNameSuggestion: (name){}, label: '본문'),
+                          child: _LinkActionButtons(controller: _answerCtrls[grade]!, onNameSuggestion: (name){}, label: '본문', grade: grade, kindKey: 'body'),
                         )),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
@@ -1375,7 +1376,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                               setState(() => _solutionCtrls[grade]!.text = path);
                             }
                           },
-                          child: _LinkActionButtons(controller: _solutionCtrls[grade]!, onNameSuggestion: (name){}, label: '해설'),
+                          child: _LinkActionButtons(controller: _solutionCtrls[grade]!, onNameSuggestion: (name){}, label: '해설', grade: grade, kindKey: 'sol'),
                         )),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
@@ -1394,7 +1395,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                               setState(() => _bodyCtrls[grade]!.text = path);
                             }
                           },
-                          child: _LinkActionButtons(controller: _bodyCtrls[grade]!, onNameSuggestion: (name){}, label: '정답'),
+                          child: _LinkActionButtons(controller: _bodyCtrls[grade]!, onNameSuggestion: (name){}, label: '정답', grade: grade, kindKey: 'ans'),
                         )),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
@@ -1438,7 +1439,9 @@ class _LinkActionButtons extends StatelessWidget {
   final TextEditingController controller;
   final void Function(String name) onNameSuggestion;
   final String label;
-  const _LinkActionButtons({required this.controller, required this.onNameSuggestion, required this.label});
+  final String grade;
+  final String kindKey; // 'body' | 'ans' | 'sol'
+  const _LinkActionButtons({required this.controller, required this.onNameSuggestion, required this.label, required this.grade, required this.kindKey});
   @override
   Widget build(BuildContext context) {
     return Row(children: [
@@ -1476,8 +1479,19 @@ class _LinkActionButtons extends StatelessWidget {
       SizedBox(
         height: 34,
         child: OutlinedButton.icon(
-          onPressed: () {
-            showDialog(context: context, builder: (ctx) => const _PdfEditorDialog());
+          onPressed: () async {
+            final out = await showDialog<String>(
+              context: context,
+              builder: (ctx) => _PdfEditorDialog(
+                initialInputPath: controller.text.trim().isEmpty ? null : controller.text.trim(),
+                grade: grade,
+                kindKey: kindKey,
+              ),
+            );
+            if (out != null && out.isNotEmpty) {
+              controller.text = out;
+              (context as Element).markNeedsBuild();
+            }
           },
           icon: const Icon(Icons.picture_as_pdf, size: 16),
           label: const Text('편집'),
@@ -2217,9 +2231,14 @@ class _FileEditDialogState extends State<_FileEditDialog> {
                       final f = await openFile(acceptedTypeGroups: [typeGroup]);
                       if (f != null) setState(() => _iconImagePath = f.path);
                     },
-                    icon: const Icon(Icons.upload_file, size: 16),
+                    icon: const Icon(Icons.upload_file, size: 16, color: Colors.white60),
                     label: const Text('이미지'),
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white60,
+                      side: const BorderSide(color: Colors.white24),
+                      shape: const StadiumBorder(),
+                      backgroundColor: Color(0xFF2A2A2A),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -3001,6 +3020,8 @@ class _FileCard extends StatelessWidget {
           _FileLinkButton(file: file, kind: 'ans'),
           const SizedBox(width: 6),
           _FileLinkButton(file: file, kind: 'sol'),
+          const SizedBox(width: 6),
+          _BookmarkButton(file: file),
           const SizedBox(width: 8),
           if (primary != null)
             Container(
@@ -3050,8 +3071,351 @@ class _FileLinkButton extends StatelessWidget {
   }
 }
 
+class _BookmarkButton extends StatefulWidget {
+  final _ResourceFile file;
+  const _BookmarkButton({required this.file});
+  @override
+  State<_BookmarkButton> createState() => _BookmarkButtonState();
+}
+
+class _BookmarkButtonState extends State<_BookmarkButton> {
+  late Future<List<Map<String, dynamic>>> _future;
+  final GlobalKey _btnKey = GlobalKey();
+  @override
+  void initState() {
+    super.initState();
+    _future = DataManager.instance.loadResourceFileBookmarks(widget.file.id);
+  }
+  void _openMenu() async {
+    final renderBox = _btnKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        renderBox!.localToGlobal(Offset.zero, ancestor: overlay),
+        renderBox.localToGlobal(renderBox.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final bookmarks = await DataManager.instance.loadResourceFileBookmarks(widget.file.id);
+    // Show menu with list + controls
+    await showMenu<void>(
+      context: context,
+      position: position,
+      items: <PopupMenuEntry<void>>[
+        ...bookmarks.map<PopupMenuEntry<void>>((b) => PopupMenuItem<void>(
+          enabled: true,
+          child: Row(
+            children: [
+              const Icon(Icons.drag_indicator, color: Colors.white60, size: 16),
+              const SizedBox(width: 8),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(b['name'] ?? '', style: const TextStyle(color: Colors.white)),
+                if ((b['description'] as String?)?.isNotEmpty ?? false)
+                  Text(b['description'], style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              ])),
+              PopupMenuButton<void>(
+                icon: const Icon(Icons.more_vert, color: Colors.white70, size: 18),
+                itemBuilder: (ctx) => <PopupMenuEntry<void>>[
+                  PopupMenuItem<void>(onTap: () async {
+                    await Future.delayed(const Duration(milliseconds: 0));
+                    final edited = await showDialog<Map<String, dynamic>>(
+                      context: context,
+                      builder: (ctx) => _BookmarkEditDialog(initial: b),
+                    );
+                    if (edited != null) {
+                      final list = List<Map<String, dynamic>>.from(bookmarks);
+                      final idx = list.indexOf(b);
+                      if (idx != -1) list[idx] = edited;
+                      await DataManager.instance.saveResourceFileBookmarks(widget.file.id, list);
+                      if (mounted) setState(() => _future = DataManager.instance.loadResourceFileBookmarks(widget.file.id));
+                    }
+                  }, child: const Text('수정')),
+                  PopupMenuItem<void>(onTap: () async {
+                    await Future.delayed(const Duration(milliseconds: 0));
+                    final list = List<Map<String, dynamic>>.from(bookmarks)..remove(b);
+                    await DataManager.instance.saveResourceFileBookmarks(widget.file.id, list);
+                    if (mounted) setState(() => _future = DataManager.instance.loadResourceFileBookmarks(widget.file.id));
+                  }, child: const Text('삭제')),
+                ],
+              ),
+            ],
+          ),
+        )),
+        const PopupMenuDivider(),
+        PopupMenuItem<void>(
+          enabled: true,
+          child: Row(children: const [Icon(Icons.settings, size: 16), SizedBox(width: 8), Text('관리...')]),
+          onTap: () async {
+            await Future.delayed(const Duration(milliseconds: 0));
+            await showDialog(
+              context: context,
+              builder: (ctx) => _BookmarkManageDialog(fileId: widget.file.id),
+            );
+            if (mounted) setState(() => _future = DataManager.instance.loadResourceFileBookmarks(widget.file.id));
+          },
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<void>(
+          enabled: true,
+          child: Row(children: const [Icon(Icons.add, size: 16), SizedBox(width: 8), Text('추가')]),
+          onTap: () async {
+            await Future.delayed(const Duration(milliseconds: 0));
+            final created = await showDialog<Map<String, dynamic>>(
+              context: context,
+              builder: (ctx) => _BookmarkCreateDialog(fileId: widget.file.id),
+            );
+            if (created != null) {
+              final list = await DataManager.instance.loadResourceFileBookmarks(widget.file.id);
+              list.add(created);
+              await DataManager.instance.saveResourceFileBookmarks(widget.file.id, list);
+              if (mounted) setState(() => _future = DataManager.instance.loadResourceFileBookmarks(widget.file.id));
+            }
+          },
+        ),
+      ],
+      color: const Color(0xFF2A2A2A),
+    );
+  }
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      key: _btnKey,
+      onPressed: _openMenu,
+      icon: const Icon(Icons.bookmarks, size: 18, color: Colors.white70),
+      tooltip: '북마크',
+    );
+  }
+}
+
+class _BookmarkCreateDialog extends StatefulWidget {
+  final String fileId;
+  const _BookmarkCreateDialog({required this.fileId});
+  @override
+  State<_BookmarkCreateDialog> createState() => _BookmarkCreateDialogState();
+}
+
+class _BookmarkCreateDialogState extends State<_BookmarkCreateDialog> {
+  final TextEditingController _name = TextEditingController();
+  final TextEditingController _desc = TextEditingController();
+  final TextEditingController _path = TextEditingController();
+  @override
+  void dispose() { _name.dispose(); _desc.dispose(); _path.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('북마크 추가', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 520,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: _name, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: '이름', labelStyle: TextStyle(color: Colors.white70), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+          const SizedBox(height: 10),
+          TextField(controller: _desc, style: const TextStyle(color: Colors.white), maxLines: 2, decoration: const InputDecoration(labelText: '설명', labelStyle: TextStyle(color: Colors.white70), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))), alignLabelWithHint: true)),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _path,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: '파일 경로 또는 URL',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              height: 36,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+                  final file = await openFile(acceptedTypeGroups: [typeGroup]);
+                  if (file != null) setState(() => _path.text = file.path);
+                },
+                icon: const Icon(Icons.folder_open, size: 16),
+                label: const Text('찾기'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white60,
+                  side: const BorderSide(color: Colors.white24),
+                  shape: const StadiumBorder(),
+                  backgroundColor: const Color(0xFF2A2A2A),
+                ),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(onPressed: () {
+          final map = {'name': _name.text.trim(), 'description': _desc.text.trim(), 'path': _path.text.trim()};
+          Navigator.pop(context, map);
+        }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
+      ],
+    );
+  }
+}
+
+class _BookmarkEditDialog extends StatefulWidget {
+  final Map<String, dynamic> initial;
+  const _BookmarkEditDialog({required this.initial});
+  @override
+  State<_BookmarkEditDialog> createState() => _BookmarkEditDialogState();
+}
+
+class _BookmarkEditDialogState extends State<_BookmarkEditDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _desc;
+  late final TextEditingController _path;
+  @override
+  void initState() { super.initState(); _name = TextEditingController(text: widget.initial['name'] ?? ''); _desc = TextEditingController(text: widget.initial['description'] ?? ''); _path = TextEditingController(text: widget.initial['path'] ?? ''); }
+  @override
+  void dispose() { _name.dispose(); _desc.dispose(); _path.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('북마크 수정', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 520,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: _name, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: '이름', labelStyle: TextStyle(color: Colors.white70), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+          const SizedBox(height: 10),
+          TextField(controller: _desc, style: const TextStyle(color: Colors.white), maxLines: 2, decoration: const InputDecoration(labelText: '설명', labelStyle: TextStyle(color: Colors.white70), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))), alignLabelWithHint: true)),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _path,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: '파일 경로 또는 URL',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              height: 36,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final typeGroup = XTypeGroup(label: 'files', extensions: ['pdf','hwp','hwpx','xlsx','xls','doc','docx','ppt','pptx']);
+                  final file = await openFile(acceptedTypeGroups: [typeGroup]);
+                  if (file != null) setState(() => _path.text = file.path);
+                },
+                icon: const Icon(Icons.folder_open, size: 16),
+                label: const Text('찾기'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white60,
+                  side: const BorderSide(color: Colors.white24),
+                  shape: const StadiumBorder(),
+                  backgroundColor: const Color(0xFF2A2A2A),
+                ),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        FilledButton(onPressed: () {
+          final map = {'name': _name.text.trim(), 'description': _desc.text.trim(), 'path': _path.text.trim()};
+          Navigator.pop(context, map);
+        }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('저장')),
+      ],
+    );
+  }
+}
+
+class _BookmarkManageDialog extends StatefulWidget {
+  final String fileId;
+  const _BookmarkManageDialog({required this.fileId});
+  @override
+  State<_BookmarkManageDialog> createState() => _BookmarkManageDialogState();
+}
+
+class _BookmarkManageDialogState extends State<_BookmarkManageDialog> {
+  List<Map<String, dynamic>> _items = [];
+  bool _loading = true;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+  Future<void> _load() async {
+    final list = await DataManager.instance.loadResourceFileBookmarks(widget.fileId);
+    if (mounted) setState(() { _items = List<Map<String, dynamic>>.from(list); _loading = false; });
+  }
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('북마크 관리', style: TextStyle(color: Colors.white)),
+      content: SizedBox(
+        width: 520,
+        height: 420,
+        child: _loading ? const Center(child: CircularProgressIndicator()) : ReorderableListView(
+          buildDefaultDragHandles: false,
+          children: [
+            for (int i = 0; i < _items.length; i++)
+              ListTile(
+                key: ValueKey('bm_$i'),
+                leading: ReorderableDragStartListener(
+                  index: i,
+                  child: const Icon(Icons.drag_indicator, color: Colors.white60),
+                ),
+                title: Text(_items[i]['name'] ?? '', style: const TextStyle(color: Colors.white)),
+                subtitle: ((
+                  (_items[i]['description'] as String?)?.isNotEmpty ?? false
+                ) ? Text(_items[i]['description'], style: const TextStyle(color: Colors.white54)) : null),
+                trailing: IconButton(
+                  icon: const Icon(Icons.edit, color: Colors.white70),
+                  onPressed: () async {
+                    final edited = await showDialog<Map<String, dynamic>>(
+                      context: context,
+                      builder: (ctx) => _BookmarkEditDialog(initial: _items[i]),
+                    );
+                    if (edited != null) setState(() => _items[i] = edited);
+                  },
+                ),
+              ),
+          ],
+          onReorder: (oldIndex, newIndex) {
+            setState(() {
+              if (newIndex > oldIndex) newIndex -= 1;
+              final item = _items.removeAt(oldIndex);
+              _items.insert(newIndex, item);
+            });
+          },
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+        FilledButton(
+          onPressed: () async {
+            await DataManager.instance.saveResourceFileBookmarks(widget.fileId, _items);
+            if (context.mounted) Navigator.pop(context);
+          },
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          child: const Text('저장'),
+        ),
+      ],
+    );
+  }
+}
+
 class _PdfEditorDialog extends StatefulWidget {
-  const _PdfEditorDialog();
+  final String? initialInputPath;
+  final String grade;
+  final String kindKey; // 'body' | 'ans' | 'sol'
+  const _PdfEditorDialog({this.initialInputPath, required this.grade, required this.kindKey});
   @override
   State<_PdfEditorDialog> createState() => _PdfEditorDialogState();
 }
@@ -3059,13 +3423,49 @@ class _PdfEditorDialog extends StatefulWidget {
 class _PdfEditorDialogState extends State<_PdfEditorDialog> {
   final TextEditingController _inputPath = TextEditingController();
   final TextEditingController _ranges = TextEditingController();
+  final TextEditingController _fileName = TextEditingController();
   String? _outputPath;
   bool _busy = false;
+  final List<int> _selectedPages = [];
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialInputPath != null && widget.initialInputPath!.isNotEmpty) {
+      _inputPath.text = widget.initialInputPath!;
+      final base = p.basenameWithoutExtension(widget.initialInputPath!);
+      final suffix = widget.kindKey == 'body' ? '본문' : widget.kindKey == 'ans' ? '정답' : '해설';
+      _fileName.text = '${base}_${widget.grade}_$suffix.pdf';
+    }
+  }
+
+  List<int> _parseRanges(String input, int maxPages) {
+    final Set<int> pages = {};
+    for (final part in input.split(',')) {
+      final t = part.trim();
+      if (t.isEmpty) continue;
+      if (t.contains('-')) {
+        final sp = t.split('-');
+        if (sp.length != 2) continue;
+        final a = int.tryParse(sp[0].trim());
+        final b = int.tryParse(sp[1].trim());
+        if (a == null || b == null) continue;
+        final start = a < 1 ? 1 : a;
+        final end = b > maxPages ? maxPages : b;
+        for (int i = start; i <= end; i++) pages.add(i);
+      } else {
+        final v = int.tryParse(t);
+        if (v != null && v >= 1 && v <= maxPages) pages.add(v);
+      }
+    }
+    final list = pages.toList()..sort();
+    return list;
+  }
 
   @override
   void dispose() {
     _inputPath.dispose();
     _ranges.dispose();
+    _fileName.dispose();
     super.dispose();
   }
 
@@ -3077,29 +3477,109 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
       title: const Text('PDF 편집기', style: TextStyle(color: Colors.white)),
       content: SizedBox(
         width: 560,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('입력 PDF', style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 6),
-            Row(children: [
-              Expanded(child: TextField(controller: _inputPath, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
-              const SizedBox(width: 8),
-              SizedBox(height: 36, child: OutlinedButton.icon(onPressed: () async {
-                final typeGroup = XTypeGroup(label: 'pdf', extensions: ['pdf']);
-                final f = await openFile(acceptedTypeGroups: [typeGroup]);
-                if (f != null) setState(() => _inputPath.text = f.path);
-              }, icon: const Icon(Icons.folder_open, size: 16), label: const Text('찾기'))),
-            ]),
-            const SizedBox(height: 12),
-            const Text('페이지 범위 (예: 1-3,5,7-9)', style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 6),
-            TextField(controller: _ranges, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '쉼표로 구분, 범위는 하이픈', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
-            const SizedBox(height: 12),
-            if (_outputPath != null)
-              Text('저장 경로: $_outputPath', style: const TextStyle(color: Colors.white60)),
-          ],
+        child: DefaultTabController(
+          length: 2,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const TabBar(tabs: [
+                Tab(text: '범위 입력'),
+                Tab(text: '미리보기 선택'),
+              ]),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 380,
+                child: TabBarView(children: [
+                  // Tab 1: 텍스트 범위 입력
+                  SingleChildScrollView(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('입력 PDF', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      Row(children: [
+                        Expanded(child: TextField(controller: _inputPath, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+                        const SizedBox(width: 8),
+                        SizedBox(height: 36, child: OutlinedButton.icon(onPressed: () async {
+                          final typeGroup = XTypeGroup(label: 'pdf', extensions: ['pdf']);
+                          final f = await openFile(acceptedTypeGroups: [typeGroup]);
+                          if (f != null) setState(() {
+                            _inputPath.text = f.path;
+                            final base = p.basenameWithoutExtension(f.path);
+                            final suffix = widget.kindKey == 'body' ? '본문' : widget.kindKey == 'ans' ? '정답' : '해설';
+                            _fileName.text = '${base}_${widget.grade}_$suffix.pdf';
+                          });
+                        }, icon: const Icon(Icons.folder_open, size: 16), label: const Text('찾기'))),
+                      ]),
+                      const SizedBox(height: 12),
+                      const Text('페이지 범위 (예: 1-3,5,7-9)', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      TextField(controller: _ranges, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '쉼표로 구분, 범위는 하이픈', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+                      const SizedBox(height: 12),
+                      const Text('파일명', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      TextField(controller: _fileName, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '원본명_과정_종류.pdf', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+                    ]),
+                  ),
+                  // Tab 2: 미리보기 선택 (페이지 선택 + 순서 변경)
+                  Column(children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(border: Border.all(color: Colors.white24)),
+                        child: const Center(child: Text('미리보기(의존성 충돌로 뷰어 임시 비활성)', style: TextStyle(color: Colors.white54))),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      SizedBox(
+                        height: 34,
+                        child: OutlinedButton.icon(
+                          onPressed: null,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('현재 페이지 추가'),
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('선택: ${_selectedPages.join(', ')}', style: const TextStyle(color: Colors.white60)),
+                    ]),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 100,
+                      child: ReorderableListView(
+                        scrollDirection: Axis.horizontal,
+                        buildDefaultDragHandles: false,
+                        children: [
+                          for (int i = 0; i < _selectedPages.length; i++)
+                            Container(
+                              key: ValueKey('sel_$i'),
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_indicator, color: Colors.white60)),
+                                const SizedBox(width: 6),
+                                Text('p${_selectedPages[i]}', style: const TextStyle(color: Colors.white)),
+                                const SizedBox(width: 6),
+                                InkWell(onTap: () => setState(() { _selectedPages.removeAt(i); }), child: const Icon(Icons.close, size: 16, color: Colors.white54)),
+                              ]),
+                            ),
+                        ],
+                        onReorder: (oldIndex, newIndex) {
+                          setState(() {
+                            if (newIndex > oldIndex) newIndex -= 1;
+                            final v = _selectedPages.removeAt(oldIndex);
+                            _selectedPages.insert(newIndex, v);
+                          });
+                        },
+                      ),
+                    ),
+                  ]),
+                ]),
+              ),
+              if (_outputPath != null)
+                Text('저장 경로: $_outputPath', style: const TextStyle(color: Colors.white60)),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -3107,15 +3587,40 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
         FilledButton(onPressed: _busy ? null : () async {
           final inPath = _inputPath.text.trim();
           final ranges = _ranges.text.trim();
+          var outName = _fileName.text.trim();
           if (inPath.isEmpty || ranges.isEmpty) return;
+          if (outName.isEmpty) {
+            final base = p.basenameWithoutExtension(inPath);
+            final suffix = widget.kindKey == 'body' ? '본문' : widget.kindKey == 'ans' ? '정답' : '해설';
+            outName = '${base}_${widget.grade}_$suffix.pdf';
+          }
           setState(() => _busy = true);
           try {
-            // TODO: PDF 페이지 추출 구현 (syncfusion/pdf 또는 pdf_render+printing 활용)
-            // 임시 동작: 출력 경로 문자열만 구성
-            final outPath = inPath.replaceAll('.pdf', '_extracted.pdf');
-            await Future.delayed(const Duration(milliseconds: 400));
+            // 1) 사용자 정의 경로 선택 (파일 저장 대화상자)
+            final saveLoc = await getSaveLocation(suggestedName: outName);
+            if (saveLoc == null) {
+              if (mounted) setState(() => _busy = false);
+              return;
+            }
+            final outPath = saveLoc.path;
+            // 2) Syncfusion로 inPath에서 ranges 추출→ outPath 저장
+            final inputBytes = await File(inPath).readAsBytes();
+            final src = sf.PdfDocument(inputBytes: inputBytes);
+            final selected = _selectedPages.isNotEmpty ? List<int>.from(_selectedPages) : _parseRanges(ranges, src.pages.count);
+            final keep = selected.toSet();
+            for (int i = src.pages.count - 1; i >= 0; i--) {
+              if (!keep.contains(i + 1)) {
+                src.pages.removeAt(i);
+              }
+            }
+            final outBytes = await src.save();
+            src.dispose();
+            await File(outPath).writeAsBytes(outBytes, flush: true);
             setState(() => _outputPath = outPath);
-            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+              Navigator.pop(context, outPath);
+            }
           } finally {
             if (mounted) setState(() => _busy = false);
           }

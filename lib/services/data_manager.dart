@@ -1577,6 +1577,27 @@ class DataManager {
     await AcademyDbService.instance.deleteResourceFile(fileId);
   }
 
+  // ======== RESOURCE FILE BOOKMARKS ========
+  Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) async {
+    final dbClient = await AcademyDbService.instance.db;
+    await AcademyDbService.instance.ensureResourceTables();
+    return await dbClient.query('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId], orderBy: 'order_index ASC');
+  }
+
+  Future<void> saveResourceFileBookmarks(String fileId, List<Map<String, dynamic>> items) async {
+    final dbClient = await AcademyDbService.instance.db;
+    await AcademyDbService.instance.ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId]);
+      for (int i = 0; i < items.length; i++) {
+        final it = Map<String, dynamic>.from(items[i]);
+        it['file_id'] = fileId;
+        it['order_index'] = i;
+        await txn.insert('resource_file_bookmarks', it);
+      }
+    });
+  }
+
   // ======== RESOURCE GRADES (학년 목록/순서) ========
   Future<List<Map<String, dynamic>>> getResourceGrades() async {
     return await AcademyDbService.instance.getResourceGrades();

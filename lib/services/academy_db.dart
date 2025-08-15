@@ -567,6 +567,16 @@ class AcademyDbService {
           if (!hasDesc) {
             await db.execute('ALTER TABLE resource_files ADD COLUMN description TEXT');
           }
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS resource_file_bookmarks (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              file_id TEXT,
+              name TEXT,
+              description TEXT,
+              path TEXT,
+              order_index INTEGER
+            )
+          ''');
         }
         // ensure new resources-related tables (links, grades)
         await db.execute('''
@@ -870,6 +880,16 @@ class AcademyDbService {
       CREATE TABLE IF NOT EXISTS resource_grades (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
+        order_index INTEGER
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_file_bookmarks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id TEXT,
+        name TEXT,
+        description TEXT,
+        path TEXT,
         order_index INTEGER
       )
     ''');
