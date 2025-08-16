@@ -793,6 +793,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     // 파일 이동 + 즉시 저장
     for (int j = 0; j < _files.length; j++) {
       final other = _files[j];
+      if (other.id == movedId) continue; // 주체 파일은 제외
       final otherRect = Rect.fromLTWH(other.position.dx, other.position.dy, other.size.width, other.size.height);
       if (_isNear(movedRect, otherRect, threshold)) {
         final target = _clampPosition(other.position + delta, other.size, canvasSize);
@@ -1660,6 +1661,7 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
   final GlobalKey _stackKey = GlobalKey();
   final Set<String> _selectedIds = <String>{}; // 'folder:ID' or 'file:ID'
   Offset? _panStartLocal;
+  bool _isDraggingAny = false;
 
   bool _isSelectedFolder(String id) => _selectedIds.contains('folder:$id');
   bool _isSelectedFile(String id) => _selectedIds.contains('file:$id');
@@ -1811,12 +1813,14 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
   Offset _groupDragDelta = Offset.zero;
   Offset? _groupDragAnchorBasePos;
   final Map<String, Offset> _groupStartPositions = <String, Offset>{}; // key -> start pos
+  bool _isApplyingGroupEnd = false;
   void beginGroupDrag({required String anchorKey, required Offset basePos}) {
     setState(() {
       _groupDragActive = true;
       _groupDragAnchorKey = anchorKey;
       _groupDragAnchorBasePos = basePos;
       _groupDragDelta = Offset.zero;
+      _isDraggingAny = true;
       _groupStartPositions.clear();
       // 앵커 포함 현재 선택된 모든 항목의 시작 좌표를 저장
       for (final f in _selectedFolders()) {
@@ -1851,6 +1855,7 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
       _groupDragAnchorKey = null;
       _groupDragAnchorBasePos = null;
       _groupDragDelta = Offset.zero;
+      _isDraggingAny = false;
       _groupStartPositions.clear();
     });
   }
@@ -1872,6 +1877,11 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
     return LayoutBuilder(
       builder: (context, constraints) {
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+        if (!widget.resizeMode && _selectedIds.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _selectedIds.clear());
+          });
+        }
         return Listener(
           behavior: HitTestBehavior.translucent,
           onPointerSignal: (signal) {
@@ -1927,79 +1937,93 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   const Center(
                     child: Text('추가 버튼으로 폴더 또는 파일을 만들어 보세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
                   ),
-                ...widget.folders.map((f) => _DraggableFolderCard(
-                  key: ValueKey(f.id),
-                  folder: f,
-                  onMoved: (pos) => widget.onFolderMoved(f.id, pos, _canvasSize),
-                  onEndMoved: (pos) {
-                    final snapped = _applySnap(pos, f.id);
-                    // 대표 델타 = 앵커 스냅 좌표 - 앵커 드래그 시작 좌표
-                    final anchorKey = 'folder:${f.id}';
-                    final startAnchor = _groupStartPositions[anchorKey] ?? f.position;
-                    final delta = snapped - startAnchor;
-                    // 앵커 및 선택된 항목들을 시작좌표 + delta로 정확히 반영
-                    widget.onFolderMoved(f.id, startAnchor + delta, _canvasSize);
-                    for (final entry in _groupStartPositions.entries) {
-                      if (entry.key == anchorKey) continue;
-                      final k = entry.key; final startPos = entry.value; final np = startPos + delta;
-                      if (k.startsWith('folder:')) {
-                        final id = k.substring('folder:'.length);
-                        widget.onFolderMoved(id, np, _canvasSize);
-                      } else if (k.startsWith('file:')) {
-                        final id = k.substring('file:'.length);
-                        if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                ...widget.folders.map((f) {
+                  return _DraggableFolderCard(
+                    key: ValueKey(f.id),
+                    folder: f,
+                    onMoved: (pos) => widget.onFolderMoved(f.id, pos, _canvasSize),
+                    onEndMoved: (pos) {
+                      final snapped = _applySnap(pos, f.id);
+                      // 대표 델타 = 앵커 스냅 좌표 - 앵커 드래그 시작 좌표
+                      final anchorKey = 'folder:${f.id}';
+                      final startAnchor = _groupStartPositions[anchorKey] ?? f.position;
+                      final delta = snapped - startAnchor;
+                      // 앵커 및 선택된 항목들을 시작좌표 + delta로 정확히 반영
+                      _isApplyingGroupEnd = true;
+                      widget.onFolderMoved(f.id, startAnchor + delta, _canvasSize);
+                      for (final entry in _groupStartPositions.entries) {
+                        if (entry.key == anchorKey) continue;
+                        final k = entry.key;
+                        final startPos = entry.value;
+                        final np = startPos + delta;
+                        if (k.startsWith('folder:')) {
+                          final id = k.substring('folder:'.length);
+                          widget.onFolderMoved(id, np, _canvasSize);
+                        } else if (k.startsWith('file:')) {
+                          final id = k.substring('file:'.length);
+                          if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                        }
                       }
-                    }
-                    if (widget.onMoveEnd != null) widget.onMoveEnd!();
-                  },
-                  globalToCanvasLocal: _globalToCanvasLocal,
-                  resizeMode: widget.resizeMode,
-                  editMode: widget.editMode,
-                  onDeleteRequested: widget.onDeleteFolder,
-                  onEditRequested: widget.onEditFolder,
-                  onResize: (size) {
-                    if (widget.onFolderResized != null) widget.onFolderResized!(f.id, size, _canvasSize);
-                  },
-                  onBackgroundTap: () {
-                    if (widget.onExitResizeMode != null) widget.onExitResizeMode!();
-                  },
-                  onResizeEnd: () {
-                    if (widget.onResizeEnd != null) widget.onResizeEnd!();
-                  },
-                )),
+                      _isApplyingGroupEnd = false;
+                      if (widget.onMoveEnd != null) widget.onMoveEnd!();
+                    },
+                    globalToCanvasLocal: _globalToCanvasLocal,
+                    resizeMode: widget.resizeMode,
+                    editMode: widget.editMode,
+                    onDeleteRequested: widget.onDeleteFolder,
+                    onEditRequested: widget.onEditFolder,
+                    onResize: (size) {
+                      if (widget.onFolderResized != null) widget.onFolderResized!(f.id, size, _canvasSize);
+                    },
+                    onBackgroundTap: () {
+                      if (widget.onExitResizeMode != null) widget.onExitResizeMode!();
+                    },
+                    onResizeEnd: () {
+                      if (widget.onResizeEnd != null) widget.onResizeEnd!();
+                    },
+                  );
+                }),
                 // 파일 카드 렌더링 (간단 placeholder 스타일)
-                ...widget.files.map((fi) => _DraggableFileCard(
-                  key: ValueKey('file_${fi.id}')
-                , file: fi,
-                  resizeMode: widget.resizeMode,
-                  globalToCanvasLocal: _globalToCanvasLocal,
-                  currentGrade: widget.currentGrade,
-                  editMode: widget.editMode,
-                  onDeleteRequested: widget.onDeleteFile,
-                  onEditRequested: widget.onEditFile,
-                  onMoved: (pos) {
-                    final anchorKey = 'file:${fi.id}';
-                    final startAnchor = _groupStartPositions[anchorKey] ?? fi.position;
-                    final delta = pos - startAnchor;
-                    if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, startAnchor + delta, _canvasSize);
-                    for (final entry in _groupStartPositions.entries) {
-                      if (entry.key == anchorKey) continue;
-                      final k = entry.key; final startPos = entry.value; final np = startPos + delta;
-                      if (k.startsWith('folder:')) {
-                        final id = k.substring('folder:'.length);
-                        widget.onFolderMoved(id, np, _canvasSize);
-                      } else if (k.startsWith('file:')) {
-                        final id = k.substring('file:'.length);
-                        if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                ...widget.files.map((fi) {
+                  return _DraggableFileCard(
+                    key: ValueKey('file_${fi.id}')
+                  , file: fi,
+                    resizeMode: widget.resizeMode,
+                    globalToCanvasLocal: _globalToCanvasLocal,
+                    currentGrade: widget.currentGrade,
+                    editMode: widget.editMode,
+                    onDeleteRequested: widget.onDeleteFile,
+                    onEditRequested: widget.onEditFile,
+                    onMoved: (pos) {
+                      // 드래그 중에는 부모 콜백 호출하지 않음 (내부 임시 위치로만 렌더)
+                    },
+                    onEndMoved: (pos) {
+                      final snapped = _applySnap(pos, fi.id);
+                      final anchorKey = 'file:${fi.id}';
+                      final startAnchor = _groupStartPositions[anchorKey] ?? fi.position;
+                      final delta = snapped - startAnchor;
+                      _isApplyingGroupEnd = true;
+                      if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, startAnchor + delta, _canvasSize);
+                      for (final entry in _groupStartPositions.entries) {
+                        if (entry.key == anchorKey) continue;
+                        final k = entry.key; final startPos = entry.value; final np = startPos + delta;
+                        if (k.startsWith('folder:')) {
+                          final id = k.substring('folder:'.length);
+                          widget.onFolderMoved(id, np, _canvasSize);
+                        } else if (k.startsWith('file:')) {
+                          final id = k.substring('file:'.length);
+                          if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                        }
                       }
-                    }
-                    if (widget.onMoveEnd != null) widget.onMoveEnd!();
-                  },
-                  onResize: (size) {
-                    if (widget.onFileResized != null) widget.onFileResized!(fi.id, size, _canvasSize);
-                  },
-                  onResizeEnd: () { if (widget.onResizeEnd != null) widget.onResizeEnd!(); },
-                )),
+                      _isApplyingGroupEnd = false;
+                      if (widget.onMoveEnd != null) widget.onMoveEnd!();
+                    },
+                    onResize: (size) {
+                      if (widget.onFileResized != null) widget.onFileResized!(fi.id, size, _canvasSize);
+                    },
+                    onResizeEnd: () { if (widget.onResizeEnd != null) widget.onResizeEnd!(); },
+                  );
+                }),
                 // 선택 강조 오버레이
                 IgnorePointer(
                   child: Stack(children: [
@@ -2031,34 +2055,25 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                     )),
                   ]),
                 ),
-                // 그룹 실시간 미리보기 오버레이 (그룹 드래그 활성 시)
+                // 그룹 드래그 고스트 오버레이 (표시 전용)
                 if (_groupDragActive)
                   IgnorePointer(
                     child: Stack(children: [
-                      ..._selectedFolders().map((f) {
-                        final base = f.position;
-                        final p = base + _groupDragDelta;
-                        return Positioned(
-                          left: p.dx,
-                          top: p.dy,
-                          child: Opacity(
-                            opacity: 0.25,
-                            child: _FolderCard(folder: f.copyWith(position: p)),
-                          ),
-                        );
-                      }),
-                      ..._selectedFiles().map((fi) {
-                        final base = fi.position;
-                        final p = base + _groupDragDelta;
-                        return Positioned(
-                          left: p.dx,
-                          top: p.dy,
-                          child: Opacity(
-                            opacity: 0.25,
-                            child: _FileCard(file: fi.copyWith(position: p)),
-                          ),
-                        );
-                      }),
+                      for (final entry in _groupStartPositions.entries)
+                        () {
+                          final key = entry.key;
+                          final start = entry.value;
+                          final p = start + _groupDragDelta;
+                          if (key.startsWith('folder:')) {
+                            final id = key.substring('folder:'.length);
+                            final f = widget.folders.firstWhere((e) => e.id == id, orElse: () => _ResourceFolder(id: id, name: '', color: null, description: '', position: start, size: const Size(200,120), shape: 'rect'));
+                            return Positioned(left: p.dx, top: p.dy, child: Opacity(opacity: 0.28, child: _FolderCard(folder: f.copyWith(position: p))));
+                          } else {
+                            final id = key.substring('file:'.length);
+                            final fi = widget.files.firstWhere((e) => e.id == id, orElse: () => _ResourceFile(id: id, name: '', color: null, position: start, size: const Size(200,60)));
+                            return Positioned(left: p.dx, top: p.dy, child: Opacity(opacity: 0.28, child: _FileCard(file: fi.copyWith(position: p))));
+                          }
+                        }(),
                     ]),
                   ),
                 // 마퀴 선택 렌더링
@@ -2167,10 +2182,16 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
             print('[FOLDER][onPanUpdate] delta=${details.delta}');
             final canvasPos = widget.globalToCanvasLocal(details.globalPosition);
             final newPos = (_dragAnchor != null) ? (canvasPos - _dragAnchor!) : Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
-            setState(() => _tempPosition = newPos);
-            // 그룹 드래그 미리보기 업데이트
+            // 그룹 드래그 중에는 내부 임시 위치를 사용하지 않고 상위에서 렌더링 위치를 제어
             final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
-            state?.updateGroupDrag(newPos);
+            if (state != null && state._groupDragActive) {
+              state.updateGroupDrag(newPos);
+            } else {
+              setState(() => _tempPosition = newPos);
+              final st = context.findAncestorStateOfType<_ResourcesCanvasState>();
+              st?.updateGroupDrag(newPos);
+            }
+            // 그룹 드래그 미리보기 업데이트 (상단에서 이미 호출)
           }
         },
         onPanEnd: widget.editMode
@@ -2179,12 +2200,19 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
           // ignore: avoid_print
           print('[FOLDER][onPanEnd] dragging=$_dragging');
           setState(() => _dragging = false);
-          final endPos = _tempPosition ?? widget.folder.position;
+          Offset endPos;
+          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+          if (state != null && state._groupDragActive) {
+            final anchorKey = 'folder:${widget.folder.id}';
+            final startAnchor = state._groupStartPositions[anchorKey] ?? widget.folder.position;
+            endPos = startAnchor + state._groupDragDelta;
+          } else {
+            endPos = _tempPosition ?? widget.folder.position;
+          }
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
           _tempPosition = null;
           _dragAnchor = null;
           // 그룹 드래그 미리보기 종료
-          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
           state?.endGroupDrag();
         },
         // 리사이즈 모드 종료는 버튼으로만 수행: 배경 탭 종료 제거
@@ -3318,9 +3346,16 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
             print('[FILE][onPanUpdate] delta=${d.delta}');
             final canvasPos = widget.globalToCanvasLocal(d.globalPosition);
             final newPos = (_dragAnchor != null) ? (canvasPos - _dragAnchor!) : Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy);
-            setState(() => _tempPosition = newPos);
+            // 그룹 드래그 중에는 내부 임시 위치를 사용하지 않고 상위에서 렌더링 위치를 제어
             final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
-            state?.updateGroupDrag(newPos);
+            if (state != null && state._groupDragActive) {
+              state.updateGroupDrag(newPos);
+            } else {
+              setState(() => _tempPosition = newPos);
+              state?.updateGroupDrag(newPos);
+            }
+            // 실시간 반영: 상태만 업데이트(저장은 onEnd에서)
+            if (widget.onMoved != null) widget.onMoved!(newPos);
           }
         },
         onPanEnd: (_) {
@@ -3328,11 +3363,18 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           // ignore: avoid_print
           print('[FILE][onPanEnd] dragging=$_dragging');
           setState(() => _dragging = false);
-          final endPos = _tempPosition ?? widget.file.position;
+          Offset endPos;
+          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+          if (state != null && state._groupDragActive) {
+            final anchorKey = 'file:${widget.file.id}';
+            final startAnchor = state._groupStartPositions[anchorKey] ?? widget.file.position;
+            endPos = startAnchor + state._groupDragDelta;
+          } else {
+            endPos = _tempPosition ?? widget.file.position;
+          }
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
           _tempPosition = null;
           _dragAnchor = null;
-          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
           state?.endGroupDrag();
         },
         behavior: HitTestBehavior.translucent,
@@ -3342,15 +3384,6 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
           child: Stack(
             children: [
               _FileCard(file: widget.file.copyWith(position: effectivePos, size: effectiveSize)),
-              if (_dragging)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: Opacity(
-                      opacity: 0.25,
-                      child: _FileCard(file: widget.file.copyWith(position: effectivePos, size: effectiveSize)),
-                    ),
-                  ),
-                ),
               if (widget.editMode)
                 Positioned(
                   right: 6,
