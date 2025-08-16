@@ -70,9 +70,18 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   // 학년 관리 상태
   final GlobalKey _gradeButtonKey = GlobalKey();
+  final GlobalKey _gradePanelKey = GlobalKey();
+  Rect? _gradePanelRect;
   OverlayEntry? _gradeOverlay;
   bool _isGradeMenuOpen = false;
+  bool _isInlineActionMenuOpen = false; // 학년 항목 점세개 메뉴 토글 상태
+  OverlayEntry? _inlineActionMenuEntry;
+  bool _inlineActionInProgress = false;
+  bool _isDialogOpen = false;
+  final Map<String, LayerLink> _gradeItemLayerLinks = {};
+  Offset? _lastPointerGlobal;
   List<String> _grades = [];
+  Map<String, int> _gradeIconCodes = {};
   int _selectedGradeIndex = 0;
   int _lastGradeScrollMs = 0;
 
@@ -104,6 +113,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
   }
 
+  // 아래 전역 함수 정의를 제거하기 위해 클래스 내부로 이동시킨 동일 시그니처
+
   Offset _clampPosition(Offset pos, Size size, Size canvasSize) {
     final maxX = (canvasSize.width - size.width).clamp(0.0, double.infinity);
     final maxY = (canvasSize.height - size.height).clamp(0.0, double.infinity);
@@ -111,6 +122,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       pos.dx.clamp(0.0, maxX),
       pos.dy.clamp(0.0, maxY),
     );
+  }
+
+  Future<T?> _showOneDialog<T>({required WidgetBuilder builder, bool barrierDismissible = true}) async {
+    _isDialogOpen = true;
+    try {
+      return await showDialog<T>(
+        context: context,
+        useRootNavigator: true,
+        barrierDismissible: barrierDismissible,
+        builder: builder,
+      );
+    } finally {
+      _isDialogOpen = false;
+    }
   }
 
   void _showDropdownMenu() {
@@ -195,14 +220,32 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
   }
 
+  Future<void> _loadGradeIcons() async {
+    try {
+      final map = await DataManager.instance.getResourceGradeIcons();
+      if (mounted) setState(() => _gradeIconCodes = Map<String, int>.from(map));
+    } catch (_) {
+      if (mounted) setState(() => _gradeIconCodes = {});
+    }
+  }
+
   void _openGradeMenu() {
     if (_isGradeMenuOpen) return;
     final box = _gradeButtonKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
     final size = box.size;
+    final overlayLeft = pos.dx;
+    final overlayTop = pos.dy + size.height + 6;
+    // ignore: avoid_print
+    print('[GRADE][overlay-open] left=$overlayLeft top=$overlayTop button=(${pos.dx}, ${pos.dy}) size=(${size.width}, ${size.height})');
     _gradeOverlay = OverlayEntry(
       builder: (context) {
+        final overlayRB = Overlay.of(context).context.findRenderObject() as RenderBox?;
+        if (overlayRB != null) {
+          // ignore: avoid_print
+          print('[GRADE][overlay-builder] overlaySize=${overlayRB.size}');
+        }
         return Stack(children: [
         Positioned.fill(
           child: GestureDetector(
@@ -211,11 +254,12 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           ),
         ),
         Positioned(
-          left: pos.dx,
-          top: pos.dy + size.height + 6,
+          left: overlayLeft,
+          top: overlayTop,
           child: Material(
           color: Colors.transparent,
           child: Container(
+            key: _gradePanelKey,
             width: 252,
             constraints: const BoxConstraints(maxHeight: 360),
             decoration: BoxDecoration(
@@ -241,8 +285,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                             print('[GRADE] + 버튼: 먼저 오버레이 닫기');
                             _closeGradeMenu();
                           }
-                          final result = await showDialog<Map<String, dynamic>>(
-                            context: context,
+                          final result = await _showOneDialog<Map<String, dynamic>>(
                             barrierDismissible: true,
                             builder: (ctx) {
                               final controller = TextEditingController();
@@ -337,6 +380,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                               if (icon != 0) {
                                 await DataManager.instance.setResourceGradeIcon(name, icon);
                               }
+                              await _loadGradeIcons();
                               Overlay.of(context).setState(() {});
                               // 다이얼로그 종료 후 다시 메뉴를 열어 사용 흐름 유지
                               _openGradeMenu();
@@ -386,184 +430,266 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       final selected = index == _selectedGradeIndex;
                       return ListTile(
                         key: ValueKey('grade_${index}_$g'),
-                        onTap: () {
-                          setState(() => _selectedGradeIndex = index);
-                          _closeGradeMenu();
-                        },
+                        onTap: null,
                 dense: true,
                 selected: selected,
                 selectedTileColor: const Color(0xFF333333),
-                        title: FutureBuilder<Map<String, int>>(
-                          future: DataManager.instance.getResourceGradeIcons(),
-                          builder: (context, snapshot) {
-                            final map = snapshot.data ?? const {};
-                            final code = map[g];
-                            final icon = code != null ? IconData(code, fontFamily: 'MaterialIcons') : null;
-                            return Row(
-                              children: [
-                                if (icon != null) ...[
-                                  Icon(icon, color: Colors.white60, size: 16),
-                                  const SizedBox(width: 8),
-                                ],
-                                Expanded(
-                                  child: Text(
-                                    g,
-                                    style: TextStyle(
-                                      color: selected ? Colors.white : Colors.white70,
-                                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                                      fontSize: 16,
-                                    ),
+                        title: InkWell(
+                          onTap: () {
+                            setState(() => _selectedGradeIndex = index);
+                            _closeGradeMenu();
+                          },
+                          borderRadius: BorderRadius.circular(6),
+                          child: Row(
+                            children: [
+                              if (_gradeIconCodes[g] != null) ...[
+                                Icon(IconData(_gradeIconCodes[g]!, fontFamily: 'MaterialIcons'), color: Colors.white60, size: 16),
+                                const SizedBox(width: 8),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  g,
+                                  style: TextStyle(
+                                    color: selected ? Colors.white : Colors.white70,
+                                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                                    fontSize: 16,
                                   ),
                                 ),
-                              ],
-                            );
-                          },
+                              ),
+                            ],
+                          ),
                         ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(
-                              tooltip: '이름 변경',
-                              icon: const Icon(Icons.edit, color: Colors.white54, size: 18),
-                              onPressed: () async {
-                                final controller = TextEditingController(text: g);
-                                final icons = <IconData>[
-                                  Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
-                                  Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
-                                  Icons.calculate, Icons.science, Icons.psychology, Icons.code,
-                                  Icons.draw, Icons.piano, Icons.sports_basketball, Icons.public,
-                                  Icons.attach_file, Icons.folder, Icons.create, Icons.edit_note,
-                                ];
-                                if (_isGradeMenuOpen) {
-                                  // ignore: avoid_print
-                                  print('[GRADE] 수정 다이얼로그: 먼저 오버레이 닫기');
-                                  _closeGradeMenu();
-                                }
-                                final newResult = await showDialog<Map<String, dynamic>>(
-                                  context: context,
-                                  barrierDismissible: true,
-                                  builder: (ctx) => StatefulBuilder(
-                                    builder: (ctx2, setState2) {
-                                      int selectedIconIndex = 0;
-                                      return AlertDialog(
-                                    backgroundColor: const Color(0xFF1F1F1F),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        title: const Text('학년 정보 수정', style: TextStyle(color: Colors.white, fontSize: 20)),
-                                        content: SizedBox(
-                                          width: 520,
-                                          child: SingleChildScrollView(
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                            TextField(
-                                              controller: controller,
-                                              style: const TextStyle(color: Colors.white),
-                                              decoration: const InputDecoration(
-                                                hintText: '새 학년명',
-                                                hintStyle: TextStyle(color: Colors.white38),
-                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                            Builder(builder: (rowCtx) {
+                              final layerLink = _gradeItemLayerLinks.putIfAbsent(g, () => LayerLink());
+                              return Listener(
+                                onPointerDown: (e) => _lastPointerGlobal = e.position,
+                                onPointerHover: (e) => _lastPointerGlobal = e.position,
+                                child: IconButton(
+                                  tooltip: '메뉴',
+                                  icon: const Icon(Icons.more_vert, color: Colors.white60, size: 18),
+                                  onPressed: () async {
+                                    // 토글: 열려있으면 닫기
+                                    if (_isInlineActionMenuOpen) { _closeInlineActionMenu(); return; }
+                                    _isInlineActionMenuOpen = true;
+                                    final overlayBox = Overlay.of(context, rootOverlay: true).context.findRenderObject() as RenderBox?;
+                                    final buttonBox = rowCtx.findRenderObject() as RenderBox?;
+                                    if (overlayBox == null || buttonBox == null) { _isInlineActionMenuOpen = false; return; }
+                                    final overlaySize = overlayBox.size;
+                                    final fallbackGlobal = buttonBox.localToGlobal(buttonBox.size.bottomRight(Offset.zero));
+                                    final baseGlobal = _lastPointerGlobal ?? fallbackGlobal;
+                                    final baseLocal = overlayBox.globalToLocal(baseGlobal);
+                                    const double menuWidth = 180.0;
+                                    const double menuHeight = 112.0; // 2 items + padding
+                                    double left = (baseLocal.dx + 8.0).clamp(8.0, overlaySize.width - menuWidth - 8.0);
+                                    double top = (baseLocal.dy + 8.0).clamp(8.0, overlaySize.height - menuHeight - 8.0);
+                                    _inlineActionMenuEntry = OverlayEntry(builder: (ctx) {
+                                      return Stack(children: [
+                                        // 바깥 클릭으로 닫기
+                                        Positioned.fill(child: GestureDetector(onTap: _closeInlineActionMenu, behavior: HitTestBehavior.opaque)),
+                                        Positioned(
+                                          left: left,
+                                          top: top,
+                                          child: Material(
+                                            color: Colors.transparent,
+                                            child: Container(
+                                              width: 180.0,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF2A2A2A),
+                                                borderRadius: BorderRadius.circular(10),
+                                                border: Border.all(color: const Color(0xFF3A3A3A)),
+                                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 8))],
                                               ),
-                                            ),
-                                            const SizedBox(height: 12),
-                                            SizedBox(
-                                              height: 120,
-                                              child: GridView.builder(
-                                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                                  crossAxisCount: 10,
-                                                  mainAxisSpacing: 6,
-                                                  crossAxisSpacing: 6,
+                                              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                                InkWell(
+                                                  onTap: () async {
+                                                    // ignore: avoid_print
+                                                    print('[INLINE][edit] tapped for idx=$index name="$g" inProgress=$_inlineActionInProgress open=$_isDialogOpen');
+                                                    if (_inlineActionInProgress) return;
+                                                    _inlineActionInProgress = true;
+                                                    try {
+                                                      _closeInlineActionMenu();
+                                                      await WidgetsBinding.instance.endOfFrame;
+                                                      if (_isGradeMenuOpen) { _closeGradeMenu(); await WidgetsBinding.instance.endOfFrame; }
+                                                      final controller = TextEditingController(text: g);
+                                                    final icons = <IconData>[
+                                                      Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
+                                                      Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
+                                                      Icons.calculate, Icons.science, Icons.psychology, Icons.code,
+                                                      Icons.draw, Icons.piano, Icons.sports_basketball, Icons.public,
+                                                      Icons.attach_file, Icons.folder, Icons.create, Icons.edit_note,
+                                                    ];
+                                                    final newResult = await _showOneDialog<Map<String, dynamic>>(
+                                                      barrierDismissible: true,
+                                                      builder: (ctx) {
+                                                        // ignore: avoid_print
+                                                        print('[INLINE][edit-dialog] build for "$g"');
+                                                        return StatefulBuilder(
+                                                          builder: (ctx2, setState2) {
+                                                            int selectedIconIndex = 0;
+                                                            return AlertDialog(
+                                                              backgroundColor: const Color(0xFF1F1F1F),
+                                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                                              title: const Text('학년 정보 수정', style: TextStyle(color: Colors.white, fontSize: 20)),
+                                                              content: SizedBox(
+                                                                width: 520,
+                                                                child: SingleChildScrollView(
+                                                                  child: Column(
+                                                                    mainAxisSize: MainAxisSize.min,
+                                                                    children: [
+                                                                      TextField(
+                                                                        controller: controller,
+                                                                        style: const TextStyle(color: Colors.white),
+                                                                        decoration: const InputDecoration(
+                                                                          hintText: '새 학년명',
+                                                                          hintStyle: TextStyle(color: Colors.white38),
+                                                                          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                                                                          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                                                                        ),
+                                                                      ),
+                                                                      const SizedBox(height: 12),
+                                                                      SizedBox(
+                                                                        height: 120,
+                                                                        child: GridView.builder(
+                                                                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                                                            crossAxisCount: 10,
+                                                                            mainAxisSpacing: 6,
+                                                                            crossAxisSpacing: 6,
+                                                                          ),
+                                                                          itemCount: icons.length,
+                                                                          shrinkWrap: true,
+                                                                          primary: false,
+                                                                          physics: const NeverScrollableScrollPhysics(),
+                                                                          itemBuilder: (c, i) {
+                                                                            final selected = i == selectedIconIndex;
+                                                                            return InkWell(
+                                                                              onTap: () => setState2(() => selectedIconIndex = i),
+                                                                              borderRadius: BorderRadius.circular(8),
+                                                                              child: Container(
+                                                                                decoration: BoxDecoration(
+                                                                                  color: selected ? const Color(0xFF1976D2).withOpacity(0.25) : const Color(0xFF2A2A2A),
+                                                                                  borderRadius: BorderRadius.circular(8),
+                                                                                  border: Border.all(color: selected ? const Color(0xFF1976D2) : Colors.white24),
+                                                                                ),
+                                                                                alignment: Alignment.center,
+                                                                                child: Icon(icons[i], color: Colors.white70, size: 18),
+                                                                              ),
+                                                                            );
+                                                                          },
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              actions: [
+                                                                TextButton(onPressed: () => Navigator.pop(ctx2), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                                                                FilledButton(
+                                                                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                                                  onPressed: () => Navigator.pop(ctx2, {
+                                                                    'name': controller.text.trim(),
+                                                                    'icon': icons[selectedIconIndex].codePoint,
+                                                                  }),
+                                                                  child: const Text('저장'),
+                                                                ),
+                                                              ],
+                                                            );
+                                                          },
+                                                        );
+                                                      },
+                                                    );
+                                                    // ignore: avoid_print
+                                                    print('[INLINE][edit] result=${newResult != null} newName="${(newResult?['name'] as String?)?.trim()}"');
+                                                    if (newResult != null) {
+                                                      final newName = (newResult['name'] as String?)?.trim() ?? '';
+                                                      final icon = (newResult['icon'] as int?) ?? 0;
+                                                      if (newName.isNotEmpty) {
+                                                        setState(() => _grades[index] = newName);
+                                                        await DataManager.instance.saveResourceGrades(_grades);
+                                                        if (icon != 0) {
+                                                          await DataManager.instance.setResourceGradeIcon(newName, icon);
+                                                        }
+                                                        await _loadGradeIcons();
+                                                        Overlay.of(context).setState(() {});
+                                                      }
+                                                    }
+                                                    } finally {
+                                                      _inlineActionInProgress = false;
+                                                    }
+                                                  },
+                                                  child: const ListTile(
+                                                    dense: true,
+                                                    leading: Icon(Icons.edit, color: Colors.white70, size: 18),
+                                                    title: Text('이름 변경', style: TextStyle(color: Colors.white)),
+                                                  ),
                                                 ),
-                                                itemCount: icons.length,
-                                                shrinkWrap: true,
-                                                primary: false,
-                                                physics: const NeverScrollableScrollPhysics(),
-                                                itemBuilder: (c, i) {
-                                                  final selected = i == selectedIconIndex;
-                                                  return InkWell(
-                                                    onTap: () => setState2(() => selectedIconIndex = i),
-                                                    borderRadius: BorderRadius.circular(8),
-                                                    child: Container(
-                                                      decoration: BoxDecoration(
-                                                        color: selected ? const Color(0xFF1976D2).withOpacity(0.25) : const Color(0xFF2A2A2A),
-                                                        borderRadius: BorderRadius.circular(8),
-                                                        border: Border.all(color: selected ? const Color(0xFF1976D2) : Colors.white24),
-                                                      ),
-                                                      alignment: Alignment.center,
-                                                      child: Icon(icons[i], color: Colors.white70, size: 18),
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                            ),
-                                              ],
+                                                const Divider(height: 1, color: Colors.white12),
+                                                InkWell(
+                                                  onTap: () async {
+                                                    // ignore: avoid_print
+                                                    print('[INLINE][delete] tapped for idx=$index name="$g" inProgress=$_inlineActionInProgress open=$_isDialogOpen');
+                                                    if (_inlineActionInProgress) return;
+                                                    _inlineActionInProgress = true;
+                                                    try {
+                                                      _closeInlineActionMenu();
+                                                      await WidgetsBinding.instance.endOfFrame;
+                                                      if (_isGradeMenuOpen) { _closeGradeMenu(); await WidgetsBinding.instance.endOfFrame; }
+                                                      final confirm = await _showOneDialog<bool>(
+                                                        builder: (ctx) {
+                                                          // ignore: avoid_print
+                                                          print('[INLINE][delete-dialog] build for "$g"');
+                                                          return AlertDialog(
+                                                            backgroundColor: const Color(0xFF1F1F1F),
+                                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                                            title: const Text('삭제 확인', style: TextStyle(color: Colors.white, fontSize: 20)),
+                                                            content: Text('\"$g\" 학년을 삭제할까요?', style: const TextStyle(color: Colors.white70)),
+                                                            actions: [
+                                                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                                                              FilledButton(
+                                                                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                                                                onPressed: () => Navigator.pop(ctx, true),
+                                                                child: const Text('삭제'),
+                                                              ),
+                                                            ],
+                                                          );
+                                                        },
+                                                      );
+                                                      // ignore: avoid_print
+                                                      print('[INLINE][delete] confirm=$confirm for "$g"');
+                                                      if (confirm == true) {
+                                                        setState(() => _grades.removeAt(index));
+                                                        if (_grades.isEmpty) {
+                                                          _selectedGradeIndex = 0;
+                                                        } else {
+                                                          _selectedGradeIndex = _selectedGradeIndex.clamp(0, _grades.length - 1);
+                                                        }
+                                                        await DataManager.instance.saveResourceGrades(_grades);
+                                                        await _loadGradeIcons();
+                                                        Overlay.of(context).setState(() {});
+                                                      }
+                                                    } finally {
+                                                      _inlineActionInProgress = false;
+                                                    }
+                                                  },
+                                                  child: const ListTile(
+                                                    dense: true,
+                                                    leading: Icon(Icons.delete, color: Colors.white70, size: 18),
+                                                    title: Text('삭제', style: TextStyle(color: Colors.white)),
+                                                  ),
+                                                ),
+                                              ]),
                                             ),
                                           ),
                                         ),
-                                        actions: [
-                                          TextButton(onPressed: () => Navigator.pop(ctx2), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-                                          FilledButton(
-                                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                                            onPressed: () => Navigator.pop(ctx2, {
-                                              'name': controller.text.trim(),
-                                              'icon': icons[selectedIconIndex].codePoint,
-                                            }),
-                                            child: const Text('저장'),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                );
-                                if (newResult != null) {
-                                  final newName = (newResult['name'] as String?)?.trim() ?? '';
-                                  final icon = (newResult['icon'] as int?) ?? 0;
-                                  if (newName.isNotEmpty) {
-                                    setState(() => _grades[index] = newName);
-                                    await DataManager.instance.saveResourceGrades(_grades);
-                                    if (icon != 0) {
-                                      await DataManager.instance.setResourceGradeIcon(newName, icon);
-                                    }
-                                    Overlay.of(context).setState(() {});
-                                  }
-                                }
-                              },
-                            ),
-                            IconButton(
-                              tooltip: '삭제',
-                              icon: const Icon(Icons.delete_outline, color: Colors.white54, size: 18),
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    backgroundColor: const Color(0xFF1F1F1F),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    title: const Text('삭제 확인', style: TextStyle(color: Colors.white, fontSize: 20)),
-                                    content: Text('"$g" 학년을 삭제할까요?', style: const TextStyle(color: Colors.white70)),
-                                    actions: [
-                                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-                                      FilledButton(
-                                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                                        onPressed: () => Navigator.pop(ctx, true),
-                                        child: const Text('삭제'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
-                                  setState(() {
-                                    _grades.removeAt(index);
-                                    if (_grades.isEmpty) {
-                                      _selectedGradeIndex = 0;
-                                    } else {
-                                      _selectedGradeIndex = _selectedGradeIndex.clamp(0, _grades.length - 1);
-                                    }
-                                  });
-                                  await DataManager.instance.saveResourceGrades(_grades);
-                                  Overlay.of(context).setState(() {});
-                                }
-                              },
-                            ),
+                                      ]);
+                                    });
+                                    Overlay.of(context, rootOverlay: true).insert(_inlineActionMenuEntry!);
+                                  },
+                                ),
+                              );
+                            }),
                             const SizedBox(width: 6),
                             ReorderableDragStartListener(
                               index: index,
@@ -587,6 +713,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() => _isGradeMenuOpen = true);
     // 외부 클릭/포커스 이동 시 자동 닫기
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 패널 실제 렌더 크기로 패널 사각형 저장
+      final rb = _gradePanelKey.currentContext?.findRenderObject() as RenderBox?;
+      if (rb != null) {
+        final topLeft = rb.localToGlobal(Offset.zero);
+        final sz = rb.size;
+        _gradePanelRect = Rect.fromLTWH(topLeft.dx, topLeft.dy, sz.width, sz.height);
+        // ignore: avoid_print
+        print('[GRADE][panel-rect] $_gradePanelRect');
+      }
       FocusScope.of(context).unfocus();
       // Route 변화 감지하여 닫기
       ModalRoute.of(context)?.addLocalHistoryEntry(LocalHistoryEntry(onRemove: () {
@@ -599,6 +734,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _gradeOverlay?.remove();
     _gradeOverlay = null;
     setState(() => _isGradeMenuOpen = false);
+    _gradePanelRect = null;
+  }
+
+  void _closeInlineActionMenu() {
+    _inlineActionMenuEntry?.remove();
+    _inlineActionMenuEntry = null;
+    _isInlineActionMenuOpen = false;
+    // ignore: avoid_print
+    print('[INLINE][close]');
   }
 
   Future<void> _onAddFolder() async {
@@ -685,6 +829,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     super.initState();
     _loadLayout();
     _ensureGradesLoaded();
+    _loadGradeIcons();
   }
 
   Future<void> _saveLayout() async {
@@ -780,44 +925,14 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       final other = _folders[j];
       if (other.id == movedId) continue;
       final otherRect = Rect.fromLTWH(other.position.dx, other.position.dy, other.size.width, other.size.height);
-      if (_isNear(movedRect, otherRect, threshold)) {
-        final target = _clampPosition(other.position + delta, other.size, canvasSize);
-        final candidate = Rect.fromLTWH(target.dx, target.dy, other.size.width, other.size.height);
-        if (!_isOverlapping(other.id, candidate)) {
-          _folders[j] = other.copyWith(position: target);
-          // ignore: avoid_print
-          print('[GROUP][folder-move] id=${other.id} -> $target');
-        }
-      }
+      // Disable push-away behavior; keep neighbors fixed
     }
     // 파일 이동 + 즉시 저장
     for (int j = 0; j < _files.length; j++) {
       final other = _files[j];
       if (other.id == movedId) continue; // 주체 파일은 제외
       final otherRect = Rect.fromLTWH(other.position.dx, other.position.dy, other.size.width, other.size.height);
-      if (_isNear(movedRect, otherRect, threshold)) {
-        final target = _clampPosition(other.position + delta, other.size, canvasSize);
-        final candidate = Rect.fromLTWH(target.dx, target.dy, other.size.width, other.size.height);
-        // 파일은 폴더와 달리 DB에 별도 저장 필요
-        _files[j] = other.copyWith(position: target);
-        // ignore: avoid_print
-        print('[GROUP][file-move] id=${other.id} -> $target');
-        await DataManager.instance.saveResourceFile({
-          'id': _files[j].id,
-          'name': _files[j].name,
-          'url': (_files[j].primaryGrade != null) ? (_files[j].linksByGrade[_files[j].primaryGrade!] ?? '') : '',
-          'color': _files[j].color?.value,
-          'grade': _files[j].primaryGrade ?? '',
-          'parent_id': _files[j].parentId,
-          'pos_x': target.dx,
-          'pos_y': target.dy,
-          'width': _files[j].size.width,
-          'height': _files[j].size.height,
-          'text_color': _files[j].textColor?.value,
-          'icon_image_path': _files[j].iconImagePath,
-          'description': _files[j].description,
-        });
-      }
+      // Disable push-away behavior; keep neighbors fixed
     }
     // ignore: avoid_print
     print('[GROUP][end]');
@@ -1000,7 +1115,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         print('[EDIT] Open FileEdit (2-step): id=${file.id}');
                         final metaUpdated = await showDialog<Map<String, dynamic>>(
                           context: context,
-                          builder: (ctx) => _FileEditDialog(initial: file),
+                          builder: (ctx) => _FileMetaDialog(initial: file),
                         );
                         if (metaUpdated == null) return;
                         final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
@@ -1252,13 +1367,43 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           builder: (ctx) => _FolderEditDialog(initial: folder),
                         );
                       },
-                      onEditFile: (file) {
+                      onEditFile: (file) async {
                         // ignore: avoid_print
-                        print('[EDIT] Open FileEditDialog: id=${file.id}');
-                        showDialog(
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
                           context: context,
                           builder: (ctx) => _FileEditDialog(initial: file),
                         );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
                       },
                     ),
                   ],
@@ -1429,9 +1574,9 @@ class _FileLinksDialog extends StatefulWidget {
 
 class _FileLinksDialogState extends State<_FileLinksDialog> {
   List<String> _grades = [];
-  late final Map<String, TextEditingController> _answerCtrls;   // 본문
+  late final Map<String, TextEditingController> _bodyCtrls;     // 본문
   late final Map<String, TextEditingController> _solutionCtrls; // 해설
-  late final Map<String, TextEditingController> _bodyCtrls;     // 정답
+  late final Map<String, TextEditingController> _answerCtrls;   // 정답
   @override
   void initState() {
     super.initState();
@@ -1441,16 +1586,16 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
     final rows = await DataManager.instance.getResourceGrades();
     final list = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
     _grades = list.isEmpty ? ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'] : list;
-    _answerCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#body'] ?? '') };
+    _bodyCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#body'] ?? '') };
     _solutionCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#sol'] ?? '') };
-    _bodyCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#ans'] ?? '') };
+    _answerCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#ans'] ?? '') };
     if (mounted) setState(() {});
   }
   @override
   void dispose() {
-    for (final c in _answerCtrls.values) { c.dispose(); }
-    for (final c in _solutionCtrls.values) { c.dispose(); }
     for (final c in _bodyCtrls.values) { c.dispose(); }
+    for (final c in _solutionCtrls.values) { c.dispose(); }
+    for (final c in _answerCtrls.values) { c.dispose(); }
     super.dispose();
   }
   @override
@@ -1549,8 +1694,8 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
           onPressed: () {
             final links = <String, String>{};
             for (final g in _grades) {
-              final body = _answerCtrls[g]!.text.trim();
-              final ans = _bodyCtrls[g]!.text.trim();
+              final body = _bodyCtrls[g]!.text.trim();
+              final ans = _answerCtrls[g]!.text.trim();
               final sol = _solutionCtrls[g]!.text.trim();
               if (body.isNotEmpty) links['$g#body'] = body;
               if (ans.isNotEmpty) links['$g#ans'] = ans;
@@ -1695,73 +1840,100 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
   }
 
   Offset _applySnap(Offset pos, String id) {
+    // New snap logic: compute X/Y independently, exclude currently moved group items
     const double gap = 8.0;
-    const double threshold = 12.0;
-    Offset snapped = pos;
-    double curW;
-    double curH;
+    const double threshold = 10.0;
+
+    double currentWidth;
+    double currentHeight;
     final folderMatch = widget.folders.where((x) => x.id == id).toList();
     if (folderMatch.isNotEmpty) {
-      curW = folderMatch.first.size.width;
-      curH = folderMatch.first.size.height;
+      currentWidth = folderMatch.first.size.width;
+      currentHeight = folderMatch.first.size.height;
     } else {
       final fileMatch = widget.files.where((x) => x.id == id).toList();
       if (fileMatch.isNotEmpty) {
-        curW = fileMatch.first.size.width;
-        curH = fileMatch.first.size.height;
+        currentWidth = fileMatch.first.size.width;
+        currentHeight = fileMatch.first.size.height;
       } else {
-        curW = 200;
-        curH = 60;
+        currentWidth = 200;
+        currentHeight = 60;
       }
     }
 
-    final targets = <Map<String, double>>[];
+    final excludedIds = <String>{id};
+    // Exclude selected group items (so anchor doesn't snap to its group)
+    for (final key in _groupStartPositions.keys) {
+      if (key.startsWith('folder:')) {
+        excludedIds.add(key.substring('folder:'.length));
+      } else if (key.startsWith('file:')) {
+        excludedIds.add(key.substring('file:'.length));
+      }
+    }
+
+    final xCandidates = <double>[];
+    final yCandidates = <double>[];
+
     for (final f in widget.folders) {
-      targets.add({'x': f.position.dx, 'y': f.position.dy, 'w': f.size.width, 'h': f.size.height});
+      if (excludedIds.contains(f.id)) continue;
+      final r = Rect.fromLTWH(f.position.dx, f.position.dy, f.size.width, f.size.height);
+      // X candidates
+      xCandidates.addAll([
+        r.left - currentWidth - gap, // left of target
+        r.right + gap,               // right of target
+        r.left,                      // align left edge
+        r.right - currentWidth,      // align right edge
+        r.center.dx - currentWidth / 2, // align center X
+      ]);
+      // Y candidates
+      yCandidates.addAll([
+        r.top - currentHeight - gap, // above target
+        r.bottom + gap,              // below target
+        r.top,                       // align top edge
+        r.bottom - currentHeight,    // align bottom edge
+        r.center.dy - currentHeight / 2, // align center Y
+      ]);
     }
     for (final fi in widget.files) {
-      targets.add({'x': fi.position.dx, 'y': fi.position.dy, 'w': fi.size.width, 'h': fi.size.height});
+      if (excludedIds.contains(fi.id)) continue;
+      final r = Rect.fromLTWH(fi.position.dx, fi.position.dy, fi.size.width, fi.size.height);
+      xCandidates.addAll([
+        r.left - currentWidth - gap,
+        r.right + gap,
+        r.left,
+        r.right - currentWidth,
+        r.center.dx - currentWidth / 2,
+      ]);
+      yCandidates.addAll([
+        r.top - currentHeight - gap,
+        r.bottom + gap,
+        r.top,
+        r.bottom - currentHeight,
+        r.center.dy - currentHeight / 2,
+      ]);
     }
 
-    for (final t in targets) {
-      final fx = t['x']!;
-      final fy = t['y']!;
-      final fw = t['w']!;
-      final fh = t['h']!;
-      // 수평 스냅(오른쪽에 붙이기)
-      final targetRight = fx + fw + gap;
-      if ((snapped.dx - targetRight).abs() <= threshold && (snapped.dy - fy).abs() <= 24) {
-        snapped = Offset(targetRight, fy);
-      }
-      // 수평 스냅(왼쪽에 붙이기)
-      final targetLeft = fx - curW - gap;
-      if ((snapped.dx - targetLeft).abs() <= threshold && (snapped.dy - fy).abs() <= 24) {
-        snapped = Offset(targetLeft, fy);
-      }
-      // 수직 스냅(아래에 붙이기)
-      final targetBelow = fy + fh + gap;
-      if ((snapped.dy - targetBelow).abs() <= threshold && (snapped.dx - fx).abs() <= 24) {
-        snapped = Offset(fx, targetBelow);
-      }
-      // 수직 스냅(위에 붙이기)
-      final targetAbove = fy - curH - gap;
-      if ((snapped.dy - targetAbove).abs() <= threshold && (snapped.dx - fx).abs() <= 24) {
-        snapped = Offset(fx, targetAbove);
-      }
-      // 상단 라인 정렬(수평 센터/좌우 맞춤은 다음 라인에서 진행)
-      if ((snapped.dy - fy).abs() <= threshold) snapped = Offset(snapped.dx, fy);
-      // 수평 센터 정렬
-      final centerX = fx + fw / 2;
-      if ((snapped.dx + curW / 2 - centerX).abs() <= threshold) {
-        snapped = Offset(centerX - curW / 2, snapped.dy);
-      }
-      // 수직 센터 정렬
-      final centerY = fy + fh / 2;
-      if ((snapped.dy + curH / 2 - centerY).abs() <= threshold) {
-        snapped = Offset(snapped.dx, centerY - curH / 2);
+    double? snappedX;
+    double minDx = double.infinity;
+    for (final cx in xCandidates) {
+      final dx = (pos.dx - cx).abs();
+      if (dx < minDx && dx <= threshold) {
+        minDx = dx;
+        snappedX = cx;
       }
     }
-    return snapped;
+
+    double? snappedY;
+    double minDy = double.infinity;
+    for (final cy in yCandidates) {
+      final dy = (pos.dy - cy).abs();
+      if (dy < minDy && dy <= threshold) {
+        minDy = dy;
+        snappedY = cy;
+      }
+    }
+
+    return Offset(snappedX ?? pos.dx, snappedY ?? pos.dy);
   }
 
   // 마퀴(박스) 선택 상태
@@ -1814,6 +1986,9 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
   Offset? _groupDragAnchorBasePos;
   final Map<String, Offset> _groupStartPositions = <String, Offset>{}; // key -> start pos
   bool _isApplyingGroupEnd = false;
+  // Snap guide lines while dragging
+  double? _snapGuideX;
+  double? _snapGuideY;
   void beginGroupDrag({required String anchorKey, required Offset basePos}) {
     setState(() {
       _groupDragActive = true;
@@ -1847,6 +2022,62 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
     if (!_groupDragActive || _groupDragAnchorBasePos == null) return;
     setState(() {
       _groupDragDelta = newAnchorPos - _groupDragAnchorBasePos!;
+      // Compute snap guides (magnet lines)
+      const double gap = 8.0;
+      const double threshold = 10.0;
+      String? movedId;
+      if (_groupDragAnchorKey != null) {
+        if (_groupDragAnchorKey!.startsWith('folder:')) {
+          movedId = _groupDragAnchorKey!.substring('folder:'.length);
+        } else if (_groupDragAnchorKey!.startsWith('file:')) {
+          movedId = _groupDragAnchorKey!.substring('file:'.length);
+        }
+      }
+      double currentWidth = 200, currentHeight = 60;
+      if (movedId != null) {
+        final fm = widget.folders.where((x) => x.id == movedId).toList();
+        if (fm.isNotEmpty) {
+          currentWidth = fm.first.size.width;
+          currentHeight = fm.first.size.height;
+        } else {
+          final fim = widget.files.where((x) => x.id == movedId).toList();
+          if (fim.isNotEmpty) {
+            currentWidth = fim.first.size.width;
+            currentHeight = fim.first.size.height;
+          }
+        }
+      }
+      final excludedIds = <String>{if (movedId != null) movedId};
+      for (final key in _groupStartPositions.keys) {
+        if (key.startsWith('folder:')) excludedIds.add(key.substring('folder:'.length));
+        if (key.startsWith('file:')) excludedIds.add(key.substring('file:'.length));
+      }
+      final xCandidates = <double>[];
+      final yCandidates = <double>[];
+      for (final f in widget.folders) {
+        if (excludedIds.contains(f.id)) continue;
+        final r = Rect.fromLTWH(f.position.dx, f.position.dy, f.size.width, f.size.height);
+        xCandidates.addAll([r.left - currentWidth - gap, r.right + gap, r.left, r.right - currentWidth, r.center.dx - currentWidth / 2]);
+        yCandidates.addAll([r.top - currentHeight - gap, r.bottom + gap, r.top, r.bottom - currentHeight, r.center.dy - currentHeight / 2]);
+      }
+      for (final fi in widget.files) {
+        if (excludedIds.contains(fi.id)) continue;
+        final r = Rect.fromLTWH(fi.position.dx, fi.position.dy, fi.size.width, fi.size.height);
+        xCandidates.addAll([r.left - currentWidth - gap, r.right + gap, r.left, r.right - currentWidth, r.center.dx - currentWidth / 2]);
+        yCandidates.addAll([r.top - currentHeight - gap, r.bottom + gap, r.top, r.bottom - currentHeight, r.center.dy - currentHeight / 2]);
+      }
+      double? gx; double? gy;
+      double minDx = double.infinity; double minDy = double.infinity;
+      for (final cx in xCandidates) {
+        final dx = (newAnchorPos.dx - cx).abs();
+        if (dx < minDx && dx <= threshold) { minDx = dx; gx = cx; }
+      }
+      for (final cy in yCandidates) {
+        final dy = (newAnchorPos.dy - cy).abs();
+        if (dy < minDy && dy <= threshold) { minDy = dy; gy = cy; }
+      }
+      _snapGuideX = gx;
+      _snapGuideY = gy;
     });
   }
   void endGroupDrag() {
@@ -1857,7 +2088,49 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
       _groupDragDelta = Offset.zero;
       _isDraggingAny = false;
       _groupStartPositions.clear();
+      _snapGuideX = null;
+      _snapGuideY = null;
     });
+  }
+
+  bool _groupWouldOverlap(Offset delta) {
+    // Build set of group ids
+    final groupFolderIds = <String>{};
+    final groupFileIds = <String>{};
+    for (final key in _groupStartPositions.keys) {
+      if (key.startsWith('folder:')) groupFolderIds.add(key.substring('folder:'.length));
+      if (key.startsWith('file:')) groupFileIds.add(key.substring('file:'.length));
+    }
+    // Precompute rectangles for non-group items
+    final otherRects = <Rect>[];
+    for (final f in widget.folders) {
+      if (groupFolderIds.contains(f.id)) continue;
+      otherRects.add(Rect.fromLTWH(f.position.dx, f.position.dy, f.size.width, f.size.height));
+    }
+    for (final fi in widget.files) {
+      if (groupFileIds.contains(fi.id)) continue;
+      otherRects.add(Rect.fromLTWH(fi.position.dx, fi.position.dy, fi.size.width, fi.size.height));
+    }
+    // Check each group item candidate against others
+    for (final entry in _groupStartPositions.entries) {
+      final key = entry.key;
+      final start = entry.value;
+      final p = start + delta;
+      Rect candidate;
+      if (key.startsWith('folder:')) {
+        final id = key.substring('folder:'.length);
+        final f = widget.folders.firstWhere((e) => e.id == id, orElse: () => _ResourceFolder(id: id, name: '', color: null, description: '', position: start, size: const Size(200,120), shape: 'rect'));
+        candidate = Rect.fromLTWH(p.dx, p.dy, f.size.width, f.size.height);
+      } else {
+        final id = key.substring('file:'.length);
+        final fi = widget.files.firstWhere((e) => e.id == id, orElse: () => _ResourceFile(id: id, name: '', color: null, position: start, size: const Size(200,60)));
+        candidate = Rect.fromLTWH(p.dx, p.dy, fi.size.width, fi.size.height);
+      }
+      for (final r in otherRects) {
+        if (candidate.overlaps(r)) return true;
+      }
+    }
+    return false;
   }
 
   bool _hitAnyItem(Offset localCanvas) {
@@ -1947,7 +2220,13 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                       // 대표 델타 = 앵커 스냅 좌표 - 앵커 드래그 시작 좌표
                       final anchorKey = 'folder:${f.id}';
                       final startAnchor = _groupStartPositions[anchorKey] ?? f.position;
-                      final delta = snapped - startAnchor;
+                      var delta = snapped - startAnchor;
+                      // Prevent overlap after snapping by reducing delta if needed
+                      int guard = 0;
+                      while (_groupWouldOverlap(delta) && guard < 20) {
+                        delta *= 0.8; // back off
+                        guard++;
+                      }
                       // 앵커 및 선택된 항목들을 시작좌표 + delta로 정확히 반영
                       _isApplyingGroupEnd = true;
                       widget.onFolderMoved(f.id, startAnchor + delta, _canvasSize);
@@ -2001,7 +2280,12 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                       final snapped = _applySnap(pos, fi.id);
                       final anchorKey = 'file:${fi.id}';
                       final startAnchor = _groupStartPositions[anchorKey] ?? fi.position;
-                      final delta = snapped - startAnchor;
+                      var delta = snapped - startAnchor;
+                      int guard = 0;
+                      while (_groupWouldOverlap(delta) && guard < 20) {
+                        delta *= 0.8;
+                        guard++;
+                      }
                       _isApplyingGroupEnd = true;
                       if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, startAnchor + delta, _canvasSize);
                       for (final entry in _groupStartPositions.entries) {
@@ -2584,14 +2868,14 @@ class _FileCreateDialog extends StatefulWidget {
   State<_FileCreateDialog> createState() => _FileCreateDialogState();
 }
 
-class _FileEditDialog extends StatefulWidget {
+class _FileMetaDialog extends StatefulWidget {
   final _ResourceFile initial;
-  const _FileEditDialog({required this.initial});
+  const _FileMetaDialog({required this.initial});
   @override
-  State<_FileEditDialog> createState() => _FileEditDialogState();
+  State<_FileMetaDialog> createState() => _FileMetaDialogState();
 }
 
-class _FileEditDialogState extends State<_FileEditDialog> {
+class _FileMetaDialogState extends State<_FileMetaDialog> {
   late final TextEditingController _nameController;
   Color? _selectedColor;
   IconData? _selectedIcon;
@@ -2629,7 +2913,7 @@ class _FileEditDialogState extends State<_FileEditDialog> {
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('파일 수정', style: TextStyle(color: Colors.white)),
+      title: const Text('파일 정보 수정', style: TextStyle(color: Colors.white)),
       content: SizedBox(
         width: 560,
         child: Column(
@@ -2856,7 +3140,7 @@ class _IconChoice extends StatelessWidget {
   const _IconChoice({required this.iconData});
   @override
   Widget build(BuildContext context) {
-    final state = context.findAncestorStateOfType<_FileEditDialogState>();
+    final state = context.findAncestorStateOfType<_FileMetaDialogState>();
     final isSelected = state?._selectedIcon == iconData;
     return InkWell(
       onTap: () => state?.setState(() => state._selectedIcon = iconData),
@@ -3309,6 +3593,21 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
       left: effectivePos.dx,
       top: effectivePos.dy,
       child: GestureDetector(
+        onDoubleTap: () async {
+          final current = widget.currentGrade;
+          if (current == null) return;
+          final key = '${current}#body';
+          final link = widget.file.linksByGrade[key]?.trim() ?? '';
+          if (link.isEmpty) return;
+          try {
+            if (link.startsWith('http://') || link.startsWith('https://')) {
+              final uri = Uri.parse(link);
+              await launchUrl(uri, mode: LaunchMode.platformDefault);
+            } else {
+              await OpenFilex.open(link);
+            }
+          } catch (_) {}
+        },
         onTap: widget.editMode
             ? () {
                 // ignore: avoid_print
@@ -4372,4 +4671,6 @@ class _ShapeSelectButton extends StatelessWidget {
     );
   }
 }
+
+ 
 
