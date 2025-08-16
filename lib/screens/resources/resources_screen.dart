@@ -752,6 +752,76 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
   }
 
+  bool _rectsHorizontallyOverlap(Rect a, Rect b) => !(a.right < b.left || b.right < a.left);
+  bool _rectsVerticallyOverlap(Rect a, Rect b) => !(a.bottom < b.top || b.bottom < a.top);
+  double _gapX(Rect a, Rect b) {
+    if (a.right < b.left) return b.left - a.right;
+    if (b.right < a.left) return a.left - b.right;
+    return 0.0;
+  }
+  double _gapY(Rect a, Rect b) {
+    if (a.bottom < b.top) return b.top - a.bottom;
+    if (b.bottom < a.top) return a.top - b.bottom;
+    return 0.0;
+  }
+  bool _isNear(Rect a, Rect b, double threshold) {
+    final gx = _gapX(a, b);
+    final gy = _gapY(a, b);
+    final overlapX = _rectsHorizontallyOverlap(a, b);
+    final overlapY = _rectsVerticallyOverlap(a, b);
+    return (gx <= threshold && overlapY) || (gy <= threshold && overlapX);
+  }
+
+  void _moveNeighborsTogether({required String movedId, required Rect movedRect, required Offset delta, required Size canvasSize, double threshold = 20}) async {
+    // ignore: avoid_print
+    print('[GROUP][start] id=$movedId delta=$delta movedRect=$movedRect threshold=$threshold');
+    // 폴더 이동
+    for (int j = 0; j < _folders.length; j++) {
+      final other = _folders[j];
+      if (other.id == movedId) continue;
+      final otherRect = Rect.fromLTWH(other.position.dx, other.position.dy, other.size.width, other.size.height);
+      if (_isNear(movedRect, otherRect, threshold)) {
+        final target = _clampPosition(other.position + delta, other.size, canvasSize);
+        final candidate = Rect.fromLTWH(target.dx, target.dy, other.size.width, other.size.height);
+        if (!_isOverlapping(other.id, candidate)) {
+          _folders[j] = other.copyWith(position: target);
+          // ignore: avoid_print
+          print('[GROUP][folder-move] id=${other.id} -> $target');
+        }
+      }
+    }
+    // 파일 이동 + 즉시 저장
+    for (int j = 0; j < _files.length; j++) {
+      final other = _files[j];
+      final otherRect = Rect.fromLTWH(other.position.dx, other.position.dy, other.size.width, other.size.height);
+      if (_isNear(movedRect, otherRect, threshold)) {
+        final target = _clampPosition(other.position + delta, other.size, canvasSize);
+        final candidate = Rect.fromLTWH(target.dx, target.dy, other.size.width, other.size.height);
+        // 파일은 폴더와 달리 DB에 별도 저장 필요
+        _files[j] = other.copyWith(position: target);
+        // ignore: avoid_print
+        print('[GROUP][file-move] id=${other.id} -> $target');
+        await DataManager.instance.saveResourceFile({
+          'id': _files[j].id,
+          'name': _files[j].name,
+          'url': (_files[j].primaryGrade != null) ? (_files[j].linksByGrade[_files[j].primaryGrade!] ?? '') : '',
+          'color': _files[j].color?.value,
+          'grade': _files[j].primaryGrade ?? '',
+          'parent_id': _files[j].parentId,
+          'pos_x': target.dx,
+          'pos_y': target.dy,
+          'width': _files[j].size.width,
+          'height': _files[j].size.height,
+          'text_color': _files[j].textColor?.value,
+          'icon_image_path': _files[j].iconImagePath,
+          'description': _files[j].description,
+        });
+      }
+    }
+    // ignore: avoid_print
+    print('[GROUP][end]');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -832,11 +902,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
                           if (i >= 0) {
+                            final prevPos = _folders[i].position;
                             final size = _folders[i].size;
                             final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
                             final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
                             if (!_isOverlapping(id, candidate)) {
                               _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
                             }
                           }
                         });
@@ -870,8 +944,14 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       onFileMoved: (id, pos, canvas) async {
                         final i = _files.indexWhere((e) => e.id == id);
                         if (i >= 0) {
+                          final prev = _files[i].position;
+                          final size = _files[i].size;
+                          final clamped = _clampPosition(pos, size, canvas);
+                          final delta = clamped - prev;
                           setState(() {
-                            _files[i] = _files[i].copyWith(position: pos);
+                            _files[i] = _files[i].copyWith(position: clamped);
+                            final movedRect = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvas);
                           });
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
@@ -880,8 +960,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                             'color': _files[i].color?.value,
                             'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
-                            'pos_x': pos.dx,
-                            'pos_y': pos.dy,
+                            'pos_x': clamped.dx,
+                            'pos_y': clamped.dy,
                             'width': _files[i].size.width,
                             'height': _files[i].size.height,
                           });
@@ -974,11 +1054,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
                           if (i >= 0) {
+                            final prevPos = _folders[i].position;
                             final size = _folders[i].size;
                             final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
                             final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
                             if (!_isOverlapping(id, candidate)) {
                               _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
                             }
                           }
                         });
@@ -1012,8 +1096,14 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       onFileMoved: (id, pos, canvas) async {
                         final i = _files.indexWhere((e) => e.id == id);
                         if (i >= 0) {
+                          final prev = _files[i].position;
+                          final size = _files[i].size;
+                          final clamped = _clampPosition(pos, size, canvas);
+                          final delta = clamped - prev;
                           setState(() {
-                            _files[i] = _files[i].copyWith(position: pos);
+                            _files[i] = _files[i].copyWith(position: clamped);
+                            final movedRect = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvas);
                           });
                           await DataManager.instance.saveResourceFile({
                             'id': _files[i].id,
@@ -1022,8 +1112,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                             'color': _files[i].color?.value,
                             'grade': _files[i].primaryGrade ?? '',
                             'parent_id': _files[i].parentId,
-                            'pos_x': pos.dx,
-                            'pos_y': pos.dy,
+                            'pos_x': clamped.dx,
+                            'pos_y': clamped.dy,
                             'width': _files[i].size.width,
                             'height': _files[i].size.height,
                           });
@@ -1114,11 +1204,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         setState(() {
                           final i = _folders.indexWhere((f) => f.id == id);
                           if (i >= 0) {
+                            final prevPos = _folders[i].position;
                             final size = _folders[i].size;
                             final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
                             final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
                             if (!_isOverlapping(id, candidate)) {
                               _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
                             }
                           }
                         });
@@ -1564,6 +1658,33 @@ class _ResourcesCanvas extends StatefulWidget {
 class _ResourcesCanvasState extends State<_ResourcesCanvas> {
   Size _canvasSize = Size.zero;
   final GlobalKey _stackKey = GlobalKey();
+  final Set<String> _selectedIds = <String>{}; // 'folder:ID' or 'file:ID'
+  Offset? _panStartLocal;
+
+  bool _isSelectedFolder(String id) => _selectedIds.contains('folder:$id');
+  bool _isSelectedFile(String id) => _selectedIds.contains('file:$id');
+  void _toggleSelectFolder(String id) {
+    setState(() {
+      final key = 'folder:$id';
+      if (_selectedIds.contains(key)) {
+        _selectedIds.remove(key);
+      } else {
+        _selectedIds.add(key);
+      }
+    });
+  }
+  void _toggleSelectFile(String id) {
+    setState(() {
+      final key = 'file:$id';
+      if (_selectedIds.contains(key)) {
+        _selectedIds.remove(key);
+      } else {
+        _selectedIds.add(key);
+      }
+    });
+  }
+  Iterable<_ResourceFolder> _selectedFolders() => widget.folders.where((f) => _isSelectedFolder(f.id));
+  Iterable<_ResourceFile> _selectedFiles() => widget.files.where((f) => _isSelectedFile(f.id));
 
   Offset _globalToCanvasLocal(Offset global) {
     final box = _stackKey.currentContext?.findRenderObject() as RenderBox?;
@@ -1641,6 +1762,111 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
     return snapped;
   }
 
+  // 마퀴(박스) 선택 상태
+  bool _isMarqueeSelecting = false;
+  Offset? _marqueeStart;
+  Rect? _marqueeRect;
+  void _beginMarquee(Offset local) {
+    setState(() {
+      _isMarqueeSelecting = true;
+      _marqueeStart = local;
+      _marqueeRect = Rect.fromLTWH(local.dx, local.dy, 0, 0);
+    });
+  }
+  void _updateMarquee(Offset local) {
+    if (!_isMarqueeSelecting || _marqueeStart == null) return;
+    final a = _marqueeStart!;
+    final rect = Rect.fromLTRB(
+      math.min(a.dx, local.dx),
+      math.min(a.dy, local.dy),
+      math.max(a.dx, local.dx),
+      math.max(a.dy, local.dy),
+    );
+    setState(() => _marqueeRect = rect);
+  }
+  void _endMarquee() {
+    if (!_isMarqueeSelecting) return;
+    final rect = _marqueeRect;
+    setState(() {
+      _isMarqueeSelecting = false;
+      _marqueeStart = null;
+      _marqueeRect = null;
+      if (rect != null) {
+        _selectedIds.clear();
+        for (final f in widget.folders) {
+          final r = Rect.fromLTWH(f.position.dx, f.position.dy, f.size.width, f.size.height);
+          if (r.overlaps(rect)) _selectedIds.add('folder:${f.id}');
+        }
+        for (final fi in widget.files) {
+          final r = Rect.fromLTWH(fi.position.dx, fi.position.dy, fi.size.width, fi.size.height);
+          if (r.overlaps(rect)) _selectedIds.add('file:${fi.id}');
+        }
+      }
+    });
+  }
+
+  // 그룹 드래그(실시간 미리보기)
+  bool _groupDragActive = false;
+  String? _groupDragAnchorKey; // 'folder:ID' or 'file:ID'
+  Offset _groupDragDelta = Offset.zero;
+  Offset? _groupDragAnchorBasePos;
+  final Map<String, Offset> _groupStartPositions = <String, Offset>{}; // key -> start pos
+  void beginGroupDrag({required String anchorKey, required Offset basePos}) {
+    setState(() {
+      _groupDragActive = true;
+      _groupDragAnchorKey = anchorKey;
+      _groupDragAnchorBasePos = basePos;
+      _groupDragDelta = Offset.zero;
+      _groupStartPositions.clear();
+      // 앵커 포함 현재 선택된 모든 항목의 시작 좌표를 저장
+      for (final f in _selectedFolders()) {
+        _groupStartPositions['folder:${f.id}'] = f.position;
+      }
+      for (final fi in _selectedFiles()) {
+        _groupStartPositions['file:${fi.id}'] = fi.position;
+      }
+      // 앵커가 선택되어 있지 않아도 앵커를 포함
+      if (!_groupStartPositions.containsKey(anchorKey)) {
+        if (anchorKey.startsWith('folder:')) {
+          final id = anchorKey.substring('folder:'.length);
+          final f = widget.folders.firstWhere((e) => e.id == id, orElse: () => _ResourceFolder(id: '', name: '', color: null, description: '', position: basePos, size: const Size(0,0), shape: 'rect'));
+          _groupStartPositions[anchorKey] = f.position;
+        } else if (anchorKey.startsWith('file:')) {
+          final id = anchorKey.substring('file:'.length);
+          final fi = widget.files.firstWhere((e) => e.id == id, orElse: () => _ResourceFile(id: '', name: '', color: null, position: basePos, size: const Size(0,0)));
+          _groupStartPositions[anchorKey] = fi.position;
+        }
+      }
+    });
+  }
+  void updateGroupDrag(Offset newAnchorPos) {
+    if (!_groupDragActive || _groupDragAnchorBasePos == null) return;
+    setState(() {
+      _groupDragDelta = newAnchorPos - _groupDragAnchorBasePos!;
+    });
+  }
+  void endGroupDrag() {
+    setState(() {
+      _groupDragActive = false;
+      _groupDragAnchorKey = null;
+      _groupDragAnchorBasePos = null;
+      _groupDragDelta = Offset.zero;
+      _groupStartPositions.clear();
+    });
+  }
+
+  bool _hitAnyItem(Offset localCanvas) {
+    for (final f in widget.folders) {
+      final r = Rect.fromLTWH(f.position.dx, f.position.dy, f.size.width, f.size.height);
+      if (r.contains(localCanvas)) return true;
+    }
+    for (final fi in widget.files) {
+      final r = Rect.fromLTWH(fi.position.dx, fi.position.dy, fi.size.width, fi.size.height);
+      if (r.contains(localCanvas)) return true;
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -1658,24 +1884,72 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
               }
             }
           },
+          onPointerDown: (event) {
+            if (!widget.resizeMode) return;
+            final local = _globalToCanvasLocal(event.position);
+            // 빈 공간 클릭 시 선택 해제
+            if (!_hitAnyItem(local)) {
+              setState(() => _selectedIds.clear());
+              _panStartLocal = local;
+            } else {
+              _panStartLocal = null; // 카드 드래그가 우선
+            }
+          },
+          onPointerMove: (event) {
+            if (!widget.resizeMode) return;
+            if (_groupDragActive) return; // 카드 드래그 우선
+            final local = _globalToCanvasLocal(event.position);
+            if (!_isMarqueeSelecting) {
+              if (_panStartLocal != null) {
+                final dx = (local.dx - _panStartLocal!.dx).abs();
+                final dy = (local.dy - _panStartLocal!.dy).abs();
+                if (dx > 6 || dy > 6) {
+                  _beginMarquee(_panStartLocal!);
+                  _updateMarquee(local);
+                }
+              }
+            } else {
+              _updateMarquee(local);
+            }
+          },
+          onPointerUp: (_) {
+            if (_isMarqueeSelecting) {
+              _endMarquee();
+            }
+            _panStartLocal = null;
+          },
           child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onPanDown: widget.editMode ? null : (_) { /* canvas panDown */ },
-            onScaleUpdate: widget.editMode ? null : (_) { /* canvas scaleUpdate */ },
+            behavior: HitTestBehavior.deferToChild,
             child: Stack(
-          key: _stackKey,
-          children: [
-            if (widget.folders.isEmpty && widget.files.isEmpty)
-              const Center(
-                child: Text('추가 버튼으로 폴더 또는 파일을 만들어 보세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-              ),
-            ...widget.folders.map((f) => _DraggableFolderCard(
+              key: _stackKey,
+              children: [
+                if (widget.folders.isEmpty && widget.files.isEmpty)
+                  const Center(
+                    child: Text('추가 버튼으로 폴더 또는 파일을 만들어 보세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                  ),
+                ...widget.folders.map((f) => _DraggableFolderCard(
                   key: ValueKey(f.id),
                   folder: f,
                   onMoved: (pos) => widget.onFolderMoved(f.id, pos, _canvasSize),
                   onEndMoved: (pos) {
                     final snapped = _applySnap(pos, f.id);
-                    widget.onFolderMoved(f.id, snapped, _canvasSize);
+                    // 대표 델타 = 앵커 스냅 좌표 - 앵커 드래그 시작 좌표
+                    final anchorKey = 'folder:${f.id}';
+                    final startAnchor = _groupStartPositions[anchorKey] ?? f.position;
+                    final delta = snapped - startAnchor;
+                    // 앵커 및 선택된 항목들을 시작좌표 + delta로 정확히 반영
+                    widget.onFolderMoved(f.id, startAnchor + delta, _canvasSize);
+                    for (final entry in _groupStartPositions.entries) {
+                      if (entry.key == anchorKey) continue;
+                      final k = entry.key; final startPos = entry.value; final np = startPos + delta;
+                      if (k.startsWith('folder:')) {
+                        final id = k.substring('folder:'.length);
+                        widget.onFolderMoved(id, np, _canvasSize);
+                      } else if (k.startsWith('file:')) {
+                        final id = k.substring('file:'.length);
+                        if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                      }
+                    }
                     if (widget.onMoveEnd != null) widget.onMoveEnd!();
                   },
                   globalToCanvasLocal: _globalToCanvasLocal,
@@ -1693,8 +1967,8 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                     if (widget.onResizeEnd != null) widget.onResizeEnd!();
                   },
                 )),
-            // 파일 카드 렌더링 (간단 placeholder 스타일)
-            ...widget.files.map((fi) => _DraggableFileCard(
+                // 파일 카드 렌더링 (간단 placeholder 스타일)
+                ...widget.files.map((fi) => _DraggableFileCard(
                   key: ValueKey('file_${fi.id}')
                 , file: fi,
                   resizeMode: widget.resizeMode,
@@ -1704,11 +1978,21 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   onDeleteRequested: widget.onDeleteFile,
                   onEditRequested: widget.onEditFile,
                   onMoved: (pos) {
-                    if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, pos, _canvasSize);
-                  },
-                  onEndMoved: (pos) {
-                    final snapped = _applySnap(pos, fi.id);
-                    if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, snapped, _canvasSize);
+                    final anchorKey = 'file:${fi.id}';
+                    final startAnchor = _groupStartPositions[anchorKey] ?? fi.position;
+                    final delta = pos - startAnchor;
+                    if (widget.onFileMoved != null) widget.onFileMoved!(fi.id, startAnchor + delta, _canvasSize);
+                    for (final entry in _groupStartPositions.entries) {
+                      if (entry.key == anchorKey) continue;
+                      final k = entry.key; final startPos = entry.value; final np = startPos + delta;
+                      if (k.startsWith('folder:')) {
+                        final id = k.substring('folder:'.length);
+                        widget.onFolderMoved(id, np, _canvasSize);
+                      } else if (k.startsWith('file:')) {
+                        final id = k.substring('file:'.length);
+                        if (widget.onFileMoved != null) widget.onFileMoved!(id, np, _canvasSize);
+                      }
+                    }
                     if (widget.onMoveEnd != null) widget.onMoveEnd!();
                   },
                   onResize: (size) {
@@ -1716,7 +2000,87 @@ class _ResourcesCanvasState extends State<_ResourcesCanvas> {
                   },
                   onResizeEnd: () { if (widget.onResizeEnd != null) widget.onResizeEnd!(); },
                 )),
-          ],
+                // 선택 강조 오버레이
+                IgnorePointer(
+                  child: Stack(children: [
+                    ...widget.folders.where((f) => _isSelectedFolder(f.id)).map((f) => Positioned(
+                      left: f.position.dx - 3,
+                      top: f.position.dy - 3,
+                      child: Container(
+                        width: f.size.width + 6,
+                        height: f.size.height + 6,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFF64A6DD), width: 2),
+                          boxShadow: [BoxShadow(color: const Color(0xFF64A6DD).withOpacity(0.25), blurRadius: 10)],
+                        ),
+                      ),
+                    )),
+                    ...widget.files.where((fi) => _isSelectedFile(fi.id)).map((fi) => Positioned(
+                      left: fi.position.dx - 3,
+                      top: fi.position.dy - 3,
+                      child: Container(
+                        width: fi.size.width + 6,
+                        height: fi.size.height + 6,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF64A6DD), width: 2),
+                          boxShadow: [BoxShadow(color: const Color(0xFF64A6DD).withOpacity(0.25), blurRadius: 10)],
+                        ),
+                      ),
+                    )),
+                  ]),
+                ),
+                // 그룹 실시간 미리보기 오버레이 (그룹 드래그 활성 시)
+                if (_groupDragActive)
+                  IgnorePointer(
+                    child: Stack(children: [
+                      ..._selectedFolders().map((f) {
+                        final base = f.position;
+                        final p = base + _groupDragDelta;
+                        return Positioned(
+                          left: p.dx,
+                          top: p.dy,
+                          child: Opacity(
+                            opacity: 0.25,
+                            child: _FolderCard(folder: f.copyWith(position: p)),
+                          ),
+                        );
+                      }),
+                      ..._selectedFiles().map((fi) {
+                        final base = fi.position;
+                        final p = base + _groupDragDelta;
+                        return Positioned(
+                          left: p.dx,
+                          top: p.dy,
+                          child: Opacity(
+                            opacity: 0.25,
+                            child: _FileCard(file: fi.copyWith(position: p)),
+                          ),
+                        );
+                      }),
+                    ]),
+                  ),
+                // 마퀴 선택 렌더링
+                if (_isMarqueeSelecting && _marqueeRect != null)
+                  IgnorePointer(
+                    child: Stack(children: [
+                      Positioned(
+                        left: _marqueeRect!.left,
+                        top: _marqueeRect!.top,
+                        child: Container(
+                          width: _marqueeRect!.width,
+                          height: _marqueeRect!.height,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1976D2).withOpacity(0.12),
+                            border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.6), width: 1.2),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+              ],
             ),
           ),
         );
@@ -1749,6 +2113,7 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
   bool _resizing = false;
   Offset? _tempPosition;
   Size? _tempSize;
+  Offset? _dragAnchor;
 
   @override
   Widget build(BuildContext context) {
@@ -1766,33 +2131,61 @@ class _DraggableFolderCardState extends State<_DraggableFolderCard> {
                 print('[EDIT] Folder tap -> open edit dialog: id=${widget.folder.id}');
                 if (widget.onEditRequested != null) widget.onEditRequested!(widget.folder);
               }
-            : null,
+            : () {
+                // 리사이징 모드에서 선택 토글
+                if (widget.resizeMode) {
+                  final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+                  state?._toggleSelectFolder(widget.folder.id);
+                }
+              },
         onPanStart: widget.editMode
             ? null
             : (details) {
-          if (!_resizing && !widget.resizeMode) {
+          // 리사이즈 모드에서만 이동 허용
+          if (!_resizing && widget.resizeMode) {
+            // DEBUG
+            // ignore: avoid_print
+            print('[FOLDER][onPanStart] resizeMode=${widget.resizeMode}, editMode=${widget.editMode}');
             setState(() {
               _dragging = true;
               _dragStartLocal = details.localPosition;
               _tempPosition = widget.folder.position;
+              // 폴더도 파일과 동일하게 드래그 앵커를 사용해 마우스에 자연스럽게 붙도록
+              final canvasPos = widget.globalToCanvasLocal(details.globalPosition);
+              _dragAnchor = canvasPos - widget.folder.position;
             });
+            // 그룹 드래그 미리보기 시작
+            final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+            state?.beginGroupDrag(anchorKey: 'folder:${widget.folder.id}', basePos: widget.folder.position);
           }
         },
         onPanUpdate: widget.editMode
             ? null
             : (details) {
-          if (_dragging && !_resizing && !widget.resizeMode) {
-            final newPos = Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
+          if (_dragging && !_resizing && widget.resizeMode) {
+            // ignore: avoid_print
+            print('[FOLDER][onPanUpdate] delta=${details.delta}');
+            final canvasPos = widget.globalToCanvasLocal(details.globalPosition);
+            final newPos = (_dragAnchor != null) ? (canvasPos - _dragAnchor!) : Offset(effectivePos.dx + details.delta.dx, effectivePos.dy + details.delta.dy);
             setState(() => _tempPosition = newPos);
+            // 그룹 드래그 미리보기 업데이트
+            final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+            state?.updateGroupDrag(newPos);
           }
         },
         onPanEnd: widget.editMode
             ? null
             : (details) {
+          // ignore: avoid_print
+          print('[FOLDER][onPanEnd] dragging=$_dragging');
           setState(() => _dragging = false);
           final endPos = _tempPosition ?? widget.folder.position;
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
           _tempPosition = null;
+          _dragAnchor = null;
+          // 그룹 드래그 미리보기 종료
+          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+          state?.endGroupDrag();
         },
         // 리사이즈 모드 종료는 버튼으로만 수행: 배경 탭 종료 제거
         behavior: HitTestBehavior.translucent,
@@ -1886,21 +2279,12 @@ class _FolderCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 6,
-                height: 26, // 10 줄임
-                decoration: BoxDecoration(
-                  color: folder.color ?? const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   folder.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 16.5, fontWeight: FontWeight.w700),
+                  style: const TextStyle(color: Colors.white, fontSize: 17.5, fontWeight: FontWeight.w700),
                 ),
               ),
             ],
@@ -2070,14 +2454,13 @@ class _FolderEditDialogState extends State<_FolderEditDialog> {
             const SizedBox(height: 12),
             const Text('모양', style: TextStyle(color: Colors.white70)),
             const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(label: const Text('직사각형'), selected: _shape == 'rect', onSelected: (_) => setState(() => _shape = 'rect')),
-                ChoiceChip(label: const Text('평행사변형'), selected: _shape == 'parallelogram', onSelected: (_) => setState(() => _shape = 'parallelogram')),
-                ChoiceChip(label: const Text('알약'), selected: _shape == 'pill', onSelected: (_) => setState(() => _shape = 'pill')),
-              ],
-            ),
+            Row(children: [
+              _ShapeSelectButton(label: '직사각형', selected: _shape == 'rect', onTap: () => setState(() => _shape = 'rect')),
+              const SizedBox(width: 8),
+              _ShapeSelectButton(label: '평행사변형', selected: _shape == 'parallelogram', onTap: () => setState(() => _shape = 'parallelogram')),
+              const SizedBox(width: 8),
+              _ShapeSelectButton(label: '알약', selected: _shape == 'pill', onTap: () => setState(() => _shape = 'pill')),
+            ]),
           ],
         ),
       ),
@@ -2794,26 +3177,13 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
             const SizedBox(height: 18),
             const Text('모양', style: TextStyle(color: Colors.white70, fontSize: 15)),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('직사각형'),
-                  selected: _shape == 'rect',
-                  onSelected: (_) => setState(() => _shape = 'rect'),
-                ),
-                ChoiceChip(
-                  label: const Text('평행사변형'),
-                  selected: _shape == 'parallelogram',
-                  onSelected: (_) => setState(() => _shape = 'parallelogram'),
-                ),
-                ChoiceChip(
-                  label: const Text('알약'),
-                  selected: _shape == 'pill',
-                  onSelected: (_) => setState(() => _shape = 'pill'),
-                ),
-              ],
-            ),
+            Row(children: [
+              _ShapeSelectButton(label: '직사각형', selected: _shape == 'rect', onTap: () => setState(() => _shape = 'rect')),
+              const SizedBox(width: 8),
+              _ShapeSelectButton(label: '평행사변형', selected: _shape == 'parallelogram', onTap: () => setState(() => _shape = 'parallelogram')),
+              const SizedBox(width: 8),
+              _ShapeSelectButton(label: '알약', selected: _shape == 'pill', onTap: () => setState(() => _shape = 'pill')),
+            ]),
           ],
         ),
       ),
@@ -2917,10 +3287,19 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
                 print('[EDIT] File tap -> open edit dialog: id=${widget.file.id}');
                 if (widget.onEditRequested != null) widget.onEditRequested!(widget.file);
               }
-            : null,
+            : () {
+                if (widget.resizeMode) {
+                  final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+                  state?._toggleSelectFile(widget.file.id);
+                }
+              },
         onPanStart: (details) {
           if (widget.editMode) return; // 편집 모드에서는 이동 금지
-          if (!_resizing && !widget.resizeMode) {
+          // 리사이징 모드에서만 이동 허용
+          if (!_resizing && widget.resizeMode) {
+            // DEBUG
+            // ignore: avoid_print
+            print('[FILE][onPanStart] resizeMode=${widget.resizeMode}, editMode=${widget.editMode}');
             setState(() {
               _dragging = true;
               _tempPosition = widget.file.position;
@@ -2928,38 +3307,33 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
               final canvasPos = widget.globalToCanvasLocal(details.globalPosition);
               _dragAnchor = canvasPos - widget.file.position;
             });
-          }
-        },
-        onDoubleTap: widget.editMode ? null : () async {
-          final grade = widget.currentGrade ?? widget.file.primaryGrade;
-          if (grade == null) return;
-          final link = widget.file.linksByGrade['$grade#body']?.trim() ?? '';
-          if (link.isEmpty) return;
-          if (link.startsWith('http://') || link.startsWith('https://')) {
-            final uri = Uri.parse(link);
-            await launchUrl(uri, mode: LaunchMode.platformDefault);
-          } else {
-            await OpenFilex.open(link);
+            final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+            state?.beginGroupDrag(anchorKey: 'file:${widget.file.id}', basePos: widget.file.position);
           }
         },
         onPanUpdate: (d) {
           if (widget.editMode) return;
-          if (_dragging && !_resizing && !widget.resizeMode) {
-            if (_dragAnchor != null) {
-              final canvasPos = widget.globalToCanvasLocal(d.globalPosition);
-              setState(() => _tempPosition = canvasPos - _dragAnchor!);
-            } else {
-              setState(() => _tempPosition = Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy));
-            }
+          if (_dragging && !_resizing && widget.resizeMode) {
+            // ignore: avoid_print
+            print('[FILE][onPanUpdate] delta=${d.delta}');
+            final canvasPos = widget.globalToCanvasLocal(d.globalPosition);
+            final newPos = (_dragAnchor != null) ? (canvasPos - _dragAnchor!) : Offset(effectivePos.dx + d.delta.dx, effectivePos.dy + d.delta.dy);
+            setState(() => _tempPosition = newPos);
+            final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+            state?.updateGroupDrag(newPos);
           }
         },
         onPanEnd: (_) {
           if (widget.editMode) return;
+          // ignore: avoid_print
+          print('[FILE][onPanEnd] dragging=$_dragging');
           setState(() => _dragging = false);
           final endPos = _tempPosition ?? widget.file.position;
           if (widget.onEndMoved != null) widget.onEndMoved!(endPos);
           _tempPosition = null;
           _dragAnchor = null;
+          final state = context.findAncestorStateOfType<_ResourcesCanvasState>();
+          state?.endGroupDrag();
         },
         behavior: HitTestBehavior.translucent,
         child: AnimatedOpacity(
@@ -3045,28 +3419,28 @@ class _FileCard extends StatelessWidget {
          border: Border.all(color: const Color(0xFF1F1F1F), width: 1.2),
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
            if (file.iconImagePath != null && file.iconImagePath!.isNotEmpty)
              Container(
-               width: 18,
-               height: 18,
+               width: 22,
+               height: 22,
                decoration: BoxDecoration(
                  borderRadius: BorderRadius.circular(4),
                  image: DecorationImage(image: FileImage(File(file.iconImagePath!)), fit: BoxFit.cover),
                ),
              )
            else
-             Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 18),
+             Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 22),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               file.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38), fontSize: 15.5, fontWeight: FontWeight.w700),
+              style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38), fontSize: 17, fontWeight: FontWeight.w800),
             ),
           ),
           const SizedBox(width: 8),
@@ -3412,7 +3786,9 @@ class _BookmarkEditDialogState extends State<_BookmarkEditDialog> {
             DropTarget(
               onDragDone: (detail) {
                 if (detail.files.isEmpty) return;
-                final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
+                final xf = detail.files.first;
+                final path = xf.path;
+                if (path != null && path.isNotEmpty) {
                   setState(() => _path.text = path);
                 }
               },
@@ -3937,6 +4313,29 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
           }
         }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: _busy ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('생성')),
       ],
+    );
+  }
+}
+
+class _ShapeSelectButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ShapeSelectButton({required this.label, required this.selected, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Ink(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF2A2A2A) : const Color(0xFF252525),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: selected ? const Color(0xFF1976D2) : Colors.white24, width: selected ? 2 : 1),
+        ),
+        child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13.5)),
+      ),
     );
   }
 }

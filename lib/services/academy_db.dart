@@ -906,6 +906,9 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureResourceTables();
     await dbClient.transaction((txn) async {
+      // 기존 모든 폴더 레코드를 지우고 현재 상태를 그대로 저장
+      // 이렇게 해야 UI에서 삭제한 폴더가 재시작 시 다시 나타나는 문제를 방지할 수 있음
+      await txn.delete('resource_folders');
       for (final row in rows) {
         await txn.insert('resource_folders', row, conflictAlgorithm: ConflictAlgorithm.replace);
       }
