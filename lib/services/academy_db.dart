@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 23,
+        version: 24,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -259,6 +259,7 @@ class AcademyDbService {
             width REAL,
             height REAL,
             text_color INTEGER,
+            icon_code INTEGER,
             icon_image_path TEXT,
             description TEXT
           )
@@ -578,6 +579,13 @@ class AcademyDbService {
             )
           ''');
         }
+        if (oldVersion < 24) {
+          final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
+          final hasIconCode = cols.any((c) => c['name'] == 'icon_code');
+          if (!hasIconCode) {
+            await db.execute('ALTER TABLE resource_files ADD COLUMN icon_code INTEGER');
+          }
+        }
         // ensure new resources-related tables (links, grades)
         await db.execute('''
           CREATE TABLE IF NOT EXISTS resource_file_links (
@@ -778,6 +786,14 @@ class AcademyDbService {
       if (paymentType == 'perClass' || paymentType == 'session') paymentTypeStr = 'session';
       if (paymentType == 'monthly') paymentTypeStr = 'monthly';
       print('[DB] saveAcademySettings: $settings, paymentType: $paymentTypeStr');
+      // 기존에 저장된 openai_api_key가 있으면 보존 (REPLACE 시 컬럼 유실 방지)
+      String? existingApiKey;
+      try {
+        final existing = await dbClient.query('academy_settings', where: 'id = ?', whereArgs: [1], limit: 1);
+        if (existing.isNotEmpty) {
+          existingApiKey = existing.first['openai_api_key'] as String?;
+        }
+      } catch (_) {}
       await dbClient.insert(
         'academy_settings',
         {
@@ -789,6 +805,7 @@ class AcademyDbService {
           'payment_type': paymentTypeStr,
           'logo': settings.logo,
           'session_cycle': settings.sessionCycle, // [추가]
+          'openai_api_key': existingApiKey,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -924,7 +941,15 @@ class AcademyDbService {
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.insert('resource_files', row, conflictAlgorithm: ConflictAlgorithm.replace);
+    final String id = row['id'] as String;
+    // 기존 레코드가 있으면 병합하여 덮어쓰기 (일부 필드만 저장하는 호출에서도 안전하게 유지)
+    final existingList = await dbClient.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+    Map<String, dynamic> merged = {};
+    if (existingList.isNotEmpty) {
+      merged = Map<String, dynamic>.from(existingList.first);
+    }
+    merged.addAll(row);
+    await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {

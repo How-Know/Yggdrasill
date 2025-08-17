@@ -31,6 +31,20 @@ void main() async {
   }
   final prefs = await SharedPreferences.getInstance();
   final maximize = prefs.getBool('fullscreen_enabled') ?? false;
+  // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
+  // Surface Pro 12" (2736x1824 @150% → 1824x1216) 의 95% ≈ 1733 x 1155
+  const windowOptions = WindowOptions(
+    size: Size(1733, 1155),
+    minimumSize: Size(1733, 1155),
+    center: true,
+  );
+  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    if (maximize) {
+      await windowManager.maximize();
+    }
+    await windowManager.focus();
+  });
   runApp(MyApp(maximizeOnStart: maximize));
 }
 
@@ -40,20 +54,7 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (maximizeOnStart) {
-        await windowManager.maximize();
-        await windowManager.focus();
-      } else {
-        await windowManager.setMinimumSize(const Size(1600, 900));
-        await windowManager.setSize(const Size(1600, 900));
-        await windowManager.center();
-        await windowManager.focus();
-        final info = await windowManager.getBounds();
-        print('실제 창 크기:  [36m${info.width} x ${info.height} [0m');
-      }
-    });
+    // 크기/최소 크기 설정은 main()에서 선적용했습니다.
     return RawKeyboardListener(
       focusNode: FocusNode(),
       autofocus: !kDisableGlobalKbAutofocus,
