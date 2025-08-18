@@ -400,8 +400,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   children: lines,
                 );
               }
-              return Container(
-                width: 450 * progress,
+              final screenWidth = MediaQuery.of(context).size.width;
+              // 최대창 기준 450px이던 시트 폭을 화면 너비 비율(대략 26%)로 환산
+              final baseRatio = 0.19; // 450 / 1728 ≈ 0.26
+              final maxWidth = screenWidth * baseRatio;
+              // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
+              final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                width: containerWidth,
                 color: const Color(0xFF1F1F1F),
                 child: progress > 0.7
                   ? Column(
@@ -420,8 +428,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
                         Container(
                           constraints: BoxConstraints(
-                            minHeight: _cardActualHeight,
-                            maxHeight: _cardActualHeight * _leavedMaxLines + _cardSpacing * (_leavedMaxLines - 1) + 22, // 줄간격을 고려한 여유 공간
+                            minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                            maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _leavedMaxLines + _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_leavedMaxLines - 1) + 22 * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                           ),
                           margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
                           child: Scrollbar(
@@ -430,11 +438,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               child: Align(
                                 alignment: Alignment.centerLeft,
                                 child: Wrap(
-                                  spacing: _cardSpacing,
-                                  runSpacing: _cardSpacing,
+                                  spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                  runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                   verticalDirection: VerticalDirection.down,
                                   children: leaved
-                                      .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}')))
+                                      .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
                                       .toList(),
                                 ),
                               ),
@@ -453,8 +461,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               borderRadius: BorderRadius.circular(18),
                             ),
                             constraints: BoxConstraints(
-                              minHeight: _cardActualHeight,
-                              maxHeight: _cardActualHeight * _attendedMaxLines + _attendedRunSpacing * (_attendedMaxLines - 1),
+                              minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                              maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
                             child: Scrollbar(
@@ -479,11 +487,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                                                    for (int i = 0; i < attended.length; i++) ...[
-                            // AnimatedSwitcher 제거로 겹침 현상 해결
-                            _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}')),
-                            if (i != attended.length - 1) SizedBox(height: 8),
-                          ]
+                                          for (int i = 0; i < attended.length; i++) ...[
+                                            _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                            if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                          ]
                                         ],
                                       ),
                                   ],
@@ -515,10 +522,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       Center(
                                         child: Wrap(
                                           alignment: WrapAlignment.center,
-                                          spacing: _cardSpacing,
-                                          runSpacing: _cardSpacing,
+                                          spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                          runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                           children: entry.value
-                                              .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}')))
+                                              .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
                                               .toList(),
                                         ),
                                       ),
@@ -531,7 +538,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                           ),
                       ],
                     )
-                  : const SizedBox(),
+                  : const SizedBox.shrink(),
               );
             },
           ),
@@ -571,7 +578,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
-  Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key}) {
+  Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key, double scale = 1.0}) {
     Color borderColor;
     Color textColor = Colors.white70;
     Widget nameWidget;

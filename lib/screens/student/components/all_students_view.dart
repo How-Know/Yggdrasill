@@ -787,7 +787,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 spacing: 4,
                 runSpacing: 8,
                 children: gradeStudents.map((student) =>
-                  Draggable<StudentWithInfo>(
+                  LongPressDraggable<StudentWithInfo>(
                     data: student,
                     feedback: Material(
                       color: Colors.transparent,
@@ -799,6 +799,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           onShowDetails: widget.onShowDetails, // 연결 복구
                           onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
+                          enableLongPressDrag: false,
                         ),
                       ),
                     ),
@@ -810,6 +811,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onShowDetails: widget.onShowDetails, // 연결 복구
                         onDelete: widget.onDeleteStudent,
                         onUpdate: widget.onStudentUpdated,
+                        enableLongPressDrag: false,
                       ),
                     ),
                     child: StudentCard(
@@ -818,6 +820,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent,
                       onUpdate: widget.onStudentUpdated,
+                      enableLongPressDrag: false,
                     ),
                   )
                 ).toList(),

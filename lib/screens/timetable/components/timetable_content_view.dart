@@ -980,7 +980,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         : [ {'student': info, 'setId': setId} ];
     return Stack(
       children: [
-        Draggable<Map<String, dynamic>>(
+        LongPressDraggable<Map<String, dynamic>>(
           data: {
             'type': isClassRegisterMode ? 'register' : 'move',
             'students': studentsWithSetId,
@@ -1029,6 +1029,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   widget.onStudentSelectChanged!(info.student.id, checked);
                 }
               },
+              enableLongPressDrag: false,
             ),
           ),
           child: StudentCard(
@@ -1042,17 +1043,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 widget.onStudentSelectChanged!(info.student.id, checked);
               }
             },
-          ),
-        ),
-        Positioned.fill(
-          child: Draggable<Map<String, dynamic>>(
-            data: {
-              'type': 'register',
-              'student': info,
-            },
-            feedback: _buildDragFeedback(selectedStudents, info),
-            childWhenDragging: const SizedBox.shrink(),
-            child: Container(), // 투명 오버레이(실제 UI는 아래 StudentCard)
+            enableLongPressDrag: false,
           ),
         ),
       ],

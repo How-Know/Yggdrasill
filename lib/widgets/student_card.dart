@@ -14,6 +14,7 @@ class StudentCard extends StatelessWidget {
   final bool showCheckbox;
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
+  final bool enableLongPressDrag;
 
   const StudentCard({
     Key? key,
@@ -25,6 +26,7 @@ class StudentCard extends StatelessWidget {
     this.showCheckbox = false,
     this.checked = false,
     this.onCheckboxChanged,
+    this.enableLongPressDrag = true,
   }) : super(key: key);
 
   Future<void> _handleEdit(BuildContext context) async {
@@ -165,6 +167,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
   final bool showCheckbox;
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
+  final bool enableLongPressDrag;
 
   const _StudentCardWithCheckboxDelay({
     Key? key,
@@ -176,6 +179,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
     this.showCheckbox = false,
     this.checked = false,
     this.onCheckboxChanged,
+    this.enableLongPressDrag = true,
   }) : super(key: key);
 
   @override
@@ -185,6 +189,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
 class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxDelay> {
   bool _showRealCheckbox = false;
   bool _prevShowCheckbox = false;
+  Offset? _tapDownPosition;
 
   @override
   void didUpdateWidget(covariant _StudentCardWithCheckboxDelay oldWidget) {
@@ -243,111 +248,213 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
   @override
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
-    return Card(
+    final cardCore = Card(
       color: const Color(0xFF1F1F1F),
       margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8.0),
       ),
-      child: AnimatedContainer(
-        width: widget.showCheckbox ? 147 : 115,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInOut,
-        height: 50,
-        onEnd: _onAnimEnd,
-        padding: EdgeInsets.only(
-          left: student.groupInfo == null ? 15.0 : 8.0,
-          right: 4.0,
-        ),
-        child: SizedBox(
-          width: widget.showCheckbox ? 147 : 125,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              if (student.groupInfo != null) ...[
-                Container(
-                  width: 5,
-                  height: 26,
-                  decoration: BoxDecoration(
-                    color: student.groupInfo!.color,
-                    borderRadius: BorderRadius.circular(2.5),
-                  ),
-                ),
-                const SizedBox(width: 5),
-              ],
-              Expanded(
-                child: Text(
-                  student.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
+      child: InkWell(
+        onTapDown: (details) => _tapDownPosition = details.globalPosition,
+        onTap: () async {
+          final pos = _tapDownPosition;
+          if (pos == null) return;
+          final overlayBox = Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+          if (overlayBox == null) return;
+          final position = RelativeRect.fromRect(
+            Rect.fromPoints(pos, pos),
+            Offset.zero & overlayBox.size,
+          );
+          final selected = await showMenu<String>(
+            context: context,
+            color: const Color(0xFF2A2A2A),
+            position: position,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            items: const [
+              PopupMenuItem(
+                value: 'details',
+                child: ListTile(
+                  leading: Icon(Icons.info_outline, color: Colors.white70),
+                  title: Text('상세보기', style: TextStyle(color: Colors.white)),
                 ),
               ),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
-                color: const Color(0xFF2A2A2A),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                tooltip: '',
-                onSelected: (value) async {
-                  if (value == 'edit') {
-                    if (widget.onUpdate != null) {
-                      widget.onUpdate!(widget.studentWithInfo);
-                    }
-                  } else if (value == 'delete') {
-                    await _handleDelete(context);
-                  } else if (value == 'details') {
-                    widget.onShowDetails(widget.studentWithInfo);
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'details',
-                    child: ListTile(
-                      leading: const Icon(Icons.info_outline, color: Colors.white70),
-                      title: const Text('상세보기', style: TextStyle(color: Colors.white)),
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: ListTile(
-                      leading: const Icon(Icons.edit_outlined, color: Colors.white70),
-                      title: const Text('수정', style: TextStyle(color: Colors.white)),
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: ListTile(
-                      leading: const Icon(Icons.delete_outline, color: Colors.red),
-                      title: const Text('삭제', style: TextStyle(color: Colors.red)),
-                    ),
-                  ),
-                ],
-              ),
-              if (_showRealCheckbox)
-                Padding(
-                  padding: const EdgeInsets.only(left: 0.0),
-                  child: Checkbox(
-                    value: widget.checked,
-                    onChanged: widget.onCheckboxChanged,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                    side: BorderSide(color: Colors.grey.shade500, width: 1.2),
-                    fillColor: MaterialStateProperty.resolveWith((states) => states.contains(MaterialState.selected) ? Colors.blue.shade400 : Colors.grey.shade200),
-                    checkColor: Colors.white,
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
+              PopupMenuItem(
+                value: 'edit',
+                child: ListTile(
+                  leading: Icon(Icons.edit_outlined, color: Colors.white70),
+                  title: Text('수정', style: TextStyle(color: Colors.white)),
                 ),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: ListTile(
+                  leading: Icon(Icons.delete_outline, color: Colors.red),
+                  title: Text('삭제', style: TextStyle(color: Colors.red)),
+                ),
+              ),
             ],
+          );
+          switch (selected) {
+            case 'details':
+              widget.onShowDetails(widget.studentWithInfo);
+              break;
+            case 'edit':
+              if (widget.onUpdate != null) {
+                widget.onUpdate!(widget.studentWithInfo);
+              } else {
+                await showDialog(
+                  context: context,
+                  builder: (context) => StudentRegistrationDialog(
+                    student: widget.studentWithInfo.student,
+                    onSave: (updatedStudent, basicInfo) async {
+                      await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                      Navigator.of(context).pop();
+                    },
+                    groups: DataManager.instance.groups,
+                  ),
+                );
+              }
+              break;
+            case 'delete':
+              if (widget.onDelete != null) {
+                widget.onDelete!(widget.studentWithInfo);
+              } else {
+                await _handleDelete(context);
+              }
+              break;
+          }
+        },
+        child: AnimatedContainer(
+          width: widget.showCheckbox ? 135 : 100,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOut,
+          height: 50,
+          onEnd: _onAnimEnd,
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          child: SizedBox(
+            width: widget.showCheckbox ? 135 : 110,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (student.groupInfo != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      width: 5,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        color: student.groupInfo!.color,
+                        borderRadius: BorderRadius.circular(2.5),
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    student.name,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                  ),
+                ),
+                if (_showRealCheckbox)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Checkbox(
+                      value: widget.checked,
+                      onChanged: widget.onCheckboxChanged,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      side: BorderSide(color: Colors.grey.shade500, width: 1.2),
+                      fillColor: MaterialStateProperty.resolveWith((states) => states.contains(MaterialState.selected) ? Colors.blue.shade400 : Colors.grey.shade200),
+                      checkColor: Colors.white,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
+    );
+
+    if (!widget.enableLongPressDrag) {
+      return cardCore;
+    }
+
+    return LongPressDraggable<StudentWithInfo>(
+      data: widget.studentWithInfo,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      hapticFeedbackOnStart: true,
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(
+          opacity: 0.9,
+          child: SizedBox(
+            width: widget.showCheckbox ? 135 : 100,
+            height: 50,
+            child: Card(
+              color: const Color(0xFF1F1F1F),
+              margin: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8.0),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (student.groupInfo != null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          width: 5,
+                          height: 26,
+                          decoration: BoxDecoration(
+                            color: student.groupInfo!.color,
+                            borderRadius: BorderRadius.circular(2.5),
+                          ),
+                        ),
+                      ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        '',
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        student.name,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: cardCore,
+      ),
+      child: cardCore,
     );
   }
 } 
