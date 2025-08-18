@@ -384,42 +384,48 @@ class StudentScreenState extends State<StudentScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            width: 220,
-                            child: SearchBar(
-                              controller: _searchController,
-                              onChanged: (value) {
-                                setState(() {
-                                  _searchQuery = value;
-                                });
-                              },
-                              hintText: '학생 검색',
-                              leading: const Icon(
-                                Icons.search,
-                                color: Colors.white70,
-                                size: 24,
-                              ),
-                              backgroundColor: MaterialStateColor.resolveWith(
-                                (states) => const Color(0xFF2A2A2A),
-                              ),
-                              elevation: MaterialStateProperty.all(0),
-                              padding: const MaterialStatePropertyAll<EdgeInsets>(
-                                EdgeInsets.symmetric(horizontal: 18.0),
-                              ),
-                              textStyle: const MaterialStatePropertyAll<TextStyle>(
-                                TextStyle(color: Colors.white, fontSize: 16.5),
-                              ),
-                              hintStyle: MaterialStatePropertyAll<TextStyle>(
-                                TextStyle(color: Colors.white54, fontSize: 16.5),
-                              ),
-                              side: MaterialStatePropertyAll<BorderSide>(
-                                BorderSide(color: Colors.white.withOpacity(0.2)),
-                              ),
-                              constraints: const BoxConstraints(
-                                minHeight: 44,
-                                maxHeight: 44,
-                              ),
-                            ),
+                          LayoutBuilder(
+                            builder: (context, c) {
+                              final screenW = MediaQuery.of(context).size.width;
+                              final double w = (screenW * 0.18).clamp(160.0, 320.0);
+                              return SizedBox(
+                                width: w,
+                                child: SearchBar(
+                                  controller: _searchController,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _searchQuery = value;
+                                    });
+                                  },
+                                  hintText: '학생 검색',
+                                  leading: const Icon(
+                                    Icons.search,
+                                    color: Colors.white70,
+                                    size: 24,
+                                  ),
+                                  backgroundColor: MaterialStateColor.resolveWith(
+                                    (states) => const Color(0xFF2A2A2A),
+                                  ),
+                                  elevation: MaterialStateProperty.all(0),
+                                  padding: const MaterialStatePropertyAll<EdgeInsets>(
+                                    EdgeInsets.symmetric(horizontal: 18.0),
+                                  ),
+                                  textStyle: const MaterialStatePropertyAll<TextStyle>(
+                                    TextStyle(color: Colors.white, fontSize: 16.5),
+                                  ),
+                                  hintStyle: MaterialStatePropertyAll<TextStyle>(
+                                    TextStyle(color: Colors.white54, fontSize: 16.5),
+                                  ),
+                                  side: MaterialStatePropertyAll<BorderSide>(
+                                    BorderSide(color: Colors.white.withOpacity(0.2)),
+                                  ),
+                                  constraints: const BoxConstraints(
+                                    minHeight: 44,
+                                    maxHeight: 44,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                           const SizedBox(width: 24),
                         ],
@@ -547,51 +553,72 @@ class StudentScreenState extends State<StudentScreen> {
           child: Row(
             children: [
               // 왼쪽 학생 리스트 컨테이너
-              Container(
-                width: 260,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1F1F1F),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                margin: const EdgeInsets.only(right: 16, left: 15),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 헤더
-                    const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        '학생 목록',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final double availableW = constraints.maxWidth; // 실제 이 Row의 가용 폭
+                  // 큰 화면에서는 고정폭(320), 작은 화면에서만 더 급격히 축소
+                  const double baseWidth = 320.0;   // 넉넉할 때 유지할 폭
+                  const double minWidth = 150.0;    // 매우 좁을 때 목표 폭
+                  // 가용 폭 기준 브레이크포인트 (메인 콘텐츠 영역 기준)
+                  const double startBp = 1100.0;    // 이 이상이면 baseWidth 유지
+                  const double endBp = 600.0;       // 이 이하면 minWidth 적용
+                  double w;
+                  if (availableW >= startBp) {
+                    w = baseWidth;
+                  } else if (availableW <= endBp) {
+                    w = minWidth;
+                  } else {
+                    final t = (availableW - endBp) / (startBp - endBp); // 0..1
+                    w = minWidth + (baseWidth - minWidth) * t;           // 선형 보간
+                  }
+                  w = w.clamp(minWidth, baseWidth);
+                  return Container(
+                    width: w,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F1F1F),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    margin: const EdgeInsets.only(right: 16, left: 15),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 헤더
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Text(
+                            '학생 목록',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
-                      ),
+                        // 학생 리스트
+                        Expanded(
+                          child: ValueListenableBuilder<List<StudentWithInfo>>(
+                            valueListenable: DataManager.instance.studentsNotifier,
+                            builder: (context, students, child) {
+                              final gradeGroups = _groupStudentsByGrade(students);
+                              return ListView(
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                children: [
+                                  ...gradeGroups.entries.map((entry) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: _buildGradeGroup(entry.key, entry.value),
+                                    );
+                                  }).toList(),
+                                  const SizedBox(height: 32),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
-                    // 학생 리스트
-                    Expanded(
-                      child: ValueListenableBuilder<List<StudentWithInfo>>(
-                        valueListenable: DataManager.instance.studentsNotifier,
-                        builder: (context, students, child) {
-                          final gradeGroups = _groupStudentsByGrade(students);
-                          return ListView(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            children: [
-                              ...gradeGroups.entries.map((entry) {
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 4),
-                                  child: _buildGradeGroup(entry.key, entry.value),
-                                );
-                              }).toList(),
-                              const SizedBox(height: 32),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
               // 오른쪽 영역: (학생정보 + 달력) + 수강료 납부
               Expanded(
@@ -943,22 +970,32 @@ class StudentScreenState extends State<StudentScreen> {
                     } else {
                       final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
                       final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
-                          rightWidget = RichText(
-                            text: TextSpan(
-                              style: const TextStyle(fontSize: 13),
-                              children: [
-                                TextSpan(text: '등원 $arr · 하원 $dep', style: const TextStyle(color: Colors.white70)),
-                                if (info.isLate) const TextSpan(text: ' · ', style: TextStyle(color: Colors.white70)),
-                                if (info.isLate) const TextSpan(text: '지각', style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w700)),
-                              ],
-                            ),
+                          rightWidget = Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('등원 $arr · 하원 $dep', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                              if (info.isLate)
+                                const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontSize: 12, fontWeight: FontWeight.w700)),
+                            ],
                           );
                     }
                   } else {
                     // 수강료는 날짜만 표시
-                        rightWidget = Text(
-                          info.arrival != null ? '납부 ${info.arrival!.month}/${info.arrival!.day}' : '날짜 없음',
-                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        final paid = info.arrival;
+                        final due = DataManager.instance.paymentRecords
+                            .firstWhere(
+                              (r) => r.studentId == e.key,
+                              orElse: () => PaymentRecord(id: -1, studentId: e.key, cycle: 0, dueDate: DateTime(0), paidDate: null),
+                            )
+                            .dueDate;
+                        rightWidget = Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(paid != null ? '납부 ${paid.month}/${paid.day}' : '미납', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                            Text('예정 ${due.month}/${due.day}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                          ],
                         );
                   }
                   return Padding(
