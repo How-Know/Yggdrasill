@@ -32,16 +32,21 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final maximize = prefs.getBool('fullscreen_enabled') ?? false;
   // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
-  // Surface Pro 12" (2736x1824 @150% → 1824x1216) 의 95% ≈ 1733 x 1155
-  const windowOptions = WindowOptions(
-    size: Size(1733, 1155),
-    minimumSize: Size(1733, 1155),
-    center: true,
+  // Surface Pro 12" (2196x1464 @150% → 1464x976) 의 95% 기준 최소 크기
+  const Size kMinSize = Size(1430, 950);
+  final windowOptions = WindowOptions(
+    minimumSize: kMinSize,
+    size: maximize ? null : kMinSize,
+    center: !maximize,
   );
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
     if (maximize) {
+      // 일부 플랫폼에서 show 직후 maximize 타이밍 이슈가 있어 약간 지연
+      await Future.delayed(const Duration(milliseconds: 60));
       await windowManager.maximize();
+    } else {
+      await windowManager.center();
     }
     await windowManager.focus();
   });

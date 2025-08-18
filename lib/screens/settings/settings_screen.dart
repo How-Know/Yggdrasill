@@ -72,6 +72,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   SettingType _selectedType = SettingType.academy;
   DayOfWeek? _selectedDay = DayOfWeek.monday;
   PaymentType _paymentType = PaymentType.monthly;
+  // 스크롤 컨트롤러 (탭별)
+  final ScrollController _academyScrollController = ScrollController();
+  final ScrollController _teacherScrollController = ScrollController();
+  final ScrollController _generalScrollController = ScrollController();
   
   // 학원 설정 컨트롤러들
   final TextEditingController _academyNameController = TextEditingController();
@@ -147,6 +151,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _capacityController.dispose();
     _lessonDurationController.dispose();
     _courseCountController.dispose(); // [추가]
+    _academyScrollController.dispose();
+    _teacherScrollController.dispose();
+    _generalScrollController.dispose();
     super.dispose();
   }
 
@@ -1694,6 +1701,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               duration: const Duration(milliseconds: 200),
               switchInCurve: Curves.easeInOut,
               switchOutCurve: Curves.easeInOut,
+              layoutBuilder: (Widget? currentChild, List<Widget> previousChildren) {
+                return Stack(
+                  alignment: Alignment.topCenter,
+                  fit: StackFit.passthrough,
+                  children: <Widget>[
+                    ...previousChildren,
+                    if (currentChild != null) currentChild,
+                  ],
+                );
+              },
               transitionBuilder: (child, animation) {
                 return FadeTransition(
                   opacity: animation,
@@ -2163,19 +2180,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildAcademySettingsContainer() {
     return Container(
       color: const Color(0xFF1F1F1F),
-      child: _buildAcademySettings(),
+      child: ScrollConfiguration(
+        behavior: const ScrollBehavior(),
+        child: Scrollbar(
+          controller: _academyScrollController,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _academyScrollController,
+            padding: const EdgeInsets.only(bottom: 24),
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: _buildAcademySettings(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
   Widget _buildTeacherSettingsContainer() {
     return Container(
       color: const Color(0xFF1F1F1F),
-      child: _buildTeacherSettings(),
+      child: ScrollConfiguration(
+        behavior: const ScrollBehavior(),
+        child: Scrollbar(
+          controller: _teacherScrollController,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _teacherScrollController,
+            padding: const EdgeInsets.only(bottom: 24),
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: _buildTeacherSettings(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
   Widget _buildGeneralSettingsContainer() {
     return Container(
       color: const Color(0xFF1F1F1F),
-      child: _buildGeneralSettings(),
+      child: ScrollConfiguration(
+        behavior: const ScrollBehavior(),
+        child: Scrollbar(
+          controller: _generalScrollController,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _generalScrollController,
+            padding: const EdgeInsets.only(bottom: 24),
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: _buildGeneralSettings(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 } 
