@@ -411,146 +411,224 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                           child: InkWell(
                                             borderRadius: BorderRadius.circular(12),
                                             onTap: () => widget.onGroupExpanded(groupInfo),
-                                            child: Container(
-                                              height: 88,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF121212),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  const SizedBox(width: 24),
-                                                  Container(
-                                                    width: 12,
-                                                    height: 40,
-                                                    decoration: BoxDecoration(
-                                                      color: groupInfo.color,
-                                                      borderRadius: BorderRadius.circular(2),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 24),
-                                                  Expanded(
+                                            child: LayoutBuilder(
+                                              builder: (context, constraints) {
+                                                final double maxW = constraints.maxWidth; // 우측 패널 내 카드 폭
+                                                // 기준 폭 424에서 1.0, 더 좁아지면 0.82까지 축소
+                                                final double scale = (maxW / 424).clamp(0.82, 1.0);
+                                                final bool compact = maxW < 380; // 컴팩트 2줄 전환 임계값
+
+                                                final double sidePadding = 24 * scale;
+                                                final double gapLarge = 24 * scale;
+                                                final double gap = 16 * scale;
+                                                final double gapSmall = 8 * scale;
+                                                final double colorBarWidth = 12 * scale;
+                                                final double colorBarHeight = 40 * scale;
+                                                final double nameSize = 22 * scale;
+                                                final double descSize = 16 * scale;
+                                                final double countSize = 16 * scale;
+                                                final double iconSize = 22 * scale;
+                                                final double actionMin = 36 * scale;
+
+                                                Widget trailingActions() {
+                                                  return FittedBox(
+                                                    fit: BoxFit.scaleDown,
                                                     child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
                                                       children: [
                                                         Text(
-                                                          groupInfo.name,
-                                                          style: const TextStyle(
+                                                          '${studentsInGroup.length}/${groupInfo.capacity}명',
+                                                          style: TextStyle(
                                                             color: Colors.white,
-                                                            fontSize: 22,
+                                                            fontSize: countSize,
                                                             fontWeight: FontWeight.w500,
                                                           ),
                                                         ),
-                                                        if (groupInfo.description.isNotEmpty) ...[
-                                                          const SizedBox(width: 16),
-                                                          Expanded(
-                                                            child: Text(
-                                                              groupInfo.description,
-                                                              style: const TextStyle(
-                                                                color: Colors.white70,
-                                                                fontSize: 18,
-                                                              ),
-                                                              overflow: TextOverflow.ellipsis,
-                                                            ),
+                                                        SizedBox(width: gapSmall),
+                                                        AnimatedRotation(
+                                                          duration: const Duration(milliseconds: 200),
+                                                          turns: isExpanded ? 0.5 : 0,
+                                                          child: Icon(
+                                                            Icons.expand_more,
+                                                            color: Colors.white70,
+                                                            size: iconSize,
                                                           ),
-                                                        ],
-                                                      ],
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 20),
-                                                  Text(
-                                                    '${studentsInGroup.length}/${groupInfo.capacity}명',
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 18,
-                                                      fontWeight: FontWeight.w500,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 16),
-                                                  AnimatedRotation(
-                                                    duration: const Duration(milliseconds: 200),
-                                                    turns: isExpanded ? 0.5 : 0,
-                                                    child: const Icon(
-                                                      Icons.expand_more,
-                                                      color: Colors.white70,
-                                                      size: 24,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Row(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      IconButton(
-                                                        onPressed: () async {
-                                                          final studentsInGroup = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
-                                                          print('[DEBUG] all_students_view.dart: studentsInGroup.length=${studentsInGroup.length}');
-                                                          final result = await showDialog<GroupInfo>(
-                                                            context: context,
-                                                            builder: (context) => GroupRegistrationDialog(
-                                                              editMode: true,
-                                                              groupInfo: groupInfo,
-                                                              currentMemberCount: studentsInGroup.length,
-                                                              onSave: (updatedGroup) {
-                                                                Navigator.of(context).pop(updatedGroup);
-                                                              },
-                                                            ),
-                                                          );
-                                                          if (result != null) {
-                                                            widget.onGroupUpdated(result, index);
-                                                          }
-                                                        },
-                                                        icon: const Icon(Icons.edit_rounded),
-                                                        style: IconButton.styleFrom(
-                                                          foregroundColor: Colors.white70,
                                                         ),
-                                                      ),
-                                                      IconButton(
-                                                        onPressed: () async {
-                                                          final confirm = await showDialog<bool>(
-                                                            context: context,
-                                                            builder: (context) => AlertDialog(
-                                                              backgroundColor: const Color(0xFF232326),
-                                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                                              title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
-                                                              content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
-                                                              actions: [
-                                                                TextButton(
-                                                                  onPressed: () => Navigator.of(context).pop(false),
-                                                                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                                                ),
-                                                                TextButton(
-                                                                  onPressed: () => Navigator.of(context).pop(true),
-                                                                  child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                          );
-                                                          if (confirm == true) {
-                                                            widget.onGroupDeleted(groupInfo);
-                                                          }
-                                                        },
-                                                        icon: const Icon(Icons.delete_rounded),
-                                                        style: IconButton.styleFrom(
-                                                          foregroundColor: Colors.white70,
-                                                        ),
-                                                      ),
-                                                      ReorderableDragStartListener(
-                                                        index: index,
-                                                        child: IconButton(
-                                                          onPressed: () {},
-                                                          icon: const Icon(Icons.drag_handle_rounded),
+                                                        SizedBox(width: gapSmall),
+                                                        IconButton(
+                                                          onPressed: () async {
+                                                            final studentsInGroup = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
+                                                            print('[DEBUG] all_students_view.dart: studentsInGroup.length=${studentsInGroup.length}');
+                                                            final result = await showDialog<GroupInfo>(
+                                                              context: context,
+                                                              builder: (context) => GroupRegistrationDialog(
+                                                                editMode: true,
+                                                                groupInfo: groupInfo,
+                                                                currentMemberCount: studentsInGroup.length,
+                                                                onSave: (updatedGroup) {
+                                                                  Navigator.of(context).pop(updatedGroup);
+                                                                },
+                                                              ),
+                                                            );
+                                                            if (result != null) {
+                                                              widget.onGroupUpdated(result, index);
+                                                            }
+                                                          },
+                                                          icon: const Icon(Icons.edit_rounded),
+                                                          iconSize: iconSize,
                                                           style: IconButton.styleFrom(
+                                                            visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
                                                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                                            minimumSize: const Size(40, 40),
+                                                            minimumSize: Size(actionMin, actionMin),
                                                             padding: EdgeInsets.zero,
                                                             foregroundColor: Colors.white70,
                                                           ),
                                                         ),
+                                                        IconButton(
+                                                          onPressed: () async {
+                                                            final confirm = await showDialog<bool>(
+                                                              context: context,
+                                                              builder: (context) => AlertDialog(
+                                                                backgroundColor: const Color(0xFF232326),
+                                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                                title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
+                                                                content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+                                                                actions: [
+                                                                  TextButton(
+                                                                    onPressed: () => Navigator.of(context).pop(false),
+                                                                    child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                                                  ),
+                                                                  TextButton(
+                                                                    onPressed: () => Navigator.of(context).pop(true),
+                                                                    child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            );
+                                                            if (confirm == true) {
+                                                              widget.onGroupDeleted(groupInfo);
+                                                            }
+                                                          },
+                                                          icon: const Icon(Icons.delete_rounded),
+                                                          iconSize: iconSize,
+                                                          style: IconButton.styleFrom(
+                                                            visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                                                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                            minimumSize: Size(actionMin, actionMin),
+                                                            padding: EdgeInsets.zero,
+                                                            foregroundColor: Colors.white70,
+                                                          ),
+                                                        ),
+                                                        ReorderableDragStartListener(
+                                                          index: index,
+                                                          child: IconButton(
+                                                            onPressed: () {},
+                                                            icon: const Icon(Icons.drag_handle_rounded),
+                                                            iconSize: iconSize,
+                                                            style: IconButton.styleFrom(
+                                                              visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                              minimumSize: Size(actionMin, actionMin),
+                                                              padding: EdgeInsets.zero,
+                                                              foregroundColor: Colors.white70,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                }
+
+                                                final Widget leading = Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    SizedBox(width: sidePadding),
+                                                    Container(
+                                                      width: colorBarWidth,
+                                                      height: colorBarHeight,
+                                                      decoration: BoxDecoration(
+                                                        color: groupInfo.color,
+                                                        borderRadius: BorderRadius.circular(2 * scale),
                                                       ),
+                                                    ),
+                                                    SizedBox(width: gapLarge),
+                                                  ],
+                                                );
+
+                                                final Widget titleContent = Expanded(
+                                                  child: compact
+                                                      ? Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            Text(
+                                                              groupInfo.name,
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: nameSize,
+                                                                fontWeight: FontWeight.w500,
+                                                              ),
+                                                            ),
+                                                            if (groupInfo.description.isNotEmpty) ...[
+                                                              SizedBox(height: gapSmall),
+                                                              Text(
+                                                                groupInfo.description,
+                                                                maxLines: 1,
+                                                                overflow: TextOverflow.ellipsis,
+                                                                style: TextStyle(
+                                                                  color: Colors.white70,
+                                                                  fontSize: descSize,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ],
+                                                        )
+                                                      : Row(
+                                                          children: [
+                                                            Text(
+                                                              groupInfo.name,
+                                                              style: TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: nameSize,
+                                                                fontWeight: FontWeight.w500,
+                                                              ),
+                                                            ),
+                                                            if (groupInfo.description.isNotEmpty) ...[
+                                                              SizedBox(width: gap),
+                                                              Expanded(
+                                                                child: Text(
+                                                                  groupInfo.description,
+                                                                  style: TextStyle(
+                                                                    color: Colors.white70,
+                                                                    fontSize: descSize,
+                                                                  ),
+                                                                  overflow: TextOverflow.ellipsis,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ],
+                                                        ),
+                                                );
+
+                                                return Container(
+                                                  padding: EdgeInsets.symmetric(vertical: compact ? 12 * scale : 14 * scale),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFF121212),
+                                                    borderRadius: BorderRadius.circular(12),
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      leading,
+                                                      titleContent,
+                                                      SizedBox(width: gap),
+                                                      trailingActions(),
+                                                      SizedBox(width: gapSmall),
                                                     ],
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                ],
-                                              ),
+                                                );
+                                              },
                                             ),
                                           ),
                                         ),
