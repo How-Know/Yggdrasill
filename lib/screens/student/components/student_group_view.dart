@@ -74,231 +74,267 @@ class _StudentGroupViewState extends State<StudentGroupView> {
                 showAppSnackBar(context, '${student.name}님이 ${oldClassInfo?.name ?? '미배정'} → ${classInfo.name}으로 이동되었습니다.', useRoot: true);
               },
               builder: (context, candidateData, rejectedData) {
-                return Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF121212),
-                    borderRadius: BorderRadius.circular(12),
-                    border: candidateData.isNotEmpty
-                      ? Border.all(
-                          color: classInfo.color,
-                          width: 2,
-                        )
-                      : null,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Material(
-                        color: Colors.transparent,
-                        borderRadius: candidateData.isNotEmpty
-                          ? const BorderRadius.vertical(
-                              top: Radius.circular(10),
-                              bottom: Radius.zero,
-                            )
-                          : BorderRadius.circular(12),
-                        child: InkWell(
-                          borderRadius: candidateData.isNotEmpty
-                            ? const BorderRadius.vertical(
-                                top: Radius.circular(10),
-                                bottom: Radius.zero,
+                return LayoutBuilder(
+                  builder: (context, constraints) {
+                    final double maxW = constraints.maxWidth;
+                    // 기준폭: 1000에서 scale 1.0, 더 좁아지면 0.7까지 축소
+                    final double scale = (maxW / 1000).clamp(0.7, 1.0);
+                    // 아주 작은 화면에서는 카드 너비를 절반까지 축소
+                    final bool veryNarrow = maxW < 1100;
+                    final double sidePadding = 24 * scale;
+                    final double gapLarge = 24 * scale;
+                    final double gap = 16 * scale;
+                    final double nameSize = 22 * scale;
+                    final double descSize = 18 * scale;
+                    final double countSize = 18 * scale;
+                    final double iconSize = 24 * scale;
+
+                    final card = Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF121212),
+                        borderRadius: BorderRadius.circular(12),
+                        border: candidateData.isNotEmpty
+                            ? Border.all(
+                                color: classInfo.color,
+                                width: 2,
                               )
-                            : BorderRadius.circular(12),
-                          onTap: () {
-                            setState(() {
-                              if (isExpanded) {
-                                _expandedClasses.remove(classInfo);
-                              } else {
-                                _expandedClasses.add(classInfo);
-                              }
-                            });
-                          },
-                          child: Container(
-                            height: 88,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF121212),
-                              borderRadius: candidateData.isNotEmpty
+                            : null,
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Material(
+                            color: Colors.transparent,
+                            borderRadius: candidateData.isNotEmpty
                                 ? const BorderRadius.vertical(
                                     top: Radius.circular(10),
                                     bottom: Radius.zero,
                                   )
                                 : BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              children: [
-                                const SizedBox(width: 24),
-                                Container(
-                                  width: 12,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    color: classInfo.color,
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
+                            child: InkWell(
+                              borderRadius: candidateData.isNotEmpty
+                                  ? const BorderRadius.vertical(
+                                      top: Radius.circular(10),
+                                      bottom: Radius.zero,
+                                    )
+                                  : BorderRadius.circular(12),
+                              onTap: () {
+                                setState(() {
+                                  if (isExpanded) {
+                                    _expandedClasses.remove(classInfo);
+                                  } else {
+                                    _expandedClasses.add(classInfo);
+                                  }
+                                });
+                              },
+                              child: Container(
+                                height: 88 * scale,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF121212),
+                                  borderRadius: candidateData.isNotEmpty
+                                      ? const BorderRadius.vertical(
+                                          top: Radius.circular(10),
+                                          bottom: Radius.zero,
+                                        )
+                                      : BorderRadius.circular(12),
                                 ),
-                                const SizedBox(width: 24),
-                                Expanded(
-                                  child: Row(
-                                    children: [
-                                      Text(
-                                        classInfo.name,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.w500,
-                                        ),
+                                child: Row(
+                                  children: [
+                                    SizedBox(width: sidePadding),
+                                    Container(
+                                      width: 12 * scale,
+                                      height: 40 * scale,
+                                      decoration: BoxDecoration(
+                                        color: classInfo.color,
+                                        borderRadius: BorderRadius.circular(2 * scale),
                                       ),
-                                      if (classInfo.description.isNotEmpty) ...[
-                                        const SizedBox(width: 16),
-                                        Expanded(
-                                          child: Text(
-                                            classInfo.description,
-                                            style: const TextStyle(
-                                              color: Colors.white70,
-                                              fontSize: 18,
+                                    ),
+                                    SizedBox(width: gapLarge),
+                                    Expanded(
+                                      child: Row(
+                                        children: [
+                                          Text(
+                                            classInfo.name,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: nameSize,
+                                              fontWeight: FontWeight.w500,
                                             ),
-                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          if (classInfo.description.isNotEmpty) ...[
+                                            SizedBox(width: gap),
+                                            Expanded(
+                                              child: Text(
+                                                classInfo.description,
+                                                style: TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: descSize,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    SizedBox(width: 20 * scale),
+                                    Text(
+                                      '${studentsInClass.length}/${classInfo.capacity}명',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: countSize,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    SizedBox(width: 16 * scale),
+                                    AnimatedRotation(
+                                      duration: const Duration(milliseconds: 200),
+                                      turns: isExpanded ? 0.5 : 0,
+                                      child: Icon(
+                                        Icons.expand_more,
+                                        color: Colors.white70,
+                                        size: iconSize,
+                                      ),
+                                    ),
+                                    SizedBox(width: 8 * scale),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          onPressed: () {
+                                            widget.onClassEdit(
+                                              editMode: true,
+                                              classInfo: classInfo,
+                                              index: index,
+                                            );
+                                          },
+                                          icon: const Icon(Icons.edit_rounded),
+                                          style: IconButton.styleFrom(
+                                            foregroundColor: Colors.white70,
+                                            visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                                            minimumSize: Size(36 * scale, 36 * scale),
+                                            padding: EdgeInsets.zero,
+                                          ),
+                                        ),
+                                        IconButton(
+                                          onPressed: () {
+                                            showDialog(
+                                              context: context,
+                                              builder: (BuildContext context) {
+                                                return AlertDialog(
+                                                  backgroundColor: const Color(0xFF1F1F1F),
+                                                  title: Text(
+                                                    '${classInfo.name} 삭제',
+                                                    style: const TextStyle(color: Colors.white),
+                                                  ),
+                                                  content: const Text(
+                                                    '정말로 이 클래스를 삭제하시겠습니까?',
+                                                    style: TextStyle(color: Colors.white),
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () {
+                                                        Navigator.of(context).pop();
+                                                      },
+                                                      child: const Text(
+                                                        '취소',
+                                                        style: TextStyle(color: Colors.white70),
+                                                      ),
+                                                    ),
+                                                    TextButton(
+                                                      onPressed: () {
+                                                        widget.onClassDelete(classInfo);
+                                                        Navigator.of(context).pop();
+                                                      },
+                                                      child: const Text(
+                                                        '삭제',
+                                                        style: TextStyle(
+                                                          color: Colors.red,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            );
+                                          },
+                                          icon: const Icon(Icons.delete_rounded),
+                                          style: IconButton.styleFrom(
+                                            foregroundColor: Colors.white70,
+                                            visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                                            minimumSize: Size(36 * scale, 36 * scale),
+                                            padding: EdgeInsets.zero,
+                                          ),
+                                        ),
+                                        ReorderableDragStartListener(
+                                          index: index,
+                                          child: IconButton(
+                                            onPressed: () {},
+                                            icon: const Icon(Icons.drag_handle_rounded),
+                                            style: IconButton.styleFrom(
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              minimumSize: Size(36 * scale, 36 * scale),
+                                              padding: EdgeInsets.zero,
+                                              foregroundColor: Colors.white70,
+                                            ),
                                           ),
                                         ),
                                       ],
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 20),
-                                Text(
-                                  '${studentsInClass.length}/${classInfo.capacity}명',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(width: 16),
-                                AnimatedRotation(
-                                  duration: const Duration(milliseconds: 200),
-                                  turns: isExpanded ? 0.5 : 0,
-                                  child: const Icon(
-                                    Icons.expand_more,
-                                    color: Colors.white70,
-                                    size: 24,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      onPressed: () {
-                                        widget.onClassEdit(
-                                          editMode: true,
-                                          classInfo: classInfo,
-                                          index: index,
-                                        );
-                                      },
-                                      icon: const Icon(Icons.edit_rounded),
-                                      style: IconButton.styleFrom(
-                                        foregroundColor: Colors.white70,
-                                      ),
                                     ),
-                                    IconButton(
-                                      onPressed: () {
-                                        showDialog(
-                                          context: context,
-                                          builder: (BuildContext context) {
-                                            return AlertDialog(
-                                              backgroundColor: const Color(0xFF1F1F1F),
-                                              title: Text(
-                                                '${classInfo.name} 삭제',
-                                                style: const TextStyle(color: Colors.white),
-                                              ),
-                                              content: const Text(
-                                                '정말로 이 클래스를 삭제하시겠습니까?',
-                                                style: TextStyle(color: Colors.white),
-                                              ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () {
-                                                    Navigator.of(context).pop();
-                                                  },
-                                                  child: const Text(
-                                                    '취소',
-                                                    style: TextStyle(color: Colors.white70),
-                                                  ),
-                                                ),
-                                                TextButton(
-                                                  onPressed: () {
-                                                    widget.onClassDelete(classInfo);
-                                                    Navigator.of(context).pop();
-                                                  },
-                                                  child: const Text(
-                                                    '삭제',
-                                                    style: TextStyle(
-                                                      color: Colors.red,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            );
-                                          },
-                                        );
-                                      },
-                                      icon: const Icon(Icons.delete_rounded),
-                                      style: IconButton.styleFrom(
-                                        foregroundColor: Colors.white70,
-                                      ),
-                                    ),
-                                    ReorderableDragStartListener(
-                                      index: index,
-                                      child: IconButton(
-                                        onPressed: () {},
-                                        icon: const Icon(Icons.drag_handle_rounded),
-                                        style: IconButton.styleFrom(
-                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                          minimumSize: const Size(40, 40),
-                                          padding: EdgeInsets.zero,
-                                          foregroundColor: Colors.white70,
-                                        ),
-                                      ),
-                                    ),
+                                    SizedBox(width: 8 * scale),
                                   ],
                                 ),
-                                const SizedBox(width: 8),
-                              ],
+                              ),
                             ),
                           ),
+                          AnimatedCrossFade(
+                            firstChild: const SizedBox.shrink(),
+                            secondChild: studentsInClass.isNotEmpty
+                                ? Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF121212),
+                                      borderRadius: candidateData.isNotEmpty
+                                          ? const BorderRadius.vertical(
+                                              top: Radius.zero,
+                                              bottom: Radius.circular(10),
+                                            )
+                                          : BorderRadius.circular(12),
+                                    ),
+                                    child: Padding(
+                                      padding: EdgeInsets.fromLTRB(30 * scale, 16 * scale, 24 * scale, 16 * scale),
+                                      child: Wrap(
+                                        spacing: 16 * scale,
+                                        runSpacing: 16 * scale,
+                                        children: studentsInClass
+                                            .map((student) => ClassStudentCard(
+                                                  student: student,
+                                                  onShowDetails: widget.onStudentTap,
+                                                ))
+                                            .toList(),
+                                      ),
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
+                            crossFadeState: isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                            duration: const Duration(milliseconds: 200),
+                          ),
+                        ],
+                      ),
+                    );
+
+                    if (veryNarrow) {
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: 0.5,
+                          child: card,
                         ),
-                      ),
-                      AnimatedCrossFade(
-                        firstChild: const SizedBox.shrink(),
-                        secondChild: studentsInClass.isNotEmpty
-                          ? Container(
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF121212),
-                                borderRadius: candidateData.isNotEmpty
-                                  ? const BorderRadius.vertical(
-                                      top: Radius.zero,
-                                      bottom: Radius.circular(10),
-                                    )
-                                  : BorderRadius.circular(12),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(30, 16, 24, 16),
-                                child: Wrap(
-                                  spacing: 16,
-                                  runSpacing: 16,
-                                  children: studentsInClass.map((student) => ClassStudentCard(
-                                    student: student,
-                                    onShowDetails: widget.onStudentTap,
-                                  )).toList(),
-                                ),
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                        crossFadeState: isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                        duration: const Duration(milliseconds: 200),
-                      ),
-                    ],
-                  ),
+                      );
+                    }
+                    return card;
+                  },
                 );
               },
             ),

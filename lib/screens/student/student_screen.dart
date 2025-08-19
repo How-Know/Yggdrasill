@@ -555,23 +555,14 @@ class StudentScreenState extends State<StudentScreen> {
               // 왼쪽 학생 리스트 컨테이너
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final double availableW = constraints.maxWidth; // 실제 이 Row의 가용 폭
-                  // 큰 화면에서는 고정폭(320), 작은 화면에서만 더 급격히 축소
-                  const double baseWidth = 320.0;   // 넉넉할 때 유지할 폭
-                  const double minWidth = 150.0;    // 매우 좁을 때 목표 폭
-                  // 가용 폭 기준 브레이크포인트 (메인 콘텐츠 영역 기준)
-                  const double startBp = 1100.0;    // 이 이상이면 baseWidth 유지
-                  const double endBp = 600.0;       // 이 이하면 minWidth 적용
-                  double w;
-                  if (availableW >= startBp) {
-                    w = baseWidth;
-                  } else if (availableW <= endBp) {
-                    w = minWidth;
-                  } else {
-                    final t = (availableW - endBp) / (startBp - endBp); // 0..1
-                    w = minWidth + (baseWidth - minWidth) * t;           // 선형 보간
-                  }
-                  w = w.clamp(minWidth, baseWidth);
+                  // Row 하위에서는 constraints.maxWidth가 무한대가 될 수 있으므로 화면 폭으로 분기
+                  final double screenW = MediaQuery.of(context).size.width;
+                  // 기본 폭은 320. 1600px 이하에서는 절반(160)로 축소
+                  const double baseWidth = 320.0;
+                  const double halfWidth = 160.0;
+                  const double minWidth = 150.0;
+                  double w = screenW <= 1600 ? halfWidth : baseWidth;
+                  w = w < minWidth ? minWidth : w;
                   return Container(
                     width: w,
                     decoration: BoxDecoration(
@@ -926,7 +917,15 @@ class StudentScreenState extends State<StudentScreen> {
           }
         }
 
-        Widget _simpleRow(String left, Widget rightWidget) {
+        Widget _simpleRow(String left, {required Widget statusLine, String? timeLine}) {
+          final double screenW = MediaQuery.of(context).size.width;
+          // 1430에서 14, 2200에서 18까지 선형 보간
+          const double minW = 1430;
+          const double maxW = 2200;
+          const double minFs = 14;
+          const double maxFs = 18;
+          double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
+          final double nameFontSize = minFs + (maxFs - minFs) * t;
           return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -934,10 +933,21 @@ class StudentScreenState extends State<StudentScreen> {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF2A2A2A)),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: Text(left, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
-                rightWidget,
+            // 1행: 이름 + 상태
+            Row(
+              children: [
+                Expanded(child: Text(left, style: TextStyle(color: Colors.white, fontSize: nameFontSize, fontWeight: FontWeight.w700))),
+                const SizedBox(width: 8),
+                statusLine,
+              ],
+            ),
+            if (timeLine != null) ...[
+              const SizedBox(height: 4),
+              Text(timeLine, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+            ],
           ],
         ),
           );
@@ -970,11 +980,9 @@ class StudentScreenState extends State<StudentScreen> {
                     } else {
                       final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
                       final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
-                          rightWidget = Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
+                          rightWidget = Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text('등원 $arr · 하원 $dep', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                               if (info.isLate)
                                 const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontSize: 12, fontWeight: FontWeight.w700)),
                             ],
@@ -1008,7 +1016,15 @@ class StudentScreenState extends State<StudentScreen> {
                               await _jumpToAttendanceEdit(e.key, info.classDateTime, info.isPresent);
                             }
                           : null,
-                          child: _simpleRow(name, rightWidget),
+                          child: _simpleRow(
+                            name,
+                            statusLine: rightWidget,
+                            timeLine: isAttendance
+                                ? (info.isPresent
+                                    ? '등원 ${info.arrival != null ? info.arrival!.hour.toString().padLeft(2,'0') + ':' + info.arrival!.minute.toString().padLeft(2,'0') : '--:--'} · 하원 ${info.departure != null ? info.departure!.hour.toString().padLeft(2,'0') + ':' + info.departure!.minute.toString().padLeft(2,'0') : '--:--'}'
+                                    : null)
+                                : null,
+                          ),
                     ),
                   );
                 }).toList(),
