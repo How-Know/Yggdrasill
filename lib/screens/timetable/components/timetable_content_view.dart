@@ -980,8 +980,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         : [ {'student': info, 'setId': setId} ];
     return Stack(
       children: [
-        LongPressDraggable<Map<String, dynamic>>(
-          data: {
+        Builder(builder: (context) {
+          final dragData = {
             'type': isClassRegisterMode ? 'register' : 'move',
             'students': studentsWithSetId,
             'student': info,
@@ -991,61 +991,77 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'dayIndex': dayIndex,
             'startTime': startTime,
             'isSelfStudy': isSelfStudy,
-          },
-          onDragStarted: () {
-            // print('[DEBUG][Draggable] onDragStarted: studentTimeBlocks.length=${DataManager.instance.studentTimeBlocks.length}');
-            // print('[DEBUG][_buildDraggableStudentCard] 드래그 시작: student= [36m${info.student.name} [0m, isSelfStudy=$isSelfStudy');
-            setState(() => _showDeleteZone = true);
-          },
-          onDragEnd: (details) {
-            // print('[DEBUG][Draggable] onDragEnd: studentTimeBlocks.length= [36m${DataManager.instance.studentTimeBlocks.length} [0m');
-            print('[DEBUG][_buildDraggableStudentCard][onDragEnd] wasAccepted=${details.wasAccepted}, 선택된 학생 수=$selectedCount');
-            setState(() => _showDeleteZone = false);
-            if (!details.wasAccepted) {
-              // 드래그 취소(시간표 외부 드롭) 시 선택모드 해제
-              print('[DEBUG][_buildDraggableStudentCard][onDragEnd] 드래그 취소 - 선택 모드 종료');
-              if (widget.onExitSelectMode != null) {
-                widget.onExitSelectMode!();
-              }
-            } else {
-              // 드래그 성공 시에도 선택모드 해제 (수업 등록 완료 후)
-              print('[DEBUG][_buildDraggableStudentCard][onDragEnd] 드래그 성공 - 선택 모드 종료');
-              if (widget.onExitSelectMode != null) {
-                widget.onExitSelectMode!();
-              }
-            }
-          },
-          feedback: _buildDragFeedback(selectedStudents, info),
-          childWhenDragging: Opacity(
-            opacity: 0.3,
-            child: StudentCard(
-              key: cardKey,
-              studentWithInfo: info,
-              onShowDetails: (info) {},
-              showCheckbox: widget.isSelectMode,
-              checked: widget.selectedStudentIds.contains(info.student.id),
-              onCheckboxChanged: (checked) {
-                if (widget.onStudentSelectChanged != null && checked != null) {
-                  widget.onStudentSelectChanged!(info.student.id, checked);
-                }
-              },
-              enableLongPressDrag: false,
+          };
+          print('[DEBUG][TT] Draggable dragData 준비: type=${dragData['type']}, setId=${dragData['setId']}, oldDayIndex=${dragData['oldDayIndex']}, oldStartTime=${dragData['oldStartTime']}, studentsCount=${(dragData['students'] as List).length}');
+          return GestureDetector(
+            onLongPressStart: (_) => print('[DEBUG][TT] onLongPressStart: ${info.student.name}'),
+            onLongPressEnd: (_) => print('[DEBUG][TT] onLongPressEnd: ${info.student.name}'),
+            behavior: HitTestBehavior.translucent,
+            child: Listener(
+              onPointerDown: (_) => print('[DEBUG][TT] PointerDown on student card: ${info.student.name}'),
+              onPointerUp: (_) => print('[DEBUG][TT] PointerUp on student card: ${info.student.name}'),
+              onPointerCancel: (_) => print('[DEBUG][TT] PointerCancel on student card: ${info.student.name}'),
+              child: LongPressDraggable<Map<String, dynamic>>(
+                data: dragData,
+                onDragStarted: () {
+                  print('[DEBUG][TT] onDragStarted: student=${info.student.name}, isSelfStudy=$isSelfStudy');
+                  setState(() {
+                    _showDeleteZone = true;
+                  });
+                  print('[DEBUG][TT] _showDeleteZone => true');
+                },
+                onDragEnd: (details) {
+                  print('[DEBUG][TT] onDragEnd: wasAccepted=${details.wasAccepted}, selectedCount=$selectedCount');
+                  setState(() {
+                    _showDeleteZone = false;
+                  });
+                  print('[DEBUG][TT] _showDeleteZone => false');
+                  if (!details.wasAccepted) {
+                    print('[DEBUG][TT] 드래그 취소 - 선택 모드 종료');
+                    if (widget.onExitSelectMode != null) {
+                      widget.onExitSelectMode!();
+                    }
+                  } else {
+                    print('[DEBUG][TT] 드래그 성공 - 선택 모드 종료');
+                    if (widget.onExitSelectMode != null) {
+                      widget.onExitSelectMode!();
+                    }
+                  }
+                },
+                feedback: _buildDragFeedback(selectedStudents, info),
+                childWhenDragging: Opacity(
+                  opacity: 0.3,
+                  child: StudentCard(
+                    key: cardKey,
+                    studentWithInfo: info,
+                    onShowDetails: (info) {},
+                    showCheckbox: widget.isSelectMode,
+                    checked: widget.selectedStudentIds.contains(info.student.id),
+                    onCheckboxChanged: (checked) {
+                      if (widget.onStudentSelectChanged != null && checked != null) {
+                        widget.onStudentSelectChanged!(info.student.id, checked);
+                      }
+                    },
+                    enableLongPressDrag: false,
+                  ),
+                ),
+                child: StudentCard(
+                  key: cardKey,
+                  studentWithInfo: info,
+                  onShowDetails: (info) {},
+                  showCheckbox: widget.isSelectMode,
+                  checked: widget.selectedStudentIds.contains(info.student.id),
+                  onCheckboxChanged: (checked) {
+                    if (widget.onStudentSelectChanged != null && checked != null) {
+                      widget.onStudentSelectChanged!(info.student.id, checked);
+                    }
+                  },
+                  enableLongPressDrag: false,
+                ),
+              ),
             ),
-          ),
-          child: StudentCard(
-            key: cardKey,
-            studentWithInfo: info,
-            onShowDetails: (info) {},
-            showCheckbox: widget.isSelectMode,
-            checked: widget.selectedStudentIds.contains(info.student.id),
-            onCheckboxChanged: (checked) {
-              if (widget.onStudentSelectChanged != null && checked != null) {
-                widget.onStudentSelectChanged!(info.student.id, checked);
-              }
-            },
-            enableLongPressDrag: false,
-          ),
-        ),
+          );
+        }),
       ],
     );
   }
@@ -1851,26 +1867,19 @@ class _ClassCardState extends State<_ClassCard> {
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
+        print('[DEBUG][_ClassCard.onWillAccept] data=$data');
         // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
-        if (widget.registrationModeType != null) return false;
-        if (data == null || data['type'] != 'register') return false;
-        final max = widget.classInfo.capacity;
-        final current = DataManager.instance.getStudentCountForClass(widget.classInfo.id);
-        final isFull = max != null && current >= max;
-        if (isFull) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('정원이 가득 찼습니다.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red, duration: Duration(seconds: 1)),
-          );
-          return false;
-        }
-        final draggedStudents = data['students'] as List<dynamic>?;
-        if (draggedStudents != null && draggedStudents.isNotEmpty) {
-          final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
-          for (final entry in draggedStudents) {
+        if (data == null) return false;
+        final isMulti = data['students'] is List;
+        if (isMulti) {
+          final entries = (data['students'] as List).cast<Map<String, dynamic>>();
+          // print('[DEBUG][onWillAccept] entries=$entries');
+          for (final entry in entries) {
             final student = entry['student'] as StudentWithInfo?;
             final setId = entry['setId'] as String?;
-            // print('[DEBUG][onWillAccept] studentId=${student?.student.id}, setId=$setId');
-            final alreadyRegistered = blocks.any((b) => b.studentId == student?.student.id && b.setId == setId);
+            if (student == null || setId == null) return false;
+            final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+            final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
             // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
             if (alreadyRegistered) return false;
           }

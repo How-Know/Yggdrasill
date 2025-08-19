@@ -367,7 +367,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           itemCount: widget.groups.length,
                           itemBuilder: (context, index) {
                             final groupInfo = widget.groups[index];
-                            final studentsInGroup = widget.students.where((s) => s.groupInfo == groupInfo).toList();
+                            // 최신 상태 반영을 위해 DataManager의 현재 students를 사용하고 id 비교로 필터링
+                            final liveStudents = DataManager.instance.students;
+                            final studentsInGroup = liveStudents.where((s) => s.groupInfo?.id == groupInfo.id).toList();
                             final isExpanded = widget.expandedGroups.contains(groupInfo);
                             return Padding(
                               key: ValueKey(groupInfo.id),
@@ -678,7 +680,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               print('[DEBUG] 삭제 드롭존 - student.student: ' + student.student.toString());
                               print('[DEBUG] 삭제 드롭존 - student.basicInfo: ' + student.basicInfo.toString());
                               final studentCopy = student.student.copyWith(groupInfo: null, groupId: null);
-                              final basicInfoCopy = student.basicInfo.copyWith(groupId: null);
+                              final basicInfoCopy = student.basicInfo.copyWith(groupId: null, clearGroupId: true);
                               print('[DEBUG] 삭제 드롭존 - studentCopy: ' + studentCopy.toString());
                               print('[DEBUG] 삭제 드롭존 - basicInfoCopy: ' + basicInfoCopy.toString());
                               print('[DEBUG] 삭제 드롭존 - studentCopy.toDb(): ' + studentCopy.toDb().toString());
@@ -712,11 +714,17 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   studentCopy,
                                   basicInfoCopy,
                                 );
+                                // 강제 동기화로 최신 상태 확인
+                                await DataManager.instance.loadStudents();
+                                final after = DataManager.instance.students.firstWhere((s) => s.student.id == student.student.id, orElse: () => student);
+                                print('[DEBUG] 삭제 드롭존 - 업데이트 후 groupInfo: ${after.groupInfo}, groupId: ${after.student.groupId}');
                                 // 수업 블록 삭제 후 주간 수업 횟수 감소 처리: 현재 등록된 set 개수로 동기화
                                 final sid = student.student.id;
                                 final registered = DataManager.instance.getStudentLessonSetCount(sid);
                                 DataManager.instance.setStudentWeeklyClassCount(sid, registered);
-                                setState(() {});
+                                setState(() {
+                                  _showDeleteZone = false;
+                                });
                                 // 그룹에서 제외되었을 때 스낵바 출력
                                 showAppSnackBar(context, '그룹에서 제외되었습니다.');
                               }

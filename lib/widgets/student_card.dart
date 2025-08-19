@@ -15,6 +15,7 @@ class StudentCard extends StatelessWidget {
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
   final bool enableLongPressDrag;
+  final bool disableTapInteractions;
 
   const StudentCard({
     Key? key,
@@ -27,6 +28,7 @@ class StudentCard extends StatelessWidget {
     this.checked = false,
     this.onCheckboxChanged,
     this.enableLongPressDrag = true,
+    this.disableTapInteractions = false,
   }) : super(key: key);
 
   Future<void> _handleEdit(BuildContext context) async {
@@ -154,6 +156,8 @@ class StudentCard extends StatelessWidget {
       showCheckbox: showCheckbox,
       checked: checked,
       onCheckboxChanged: onCheckboxChanged,
+      enableLongPressDrag: enableLongPressDrag,
+      disableTapInteractions: disableTapInteractions,
     );
   }
 }
@@ -168,6 +172,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
   final bool enableLongPressDrag;
+  final bool disableTapInteractions;
 
   const _StudentCardWithCheckboxDelay({
     Key? key,
@@ -180,6 +185,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
     this.checked = false,
     this.onCheckboxChanged,
     this.enableLongPressDrag = true,
+    this.disableTapInteractions = false,
   }) : super(key: key);
 
   @override
@@ -255,8 +261,8 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         borderRadius: BorderRadius.circular(8.0),
       ),
       child: InkWell(
-        onTapDown: (details) => _tapDownPosition = details.globalPosition,
-        onTap: () async {
+        onTapDown: widget.disableTapInteractions ? null : (details) => _tapDownPosition = details.globalPosition,
+        onTap: widget.disableTapInteractions ? null : () async {
           final pos = _tapDownPosition;
           if (pos == null) return;
           final overlayBox = Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;

@@ -35,6 +35,8 @@ class Student {
     String? phoneNumber,
     String? parentPhoneNumber,
     String? groupId,
+    bool clearGroupInfo = false,
+    bool clearGroupId = false,
   }) {
     return Student(
       id: id ?? this.id,
@@ -42,10 +44,10 @@ class Student {
       school: school ?? this.school,
       grade: grade ?? this.grade,
       educationLevel: educationLevel ?? this.educationLevel,
-      groupInfo: groupInfo ?? this.groupInfo,
+      groupInfo: clearGroupInfo ? null : (groupInfo ?? this.groupInfo),
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
-      groupId: groupId ?? this.groupId,
+      groupId: clearGroupId ? null : (groupId ?? this.groupId),
     );
   }
 
@@ -107,12 +109,13 @@ class StudentBasicInfo {
     String? groupId,
     DateTime? registrationDate,
     String? memo,
+    bool clearGroupId = false,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       parentPhoneNumber: parentPhoneNumber ?? this.parentPhoneNumber,
-      groupId: groupId ?? this.groupId,
+      groupId: clearGroupId ? null : (groupId ?? this.groupId),
       registrationDate: registrationDate ?? this.registrationDate,
       memo: memo ?? this.memo,
     );

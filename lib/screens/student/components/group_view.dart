@@ -236,9 +236,12 @@ class _GroupViewState extends State<GroupView> {
                 print('[DEBUG] 그룹카드 생성: groupInfo.id=${groupInfo.id}');
                 print('[DEBUG] widget.students.length=${widget.students.length}');
                 for (final s in widget.students) {
-                  print('[DEBUG] 학생: name=${s.student.name}, groupInfo=[33m${s.groupInfo}[0m, groupInfo?.id=${s.groupInfo?.id}, groupId=${s.student.groupId}');
+                  print('[DEBUG] 학생: name=${s.student.name}, groupInfo=\x1B[33m${s.groupInfo}\x1B[0m, groupInfo?.id=${s.groupInfo?.id}, groupId=${s.student.groupId}');
                 }
-                final studentsInGroup = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
+                // 최신 상태 기준으로 계산하여 UI 미반영 이슈 방지
+                final liveStudents = DataManager.instance.students;
+                print('[DEBUG] liveStudents.length=${liveStudents.length}');
+                final studentsInGroup = liveStudents.where((s) => s.groupInfo?.id == groupInfo.id).toList();
                 print('[DEBUG] studentsInGroup.length=${studentsInGroup.length}');
                 final isExpanded = widget.expandedGroups.contains(groupInfo);
                 return Padding(
