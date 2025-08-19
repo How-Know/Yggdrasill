@@ -227,12 +227,44 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
   Timer? _ticker;
   // 세션 내에서만 유지되는 닫힘 기록 (앱 재시작 시 초기화)
   final Set<String> _sessionDismissed = <String>{};
+  // 자정까지 유지되는 닫힘 기록(영속) - 일정 있는 메모용
+  final Set<String> _persistDismissed = <String>{};
+  // 일정 없는 메모 영구 해제 목록(메모 ID 기준)
+  final Set<String> _persistDismissedUnscheduled = <String>{};
+
+  String _keyFor(Memo m) {
+    // 메모의 예정일(YYYYMMDD) 기준으로 키 생성 → 해당 날짜 자정까지 표시/해제 동작 유지
+    final dt = m.scheduledAt ?? DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${m.id}:${dt.year}${two(dt.month)}${two(dt.day)}';
+  }
+
+  Future<void> _loadPersistDismissed() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('memo_dismissed_today') ?? <String>[];
+    _persistDismissed
+      ..clear()
+      ..addAll(list);
+    final uns = prefs.getStringList('memo_dismissed_unscheduled') ?? <String>[];
+    _persistDismissedUnscheduled
+      ..clear()
+      ..addAll(uns);
+  }
+
+  Future<void> _savePersistDismissed() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('memo_dismissed_today', _persistDismissed.toList());
+    await prefs.setStringList('memo_dismissed_unscheduled', _persistDismissedUnscheduled.toList());
+  }
 
   @override
   void initState() {
     super.initState();
     // 주기적으로 현재 시간을 반영해 표시 대상 갱신
     _ticker = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+    _loadPersistDismissed().then((_) {
       if (mounted) setState(() {});
     });
   }
@@ -254,26 +286,57 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
         builder: (context, memos, _) {
           // 가까운 미래 순 정렬, 해제되지 않은 배너만
           final now = DateTime.now();
-          // 일정 시간이 도래(또는 지남)했고 닫지 않은 메모만 표시
-          final upcoming = memos
-              .where((m) => m.scheduledAt != null && !m.dismissed && !_sessionDismissed.contains(m.id) && _isSameDay(m.scheduledAt!, now))
+          final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+          // 디버그: 전체/필터 단계별 카운트
+          print('[FLOAT][DEBUG] total memos=${memos.length}');
+          final withSchedule = memos.where((m) => m.scheduledAt != null).toList();
+          print('[FLOAT][DEBUG] with scheduledAt != null: ${withSchedule.length}');
+          final notDismissedFlag = withSchedule.where((m) => !m.dismissed).toList();
+          print('[FLOAT][DEBUG] !dismissed: ${notDismissedFlag.length}');
+          final notSessionDismissed = notDismissedFlag.where((m) => !_sessionDismissed.contains(m.id)).toList();
+          print('[FLOAT][DEBUG] !sessionDismissed: ${notSessionDismissed.length}');
+          // 오늘(자정)까지 도래한 모든 일정 포함 (과거+오늘, 미래 제외)
+          final dueUntilToday = notSessionDismissed.where((m) => !m.scheduledAt!.isAfter(endOfToday)).toList();
+          print('[FLOAT][DEBUG] dueUntilToday(<= today EOD): ${dueUntilToday.length}');
+          // 일정 있는 메모 중 오늘까지 + 오늘 날짜 키로 해제되지 않은 항목
+          final scheduledCandidates = dueUntilToday
+              .where((m) => !_persistDismissed.contains(_keyFor(m)))
               .toList()
             ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
-          if (upcoming.isEmpty) return const SizedBox.shrink();
+          // 일정 없는 메모: 생성 시점부터 X 누르기 전까지 항상 표시(영구 해제 목록 제외)
+          final unscheduledCandidates = memos
+              .where((m) => m.scheduledAt == null && !m.dismissed && !_sessionDismissed.contains(m.id) && !_persistDismissedUnscheduled.contains(m.id))
+              .toList();
+          print('[FLOAT][DEBUG] unscheduled candidates: ${unscheduledCandidates.length}');
+          // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
+          DateTime sortKey(m) => (m.scheduledAt ?? m.createdAt);
+          final combined = [...scheduledCandidates, ...unscheduledCandidates]
+            ..sort((a, b) => sortKey(a).compareTo(sortKey(b)));
+          print('[FLOAT][DEBUG] combined after sort: ${combined.length}');
+          for (final m in combined) {
+            print('[FLOAT][DEBUG] show memo id=${m.id}, when=${m.scheduledAt}, createdAt=${m.createdAt}');
+          }
+          if (combined.isEmpty) return const SizedBox.shrink();
           // 아래에서 위로 쌓기
           return Material(
             color: Colors.transparent,
             child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
-            children: upcoming.take(3).map((m) {
+            children: combined.take(5).map((m) {
               return _MemoBanner(
                 memo: m,
                 onClose: () async {
-                  // X 클릭 시: DB flag는 유지(dismissed=false)하고 세션만 닫음
+                  // X 클릭 시: 자정까지는 다시 뜨지 않도록 보관
                   setState(() {
                     _sessionDismissed.add(m.id);
+                    if (m.scheduledAt != null) {
+                      _persistDismissed.add(_keyFor(m));
+                    } else {
+                      _persistDismissedUnscheduled.add(m.id);
+                    }
                   });
+                  await _savePersistDismissed();
                 },
               );
             }).toList(),
@@ -311,28 +374,87 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   bool _hoveringEdge = false;
   bool _panelHovered = false;
   Timer? _closeTimer;
+  // 터치 전용 드래그 상태 (엣지 오픈)
+  bool _edgeTouchActive = false;
+  Offset? _edgeDragStart;
+  // 터치 전용 드래그 상태 (패널 닫기)
+  bool _panelTouchActive = false;
+  Offset? _panelDragStart;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth = 75;
+      const double panelWidth = 99; // 기존 75에서 +24 확장
       return Stack(children: [
+        // 패널이 열려 있을 때, 패널 바깥 영역을 탭/클릭하면 닫기
+        ValueListenableBuilder<bool>(
+          valueListenable: widget.isOpenListenable,
+          builder: (context, open, _) {
+            if (!open) return const SizedBox.shrink();
+            return Positioned(
+              left: 0,
+              top: kToolbarHeight,
+              bottom: 0,
+              right: panelWidth,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _setOpen(false),
+                onDoubleTap: () => _setOpen(false),
+              ),
+            );
+          },
+        ),
         Positioned(
           right: 0,
           top: kToolbarHeight,
           bottom: 0,
           width: 24,
-          child: MouseRegion(
-            onEnter: (_) {
-              _hoveringEdge = true;
-              _setOpen(true);
-              _cancelCloseTimer();
-            },
-            onExit: (_) {
-              _hoveringEdge = false;
-              _scheduleMaybeClose();
-            },
-            child: const SizedBox.shrink(),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // 마우스 호버로 오픈 (기존 동작)
+              MouseRegion(
+                onEnter: (_) {
+                  _hoveringEdge = true;
+                  _setOpen(true);
+                  _cancelCloseTimer();
+                },
+                onExit: (_) {
+                  _hoveringEdge = false;
+                  // 엣지에서 패널로 이동하는 순간에 닫기 타이머가 먼저 실행되며 깜빡임이 발생하므로
+                  // 여기서는 닫기를 스케줄하지 않고, 패널 영역 MouseRegion.onExit에서만 닫도록 위임한다.
+                  _cancelCloseTimer();
+                },
+                child: const SizedBox.shrink(),
+              ),
+              // 터치/펜 엣지 스와이프로 오픈
+              Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (event) {
+                  if (event.kind == PointerDeviceKind.touch || event.kind == PointerDeviceKind.stylus) {
+                    _edgeTouchActive = true;
+                    _edgeDragStart = event.position;
+                  }
+                },
+                onPointerMove: (event) {
+                  if (_edgeTouchActive && _edgeDragStart != null) {
+                    final dx = event.position.dx - _edgeDragStart!.dx;
+                    // 오른쪽 엣지에서 왼쪽으로 24px 이상 드래그 시 오픈
+                    if (dx < -24) {
+                      _setOpen(true);
+                    }
+                  }
+                },
+                onPointerUp: (event) {
+                  _edgeTouchActive = false;
+                  _edgeDragStart = null;
+                },
+                onPointerCancel: (event) {
+                  _edgeTouchActive = false;
+                  _edgeDragStart = null;
+                },
+              ),
+            ],
           ),
         ),
         ValueListenableBuilder<bool>(
@@ -345,20 +467,54 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
               top: kToolbarHeight,
               bottom: 0,
               width: panelWidth,
-              child: MouseRegion(
-                onEnter: (_) {
-                  _panelHovered = true;
-                  _cancelCloseTimer();
-                },
-                onExit: (_) {
-                  _panelHovered = false;
-                  _scheduleMaybeClose();
-                },
-                child: _MemoPanel(
-                  memosListenable: widget.memosListenable,
-                  onAddMemo: () => widget.onAddMemo(context),
-                  onEditMemo: (m) => widget.onEditMemo(context, m),
-                ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  MouseRegion(
+                    onEnter: (_) {
+                      _panelHovered = true;
+                      _cancelCloseTimer(); // 패널에 진입하는 즉시 닫기 타이머 해제
+                    },
+                    onExit: (_) {
+                      _panelHovered = false;
+                      _scheduleMaybeClose(); // 패널을 벗어날 때에만 닫기 스케줄
+                    },
+                    child: const SizedBox.shrink(),
+                  ),
+                  // 패널 내부 터치 드래그로 닫기 (오른쪽으로 24px 이상)
+                  Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (event) {
+                      if (event.kind == PointerDeviceKind.touch || event.kind == PointerDeviceKind.stylus) {
+                        _panelTouchActive = true;
+                        _panelDragStart = event.position;
+                      }
+                    },
+                    onPointerMove: (event) {
+                      if (_panelTouchActive && _panelDragStart != null) {
+                        final dx = event.position.dx - _panelDragStart!.dx;
+                        if (dx > 24) {
+                          _setOpen(false);
+                        }
+                      }
+                    },
+                    onPointerUp: (_) {
+                      _panelTouchActive = false;
+                      _panelDragStart = null;
+                      _scheduleMaybeClose();
+                    },
+                    onPointerCancel: (_) {
+                      _panelTouchActive = false;
+                      _panelDragStart = null;
+                      _scheduleMaybeClose();
+                    },
+                    child: _MemoPanel(
+                      memosListenable: widget.memosListenable,
+                      onAddMemo: () => widget.onAddMemo(context),
+                      onEditMemo: (m) => widget.onEditMemo(context, m),
+                    ),
+                  ),
+                ],
               ),
             );
           },
@@ -396,6 +552,14 @@ class _MemoPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double screenW = MediaQuery.of(context).size.width;
+    // 최소창(≈1430)에서 12, 넓을수록 16까지 선형 증가
+    const double minW = 1430;
+    const double maxW = 2200;
+    const double fsMin = 12;
+    const double fsMax = 16;
+    final double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
+    final double memoFontSize = fsMin + (fsMax - fsMin) * t;
     return Material(
       color: Colors.transparent,
       child: Container(
@@ -445,7 +609,7 @@ class _MemoPanel extends StatelessWidget {
                               m.original,
                               maxLines: 6,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.2),
+                              style: TextStyle(color: Colors.white70, fontSize: memoFontSize, height: 1.2),
                             ),
                           ),
                         ),
@@ -630,6 +794,14 @@ class _MemoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double screenW = MediaQuery.of(context).size.width;
+    // 최소창(≈1430)에서 14, 넓을수록 18까지 선형 증가
+    const double minW = 1430;
+    const double maxW = 2200;
+    const double fsMin = 14;
+    const double fsMax = 17; // 최대창 기준 1pt 감소
+    final double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
+    final double bannerFontSize = fsMin + (fsMax - fsMin) * t;
     final when = memo.scheduledAt != null
         ? '${memo.scheduledAt!.month}/${memo.scheduledAt!.day} ${memo.scheduledAt!.hour.toString().padLeft(2, '0')}:${memo.scheduledAt!.minute.toString().padLeft(2, '0')}'
         : '';
@@ -661,7 +833,7 @@ class _MemoBanner extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   memo.summary.isNotEmpty ? memo.summary : memo.original,
-                  style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.3),
+                  style: TextStyle(color: Colors.white, fontSize: bannerFontSize, height: 1.3),
                 ),
               ],
             ),

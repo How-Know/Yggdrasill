@@ -150,6 +150,23 @@ class AiSummaryService {
       if (isAm && h == 12) h = 0;
       return DateTime(y, mo, d, h, mi);
     }
+
+    // 2-1.5) 연도 생략: M/d 또는 M.d 또는 M-d [시:분 옵션]
+    final reMd = RegExp(r"\b(\d{1,2})[\/.\-](\d{1,2})(?:\s+(\d{1,2})(?::(\d{2}))?)?\b");
+    final mMd = reMd.firstMatch(plain);
+    if (mMd != null) {
+      final mo = int.parse(mMd.group(1)!);
+      final d = int.parse(mMd.group(2)!);
+      int h = mMd.group(3) != null ? int.parse(mMd.group(3)!) : 9;
+      final mi = mMd.group(4) != null ? int.parse(mMd.group(4)!) : 0;
+      if (isPm && h >= 1 && h <= 11) h += 12;
+      if (isAm && h == 12) h = 0;
+      final dt = DateTime(now.year, mo, d, h, mi);
+      // 디버그: 인식 로그
+      // print('[AI-DATE] M/d fallback matched: $dt for text=$text');
+      return dt;
+    }
+
     // 2-2) 한국식 날짜: M월 d일 (시/분 생략 가능)
     final reKor = RegExp(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일(?:\s*(\d{1,2})(?::|시)(\d{2})?)?");
     final m2 = reKor.firstMatch(plain);

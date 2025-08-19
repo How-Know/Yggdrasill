@@ -847,6 +847,14 @@ class StudentScreenState extends State<StudentScreen> {
     }
 
         Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9)}) {
+          final double screenW = MediaQuery.of(context).size.width;
+          // 최소창(≈1430)에서 17, 넓을수록 23까지 선형 증가
+          const double minW = 1430;
+          const double maxW = 2200;
+          const double fsMin = 17; // 최소 화면에서의 글자 크기
+          const double fsMax = 23; // 최대 화면에서의 글자 크기
+          double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
+          final double bigFontSize = fsMin + (fsMax - fsMin) * t;
           return Container(
         margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
         padding: const EdgeInsets.all(16),
@@ -859,11 +867,11 @@ class StudentScreenState extends State<StudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+            Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
-            Text(big, style: TextStyle(color: accent, fontSize: 22, fontWeight: FontWeight.w800)),
+            Text(big, style: TextStyle(color: accent, fontSize: bigFontSize, fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
-            Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+            Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 14)),
           ],
         ),
           );
@@ -975,8 +983,16 @@ class StudentScreenState extends State<StudentScreen> {
                   final info = e.value;
                       Widget rightWidget;
                   if (isAttendance) {
+                    // 상태 폰트 반응형 크기 (최소창≈1430에서 12 → 넓을수록 16)
+                    final double screenW = MediaQuery.of(context).size.width;
+                    const double minW = 1430;
+                    const double maxW = 2200;
+                    const double fsMin = 12;
+                    const double fsMax = 16;
+                    double tFS = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
+                    final double statusFontSize = fsMin + (fsMax - fsMin) * tFS;
                     if (!info.isPresent) {
-                          rightWidget = const Text('무단결석', style: TextStyle(color: Color(0xFFE53E3E), fontSize: 13, fontWeight: FontWeight.w700));
+                          rightWidget = Text('무단결석', style: TextStyle(color: const Color(0xFFE53E3E), fontSize: statusFontSize, fontWeight: FontWeight.w700));
                     } else {
                       final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
                       final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
@@ -984,7 +1000,7 @@ class StudentScreenState extends State<StudentScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               if (info.isLate)
-                                const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontSize: 12, fontWeight: FontWeight.w700)),
+                                Text('지각', style: TextStyle(color: const Color(0xFFFF9800), fontSize: statusFontSize, fontWeight: FontWeight.w700)),
                             ],
                           );
                     }
