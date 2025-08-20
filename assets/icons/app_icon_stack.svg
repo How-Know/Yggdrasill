@@ -1,8 +1,17 @@
-<svg width="1024" height="1024" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <rect width="256" height="256" rx="40" fill="#1F1F1F"/>
-  <rect x="76" y="70" width="120" height="80" rx="12" fill="#232326" stroke="#2A2A2A"/>
-  <rect x="60" y="100" width="120" height="80" rx="12" fill="#1976D2"/>
-  <rect x="44" y="130" width="120" height="80" rx="12" fill="#64B5F6"/>
-  <circle cx="160" cy="156" r="12" fill="#FF9800" stroke="#1F1F1F" stroke-width="4"/>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background squircle -->
+  <rect width="256" height="256" rx="44" fill="#1F1F1F"/>
+
+  <!-- Back card (shadow/dark) -->
+  <rect x="84" y="58" width="112" height="82" rx="14" fill="#232326" stroke="#2A2A2A" stroke-width="2"/>
+
+  <!-- Middle card (primary) -->
+  <rect x="62" y="92" width="124" height="86" rx="16" fill="#1976D2"/>
+
+  <!-- Front card (accent) -->
+  <rect x="42" y="128" width="124" height="86" rx="16" fill="#64B5F6"/>
+
+  <!-- Group tag dot -->
+  <circle cx="178" cy="154" r="12" fill="#FF9800" stroke="#1F1F1F" stroke-width="4"/>
 </svg>
 
