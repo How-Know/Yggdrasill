@@ -203,9 +203,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _rotationAnimation = AnimationController(
-      duration: const Duration(milliseconds: 350),
+      duration: const Duration(milliseconds: 240),
       vsync: this,
     );
+    // 진단용: 애니메이션 진행도 및 상태 로깅
+    _rotationAnimation.addListener(() {
+      final v = _rotationAnimation.value;
+      if (v == 0.0 || v == 1.0) {
+        print('[SIDE_SHEET][controller.value]=$v');
+      }
+    });
+    _rotationAnimation.addStatusListener((status) {
+      print('[SIDE_SHEET][controller.status]=$status');
+    });
     _sideSheetAnimation = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(
         parent: _rotationAnimation,
@@ -303,6 +313,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _toggleSideSheet() {
+    print('[SIDE_SHEET] toggle requested. status=${_rotationAnimation.status} value=${_rotationAnimation.value}');
     if (_rotationAnimation.status == AnimationStatus.completed) {
       _rotationAnimation.reverse();
     } else {
@@ -360,8 +371,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             animation: _sideSheetAnimation,
             builder: (context, child) {
               final progress = _sideSheetAnimation.value;
-              final attendanceTargets = getTodayAttendanceTargets();
-              // 상태별 분류
+              if (progress <= 0.8) {
+                print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 숨김)');
+              } else {
+                print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 표시 시작)');
+              }
+              final attendanceTargets = progress > 0.8 ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
+              // 상태별 분류 (시트가 충분히 열린 뒤에만 실제 데이터 계산)
               final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
               final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList()
                 ..sort((a, b) {
@@ -375,8 +391,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final waiting = attendanceTargets.where((t) => !_attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
               // 출석 전 학생카드: 시작시간별 그룹핑
               final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
-              for (final t in waiting) {
-                waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
+              if (progress > 0.8) {
+                for (final t in waiting) {
+                  waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
+                }
               }
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
               Widget _ellipsisWrap(List<Widget> cards, {int maxLines = 2, double spacing = 8, double runSpacing = 8}) {
@@ -407,11 +425,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
               return AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 160),
                 curve: Curves.easeInOut,
                 width: containerWidth,
                 color: const Color(0xFF1F1F1F),
-                child: progress > 0.7
+                child: progress > 0.8
                   ? Column(
                       children: [
                         // 날짜/요일 표시

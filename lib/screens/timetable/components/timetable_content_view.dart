@@ -398,11 +398,164 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.max,
-                        children: [
+                      Builder(builder: (context) {
+                        final screenW = MediaQuery.of(context).size.width;
+                        final isNarrow = screenW <= 1600;
+                        if (isNarrow) {
+                          // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
+                          final double t = ((screenW - 1200) / 400).clamp(0.0, 1.0);
+                          final double h = 30 + (38 - 30) * t; // 1200px에서 30 → 1600px에서 38
+                          final double regW = 80 + (96 - 80) * t; // 등록 버튼 너비 80~96
+                          final double dropW = 30 + (38 - 30) * t; // 드롭다운 30~38
+                          final double dividerLineH = 16 + (22 - 16) * t; // 구분선 내부 라인 16~22
+                          final double searchW = 120 + (160 - 120) * t; // 검색바 너비 120~160
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  mainAxisSize: MainAxisSize.max,
+                                  children: [
+                                    // 수업 등록 버튼 (협소 화면 추가 축소)
+                                    SizedBox(
+                                      width: regW,
+                                      height: h,
+                                      child: Material(
+                                        color: const Color(0xFF1976D2),
+                                        borderRadius: const BorderRadius.only(
+                                          topLeft: Radius.circular(32),
+                                          bottomLeft: Radius.circular(32),
+                                          topRight: Radius.circular(6),
+                                          bottomRight: Radius.circular(6),
+                                        ),
+                                        child: InkWell(
+                                          borderRadius: const BorderRadius.only(
+                                            topLeft: Radius.circular(32),
+                                            bottomLeft: Radius.circular(32),
+                                            topRight: Radius.circular(6),
+                                            bottomRight: Radius.circular(6),
+                                          ),
+                                          onTap: widget.onRegisterPressed,
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            mainAxisSize: MainAxisSize.max,
+                                            children: const [
+                                              Icon(Icons.add, color: Colors.white, size: 16),
+                                              SizedBox(width: 6),
+                                              Text('등록', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    // 구분선
+                                    Container(
+                                      height: h,
+                                      width: 3.0,
+                                      color: Colors.transparent,
+                                      child: Center(
+                                        child: Container(
+                                          width: 2,
+                                          height: dividerLineH,
+                                          color: Colors.white.withOpacity(0.1),
+                                        ),
+                                      ),
+                                    ),
+                                    // 드롭다운 버튼
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 2.5),
+                                      child: GestureDetector(
+                                        key: _dropdownButtonKey,
+                                        onTap: () {
+                                          if (_dropdownOverlay == null) {
+                                            widget.onDropdownOpenChanged(true);
+                                            _showDropdownMenu();
+                                          } else {
+                                            _removeDropdownMenu();
+                                          }
+                                        },
+                                        child: AnimatedContainer(
+                                          duration: const Duration(milliseconds: 350),
+                                          width: dropW,
+                                          height: h,
+                                          decoration: ShapeDecoration(
+                                            color: const Color(0xFF1976D2),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: widget.isDropdownOpen
+                                                ? BorderRadius.circular(50)
+                                                : const BorderRadius.only(
+                                                    topLeft: Radius.circular(6),
+                                                    bottomLeft: Radius.circular(6),
+                                                    topRight: Radius.circular(32),
+                                                    bottomRight: Radius.circular(32),
+                                                  ),
+                                            ),
+                                          ),
+                                          child: Center(
+                                            child: AnimatedRotation(
+                                              turns: widget.isDropdownOpen ? 0.5 : 0.0,
+                                              duration: const Duration(milliseconds: 350),
+                                              curve: Curves.easeInOut,
+                                              child: const Icon(
+                                                Icons.keyboard_arrow_down,
+                                                color: Colors.white,
+                                                size: 20,
+                                                key: ValueKey('arrow'),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: SizedBox(
+                                    height: h,
+                                    child: SearchBar(
+                                      controller: _searchController,
+                                      onChanged: _onSearchChanged,
+                                      hintText: '검색',
+                                      leading: const Icon(
+                                        Icons.search,
+                                        color: Colors.white70,
+                                        size: 24,
+                                      ),
+                                      backgroundColor: MaterialStateColor.resolveWith(
+                                        (states) => const Color(0xFF2A2A2A),
+                                      ),
+                                      elevation: MaterialStateProperty.all(0),
+                                      padding: const MaterialStatePropertyAll<EdgeInsets>(
+                                        EdgeInsets.symmetric(horizontal: 18.0),
+                                      ),
+                                      textStyle: const MaterialStatePropertyAll<TextStyle>(
+                                        TextStyle(color: Colors.white, fontSize: 16.5),
+                                      ),
+                                      hintStyle: const MaterialStatePropertyAll<TextStyle>(
+                                        TextStyle(color: Colors.white54, fontSize: 16.5),
+                                      ),
+                                      side: MaterialStatePropertyAll<BorderSide>(
+                                        BorderSide(color: Colors.white.withOpacity(0.2), width: 1, style: BorderStyle.solid),
+                                      ),
+                                      constraints: BoxConstraints(minHeight: h, maxHeight: h),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                        // 넓은 화면: 기존 레이아웃 유지
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.max,
+                          children: [
                           // 수업 등록 버튼
                           SizedBox(
                             width: 113,
@@ -503,12 +656,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 children: [
                                   SizedBox(width: 16),
                                   SizedBox(
-                                    width: 170,
-                                    height: 48,
+                                    width: 150,
+                                    height: 40,
                                     child: SearchBar(
                                       controller: _searchController,
                                       onChanged: _onSearchChanged,
-                                      hintText: '학생 검색',
+                                      hintText: '검색',
                                       leading: const Icon(
                                         Icons.search,
                                         color: Colors.white70,
@@ -531,8 +684,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         BorderSide(color: Colors.white.withOpacity(0.2), width: 1, style: BorderStyle.solid),
                                       ),
                                       constraints: const BoxConstraints(
-                                        minHeight: 50,
-                                        maxHeight: 50,
+                                        minHeight: 40,
+                                        maxHeight: 40,
                                       ),
                                     ),
                                   ),
@@ -541,7 +694,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             ),
                           ),
                         ],
-                      ),
+                      );
+                      }),
                       // 학생카드 리스트 위에 요일+시간 출력
                       if (_searchQuery.isNotEmpty && _searchResults.isNotEmpty)
                         Expanded(
@@ -856,7 +1010,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             padding: const EdgeInsets.only(top: 12, right: 8),
                             child: Row(
                               children: [
-                                Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                                if (MediaQuery.of(context).size.width > 1600)
+                                  Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                                 SizedBox(width: 6),
                                 Tooltip(
                                   message: '수업 등록 모드',

@@ -305,7 +305,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               '그룹 목록',
                               style: TextStyle(
                                 color: Colors.grey,
-                                fontSize: 27,
+                                fontSize: 26,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),

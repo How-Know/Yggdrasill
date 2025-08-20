@@ -352,10 +352,14 @@ class StudentScreenState extends State<StudentScreen> {
               Row(
                 children: [
                   const SizedBox(width: 24),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
+                  // 좌측: 등록 버튼 (고정 너비, 왼쪽 정렬)
+                  SizedBox(
+                    width: 131, // 고정 너비 (등록 버튼)
+                    child: Align(
+                      alignment: Alignment.centerLeft,
                       child: SizedBox(
                         width: 131,
+                        height: 44,
                         child: FilledButton.icon(
                           onPressed: () {
                             showStudentRegistrationDialog();
@@ -369,7 +373,7 @@ class StudentScreenState extends State<StudentScreen> {
                           ),
                           icon: const Icon(Icons.add, size: 26),
                           label: const Text(
-                        '등록 ',
+                            '등록 ',
                             style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w500,
@@ -378,60 +382,51 @@ class StudentScreenState extends State<StudentScreen> {
                         ),
                       ),
                     ),
-                  Expanded(
+                  ),
+                  const SizedBox(width: 8),
+                  // 우측: 검색 바 (고정 너비, 등록 버튼과 동일 너비, 왼쪽 정렬로 바로 붙임)
+                  SizedBox(
+                    width: 131, // 고정 너비 (검색 바)
                     child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          LayoutBuilder(
-                            builder: (context, c) {
-                              final screenW = MediaQuery.of(context).size.width;
-                              final double w = (screenW * 0.18).clamp(160.0, 320.0);
-                              return SizedBox(
-                                width: w,
-                                child: SearchBar(
-                                  controller: _searchController,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _searchQuery = value;
-                                    });
-                                  },
-                                  hintText: '학생 검색',
-                                  leading: const Icon(
-                                    Icons.search,
-                                    color: Colors.white70,
-                                    size: 24,
-                                  ),
-                                  backgroundColor: MaterialStateColor.resolveWith(
-                                    (states) => const Color(0xFF2A2A2A),
-                                  ),
-                                  elevation: MaterialStateProperty.all(0),
-                                  padding: const MaterialStatePropertyAll<EdgeInsets>(
-                                    EdgeInsets.symmetric(horizontal: 18.0),
-                                  ),
-                                  textStyle: const MaterialStatePropertyAll<TextStyle>(
-                                    TextStyle(color: Colors.white, fontSize: 16.5),
-                                  ),
-                                  hintStyle: MaterialStatePropertyAll<TextStyle>(
-                                    TextStyle(color: Colors.white54, fontSize: 16.5),
-                                  ),
-                                  side: MaterialStatePropertyAll<BorderSide>(
-                                    BorderSide(color: Colors.white.withOpacity(0.2)),
-                                  ),
-                                  constraints: const BoxConstraints(
-                                    minHeight: 44,
-                                    maxHeight: 44,
-                                  ),
-                                ),
-                              );
-                            },
+                      alignment: Alignment.centerLeft,
+                      child: SizedBox(
+                        height: 44,
+                        child: SearchBar(
+                          controller: _searchController,
+                          onChanged: (value) {
+                            setState(() {
+                              _searchQuery = value;
+                            });
+                          },
+                          hintText: '검색',
+                          leading: const Icon(
+                            Icons.search,
+                            color: Colors.white70,
+                            size: 24,
                           ),
-                          const SizedBox(width: 24),
-                        ],
+                          backgroundColor: MaterialStateColor.resolveWith(
+                            (states) => const Color(0xFF2A2A2A),
+                          ),
+                          elevation: MaterialStateProperty.all(0),
+                          padding: const MaterialStatePropertyAll<EdgeInsets>(
+                            EdgeInsets.symmetric(horizontal: 18.0),
+                          ),
+                          textStyle: const MaterialStatePropertyAll<TextStyle>(
+                            TextStyle(color: Colors.white, fontSize: 16.5),
+                          ),
+                          hintStyle: const MaterialStatePropertyAll<TextStyle>(
+                            TextStyle(color: Colors.white54, fontSize: 16.5),
+                          ),
+                          side: MaterialStatePropertyAll<BorderSide>(
+                            BorderSide(color: Colors.white.withOpacity(0.2)),
+                          ),
+                          constraints: const BoxConstraints(minHeight: 44, maxHeight: 44),
+                        ),
                       ),
                     ),
                   ),
+                  const Spacer(),
+                  const SizedBox(width: 24),
                 ],
               ),
           if (_customTabIndex == 0)
