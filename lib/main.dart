@@ -30,27 +30,36 @@ void main() async {
     databaseFactory = databaseFactoryFfi;
   }
   final prefs = await SharedPreferences.getInstance();
-  final maximize = prefs.getBool('fullscreen_enabled') ?? false;
+  final fullscreen = prefs.getBool('fullscreen_enabled') ?? false;
+  final maximizeFlag = prefs.getBool('maximize_enabled') ?? false;
   // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
   // Surface Pro 12" (2196x1464 @150% → 1464x976) 의 95% 기준 최소 크기
   const Size kMinSize = Size(1430, 950);
   final windowOptions = WindowOptions(
     minimumSize: kMinSize,
-    size: maximize ? null : kMinSize,
-    center: !maximize,
+    size: (fullscreen || maximizeFlag) ? null : kMinSize,
+    center: !(fullscreen || maximizeFlag),
   );
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
-    if (maximize) {
+    if (fullscreen || maximizeFlag) {
       // 일부 플랫폼에서 show 직후 maximize 타이밍 이슈가 있어 약간 지연
       await Future.delayed(const Duration(milliseconds: 60));
-      await windowManager.maximize();
+      if (fullscreen) {
+        try {
+          await windowManager.setFullScreen(true);
+        } catch (_) {
+          await windowManager.maximize();
+        }
+      } else {
+        await windowManager.maximize();
+      }
     } else {
       await windowManager.center();
     }
     await windowManager.focus();
   });
-  runApp(MyApp(maximizeOnStart: maximize));
+  runApp(MyApp(maximizeOnStart: fullscreen || maximizeFlag));
 }
 
 class MyApp extends StatelessWidget {

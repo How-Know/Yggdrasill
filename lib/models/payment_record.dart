@@ -4,6 +4,7 @@ class PaymentRecord {
   final int cycle;
   final DateTime dueDate; // 수업료를 내야하는 날짜
   final DateTime? paidDate; // 실제로 납부한 날짜
+  final String? postponeReason; // 연기 사유
 
   PaymentRecord({
     this.id,
@@ -11,6 +12,7 @@ class PaymentRecord {
     required this.cycle,
     required this.dueDate,
     this.paidDate,
+    this.postponeReason,
   });
 
   Map<String, dynamic> toMap() {
@@ -20,6 +22,7 @@ class PaymentRecord {
       'cycle': cycle,
       'due_date': dueDate.millisecondsSinceEpoch,
       'paid_date': paidDate?.millisecondsSinceEpoch,
+      'postpone_reason': postponeReason,
     };
   }
 
@@ -32,6 +35,7 @@ class PaymentRecord {
       paidDate: map['paid_date'] != null 
         ? DateTime.fromMillisecondsSinceEpoch(map['paid_date'])
         : null,
+      postponeReason: map['postpone_reason'] as String?,
     );
   }
 
@@ -41,6 +45,7 @@ class PaymentRecord {
     int? cycle,
     DateTime? dueDate,
     DateTime? paidDate,
+    String? postponeReason,
   }) {
     return PaymentRecord(
       id: id ?? this.id,
@@ -48,6 +53,7 @@ class PaymentRecord {
       cycle: cycle ?? this.cycle,
       dueDate: dueDate ?? this.dueDate,
       paidDate: paidDate ?? this.paidDate,
+      postponeReason: postponeReason ?? this.postponeReason,
     );
   }
 }

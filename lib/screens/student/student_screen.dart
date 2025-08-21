@@ -391,60 +391,73 @@ class StudentScreenState extends State<StudentScreen> {
                       alignment: Alignment.centerLeft,
                       child: SizedBox(
                         height: 44,
-                        child: SearchBar(
-                          controller: _searchController,
-                          onChanged: (value) {
-                            setState(() {
-                              _searchQuery = value;
-                            });
-                          },
-                          hintText: '검색',
-                          leading: const Padding(
-                            padding: EdgeInsets.only(left: 6, right: 4),
-                            child: Icon(
-                              Icons.search,
-                              color: Colors.white70,
-                              size: 20,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            SearchBar(
+                              controller: _searchController,
+                              onChanged: (value) {
+                                setState(() {
+                                  _searchQuery = value;
+                                });
+                              },
+                              hintText: '',
+                              leading: const Padding(
+                                padding: EdgeInsets.only(left: 6, right: 4),
+                                child: Icon(
+                                  Icons.search,
+                                  color: Colors.white70,
+                                  size: 20,
+                                ),
+                              ),
+                              trailing: [
+                                if (_searchQuery.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 4),
+                                    child: IconButton(
+                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                      tooltip: '지우기',
+                                      icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                      onPressed: () {
+                                        print('[DEBUG][StudentScreen] 검색어 초기화 버튼 클릭');
+                                        setState(() {
+                                          _searchController.clear();
+                                          _searchQuery = '';
+                                        });
+                                        FocusScope.of(context).unfocus();
+                                      },
+                                    ),
+                                  ),
+                              ],
+                              backgroundColor: MaterialStateColor.resolveWith(
+                                (states) => const Color(0xFF2A2A2A),
+                              ),
+                              elevation: MaterialStateProperty.all(0),
+                              padding: const MaterialStatePropertyAll<EdgeInsets>(
+                                EdgeInsets.symmetric(horizontal: 10.0),
+                              ),
+                              textStyle: const MaterialStatePropertyAll<TextStyle>(
+                                TextStyle(color: Colors.white, fontSize: 16.5),
+                              ),
+                              hintStyle: const MaterialStatePropertyAll<TextStyle>(
+                                TextStyle(color: Colors.white54, fontSize: 16.5),
+                              ),
+                              side: MaterialStatePropertyAll<BorderSide>(
+                                BorderSide(color: Colors.white.withOpacity(0.2)),
+                              ),
+                              constraints: const BoxConstraints(minHeight: 44, maxHeight: 44),
                             ),
-                          ),
-                          trailing: [
-                            if (_searchQuery.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: IconButton(
-                                  visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                                  tooltip: '지우기',
-                                  icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-                                  onPressed: () {
-                                    print('[DEBUG][StudentScreen] 검색어 초기화 버튼 클릭');
-                                    setState(() {
-                                      _searchController.clear();
-                                      _searchQuery = '';
-                                    });
-                                    FocusScope.of(context).unfocus();
-                                  },
+                            if (_searchQuery.isEmpty)
+                              IgnorePointer(
+                                child: Text(
+                                  '검색',
+                                  style: const TextStyle(color: Colors.white54, fontSize: 16.5),
+                                  textAlign: TextAlign.center,
                                 ),
                               ),
                           ],
-                          backgroundColor: MaterialStateColor.resolveWith(
-                            (states) => const Color(0xFF2A2A2A),
-                          ),
-                          elevation: MaterialStateProperty.all(0),
-                          padding: const MaterialStatePropertyAll<EdgeInsets>(
-                            EdgeInsets.symmetric(horizontal: 10.0),
-                          ),
-                          textStyle: const MaterialStatePropertyAll<TextStyle>(
-                            TextStyle(color: Colors.white, fontSize: 16.5),
-                          ),
-                          hintStyle: const MaterialStatePropertyAll<TextStyle>(
-                            TextStyle(color: Colors.white54, fontSize: 16.5),
-                          ),
-                          side: MaterialStatePropertyAll<BorderSide>(
-                            BorderSide(color: Colors.white.withOpacity(0.2)),
-                          ),
-                          constraints: const BoxConstraints(minHeight: 44, maxHeight: 44),
                         ),
                       ),
                     ),
@@ -656,13 +669,14 @@ class StudentScreenState extends State<StudentScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // 헤더
+                        const SizedBox(height: 18),
                         const Padding(
                           padding: EdgeInsets.all(8),
                           child: Text(
                             '학생 목록',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
+                              color: Colors.grey,
+                              fontSize: 22,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -2015,15 +2029,12 @@ class StudentScreenState extends State<StudentScreen> {
                   final cycleNumber = _calculateCycleNumber(registrationDate, paymentDate);
                   final record = DataManager.instance.getPaymentRecord(studentWithInfo.student.id, cycleNumber);
 
-                  final monthDiff = (month.year - currentMonth.year) * 12 + (month.month - currentMonth.month);
-                  String label;
-                  if (monthDiff == 0) {
-                    label = '이번달';
-                  } else if (monthDiff < 0) {
-                    label = '${monthDiff.abs()}달전';
-                  } else {
-                    label = '${monthDiff}달후';
-                  }
+                  // 라벨: 상대 월 표기 대신 사이클 번호로 표시
+                  final String label = '${cycleNumber}번째';
+
+                  // 기본 예정일(등록일 기준)과 변경 여부 계산
+                  final defaultDue = DateTime(month.year, month.month, registrationDate.day);
+                  final bool isChanged = record != null && record!.dueDate.millisecondsSinceEpoch != defaultDue.millisecondsSinceEpoch;
 
                   return GestureDetector(
                     onTap: () => _showPaymentDatePicker(
@@ -2047,7 +2058,7 @@ class StudentScreenState extends State<StudentScreen> {
                               style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                             ),
                           ),
-                          // 라벨
+                          // 사이클 라벨
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -2057,10 +2068,22 @@ class StudentScreenState extends State<StudentScreen> {
                             child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
                           ),
                           const Spacer(),
-                          // 예정일
-                          Text(
-                            '예정 ${paymentDate.month}/${paymentDate.day}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                          // 예정일 + 변경됨 배지(사유 툴팁)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '예정 ${paymentDate.month}/${paymentDate.day}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                              ),
+                              if (isChanged) ...[
+                                const SizedBox(width: 6),
+                                Tooltip(
+                                  message: (record?.postponeReason ?? '').isNotEmpty ? record!.postponeReason! : '납부 예정일이 변경되었습니다.',
+                                  child: const Text('변경됨', style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                                ),
+                              ],
+                            ],
                           ),
                           const SizedBox(width: 12),
                           // 실제 납부일 or 미납
@@ -2188,6 +2211,7 @@ class StudentScreenState extends State<StudentScreen> {
         cycle: record.cycle,
         dueDate: record.dueDate,
         paidDate: picked,
+        postponeReason: record.postponeReason,
       );
 
       if (record.id != null) {
@@ -2235,10 +2259,7 @@ class StudentScreenState extends State<StudentScreen> {
       // 모든 달이 납부 완료된 경우
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('수정 가능한 미납부 월이 없습니다.'),
-            backgroundColor: Colors.orange,
-          ),
+          const SnackBar(content: Text('모든 달이 납부 완료되었습니다.')),
         );
       }
       return;
@@ -2249,82 +2270,70 @@ class StudentScreenState extends State<StudentScreen> {
     final currentDueDate = currentRecord?.dueDate ?? 
         DateTime(earliestUnpaidMonth.year, earliestUnpaidMonth.month, registrationDate.day);
 
-    // 3. 날짜 선택 다이얼로그 표시
-    // 1번째 사이클의 경우 수강등록일 이후만 선택 가능하도록 제한
-    final firstSelectableDate = earliestUnpaidCycle == 1 ? registrationDate : DateTime(2000);
-    
-    final DateTime? pickedDate = await showDatePicker(
+    // 3. 날짜 선택 다이얼로그
+    final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: currentDueDate.isBefore(firstSelectableDate) ? firstSelectableDate : currentDueDate,
-      firstDate: firstSelectableDate,
-      lastDate: DateTime(2101),
+      initialDate: currentDueDate,
+      firstDate: DateTime(now.year, now.month),
+      lastDate: DateTime(now.year + 2),
       locale: const Locale('ko', 'KR'),
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF1976D2),
-              onPrimary: Colors.white,
-              surface: Color(0xFF2A2A2A),
-              onSurface: Colors.white,
-            ),
+            colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+            dialogBackgroundColor: const Color(0xFF18181A),
           ),
           child: child!,
         );
       },
-      helpText: earliestUnpaidCycle == 1 
-        ? '${earliestUnpaidMonth.month}월 납부일 수정 (수강등록일 이후만 가능)'
-        : '${earliestUnpaidMonth.month}월 납부일 수정',
     );
 
-    if (pickedDate != null) {
-      // 4-1. 1번째 사이클의 경우 수강등록일 이전으로 설정할 수 없도록 방어
-      if (earliestUnpaidCycle == 1 && pickedDate.isBefore(registrationDate)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('1번째 사이클 결제일은 수강등록일(${registrationDate.month}/${registrationDate.day}) 이전으로 설정할 수 없습니다.'),
-              backgroundColor: Colors.red,
-              behavior: SnackBarBehavior.floating,
+    if (picked == null) return;
+
+    // 3-1. 연기 사유 입력 다이얼로그 (선택)
+    final reasonController = TextEditingController();
+    final String? reason = await showDialog<String?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        title: const Text('연기 사유 입력', style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 380,
+          child: TextField(
+            controller: reasonController,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: '연기 사유를 입력하세요 (선택)',
+              hintStyle: TextStyle(color: Colors.white38),
+              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
             ),
-          );
-        }
-        return;
-      }
-      
-      // 4-2. 선택한 날짜로 해당 사이클 업데이트 또는 추가
-      final updatedRecord = PaymentRecord(
-        id: currentRecord?.id,
-        studentId: _selectedStudent!.student.id,
-        cycle: earliestUnpaidCycle,
-        dueDate: pickedDate,
-        paidDate: currentRecord?.paidDate, // 기존 납부일 유지
-      );
-
-      if (currentRecord?.id != null) {
-        await DataManager.instance.updatePaymentRecord(updatedRecord);
-      } else {
-        await DataManager.instance.addPaymentRecord(updatedRecord);
-      }
-
-      // 5. 이후 월들의 납부 예정일 재계산 및 업데이트
-      await _recalculateSubsequentPaymentDates(
-        _selectedStudent!.student.id, 
-        registrationDate, 
-        earliestUnpaidCycle, 
-        pickedDate
-      );
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${earliestUnpaidMonth.month}월 납부일이 ${pickedDate.month}/${pickedDate.day}로 수정되었습니다.'),
-            backgroundColor: Colors.green,
           ),
-        );
-      }
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('건너뛰기', style: TextStyle(color: Colors.white70))),
+          FilledButton(onPressed: () => Navigator.of(context).pop(reasonController.text.trim().isEmpty ? null : reasonController.text.trim()), child: const Text('확인')),
+        ],
+      ),
+    );
+
+    // 4-2. 선택한 날짜로 해당 사이클 업데이트 또는 추가
+    final updatedRecord = PaymentRecord(
+      id: currentRecord?.id,
+      studentId: _selectedStudent!.student.id,
+      cycle: earliestUnpaidCycle,
+      dueDate: picked,
+      paidDate: currentRecord?.paidDate,
+      postponeReason: reason,
+    );
+
+    if (currentRecord?.id != null) {
+      await DataManager.instance.updatePaymentRecord(updatedRecord);
+    } else {
+      await DataManager.instance.addPaymentRecord(updatedRecord);
     }
+
+    if (mounted) setState(() {});
   }
 
   // 이후 월들의 납부 예정일 재계산

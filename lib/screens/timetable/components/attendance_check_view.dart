@@ -304,8 +304,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                                           _menuItem('skip_cancel', '휴강 취소'),
                                         ]
                                       : [
-                                          _menuItem('replace', '이번 회차만 변경'),
-                                          _menuItem('skip', '이번 회차 건너뛰기'),
+                                          _menuItem('replace', '보강'),
+                                          _menuItem('skip', '휴강'),
                                         ],
                            );
                            if (selected == null) return;
@@ -2194,7 +2194,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 카드 탭으로 메뉴 열기 (버튼 제거 대체)
     // 기본: 원본 카드만 메뉴 허용. 단, 휴강 고스트 카드는 미래 일정에 한해 '휴강 취소' 허용
     final bool isSkipGhost = !isReplacement && isGhost && _hasSkipOverrideFor(session);
-    final bool canShowMenu = (!isGhost && !isPast) || (isSkipGhost && !isPast);
+    // 무단결석 카드도 메뉴 허용, 출석 완료/등원 상태는 방어 다이얼로그 처리
+    final bool canShowMenu = (!isGhost && !isPast) || (isSkipGhost && !isPast) || session.attendanceStatus == AttendanceStatus.absent;
     Offset? tapDownPosition;
     // 카드(1~3행)만 탭 영역으로, 체크박스(4행)는 카드 아래에 분리된 영역
     final interactive = Container(
@@ -2208,7 +2209,17 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
               behavior: HitTestBehavior.opaque,
               onTapDown: (details) => tapDownPosition = details.globalPosition,
               onTap: () async {
-                if (!canShowMenu || tapDownPosition == null) return;
+                if (tapDownPosition == null) return;
+                if (!canShowMenu) {
+                  // 리스트에서와 동일한 방어 다이얼로그
+                  final now = DateTime.now();
+                  final isPast = session.dateTime.isBefore(now);
+                  final hasAttendance = session.attendanceStatus == AttendanceStatus.arrived || session.attendanceStatus == AttendanceStatus.completed;
+                  if (isPast && hasAttendance) {
+                    await _showInfoDialog('이미 지난 수업이며 출석이 기록된 회차는 보강을 생성할 수 없습니다.');
+                  }
+                  return;
+                }
                 final selected = await showMenu<String>(
                   context: context,
                   position: RelativeRect.fromLTRB(
@@ -2228,8 +2239,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                               _menuItem('skip_cancel', '휴강 취소'),
                             ]
                           : [
-                              _menuItem('replace', '이번 회차만 변경'),
-                              _menuItem('skip', '이번 회차 건너뛰기'),
+                              _menuItem('replace', '보강'),
+                              _menuItem('skip', '휴강'),
                             ],
                 );
                 if (selected == null) return;

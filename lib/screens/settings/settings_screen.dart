@@ -128,6 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _isTabAnimating = false;
   bool _fullscreenEnabled = false; // [추가] 전체화면 스위치 상태
+  bool _maximizeEnabled = false; // [추가] 최대창 시작 스위치 상태
   ThemeMode _selectedThemeMode = ThemeMode.dark; // [추가] 테마 선택 상태
 
   @override
@@ -141,6 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _fullscreenEnabled = prefs.getBool('fullscreen_enabled') ?? false;
+      _maximizeEnabled = prefs.getBool('maximize_enabled') ?? false;
     });
   }
 
@@ -239,10 +241,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                FutureBuilder<String?>(
-                  future: SharedPreferences.getInstance().then((p) => p.getString('openai_api_key')),
+                FutureBuilder<Map<String, String?>>( 
+                  future: () async {
+                    final prefs = await SharedPreferences.getInstance();
+                    final mem = prefs.getString('openai_api_key');
+                    // DB fallback
+                    String? dbKey;
+                    try {
+                      final db = await AcademyDbService.instance.db;
+                      final rows = await db.query('academy_settings', where: 'id = ?', whereArgs: [1]);
+                      if (rows.isNotEmpty) dbKey = rows.first['openai_api_key'] as String?;
+                    } catch (_) {}
+                    return {'prefs': mem, 'db': dbKey};
+                  }(),
                   builder: (context, snapshot) {
-                    final initial = snapshot.data ?? '';
+                    final initial = (snapshot.data?['prefs'] ?? snapshot.data?['db']) ?? '';
                     final controller = TextEditingController(text: initial);
                     return Row(
                       children: [
@@ -294,9 +307,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 backgroundColor: Color(0xFF1976D2),
                               ));
                             }
+                            setState(() {}); // 상태표시 리프레시
                           },
                           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
                           child: const Text('저장'),
+                        ),
+                        const SizedBox(width: 8),
+                        FutureBuilder<String?>(
+                          future: SharedPreferences.getInstance().then((p) => p.getString('openai_api_key')),
+                          builder: (context, snap) {
+                            final hasKey = (snap.data != null && (snap.data ?? '').isNotEmpty);
+                            return Row(children: [
+                              Icon(hasKey ? Icons.check_circle : Icons.error_outline, color: hasKey ? Colors.lightGreen : Colors.orangeAccent, size: 18),
+                              const SizedBox(width: 6),
+                              Text(hasKey ? '사용 중' : '미사용', style: const TextStyle(color: Colors.white70)),
+                            ]);
+                          },
                         ),
                       ],
                     );
@@ -478,9 +504,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (bool value) async {
                     setState(() {
                       _fullscreenEnabled = value;
+                      if (value) _maximizeEnabled = false; // 상호 배타
                     });
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setBool('fullscreen_enabled', value);
+                    if (value) await prefs.setBool('maximize_enabled', false);
+                  },
+                  activeColor: const Color(0xFF1976D2),
+                ),
+                SwitchListTile(
+                  title: const Text(
+                    '최대창으로 시작',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                  subtitle: const Text(
+                    '프로그램 시작시 최대화된 창으로 시작합니다.',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  value: _maximizeEnabled,
+                  onChanged: (bool value) async {
+                    setState(() {
+                      _maximizeEnabled = value;
+                      if (value) _fullscreenEnabled = false; // 상호 배타
+                    });
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('maximize_enabled', value);
+                    if (value) await prefs.setBool('fullscreen_enabled', false);
                   },
                   activeColor: const Color(0xFF1976D2),
                 ),
@@ -1988,15 +2037,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: ReorderableListView(
                         buildDefaultDragHandles: false,
                         proxyDecorator: (child, index, animation) {
+                          // 드래그 피드백 크기 과대 표시 이슈 해결: 외부 Padding 제거
+                          Widget feedback = child;
+                          if (feedback is Padding) {
+                            final inner = feedback.child;
+                            if (inner != null) {
+                              feedback = inner;
+                            }
+                          }
                           return Material(
                             color: Colors.transparent,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF23232A),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: child,
-                            ),
+                            child: feedback,
                           );
                         },
                         onReorder: (oldIndex, newIndex) {

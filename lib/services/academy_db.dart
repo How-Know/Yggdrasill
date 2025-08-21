@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 24,
+        version: 25,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -134,6 +134,7 @@ class AcademyDbService {
             cycle INTEGER,
             due_date INTEGER,
             paid_date INTEGER,
+            postpone_reason TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -391,9 +392,23 @@ class AcademyDbService {
               cycle INTEGER,
               due_date INTEGER,
               paid_date INTEGER,
+              postpone_reason TEXT,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
+        }
+        // v25: payment_records.postpone_reason 컬럼 보정 추가
+        if (oldVersion < 25) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(payment_records)");
+            final hasPostpone = cols.any((c) => c['name'] == 'postpone_reason');
+            if (!hasPostpone) {
+              await db.execute('ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
+              print('[DB][마이그레이션] v25: payment_records.postpone_reason 추가 완료');
+            }
+          } catch (e, st) {
+            print('[DB][마이그레이션][에러] v25 postpone_reason 추가 실패: $e\n$st');
+          }
         }
         if (oldVersion < 10) {
           await db.execute('''
@@ -1563,6 +1578,7 @@ class AcademyDbService {
             cycle INTEGER,
             due_date INTEGER,
             paid_date INTEGER,
+            postpone_reason TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -1570,6 +1586,13 @@ class AcademyDbService {
         print('[DEBUG] payment_records 테이블 생성 완료');
       } else {
         print('[DEBUG] payment_records 테이블이 이미 존재함');
+        // 컬럼 존재 여부 점검 후 없으면 추가
+        final columns = await dbClient.rawQuery("PRAGMA table_info(payment_records)");
+        final hasPostpone = columns.any((col) => col['name'] == 'postpone_reason');
+        if (!hasPostpone) {
+          print('[DB][마이그레이션] payment_records.postpone_reason 컬럼 추가');
+          await dbClient.execute('ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
+        }
       }
     } catch (e) {
       print('[ERROR] payment_records 테이블 확인/생성 중 오류: $e');
