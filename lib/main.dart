@@ -600,36 +600,148 @@ class _MemoPanel extends StatelessWidget {
                     final m = memos[index];
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
-                      child: Tooltip(
-                        message: m.summary.isNotEmpty ? m.summary : m.original,
-                        waitDuration: const Duration(milliseconds: 200),
-                        child: InkWell(
-                          onTap: () => onEditMemo(m),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2A2A2A),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              m.original,
-                              maxLines: 6,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.white70, fontSize: memoFontSize, height: 1.2),
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: _MemoItemWidget(memo: m, memoFontSize: memoFontSize, onEdit: () => onEditMemo(m)),
                     );
                   },
                 );
               },
             ),
           ),
+          const Divider(height: 1, color: Colors.white10),
+          SizedBox(
+            height: 40,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await showDialog(
+                      context: context,
+                      builder: (context) {
+                        return AlertDialog(
+                          backgroundColor: const Color(0xFF18181A),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          title: const Text('메모 목록', style: TextStyle(color: Colors.white)),
+                          content: SizedBox(
+                            width: 520,
+                            height: 420,
+                            child: ValueListenableBuilder<List<Memo>>(
+                              valueListenable: memosListenable,
+                              builder: (context, memos, _) {
+                                if (memos.isEmpty) return const Center(child: Text('메모 없음', style: TextStyle(color: Colors.white54)));
+                                return ListView.separated(
+                                  itemCount: memos.length,
+                                  separatorBuilder: (_, __) => const Divider(color: Colors.white10),
+                                  itemBuilder: (context, i) {
+                                    final m = memos[i];
+                                    return ListTile(
+                                      dense: true,
+                                      title: Text(m.summary.isNotEmpty ? m.summary : m.original, style: const TextStyle(color: Colors.white)),
+                                      subtitle: Row(
+                                        children: [
+                                          Text('${m.createdAt.month}/${m.createdAt.day}', style: const TextStyle(color: Colors.white54)),
+                                          if (m.scheduledAt != null) ...[
+                                            const SizedBox(width: 12),
+                                            Text('일정 ${m.scheduledAt!.month}/${m.scheduledAt!.day} ${m.scheduledAt!.hour.toString().padLeft(2,'0')}:${m.scheduledAt!.minute.toString().padLeft(2,'0')}', style: const TextStyle(color: Colors.white38)),
+                                          ]
+                                        ],
+                                      ),
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                        onPressed: () async {
+                                          await DataManager.instance.deleteMemo(m.id);
+                                        },
+                                      ),
+                                      onTap: () => onEditMemo(m),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                          ),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                  icon: const Icon(Icons.list, color: Colors.white70, size: 18),
+                  label: const Text('list', style: TextStyle(color: Colors.white70)),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     ));
+  }
+}
+
+class _MemoItemWidget extends StatefulWidget {
+  final Memo memo;
+  final double memoFontSize;
+  final VoidCallback onEdit;
+  const _MemoItemWidget({required this.memo, required this.memoFontSize, required this.onEdit});
+
+  @override
+  State<_MemoItemWidget> createState() => _MemoItemWidgetState();
+}
+
+class _MemoItemWidgetState extends State<_MemoItemWidget> {
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.memo;
+    final content = InkWell(
+      onTap: widget.onEdit,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 상단: 생성일 + 삭제 버튼
+            Row(
+              children: [
+                Text(
+                  '${m.createdAt.month}/${m.createdAt.day}',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: '삭제',
+                  onPressed: () async {
+                    await DataManager.instance.deleteMemo(m.id);
+                  },
+                  icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                )
+              ],
+            ),
+            // 본문: 요약(없으면 원문)
+            Text(
+              (m.summary.isNotEmpty ? m.summary : m.original),
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: Colors.white70, fontSize: widget.memoFontSize, height: 1.2),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (m.scheduledAt != null) {
+      final tooltip = '일정: ${m.scheduledAt!.month}/${m.scheduledAt!.day} ${m.scheduledAt!.hour.toString().padLeft(2, '0')}:${m.scheduledAt!.minute.toString().padLeft(2, '0')}';
+      return Tooltip(message: tooltip, waitDuration: const Duration(milliseconds: 150), child: content);
+    }
+    return content;
   }
 }
 

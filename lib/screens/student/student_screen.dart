@@ -2311,11 +2311,20 @@ class StudentScreenState extends State<StudentScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('건너뛰기', style: TextStyle(color: Colors.white70))),
-          FilledButton(onPressed: () => Navigator.of(context).pop(reasonController.text.trim().isEmpty ? null : reasonController.text.trim()), child: const Text('확인')),
+          TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(reasonController.text),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            child: const Text('확인'),
+          ),
         ],
       ),
     );
+
+    // 취소 시 전체 변경 취소
+    if (reason == null) return;
+
+    final String? normalizedReason = reason.trim().isEmpty ? null : reason.trim();
 
     // 4-2. 선택한 날짜로 해당 사이클 업데이트 또는 추가
     final updatedRecord = PaymentRecord(
@@ -2324,7 +2333,7 @@ class StudentScreenState extends State<StudentScreen> {
       cycle: earliestUnpaidCycle,
       dueDate: picked,
       paidDate: currentRecord?.paidDate,
-      postponeReason: reason,
+      postponeReason: normalizedReason,
     );
 
     if (currentRecord?.id != null) {

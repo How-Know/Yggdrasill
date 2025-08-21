@@ -371,12 +371,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             animation: _sideSheetAnimation,
             builder: (context, child) {
               final progress = _sideSheetAnimation.value;
-              if (progress <= 0.8) {
+              if (progress <= 0.9) {
                 print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 숨김)');
               } else {
                 print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 표시 시작)');
               }
-              final attendanceTargets = progress > 0.8 ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
+              final bool isComplete = _rotationAnimation.status == AnimationStatus.completed && progress >= 1.0;
+              final attendanceTargets = isComplete ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
               // 상태별 분류 (시트가 충분히 열린 뒤에만 실제 데이터 계산)
               final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
               final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList()
@@ -391,7 +392,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final waiting = attendanceTargets.where((t) => !_attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
               // 출석 전 학생카드: 시작시간별 그룹핑
               final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
-              if (progress > 0.8) {
+              if (isComplete) {
                 for (final t in waiting) {
                   waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
                 }
@@ -429,8 +430,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 curve: Curves.easeInOut,
                 width: containerWidth,
                 color: const Color(0xFF1F1F1F),
-                child: progress > 0.8
-                  ? Column(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // 내용: 애니메이션 완료 후에만 실제로 구성
+                    if (isComplete)
+                      Column(
                       children: [
                         // 날짜/요일 표시
                         Padding(
@@ -555,8 +560,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             ),
                           ),
                       ],
-                    )
-                  : const SizedBox.shrink(),
+                    ),
+                    // 커버: 완료 전에는 동일 배경색으로 완전히 가림(착시/중간 노출 차단)
+                    if (!isComplete)
+                      const Positioned.fill(
+                        child: ColoredBox(color: Color(0xFF1F1F1F)),
+                      ),
+                  ],
+                ),
               );
             },
           ),
