@@ -142,40 +142,7 @@ class _GroupViewState extends State<GroupView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('그룹 목록', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                FilledButton.icon(
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) => GroupRegistrationDialog(
-                        editMode: false,
-                        onSave: (groupInfo) {
-                          // 그룹 추가 로직 (상위에서 콜백으로 받아야 할 경우 수정 필요)
-                        },
-                      ),
-                    );
-                  },
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1976D2),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                    minimumSize: const Size(0, 44),
-                    maximumSize: const Size(double.infinity, 44),
-                  ),
-                  icon: const Icon(Icons.add, size: 26),
-                  label: const Text(
-                    '그룹 등록',
-                    style: TextStyle(
-                      fontSize: 16.5,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            // 상단 '그룹 목록' 타이틀과 '그룹 등록' 버튼 제거 (상단 바에서 통합 처리)
             const SizedBox(height: 24),
             if (_showDeleteZone)
               Padding(

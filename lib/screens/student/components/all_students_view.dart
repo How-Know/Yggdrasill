@@ -190,7 +190,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   '학생 리스트',
                                   style: TextStyle(
                                     color: Colors.grey,
-                                    fontSize: 27,
+                                    fontSize: 28, // +1pt
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -199,7 +199,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   ' ${widget.students.length}명',
                                   style: const TextStyle(
                                     color: Colors.grey,
-                                    fontSize: 20, // 타이틀보다 3pt 작게
+                                    fontSize: 21, // +1pt, 타이틀보다 3pt 작게 유지
                                   ),
                                 ),
                               ],
@@ -257,7 +257,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 8),
+                      Divider(
+                        height: 24,
+                        thickness: 2,
+                        color: Colors.white12,
+                      ),
+                      const SizedBox(height: 5),
                       Expanded(
                         child: ListView(
                           children: [
@@ -287,7 +293,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     minWidth: 424,
                     maxWidth: 424,
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
                   decoration: BoxDecoration(
                     color: Color(0xFF18181A),
                     borderRadius: BorderRadius.circular(16),
@@ -295,57 +301,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(left: 4.0),
-                            child: Text(
-                              '그룹 목록',
-                              style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 26,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 130,
-                            child: FilledButton.icon(
-                              onPressed: () async {
-                                final result = await showDialog<GroupInfo>(
-                                  context: context,
-                                  builder: (context) => GroupRegistrationDialog(
-                                    editMode: false,
-                                    onSave: (groupInfo) {
-                                      Navigator.of(context).pop(groupInfo);
-                                    },
-                                  ),
-                                );
-                                if (result != null) {
-                                  widget.onGroupAdded(result);
-                                }
-                              },
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1976D2),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                                minimumSize: const Size(0, 44),
-                                maximumSize: const Size(double.infinity, 44),
-                              ),
-                              icon: const Icon(Icons.add, size: 24),
-                              label: const Text(
-                                '그룹 등록',
-                                style: TextStyle(
-                                  fontSize: 15.5,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                      // 우측 패널 상단 타이틀/버튼 제거 (그룹 목록/그룹 등록)
                       const SizedBox(height: 24),
                       Expanded(
                         child: ReorderableListView.builder(

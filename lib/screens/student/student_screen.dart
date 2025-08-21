@@ -373,7 +373,7 @@ class StudentScreenState extends State<StudentScreen> {
                           ),
                           icon: const Icon(Icons.add, size: 26),
                           label: const Text(
-                            '등록 ',
+                            '학생',
                             style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w500,
@@ -386,7 +386,7 @@ class StudentScreenState extends State<StudentScreen> {
                   const SizedBox(width: 8),
                   // 우측: 검색 바 (고정 너비, 등록 버튼과 동일 너비, 왼쪽 정렬로 바로 붙임)
                   SizedBox(
-                    width: 131, // 고정 너비 (검색 바)
+                    width: 151, // +20 확장
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: SizedBox(
@@ -399,17 +399,41 @@ class StudentScreenState extends State<StudentScreen> {
                             });
                           },
                           hintText: '검색',
-                          leading: const Icon(
-                            Icons.search,
-                            color: Colors.white70,
-                            size: 24,
+                          leading: const Padding(
+                            padding: EdgeInsets.only(left: 6, right: 4),
+                            child: Icon(
+                              Icons.search,
+                              color: Colors.white70,
+                              size: 20,
+                            ),
                           ),
+                          trailing: [
+                            if (_searchQuery.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: IconButton(
+                                  visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                  tooltip: '지우기',
+                                  icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                  onPressed: () {
+                                    print('[DEBUG][StudentScreen] 검색어 초기화 버튼 클릭');
+                                    setState(() {
+                                      _searchController.clear();
+                                      _searchQuery = '';
+                                    });
+                                    FocusScope.of(context).unfocus();
+                                  },
+                                ),
+                              ),
+                          ],
                           backgroundColor: MaterialStateColor.resolveWith(
                             (states) => const Color(0xFF2A2A2A),
                           ),
                           elevation: MaterialStateProperty.all(0),
                           padding: const MaterialStatePropertyAll<EdgeInsets>(
-                            EdgeInsets.symmetric(horizontal: 18.0),
+                            EdgeInsets.symmetric(horizontal: 10.0),
                           ),
                           textStyle: const MaterialStatePropertyAll<TextStyle>(
                             TextStyle(color: Colors.white, fontSize: 16.5),
@@ -426,6 +450,37 @@ class StudentScreenState extends State<StudentScreen> {
                     ),
                   ),
                   const Spacer(),
+                  // 우측: 그룹 버튼 (학생 버튼과 동일한 크기/스타일, 오른쪽 정렬)
+                  SizedBox(
+                    width: 131,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: SizedBox(
+                        width: 131,
+                        height: 44,
+                        child: FilledButton.icon(
+                          onPressed: () {
+                            showClassRegistrationDialog();
+                          },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1976D2),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                            minimumSize: const Size(0, 44),
+                            maximumSize: const Size(double.infinity, 44),
+                          ),
+                          icon: const Icon(Icons.add, size: 26),
+                          label: const Text(
+                            '그룹',
+                            style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                   const SizedBox(width: 24),
                 ],
               ),
@@ -526,8 +581,40 @@ class StudentScreenState extends State<StudentScreen> {
                 }
               },
               onReorder: (oldIndex, newIndex) {},
-              onDeleteStudent: (studentWithInfo) {},
-              onStudentUpdated: (studentWithInfo) {},
+              onDeleteStudent: (studentWithInfo) async {
+                print('[DEBUG][StudentScreen] onDeleteStudent 호출: ' + studentWithInfo.student.id);
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    backgroundColor: const Color(0xFF232326),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
+                    content: Text('${studentWithInfo.student.name} 학생을 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                  showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
+                }
+              },
+              onStudentUpdated: (studentWithInfo) async {
+                print('[DEBUG][StudentScreen] onStudentUpdated 호출: ' + studentWithInfo.student.id);
+                await showDialog(
+                  context: context,
+                  builder: (context) => StudentRegistrationDialog(
+                    student: studentWithInfo.student,
+                    onSave: (updatedStudent, basicInfo) async {
+                      await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                      showAppSnackBar(context, '학생 정보가 수정되었습니다.');
+                    },
+                    groups: DataManager.instance.groups,
+                  ),
+                );
+              },
               activeFilter: _activeFilter,
               onFilterChanged: (filter) {
                 setState(() {

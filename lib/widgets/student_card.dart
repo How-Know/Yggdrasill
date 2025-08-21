@@ -4,6 +4,7 @@ import '../models/group_info.dart';
 import 'student_details_dialog.dart';
 import 'student_registration_dialog.dart';
 import '../services/data_manager.dart';
+import '../main.dart';
 
 class StudentCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
@@ -119,8 +120,11 @@ class StudentCard extends StatelessWidget {
             ),
             contentPadding: EdgeInsets.zero,
             visualDensity: VisualDensity.compact,
-            onTap: () {
+            onTap: () async {
+              print('[DEBUG][StudentCard] 수정 메뉴 탭');
               Navigator.of(context).pop();
+              await Future.delayed(const Duration(milliseconds: 0));
+              print('[DEBUG][StudentCard] 수정 다이얼로그 호출 직전');
               _handleEdit(context);
             },
           ),
@@ -134,8 +138,11 @@ class StudentCard extends StatelessWidget {
             ),
             contentPadding: EdgeInsets.zero,
             visualDensity: VisualDensity.compact,
-            onTap: () {
+            onTap: () async {
+              print('[DEBUG][StudentCard] 삭제 메뉴 탭');
               Navigator.of(context).pop();
+              await Future.delayed(const Duration(milliseconds: 0));
+              print('[DEBUG][StudentCard] 삭제 다이얼로그 호출 직전');
               _handleDelete(context);
             },
           ),
@@ -271,6 +278,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
             Rect.fromPoints(pos, pos),
             Offset.zero & overlayBox.size,
           );
+          print('[DEBUG][StudentCard] 카드 탭, 컨텍스트 메뉴 오픈');
           final selected = await showMenu<String>(
             context: context,
             color: const Color(0xFF2A2A2A),
@@ -300,6 +308,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
               ),
             ],
           );
+          print('[DEBUG][StudentCard] 메뉴 선택: ' + (selected ?? 'null'));
           switch (selected) {
             case 'details':
               widget.onShowDetails(widget.studentWithInfo);
@@ -308,25 +317,48 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
               if (widget.onUpdate != null) {
                 widget.onUpdate!(widget.studentWithInfo);
               } else {
-                await showDialog(
-                  context: context,
-                  builder: (context) => StudentRegistrationDialog(
-                    student: widget.studentWithInfo.student,
-                    onSave: (updatedStudent, basicInfo) async {
-                      await DataManager.instance.updateStudent(updatedStudent, basicInfo);
-                      Navigator.of(context).pop();
-                    },
-                    groups: DataManager.instance.groups,
-                  ),
-                );
+                final dialogContext = rootNavigatorKey.currentContext ?? context;
+                print('[DEBUG][StudentCard] edit dialog schedule 시작');
+                WidgetsBinding.instance.addPostFrameCallback((_) async {
+                  try {
+                    print('[DEBUG][StudentCard] edit showDialog 호출 직전');
+                    await showDialog(
+                      context: dialogContext,
+                      builder: (context) => StudentRegistrationDialog(
+                        student: widget.studentWithInfo.student,
+                        onSave: (updatedStudent, basicInfo) async {
+                          await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                          Navigator.of(context).pop();
+                        },
+                        groups: DataManager.instance.groups,
+                      ),
+                    );
+                    print('[DEBUG][StudentCard] edit showDialog 종료');
+                  } catch (e, st) {
+                    print('[ERROR][StudentCard] edit dialog 예외: ' + e.toString() + '\n' + st.toString());
+                  }
+                });
               }
               break;
             case 'delete':
               if (widget.onDelete != null) {
                 widget.onDelete!(widget.studentWithInfo);
               } else {
-                await _handleDelete(context);
+                final dialogContext = rootNavigatorKey.currentContext ?? context;
+                print('[DEBUG][StudentCard] delete dialog schedule 시작');
+                WidgetsBinding.instance.addPostFrameCallback((_) async {
+                  try {
+                    print('[DEBUG][StudentCard] delete showDialog 호출 직전');
+                    await _handleDelete(dialogContext);
+                    print('[DEBUG][StudentCard] delete showDialog 종료');
+                  } catch (e, st) {
+                    print('[ERROR][StudentCard] delete dialog 예외: ' + e.toString() + '\n' + st.toString());
+                  }
+                });
               }
+              break;
+            default:
+              // 선택 취소 또는 외부 클릭
               break;
           }
         },
