@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 25,
+        version: 26,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -43,6 +43,20 @@ class AcademyDbService {
             logo BLOB,
             session_cycle INTEGER DEFAULT 1, -- [추가] 수강 횟수
             openai_api_key TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE kakao_reservations (
+            id TEXT PRIMARY KEY,
+            created_at TEXT,
+            message TEXT,
+            name TEXT,
+            student_name TEXT,
+            phone TEXT,
+            desired_datetime TEXT,
+            is_read INTEGER,
+            kakao_user_id TEXT,
+            kakao_nickname TEXT
           )
         ''');
         await db.execute('''
@@ -282,6 +296,22 @@ class AcademyDbService {
         ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
+        if (oldVersion < 26) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS kakao_reservations (
+              id TEXT PRIMARY KEY,
+              created_at TEXT,
+              message TEXT,
+              name TEXT,
+              student_name TEXT,
+              phone TEXT,
+              desired_datetime TEXT,
+              is_read INTEGER,
+              kakao_user_id TEXT,
+              kakao_nickname TEXT
+            )
+          ''');
+        }
         if (oldVersion < 2) {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS groups (

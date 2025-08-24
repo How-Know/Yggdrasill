@@ -6,6 +6,7 @@ import '../services/data_manager.dart';
 import '../models/attendance_record.dart';
 import 'student/student_screen.dart';
 import 'timetable/timetable_screen.dart';
+import 'home/home_screen.dart';
 import 'settings/settings_screen.dart';
 import 'resources/resources_screen.dart';
 import '../models/student.dart';
@@ -325,7 +326,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     print('[DEBUG] _buildContent 진입, _selectedIndex= [38;5;246m$_selectedIndex [0m');
     switch (_selectedIndex) {
       case 0:
-        return const Center(child: Text('홈', style: TextStyle(color: Colors.white)));
+        return const HomeScreen();
       case 1:
         return StudentScreen(key: _studentScreenKey);
       case 2:

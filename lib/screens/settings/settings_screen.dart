@@ -329,6 +329,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const SizedBox(height: 28),
+                // 카카오 연동
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: Text(
+                    '카카오 연동',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                // Base URL 입력
+                FutureBuilder<String?>(
+                  future: SharedPreferences.getInstance().then((p) => p.getString('kakao_api_base_url')),
+                  builder: (context, snapshot) {
+                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              labelText: '서버 주소 (예: https://api.yourapp.com)',
+                              labelStyle: TextStyle(color: Colors.white70),
+                              hintText: '백엔드 서버 기본 주소를 입력하세요',
+                              hintStyle: TextStyle(color: Colors.white24),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Colors.white24),
+                              ),
+                              focusedBorder: const OutlineInputBorder(
+                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final value = controller.text.trim();
+                            if (value.isEmpty) {
+                              await prefs.remove('kakao_api_base_url');
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('서버 주소가 제거되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            } else {
+                              await prefs.setString('kakao_api_base_url', value);
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('서버 주소가 저장되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            }
+                            setState(() {});
+                          },
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: const Text('저장'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                // API 토큰 입력
+                FutureBuilder<String?>(
+                  future: SharedPreferences.getInstance().then((p) => p.getString('kakao_api_token')),
+                  builder: (context, snapshot) {
+                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            style: const TextStyle(color: Colors.white),
+                            obscureText: true,
+                            decoration: InputDecoration(
+                              labelText: 'API 토큰 (선택)',
+                              labelStyle: TextStyle(color: Colors.white70),
+                              hintText: '백엔드 인증용 토큰이 있다면 입력하세요',
+                              hintStyle: TextStyle(color: Colors.white24),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Colors.white24),
+                              ),
+                              focusedBorder: const OutlineInputBorder(
+                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final value = controller.text.trim();
+                            if (value.isEmpty) {
+                              await prefs.remove('kakao_api_token');
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('API 토큰이 제거되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            } else {
+                              await prefs.setString('kakao_api_token', value);
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('API 토큰이 저장되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            }
+                            setState(() {});
+                          },
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: const Text('저장'),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon((snapshot.data != null && (snapshot.data ?? '').isNotEmpty) ? Icons.check_circle : Icons.error_outline,
+                            color: (snapshot.data != null && (snapshot.data ?? '').isNotEmpty) ? Colors.lightGreen : Colors.orangeAccent, size: 18),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 28),
                 // 테마 설정
                 const Padding(
                   padding: EdgeInsets.only(top: 24),

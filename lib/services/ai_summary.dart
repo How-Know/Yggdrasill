@@ -202,6 +202,135 @@ class AiSummaryService {
     }
     return null;
   }
+
+  // 한국 휴대전화 추출: 우선 GPT, 실패 시 정규식
+  static Future<String?> extractPhone(String text) async {
+    // 1) GPT 시도: 010-1234-5678 포맷으로만, 없으면 null
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = prefs.getString('openai_api_key') ?? '';
+      final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
+      final apiKey = persisted.isNotEmpty ? persisted : defined;
+      if (apiKey.isNotEmpty) {
+        final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+        final body = jsonEncode({
+          'model': 'gpt-4o-mini',
+          'messages': [
+            {
+              'role': 'system',
+              'content': '사용자 문장에서 한국 휴대전화 하나를 010-1234-5678 형식으로만 출력. 없으면 null.'
+            },
+            {
+              'role': 'user',
+              'content': text
+            }
+          ],
+          'temperature': 0.0,
+          'max_tokens': 10,
+        });
+        final res = await http.post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: body,
+        );
+        if (res.statusCode == 200) {
+          final json = jsonDecode(res.body) as Map<String, dynamic>;
+          final choices = json['choices'] as List<dynamic>?;
+          final content = choices != null && choices.isNotEmpty
+              ? (choices.first['message']?['content'] as String? ?? '')
+              : '';
+          final out = content.trim();
+          if (out.toLowerCase() != 'null' && out.isNotEmpty) {
+            return _normalizePhone(out);
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2) 정규식 폴백
+    final re = RegExp(r"(01[016789])[- .]?(\d{3,4})[- .]?(\d{4})");
+    final m = re.firstMatch(text);
+    if (m != null) {
+      return '${m.group(1)}-${m.group(2)}-${m.group(3)}';
+    }
+    return null;
+  }
+
+  static String _normalizePhone(String raw) {
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length == 11 && digits.startsWith('01')) {
+      return digits.substring(0,3) + '-' + digits.substring(3,7) + '-' + digits.substring(7);
+    }
+    if (digits.length == 10 && digits.startsWith('01')) {
+      return digits.substring(0,3) + '-' + digits.substring(3,6) + '-' + digits.substring(6);
+    }
+    // fallback: keep raw
+    return raw;
+  }
+
+  // 한국인 이름(2~4자 한글) 추출: GPT 우선, 정규식 보조
+  static Future<String?> extractKoreanName(String text) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = prefs.getString('openai_api_key') ?? '';
+      final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
+      final apiKey = persisted.isNotEmpty ? persisted : defined;
+      if (apiKey.isNotEmpty) {
+        final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+        final body = jsonEncode({
+          'model': 'gpt-4o-mini',
+          'messages': [
+            {
+              'role': 'system',
+              'content': '사용자 문장에서 한국인의 고유명사 이름(한글 2~4자)만 출력. 없으면 null. 호칭(학생, 님, 보호자 등) 제외.'
+            },
+            {
+              'role': 'user',
+              'content': text
+            }
+          ],
+          'temperature': 0.0,
+          'max_tokens': 6,
+        });
+        final res = await http.post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: body,
+        );
+        if (res.statusCode == 200) {
+          final json = jsonDecode(res.body) as Map<String, dynamic>;
+          final choices = json['choices'] as List<dynamic>?;
+          final content = choices != null && choices.isNotEmpty
+              ? (choices.first['message']?['content'] as String? ?? '')
+              : '';
+          final out = content.trim();
+          // 허용: 한글 2~4자 이름만
+          if (out.toLowerCase() != 'null' && RegExp(r'^[가-힣]{2,4}  $').hasMatch(out)) {
+            return out;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 정규식 폴백
+    // 따옴표/유니코드 문자가 섞인 Raw String 리터럴에서 에러가 나지 않도록 일반 문자열로 작성하고 백슬래시 이스케이프를 명시합니다.
+    final keyword = RegExp("(?:이름|성함|학생|자녀|아이|원생|보호자|학부모|부모)\\s*[:：]?[\\s\"“”']*([가-힣]{2,4})");
+    final m1 = keyword.firstMatch(text);
+    if (m1 != null) return m1.group(1);
+    final simple = RegExp(r'([가-힣]{2,4})\s*(?:학생|입니다|예요)');
+    final m2 = simple.firstMatch(text);
+    if (m2 != null) return m2.group(1);
+    final justName = RegExp(r'\b([가-힣]{2,4})\b');
+    final m3 = justName.firstMatch(text);
+    if (m3 != null) return m3.group(1);
+    return null;
+  }
 }
 
 
