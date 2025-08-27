@@ -12,6 +12,7 @@ import 'package:flutter/gestures.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/timetable/timetable_screen.dart';
 import 'services/data_manager.dart';
+import 'services/sync_service.dart';
 import 'models/memo.dart';
 import 'services/ai_summary.dart';
 import 'dart:async';
@@ -83,61 +84,70 @@ class MyApp extends StatelessWidget {
           }
         }
       },
-      child: MaterialApp(
-        scaffoldMessengerKey: rootScaffoldMessengerKey,
-        navigatorKey: rootNavigatorKey,
-        title: 'Yggdrasill',
-        // 로케일 설정 추가
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: const [
-          Locale('en', 'US'), // 영어 (기본)
-          Locale('ko', 'KR'), // 한국어
-        ],
-        locale: const Locale('ko', 'KR'), // 기본 로케일을 한국어로 설정
-        theme: ThemeData(
-          useMaterial3: true,
-          scaffoldBackgroundColor: const Color(0xFF1F1F1F),
-          appBarTheme: const AppBarTheme(
-            toolbarHeight: 80,  // 기본 56에서 24px 추가
-            backgroundColor: Color(0xFF1F1F1F),
-          ),
-          navigationRailTheme: const NavigationRailThemeData(
-            backgroundColor: Color(0xFF1F1F1F),
-            selectedIconTheme: IconThemeData(color: Colors.white, size: 30),
-            unselectedIconTheme: IconThemeData(color: Colors.white70, size: 30),
-            minWidth: 84,
-            indicatorColor: Color(0xFF0F467D),
-            groupAlignment: -1,
-            useIndicator: true,
-          ),
-          tooltipTheme: TooltipThemeData(
-            decoration: BoxDecoration(
-              color: Color(0xFF1F1F1F),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.white24),
+      child: FutureBuilder<void>(
+        future: () async {
+          // 초기 데이터 로드 후 최초 1회 동기화
+          await DataManager.instance.initialize();
+          await SyncService.instance.runInitialSyncIfNeeded();
+        }(),
+        builder: (context, snapshot) {
+          return MaterialApp(
+            scaffoldMessengerKey: rootScaffoldMessengerKey,
+            navigatorKey: rootNavigatorKey,
+            title: 'Yggdrasill',
+            // 로케일 설정 추가
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: const [
+              Locale('en', 'US'), // 영어 (기본)
+              Locale('ko', 'KR'), // 한국어
+            ],
+            locale: const Locale('ko', 'KR'), // 기본 로케일을 한국어로 설정
+            theme: ThemeData(
+              useMaterial3: true,
+              scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+              appBarTheme: const AppBarTheme(
+                toolbarHeight: 80,  // 기본 56에서 24px 추가
+                backgroundColor: Color(0xFF1F1F1F),
+              ),
+              navigationRailTheme: const NavigationRailThemeData(
+                backgroundColor: Color(0xFF1F1F1F),
+                selectedIconTheme: IconThemeData(color: Colors.white, size: 30),
+                unselectedIconTheme: IconThemeData(color: Colors.white70, size: 30),
+                minWidth: 84,
+                indicatorColor: Color(0xFF0F467D),
+                groupAlignment: -1,
+                useIndicator: true,
+              ),
+              tooltipTheme: TooltipThemeData(
+                decoration: BoxDecoration(
+                  color: Color(0xFF1F1F1F),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.white24),
+                ),
+                textStyle: TextStyle(color: Colors.white),
+              ),
+              floatingActionButtonTheme: FloatingActionButtonThemeData(
+                backgroundColor: const Color(0xFF1976D2),
+                foregroundColor: Colors.white,
+              ),
             ),
-            textStyle: TextStyle(color: Colors.white),
-          ),
-          floatingActionButtonTheme: FloatingActionButtonThemeData(
-            backgroundColor: const Color(0xFF1976D2),
-            foregroundColor: Colors.white,
-          ),
-        ),
-        home: Stack(
-          children: const [
-            MainScreen(),
-            // 전역 메모 패널 오버레이
-            _GlobalMemoOverlay(),
-            _GlobalMemoFloatingBanners(),
-          ],
-        ),
-        routes: {
-          '/settings': (context) => const SettingsScreen(),
-          '/students': (context) => const StudentScreen(),
+            home: Stack(
+              children: const [
+                MainScreen(),
+                // 전역 메모 패널 오버레이
+                _GlobalMemoOverlay(),
+                _GlobalMemoFloatingBanners(),
+              ],
+            ),
+            routes: {
+              '/settings': (context) => const SettingsScreen(),
+              '/students': (context) => const StudentScreen(),
+            },
+          );
         },
       ),
     );

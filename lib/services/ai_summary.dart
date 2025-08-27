@@ -84,7 +84,36 @@ class AiSummaryService {
     return buf.toString();
   }
   static Future<DateTime?> extractDateTime(String text) async {
-    // 1) GPT 우선: ISO 8601 yyyy-MM-ddTHH:mm 형식만 반환(없으면 "null")
+    // 0) 전화번호 제거 및 상대일(오늘/내일/모레/글피) 우선 처리
+    String _scrubPhones(String s) => s.replaceAll(RegExp(r'(01[016789])[- .]?(\d{3,4})[- .]?(\d{4})'), ' ');
+    final now = DateTime.now();
+    final sanitized = _scrubPhones(text);
+    bool isAmEarly = RegExp(r"오전").hasMatch(sanitized);
+    bool isPmEarly = RegExp(r"오후").hasMatch(sanitized);
+    String plainEarly = sanitized.replaceAll('오전', '').replaceAll('오후', '');
+    int? dayOffset0;
+    if (RegExp(r"오늘").hasMatch(sanitized)) dayOffset0 = 0;
+    if (RegExp(r"내일").hasMatch(sanitized)) dayOffset0 = 1;
+    if (RegExp(r"모레").hasMatch(sanitized)) dayOffset0 = 2;
+    if (RegExp(r"글피").hasMatch(sanitized)) dayOffset0 = 3;
+    if (dayOffset0 != null) {
+      final reTime0 = RegExp(r"(\d{1,2})(?::(\d{2}))?\s*(?:분|시)?");
+      final tm0 = reTime0.firstMatch(plainEarly);
+      int h0 = 9;
+      int mi0 = 0;
+      if (tm0 != null) {
+        h0 = int.tryParse(tm0.group(1) ?? '9') ?? 9;
+        mi0 = int.tryParse(tm0.group(2) ?? '0') ?? 0;
+      }
+      // 모호한 시간(오전/오후 키워드 없음)인데 1~11시이면 오후로 해석
+      if (!isAmEarly && !isPmEarly && h0 >= 1 && h0 <= 11) h0 += 12;
+      if (isPmEarly && h0 >= 1 && h0 <= 11) h0 += 12;
+      if (isAmEarly && h0 == 12) h0 = 0;
+      final base0 = DateTime(now.year, now.month, now.day).add(Duration(days: dayOffset0));
+      return DateTime(base0.year, base0.month, base0.day, h0, mi0);
+    }
+
+    // 1) GPT 시도 (상대일이 아닌 경우에만)
     try {
       final prefs = await SharedPreferences.getInstance();
       final persisted = prefs.getString('openai_api_key') ?? '';
@@ -101,7 +130,7 @@ class AiSummaryService {
             },
             {
               'role': 'user',
-              'content': text
+              'content': sanitized
             }
           ],
           'temperature': 0.0,
@@ -129,13 +158,11 @@ class AiSummaryService {
       }
     } catch (_) {}
 
-    // 2) 정규식 폴백: yyyy-MM-dd HH:mm 또는 M월 d일 (오전/오후) h[:mm], 그리고 오늘/내일/모레/글피 + (오전/오후)h[:mm]
-    final now = DateTime.now();
-
+    // 2) 정규식 폴백: yyyy-MM-dd HH:mm 또는 M월 d일 등
     // 공통: 오전/오후 감지
-    bool isAm = RegExp(r"오전").hasMatch(text);
-    bool isPm = RegExp(r"오후").hasMatch(text);
-    String plain = text.replaceAll('오전', '').replaceAll('오후', '');
+    bool isAm = RegExp(r"오전").hasMatch(sanitized);
+    bool isPm = RegExp(r"오후").hasMatch(sanitized);
+    String plain = sanitized.replaceAll('오전', '').replaceAll('오후', '');
 
     // 2-1) ISO 혹은 yyyy-MM-dd HH:mm / yyyy/MM/dd HH:mm 등
     final reIso = RegExp(r"(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:\s+(\d{1,2})(?::(\d{2}))?)?");
@@ -162,8 +189,6 @@ class AiSummaryService {
       if (isPm && h >= 1 && h <= 11) h += 12;
       if (isAm && h == 12) h = 0;
       final dt = DateTime(now.year, mo, d, h, mi);
-      // 디버그: 인식 로그
-      // print('[AI-DATE] M/d fallback matched: $dt for text=$text');
       return dt;
     }
 
@@ -179,22 +204,23 @@ class AiSummaryService {
       if (isAm && h == 12) h = 0;
       return DateTime(now.year, mo, d, h, mi);
     }
-    // 2-3) 상대 날짜: 오늘/내일/모레/글피 + (시간 선택적)
+
+    // 2-3) 상대 날짜(안전망)
     int? dayOffset;
-    if (RegExp(r"오늘").hasMatch(text)) dayOffset = 0;
-    if (RegExp(r"내일").hasMatch(text)) dayOffset = 1;
-    if (RegExp(r"모레").hasMatch(text)) dayOffset = 2;
-    if (RegExp(r"글피").hasMatch(text)) dayOffset = 3;
+    if (RegExp(r"오늘").hasMatch(sanitized)) dayOffset = 0;
+    if (RegExp(r"내일").hasMatch(sanitized)) dayOffset = 1;
+    if (RegExp(r"모레").hasMatch(sanitized)) dayOffset = 2;
+    if (RegExp(r"글피").hasMatch(sanitized)) dayOffset = 3;
     if (dayOffset != null) {
-      // 시간 추출: h[:mm] 또는 h시mm분/h시
-      final reTime = RegExp(r"(\d{1,2})(?::(\d{2}))?\s*(?:분)?");
+      final reTime = RegExp(r"(\d{1,2})(?::(\d{2}))?\s*(?:분|시)?");
       final tm = reTime.firstMatch(plain);
       int h = 9;
       int mi = 0;
       if (tm != null) {
-        h = int.parse(tm.group(1)!);
-        if (tm.group(2) != null) mi = int.parse(tm.group(2)!);
+        h = int.tryParse(tm.group(1) ?? '9') ?? 9;
+        mi = int.tryParse(tm.group(2) ?? '0') ?? 0;
       }
+      if (!isAm && !isPm && h >= 1 && h <= 11) h += 12;
       if (isPm && h >= 1 && h <= 11) h += 12;
       if (isAm && h == 12) h = 0;
       final base = DateTime(now.year, now.month, now.day).add(Duration(days: dayOffset));
@@ -310,8 +336,7 @@ class AiSummaryService {
               ? (choices.first['message']?['content'] as String? ?? '')
               : '';
           final out = content.trim();
-          // 허용: 한글 2~4자 이름만
-          if (out.toLowerCase() != 'null' && RegExp(r'^[가-힣]{2,4}  $').hasMatch(out)) {
+          if (out.toLowerCase() != 'null' && RegExp(r'^[가-힣]{2,4}$').hasMatch(out)) {
             return out;
           }
         }
@@ -319,7 +344,6 @@ class AiSummaryService {
     } catch (_) {}
 
     // 정규식 폴백
-    // 따옴표/유니코드 문자가 섞인 Raw String 리터럴에서 에러가 나지 않도록 일반 문자열로 작성하고 백슬래시 이스케이프를 명시합니다.
     final keyword = RegExp("(?:이름|성함|학생|자녀|아이|원생|보호자|학부모|부모)\\s*[:：]?[\\s\"“”']*([가-힣]{2,4})");
     final m1 = keyword.firstMatch(text);
     if (m1 != null) return m1.group(1);

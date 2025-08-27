@@ -11,6 +11,7 @@ class KakaoReservation {
   final bool isRead;
   final String? kakaoUserId;
   final String? kakaoNickname;
+  final String? status; // 'pending' | 'accepted' | 'rejected'
 
   KakaoReservation({
     required this.id,
@@ -23,6 +24,7 @@ class KakaoReservation {
     this.isRead = false,
     this.kakaoUserId,
     this.kakaoNickname,
+    this.status,
   });
 
   factory KakaoReservation.fromJson(Map<String, dynamic> json) {
@@ -56,6 +58,20 @@ class KakaoReservation {
       }
     }
 
+    // helper to read case-insensitive keys
+    String? readStr(Map<String, dynamic> m, List<String> keys) {
+      for (final k in keys) {
+        if (m.containsKey(k)) return m[k]?.toString();
+      }
+      // case-insensitive scan
+      final lower = {for (final e in m.entries) e.key.toLowerCase(): e.value};
+      for (final k in keys) {
+        final v = lower[k.toLowerCase()];
+        if (v != null) return v.toString();
+      }
+      return null;
+    }
+
     return KakaoReservation(
       id: (json['id'] ?? json['reservationId'] ?? json['uuid'] ?? '').toString(),
       createdAt: parseDate(json['createdAt'] ?? json['created_at'] ?? json['timestamp']),
@@ -65,8 +81,9 @@ class KakaoReservation {
       message: (json['message'] ?? json['text'] ?? json['utterance'] ?? '').toString(),
       desiredDateTime: parseOptionalDate(json['desiredDateTime'] ?? json['desired_time']),
       isRead: (json['isRead'] ?? json['read'] ?? false) == true,
-      kakaoUserId: (json['kakaoUserId'] ?? json['userId'] ?? json['kakao_user_id'])?.toString(),
-      kakaoNickname: (json['kakaoNickname'] ?? json['nickname'] ?? json['kakao_nickname'])?.toString(),
+      kakaoUserId: readStr(json, ['kakaoUserId', 'userId', 'kakao_user_id', 'kakaouserid', 'user_id', 'kakaoid']),
+      kakaoNickname: readStr(json, ['kakaoNickname', 'nickname', 'kakao_nickname', 'kakaonickname', 'userNickname']),
+      status: (json['status'] ?? json['reservation_status'] ?? 'pending')?.toString(),
     );
   }
 
@@ -82,6 +99,7 @@ class KakaoReservation {
       'isRead': isRead,
       'kakaoUserId': kakaoUserId,
       'kakaoNickname': kakaoNickname,
+      'status': status,
     };
   }
 }

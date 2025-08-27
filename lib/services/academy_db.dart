@@ -56,7 +56,8 @@ class AcademyDbService {
             desired_datetime TEXT,
             is_read INTEGER,
             kakao_user_id TEXT,
-            kakao_nickname TEXT
+            kakao_nickname TEXT,
+            status TEXT
           )
         ''');
         await db.execute('''
@@ -308,7 +309,8 @@ class AcademyDbService {
               desired_datetime TEXT,
               is_read INTEGER,
               kakao_user_id TEXT,
-              kakao_nickname TEXT
+              kakao_nickname TEXT,
+              status TEXT
             )
           ''');
         }
