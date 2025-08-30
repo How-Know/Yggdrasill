@@ -67,12 +67,31 @@ class ParentLinkService {
             }
           }
 
+          final toPush = <ParentLink>[];
           items = items.map((p) {
             final d = digits(p.phone);
             final name = phoneToStudentName[d];
             if (name == null || name.isEmpty) return p;
-            return p.copyWith(matchedStudentName: name);
+            final updated = p.copyWith(matchedStudentName: name);
+            // 서버에 아직 matchedStudentId가 없다면 업서트 예약
+            if ((p.matchedStudentId == null || p.matchedStudentId!.isEmpty) && d.isNotEmpty) {
+              toPush.add(updated);
+            }
+            return updated;
           }).toList();
+
+          // 백그라운드로 서버에 매칭 결과 업로드
+          for (final link in toPush) {
+            _pushMatch(
+              kakaoUserId: link.kakaoUserId,
+              phoneDigits: digits(link.phone),
+              studentId: students.firstWhere(
+                (s) => digits(s.student.parentPhoneNumber ?? s.basicInfo.parentPhoneNumber) == digits(link.phone),
+                orElse: () => students.first,
+              ).student.id,
+              studentName: link.matchedStudentName,
+            );
+          }
         } catch (e) {
           debugPrint('[ParentLinkService] local match failed: $e');
         }
@@ -83,6 +102,75 @@ class ParentLinkService {
       }
     } catch (e) {
       debugPrint('[ParentLinkService] fetchRecentLinks error: $e');
+    }
+  }
+
+  Future<bool> deleteLink(ParentLink link) async {
+    final base = await _getBaseUrl();
+    if (base == null) return false;
+    final token = await _getToken();
+    String withApi(String b) {
+      if (b.endsWith('/api')) return b;
+      if (b.endsWith('/api/')) return b.substring(0, b.length - 1);
+      return b + '/api';
+    }
+    Uri uri;
+    if ((link.id).isNotEmpty) {
+      uri = Uri.parse('${withApi(base)}/parent/link/${link.id}');
+    } else {
+      final qp = <String, String>{};
+      if ((link.phone ?? '').isNotEmpty) qp['phone'] = link.phone!;
+      if ((link.kakaoUserId ?? '').isNotEmpty) qp['userId'] = link.kakaoUserId!;
+      uri = Uri.parse('${withApi(base)}/parent/link').replace(queryParameters: qp.isEmpty ? null : qp);
+    }
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
+    try {
+      final res = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 8));
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        // 낙관적 업데이트
+        final next = List<ParentLink>.from(linksNotifier.value)..removeWhere((p) => p.id == link.id || (p.phone == link.phone && p.kakaoUserId == link.kakaoUserId));
+        linksNotifier.value = List.unmodifiable(next);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[ParentLinkService] deleteLink error: $e');
+    }
+    return false;
+  }
+
+  Future<void> _pushMatch({
+    String? kakaoUserId,
+    required String phoneDigits,
+    required String studentId,
+    String? studentName,
+  }) async {
+    try {
+      if (phoneDigits.isEmpty || studentId.isEmpty) return;
+      final base = await _getBaseUrl();
+      if (base == null) return;
+      final token = await _getToken();
+      String withApi(String b) {
+        if (b.endsWith('/api')) return b;
+        if (b.endsWith('/api/')) return b.substring(0, b.length - 1);
+        return b + '/api';
+      }
+      final uri = Uri.parse('${withApi(base)}/parent/link/match');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+      final body = jsonEncode({
+        'userId': kakaoUserId,
+        'phone': phoneDigits,
+        'studentId': studentId,
+        if (studentName != null) 'studentName': studentName,
+      });
+      await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 8));
+    } catch (e) {
+      debugPrint('[ParentLinkService] _pushMatch error: $e');
     }
   }
 }

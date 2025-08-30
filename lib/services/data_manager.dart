@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:sqflite/sqflite.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/operating_hours.dart';
@@ -1575,6 +1576,26 @@ class DataManager {
   Future<void> deleteResourceFile(String fileId) async {
     await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
     await AcademyDbService.instance.deleteResourceFile(fileId);
+  }
+
+  // ======== RESOURCE FAVORITES ========
+  Future<Set<String>> loadResourceFavorites() async {
+    final dbClient = await AcademyDbService.instance.db;
+    await AcademyDbService.instance.ensureResourceTables();
+    final rows = await dbClient.query('resource_favorites');
+    return rows.map((r) => (r['file_id'] as String)).toSet();
+  }
+
+  Future<void> addResourceFavorite(String fileId) async {
+    final dbClient = await AcademyDbService.instance.db;
+    await AcademyDbService.instance.ensureResourceTables();
+    await dbClient.insert('resource_favorites', {'file_id': fileId}, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> removeResourceFavorite(String fileId) async {
+    final dbClient = await AcademyDbService.instance.db;
+    await AcademyDbService.instance.ensureResourceTables();
+    await dbClient.delete('resource_favorites', where: 'file_id = ?', whereArgs: [fileId]);
   }
 
   // ======== RESOURCE FILE BOOKMARKS ========

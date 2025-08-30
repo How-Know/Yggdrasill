@@ -273,6 +273,13 @@ class _ParentLinkPanelState extends State<_ParentLinkPanel> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        tooltip: '삭제',
+                        onPressed: () async {
+                          await ParentLinkService.instance.deleteLink(p);
+                        },
+                      ),
                     );
                   },
                 ),

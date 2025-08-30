@@ -34,28 +34,34 @@ class SyncService {
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
 
-    final items = <Map<String, dynamic>>[];
+    String withApi(String b) {
+      if (b.endsWith('/api')) return b;
+      if (b.endsWith('/api/')) return b.substring(0, b.length - 1);
+      return b + '/api';
+    }
+
+    final data = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final s in DataManager.instance.students) {
       final sid = s.student.id;
       if (seen.contains(sid)) continue;
       seen.add(sid);
       final String? parentPhone = s.student.parentPhoneNumber ?? s.basicInfo.parentPhoneNumber;
-      final List<String> parentPhones = [];
+      String parentDigits = '';
       if (parentPhone != null && parentPhone.trim().isNotEmpty) {
-        final digits = parentPhone.replaceAll(RegExp(r'[^0-9]'), '');
-        if (digits.isNotEmpty) parentPhones.add(digits);
+        parentDigits = parentPhone.replaceAll(RegExp(r'[^0-9]'), '');
       }
-      items.add({
+      data.add({
         'studentId': sid,
-        'studentName': s.student.name,
-        'parentPhones': parentPhones,
+        'name': s.student.name,
+        'parentPhoneDigits': parentDigits,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
       });
     }
     try {
-      final uri = Uri.parse('$baseUrl/sync/students');
+      final uri = Uri.parse('${withApi(baseUrl)}/sync/students');
       await http
-          .post(uri, headers: headers, body: jsonEncode({'items': items}))
+          .post(uri, headers: headers, body: jsonEncode({'data': data}))
           .timeout(const Duration(seconds: 10));
     } catch (_) {}
   }
@@ -71,22 +77,30 @@ class SyncService {
 
     final now = DateTime.now();
     final from = now.subtract(Duration(days: days));
-    final df = DateFormat('yyyy-MM-dd');
-    final items = <Map<String, dynamic>>[];
+    String withApi(String b) {
+      if (b.endsWith('/api')) return b;
+      if (b.endsWith('/api/')) return b.substring(0, b.length - 1);
+      return b + '/api';
+    }
+    final data = <Map<String, dynamic>>[];
     for (final r in DataManager.instance.attendanceRecords) {
       if (r.classDateTime.isBefore(DateTime(from.year, from.month, from.day))) continue;
-      final classDate = df.format(r.classDateTime);
-      items.add({
+      final id = r.id ?? '${r.studentId}-${r.classDateTime.toIso8601String()}';
+      data.add({
+        'id': id,
         'studentId': r.studentId,
-        'classDate': classDate,
-        'arrivalTime': r.arrivalTime?.toIso8601String(),
-        'departureTime': r.departureTime?.toIso8601String(),
+        'className': r.className,
+        'classStart': r.classDateTime.toUtc().toIso8601String(),
+        'classEnd': r.classEndTime.toUtc().toIso8601String(),
+        'arrival': r.arrivalTime?.toUtc().toIso8601String(),
+        'departure': r.departureTime?.toUtc().toIso8601String(),
+        'updatedAt': r.updatedAt.toUtc().toIso8601String(),
       });
     }
     try {
-      final uri = Uri.parse('$baseUrl/sync/attendance');
+      final uri = Uri.parse('${withApi(baseUrl)}/sync/attendance');
       await http
-          .post(uri, headers: headers, body: jsonEncode({'items': items}))
+          .post(uri, headers: headers, body: jsonEncode({'data': data}))
           .timeout(const Duration(seconds: 12));
     } catch (_) {}
   }

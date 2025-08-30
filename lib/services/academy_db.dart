@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 26,
+        version: 29,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -259,7 +259,9 @@ class AcademyDbService {
             pos_y REAL,
             width REAL,
             height REAL,
-            shape TEXT
+            shape TEXT,
+            parent_id TEXT,
+            order_index INTEGER
           )
         ''');
         await db.execute('''
@@ -277,7 +279,13 @@ class AcademyDbService {
             text_color INTEGER,
             icon_code INTEGER,
             icon_image_path TEXT,
-            description TEXT
+            description TEXT,
+            order_index INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_favorites (
+            file_id TEXT PRIMARY KEY
           )
         ''');
         await db.execute('''
@@ -313,6 +321,45 @@ class AcademyDbService {
               status TEXT
             )
           ''');
+        }
+        if (oldVersion < 27) {
+          // Add parent_id to resource_folders for nested folder tree
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final hasParent = cols.any((c) => c['name'] == 'parent_id');
+            if (!hasParent) {
+              await db.execute('ALTER TABLE resource_folders ADD COLUMN parent_id TEXT');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v27: resource_folders.parent_id 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 28) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final hasOrder = cols.any((c) => c['name'] == 'order_index');
+            if (!hasOrder) {
+              await db.execute('ALTER TABLE resource_folders ADD COLUMN order_index INTEGER');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v28: resource_folders.order_index 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 29) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
+            final hasOrder = cols.any((c) => c['name'] == 'order_index');
+            if (!hasOrder) {
+              await db.execute('ALTER TABLE resource_files ADD COLUMN order_index INTEGER');
+            }
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS resource_favorites (
+                file_id TEXT PRIMARY KEY
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v29: resource_files.order_index/resource_favorites 추가 실패: $e');
+          }
         }
         if (oldVersion < 2) {
           await db.execute('''
@@ -915,7 +962,9 @@ class AcademyDbService {
         pos_y REAL,
         width REAL,
         height REAL,
-        shape TEXT
+        shape TEXT,
+        parent_id TEXT,
+        order_index INTEGER
       )
     ''');
     await dbClient.execute('''

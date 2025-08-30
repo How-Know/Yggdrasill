@@ -84,6 +84,45 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   Map<String, int> _gradeIconCodes = {};
   int _selectedGradeIndex = 0;
   int _lastGradeScrollMs = 0;
+  
+  // 트리 레이아웃 상태
+  String? _selectedFolderIdForTree; // null = 루트
+  final Set<String> _expandedFolderIds = <String>{};
+  Set<String> _favoriteFileIds = <String>{};
+  String? _draggingFolderId;
+  String? _dragIncomingParentId;
+  String? _reorderTargetFolderId;
+  bool _reorderInsertBefore = true;
+  String? _moveToParentFolderId;
+
+  List<_ResourceFolder> _childFoldersOf(String? parentId) {
+    final list = _folders.where((f) => (f.parentId ?? '') == (parentId ?? '')).toList();
+    list.sort((a, b) {
+      final ai = a.orderIndex ?? 1 << 20; // nulls last
+      final bi = b.orderIndex ?? 1 << 20;
+      if (ai != bi) return ai.compareTo(bi);
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return list;
+  }
+
+  List<_ResourceFile> _childFilesOf(String? parentId) {
+    if (parentId == '__FAVORITES__') {
+      final favs = _files.where((fi) => _favoriteFileIds.contains(fi.id)).toList();
+      favs.sort((a, b) {
+        final ai = a.size.height; // stable
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+      return favs;
+    }
+    final list = _files
+        .where((fi) => (fi.parentId ?? '') == (parentId ?? ''))
+        .toList();
+    list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return list;
+  }
+
+  
 
   static const Size _defaultFolderSize = Size(220, 120);
   static const List<String> kFolderShapes = ['rect', 'parallelogram', 'pill'];
@@ -746,42 +785,49 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 
   Future<void> _onAddFolder() async {
+    await _onAddFolderWithParent(_customTabIndex == 0 ? _selectedFolderIdForTree : null);
+  }
+
+  Future<void> _onAddFolderWithParent(String? parentId) async {
     final result = await showDialog<_ResourceFolder>(
       context: context,
       builder: (context) => const _FolderCreateDialog(),
     );
-    if (result != null) {
-      // 기본 위치를 간단한 그리드 규칙으로 배치 (겹침 방지)
-      final double stepX = _defaultFolderSize.width + 20.0;
-      final double stepY = _defaultFolderSize.height + 20.0;
-      double baseX = 24.0 + (_folders.length % 4) * stepX;
-      double baseY = 24.0 + (_folders.length ~/ 4) * stepY;
-      Rect candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
-      int guard = 0;
-      while (_isOverlapping(result.id, candidate) && guard < 100) {
-        baseX += stepX;
-        if (baseX + _defaultFolderSize.width > MediaQuery.of(context).size.width - 24.0) {
-          baseX = 24.0;
-          baseY += stepY;
-        }
-        candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
-        guard++;
+    if (result == null) return;
+    // 기본 위치를 간단한 그리드 규칙으로 배치 (겹침 방지)
+    final double stepX = _defaultFolderSize.width + 20.0;
+    final double stepY = _defaultFolderSize.height + 20.0;
+    double baseX = 24.0 + (_folders.length % 4) * stepX;
+    double baseY = 24.0 + (_folders.length ~/ 4) * stepY;
+    Rect candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
+    int guard = 0;
+    while (_isOverlapping(result.id, candidate) && guard < 100) {
+      baseX += stepX;
+      if (baseX + _defaultFolderSize.width > MediaQuery.of(context).size.width - 24.0) {
+        baseX = 24.0;
+        baseY += stepY;
       }
-      setState(() {
-        _folders.add(
-          _ResourceFolder(
-            id: result.id,
-            name: result.name,
-            color: result.color,
-            description: result.description,
-            position: Offset(baseX, baseY),
-            size: _defaultFolderSize,
-            shape: result.shape,
-          ),
-        );
-      });
-      await _saveLayout();
+      candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
+      guard++;
     }
+    setState(() {
+      _folders.add(
+        _ResourceFolder(
+          id: result.id,
+          name: result.name,
+          color: result.color,
+          description: result.description,
+          position: Offset(baseX, baseY),
+          size: _defaultFolderSize,
+          shape: result.shape,
+          parentId: parentId,
+          orderIndex: (_childFoldersOf(parentId).isNotEmpty ? (_childFoldersOf(parentId).map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1) : 0),
+        ),
+      );
+      // 컨텍스트 메뉴로 생성 시, 방금 추가한 부모를 확장
+      if (parentId != null) _expandedFolderIds.add(parentId);
+    });
+    await _saveLayout();
   }
 
   Future<void> _onAddFile() async {
@@ -800,28 +846,29 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     if (linksResult == null) return; // 취소 시 생성 중단 (버그 수정)
     final finalLinks = linksResult['links'] ?? <String, String>{};
     final merged = meta.copyWith(linksByGrade: finalLinks);
+    final merged2 = merged.copyWith(parentId: _customTabIndex == 0 ? _selectedFolderIdForTree : merged.parentId);
       // 파일 메타 저장
       await DataManager.instance.saveResourceFile({
-      'id': merged.id,
-      'name': merged.name,
+      'id': merged2.id,
+      'name': merged2.name,
       'url': '',
-      'color': merged.color?.value,
-      'grade': merged.primaryGrade ?? '',
-      'parent_id': merged.parentId,
-      'pos_x': merged.position.dx,
-      'pos_y': merged.position.dy,
-      'width': merged.size.width,
-      'height': merged.size.height,
-      'text_color': merged.textColor?.value,
-      'icon_code': merged.icon?.codePoint,
-      'icon_image_path': merged.iconImagePath,
-      'description': merged.description,
+      'color': merged2.color?.value,
+      'grade': merged2.primaryGrade ?? '',
+      'parent_id': merged2.parentId,
+      'pos_x': merged2.position.dx,
+      'pos_y': merged2.position.dy,
+      'width': merged2.size.width,
+      'height': merged2.size.height,
+      'text_color': merged2.textColor?.value,
+      'icon_code': merged2.icon?.codePoint,
+      'icon_image_path': merged2.iconImagePath,
+      'description': merged2.description,
       });
       // 학년별 링크 저장
-    await DataManager.instance.saveResourceFileLinks(merged.id, merged.linksByGrade);
+    await DataManager.instance.saveResourceFileLinks(merged2.id, merged2.linksByGrade);
     // 상태 반영
     setState(() {
-      _files.add(merged);
+      _files.add(merged2);
     });
   }
 
@@ -831,6 +878,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _loadLayout();
     _ensureGradesLoaded();
     _loadGradeIcons();
+    _initFavoritesAndDefaultSelection();
+  }
+
+  Future<void> _initFavoritesAndDefaultSelection() async {
+    _favoriteFileIds = await DataManager.instance.loadResourceFavorites();
+    // 교재탭 첫 진입 시 즐겨찾기 선택
+    setState(() {
+      _selectedFolderIdForTree = '__FAVORITES__';
+    });
   }
 
   Future<void> _saveLayout() async {
@@ -846,6 +902,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         'width': f.size.width,
         'height': f.size.height,
         'shape': f.shape,
+        'parent_id': f.parentId,
+        'order_index': f.orderIndex,
       }).toList();
       await DataManager.instance.saveResourceFolders(rows);
     } catch (e) {
@@ -864,6 +922,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         position: Offset((r['pos_x'] as num?)?.toDouble() ?? 0.0, (r['pos_y'] as num?)?.toDouble() ?? 0.0),
         size: Size((r['width'] as num?)?.toDouble() ?? _defaultFolderSize.width, (r['height'] as num?)?.toDouble() ?? _defaultFolderSize.height),
         shape: (r['shape'] as String?) ?? 'rect',
+        parentId: r['parent_id'] as String?,
+        orderIndex: (r['order_index'] as num?)?.toInt(),
       )).toList();
       final fileRows = await DataManager.instance.loadResourceFiles();
       final List<_ResourceFile> loadedFiles = [];
@@ -967,24 +1027,25 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: OutlinedButton.icon(
-                    key: _gradeButtonKey,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white38, width: 1.4),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15.4),
-                    ),
-                    onPressed: () async {
-                      // 버튼 연속 클릭 시만 닫기. 닫혀있으면 열기만 수행
-                      if (_isGradeMenuOpen) _closeGradeMenu();
-                      await _ensureGradesLoaded();
-                      // 오픈만 수행
-                      _openGradeMenu();
-                    },
-                    icon: const Icon(Icons.school, size: 20),
-                    label: Text(
-                      _grades.isEmpty ? '' : _grades[_selectedGradeIndex],
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  child: SizedBox(
+                    width: 240, // 폴더 리스트 폭과 일치
+                    child: OutlinedButton.icon(
+                      key: _gradeButtonKey,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white38, width: 1.4),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15.4),
+                      ),
+                      onPressed: () async {
+                        if (_isGradeMenuOpen) _closeGradeMenu();
+                        await _ensureGradesLoaded();
+                        _openGradeMenu();
+                      },
+                      icon: const Icon(Icons.school, size: 20),
+                      label: Text(
+                        _grades.isEmpty ? '' : _grades[_selectedGradeIndex],
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ),
@@ -993,6 +1054,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 child: IndexedStack(
                   index: _customTabIndex,
                   children: [
+                    // 교재 탭: 좌측 트리 + 우측 그리드 레이아웃
+                    _buildTextbooksTreeLayout(),
                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
@@ -1547,43 +1610,458 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: Material(
-                        color: _editMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
-                        shape: const CircleBorder(),
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: () => setState(() { _editMode = !_editMode; if (_editMode) _resizeMode = false; }),
-                          child: const Center(
-                            child: Icon(Icons.edit, color: Colors.white, size: 18),
+                    if (_customTabIndex != 0) ...[
+                      SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Material(
+                          color: _editMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => setState(() { _editMode = !_editMode; if (_editMode) _resizeMode = false; }),
+                            child: const Center(
+                              child: Icon(Icons.edit, color: Colors.white, size: 18),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: Material(
-                        color: _resizeMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
-                        shape: const CircleBorder(),
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: () => setState(() { _resizeMode = !_resizeMode; if (_resizeMode) _editMode = false; }),
-                          child: const Center(
-                            child: Icon(Icons.open_in_full, color: Colors.white, size: 18),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Material(
+                          color: _resizeMode ? const Color(0xFF0F467D) : const Color(0xFF1976D2),
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => setState(() { _resizeMode = !_resizeMode; if (_resizeMode) _editMode = false; }),
+                            child: const Center(
+                              child: Icon(Icons.open_in_full, color: Colors.white, size: 18),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// --- 교재 탭: 좌측 트리 + 우측 그리드 ---
+extension _ResourcesScreenTree on _ResourcesScreenState {
+  Widget _buildDragFeedback(_ResourceFolder f) {
+    final children = _childFoldersOf(f.id);
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 240,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A).withOpacity(0.92),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white24),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 14, offset: const Offset(0, 6))],
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.folder, color: (f.color ?? Colors.amber).withOpacity(0.9), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                f.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+              ),
+            ),
+            if (children.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Text('${children.length}', style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _reorderSiblings({required _ResourceFolder target, required _ResourceFolder incoming}) {
+    final parent = target.parentId;
+    final siblings = _childFoldersOf(parent);
+    final minIndex = siblings.map((e) => e.orderIndex ?? 0).fold<int>(0, (a, b) => a < b ? a : b);
+    final maxIndex = siblings.map((e) => e.orderIndex ?? 0).fold<int>(0, (a, b) => a > b ? a : b);
+    // 기본 인덱스 부여
+    for (int i = 0; i < siblings.length; i++) {
+      final idx = _folders.indexWhere((x) => x.id == siblings[i].id);
+      if (idx != -1) _folders[idx] = _folders[idx].copyWith(orderIndex: i);
+    }
+    // incoming을 target 위치로 이동
+    final from = siblings.indexWhere((x) => x.id == incoming.id);
+    final to = siblings.indexWhere((x) => x.id == target.id);
+    if (from == -1 || to == -1) return;
+    final ordered = List<_ResourceFolder>.from(siblings);
+    final moved = ordered.removeAt(from);
+    ordered.insert(to, moved);
+    // 반영
+    for (int i = 0; i < ordered.length; i++) {
+      final idx = _folders.indexWhere((x) => x.id == ordered[i].id);
+      if (idx != -1) _folders[idx] = _folders[idx].copyWith(orderIndex: i);
+    }
+    setState(() {});
+    _saveLayout();
+  }
+
+  void _moveToAsChild({required _ResourceFolder targetParent, required _ResourceFolder incoming}) {
+    // 부모만 바꾸고, 마지막 인덱스로 부여
+    final childList = _childFoldersOf(targetParent.id);
+    final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
+    final idx = _folders.indexWhere((x) => x.id == incoming.id);
+    if (idx != -1) {
+      _folders[idx] = _folders[idx].copyWith(parentId: targetParent.id, orderIndex: nextIndex);
+    }
+    setState(() {});
+    _saveLayout();
+  }
+  Widget _buildTextbooksTreeLayout() {
+    return Row(
+      children: [
+        SizedBox(
+          width: 260,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF232323),
+              border: Border(right: BorderSide(color: Colors.white.withOpacity(0.06), width: 1)),
+            ),
+            child: _buildFolderTreePanel(),
+          ),
+        ),
+        Expanded(child: _buildFolderContentGrid()),
+      ],
+    );
+  }
+
+  Widget _buildFolderTreePanel() {
+    final flattened = <Map<String, dynamic>>[];
+    void visit(String? parentId, int depth) {
+      final children = _childFoldersOf(parentId);
+      for (final f in children) {
+        flattened.add({'folder': f, 'depth': depth});
+        if (_expandedFolderIds.contains(f.id)) {
+          visit(f.id, depth + 1);
+        }
+      }
+    }
+    // root pseudo node omitted; 바로 폴더 목록으로 시작
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('폴더', style: TextStyle(color: Colors.white.withOpacity(0.85), fontWeight: FontWeight.w700, fontSize: 16)),
+              ),
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: IconButton(
+                  tooltip: '최상위 폴더 추가',
+                  padding: EdgeInsets.zero,
+                  iconSize: 18,
+                  onPressed: () async => await _onAddFolderWithParent(null),
+                  icon: const Icon(Icons.add, color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Builder(
+            builder: (context) {
+              flattened.clear();
+              visit(null, 0);
+              return ListView.builder(
+                itemCount: flattened.length,
+                itemBuilder: (context, index) {
+                  final f = flattened[index]['folder'] as _ResourceFolder;
+                  final depth = flattened[index]['depth'] as int;
+                  final children = _childFoldersOf(f.id);
+                  final isExpanded = _expandedFolderIds.contains(f.id);
+                  final isSelected = _selectedFolderIdForTree == f.id;
+                  return InkWell(
+                    onTap: () => setState(() => _selectedFolderIdForTree = f.id),
+                    onSecondaryTapDown: (details) async {
+                      // 우클릭 컨텍스트 메뉴: 하위 폴더 만들기
+                      final overlay = Overlay.of(context)?.context.findRenderObject();
+                      if (overlay is! RenderBox) return;
+                      final position = RelativeRect.fromRect(
+                        Rect.fromPoints(
+                          details.globalPosition,
+                          details.globalPosition,
+                        ),
+                        Offset.zero & overlay.size,
+                      );
+                      final action = await showMenu<String>(
+                        context: context,
+                        position: position,
+                        color: const Color(0xFF2A2A2A),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Color(0xFF3A3A3A))),
+                        items: [
+                          const PopupMenuItem<String>(
+                            value: 'new-folder',
+                            child: Text('하위 폴더 만들기', style: TextStyle(color: Colors.white)),
+                          ),
+                          const PopupMenuDivider(),
+                          const PopupMenuItem<String>(
+                            value: 'edit-folder',
+                            child: Text('수정', style: TextStyle(color: Colors.white)),
+                          ),
+                          const PopupMenuItem<String>(
+                            value: 'delete-folder',
+                            child: Text('삭제', style: TextStyle(color: Colors.white)),
+                          ),
+                        ],
+                      );
+                      if (action == 'new-folder') {
+                        await _onAddFolderWithParent(f.id);
+                      } else if (action == 'edit-folder') {
+                        final result = await showDialog<_ResourceFolder>(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: f),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            final idx = _folders.indexWhere((x) => x.id == f.id);
+                            if (idx != -1) _folders[idx] = result.copyWith(parentId: f.parentId, orderIndex: f.orderIndex);
+                          });
+                          await _saveLayout();
+                        }
+                      } else if (action == 'delete-folder') {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            backgroundColor: const Color(0xFF1F1F1F),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            title: const Text('삭제 확인', style: TextStyle(color: Colors.white)),
+                            content: Text('"${f.name}" 폴더를 삭제할까요?', style: const TextStyle(color: Colors.white70)),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                              FilledButton(onPressed: () => Navigator.pop(ctx, true), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('삭제')),
+                            ],
+                          ),
+                        );
+                        if (confirm == true) {
+                          setState(() {
+                            _folders.removeWhere((x) => x.id == f.id);
+                          });
+                          await _saveLayout();
+                        }
+                      }
+                    },
+                    child: LongPressDraggable<_ResourceFolder>(
+                      data: f,
+                      hapticFeedbackOnStart: true,
+                      feedback: _buildDragFeedback(f),
+                      dragAnchorStrategy: pointerDragAnchorStrategy,
+                      onDragStarted: () {
+                        setState(() { _draggingFolderId = f.id; _moveToParentFolderId = null; _reorderTargetFolderId = null;});
+                      },
+                      onDragEnd: (_) {
+                        setState(() { _draggingFolderId = null; _moveToParentFolderId = null; _reorderTargetFolderId = null;});
+                      },
+                      child: DragTarget<_ResourceFolder>(
+                        onWillAccept: (incoming) {
+                          if (incoming == null) return false;
+                          if (incoming.id == f.id) return false; // self
+                          final sameLevel = (incoming.parentId ?? '') == (f.parentId ?? '');
+                          // 같은 레벨: 재정렬 표시, 다른 레벨: 이동 하이라이트
+                          setState(() { 
+                            if (sameLevel) {
+                              _reorderTargetFolderId = f.id;
+                            } else {
+                              _moveToParentFolderId = f.id;
+                            }
+                          });
+                          return true;
+                        },
+                        onAcceptWithDetails: (details) {
+                          final incoming = details.data;
+                          final sameLevel = (incoming.parentId ?? '') == (f.parentId ?? '');
+                          if (sameLevel) {
+                            _reorderSiblings(target: f, incoming: incoming);
+                          } else {
+                            _moveToAsChild(targetParent: f, incoming: incoming);
+                          }
+                          setState(() { _moveToParentFolderId = null; _reorderTargetFolderId = null; });
+                        },
+                        onLeave: (_) { setState(() { if (_reorderTargetFolderId == f.id) _reorderTargetFolderId = null; if (_moveToParentFolderId == f.id) _moveToParentFolderId = null; }); },
+                        builder: (context, candidate, rejected) {
+                          final highlightMove = _moveToParentFolderId == f.id && _draggingFolderId != null && _draggingFolderId != f.id;
+                          final highlightReorder = _reorderTargetFolderId == f.id && _draggingFolderId != null && _draggingFolderId != f.id;
+                          return Stack(
+                            children: [
+                              Container(
+                                color: highlightMove ? const Color(0xFF2F3A4A) : isSelected ? const Color(0xFF2A2A2A) : Colors.transparent,
+                                padding: EdgeInsets.only(left: 12.0 + depth * 16.0, right: 12.0, top: 8.0, bottom: 8.0),
+                                child: Row(
+                                  children: [
+                                    if (children.isNotEmpty)
+                                      InkWell(
+                                        onTap: () => setState(() {
+                                          if (isExpanded) {
+                                            _expandedFolderIds.remove(f.id);
+                                          } else {
+                                            _expandedFolderIds.add(f.id);
+                                          }
+                                        }),
+                                        child: Icon(isExpanded ? Icons.expand_more : Icons.chevron_right, color: Colors.white54, size: 18),
+                                      )
+                                    else
+                                      const SizedBox(width: 18),
+                                    const SizedBox(width: 4),
+                                    Icon(Icons.folder, color: (f.color ?? Colors.amber).withOpacity(0.85), size: 18),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        f.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16),
+                                      ),
+                                    ),
+                                    if (highlightMove)
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 8.0),
+                                        child: Text('"${f.name}"으로 이동', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (highlightReorder)
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  child: SizedBox(height: 2, child: DecoratedBox(decoration: BoxDecoration(color: const Color(0xFF64A6DD)))),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        // 즐겨찾기 고정 항목
+        Container(
+          height: 40,
+          child: InkWell(
+            onTap: () => setState(() => _selectedFolderIdForTree = '__FAVORITES__'),
+            child: Row(
+              children: [
+                const SizedBox(width: 12),
+                Icon(Icons.star, color: _selectedFolderIdForTree == '__FAVORITES__' ? Colors.amber : Colors.white54, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('즐겨찾기', style: TextStyle(color: Colors.white.withOpacity(0.95), fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFolderContentGrid() {
+    final files = _childFilesOf(_selectedFolderIdForTree);
+    final selectedFolder = _folders.firstWhere(
+      (f) => f.id == _selectedFolderIdForTree,
+      orElse: () => _ResourceFolder(id: '', name: '', color: null, description: '', position: Offset.zero, size: const Size(0,0), shape: 'rect', parentId: null),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const double tileWidth = 210;
+          final cols = (constraints.maxWidth / (tileWidth + 16)).floor().clamp(1, 8);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (selectedFolder.id.isNotEmpty && (selectedFolder.description.trim().isNotEmpty)) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 6),
+                  child: Text(selectedFolder.description, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+                ),
+                const Divider(height: 1, color: Colors.white12),
+              ],
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    mainAxisSpacing: 16,
+                    crossAxisSpacing: 16,
+                    childAspectRatio: 210 / 130,
+                  ),
+                  itemCount: files.length,
+                  itemBuilder: (context, index) {
+                    final fi = files[index];
+                    return LongPressDraggable<_ResourceFile>(
+                      data: fi,
+                      hapticFeedbackOnStart: true,
+                      feedback: Opacity(opacity: 0.9, child: SizedBox(width: 210, child: _GridFileCard(file: fi))),
+                      childWhenDragging: Opacity(opacity: 0.3, child: _GridFileCard(file: fi)),
+                      dragAnchorStrategy: pointerDragAnchorStrategy,
+                      child: DragTarget<_ResourceFile>(
+                        onWillAccept: (incoming) {
+                          return incoming != null && incoming.id != fi.id;
+                        },
+                        onAcceptWithDetails: (details) {
+                          final incoming = details.data;
+                          // 같은 폴더에서 재정렬
+                          final sameParent = (incoming.parentId ?? '') == (fi.parentId ?? _selectedFolderIdForTree ?? '');
+                          if (sameParent) {
+                            final list = _childFilesOf(fi.parentId ?? _selectedFolderIdForTree);
+                            // 간단히 이름 기준 재정렬 유지: 실제 order_index로 확장 가능
+                          } else {
+                            // 다른 폴더로 이동
+                            final idx = _files.indexWhere((x) => x.id == incoming.id);
+                            if (idx != -1) {
+                              _files[idx] = _files[idx].copyWith(parentId: fi.parentId ?? _selectedFolderIdForTree);
+                            }
+                            setState(() {});
+                            DataManager.instance.saveResourceFile({
+                              'id': incoming.id,
+                              'parent_id': fi.parentId ?? _selectedFolderIdForTree,
+                            });
+                          }
+                        },
+                        builder: (context, cand, rej) => _GridFileCard(file: fi),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2596,7 +3074,7 @@ class _FolderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final baseDecoration = BoxDecoration(
-      color: const Color(0xFF1F1F1F),
+      color: (folder.color != null) ? folder.color!.withOpacity(0.18) : const Color(0xFF1F1F1F),
       borderRadius: folder.shape == 'pill' ? BorderRadius.circular(999) : BorderRadius.circular(12),
       border: Border.all(color: (folder.color ?? Colors.white24).withOpacity(0.75), width: 2.5),
       boxShadow: [
@@ -2658,9 +3136,11 @@ class _ResourceFolder {
   final Offset position;
   final Size size;
   final String shape;
-  _ResourceFolder({required this.id, required this.name, required this.color, required this.description, required this.position, required this.size, required this.shape});
+  final String? parentId;
+  final int? orderIndex;
+  _ResourceFolder({required this.id, required this.name, required this.color, required this.description, required this.position, required this.size, required this.shape, this.parentId, this.orderIndex});
 
-  _ResourceFolder copyWith({String? id, String? name, Color? color, String? description, Offset? position, Size? size, String? shape}) {
+  _ResourceFolder copyWith({String? id, String? name, Color? color, String? description, Offset? position, Size? size, String? shape, String? parentId, int? orderIndex}) {
     return _ResourceFolder(
       id: id ?? this.id,
       name: name ?? this.name,
@@ -2669,6 +3149,8 @@ class _ResourceFolder {
       position: position ?? this.position,
       size: size ?? this.size,
       shape: shape ?? this.shape,
+      parentId: parentId ?? this.parentId,
+      orderIndex: orderIndex ?? this.orderIndex,
     );
   }
 
@@ -2679,6 +3161,8 @@ class _ResourceFolder {
     'description': description,
     'position': {'x': position.dx, 'y': position.dy},
     'size': {'w': size.width, 'h': size.height},
+    'parent_id': parentId,
+    'order_index': orderIndex,
   };
 
   factory _ResourceFolder.fromJson(Map<String, dynamic> json) {
@@ -2694,6 +3178,8 @@ class _ResourceFolder {
       position: Offset((pos['x'] as num).toDouble(), (pos['y'] as num).toDouble()),
       size: Size((sz['w'] as num).toDouble(), (sz['h'] as num).toDouble()),
       shape: (json['shape'] as String?) ?? 'rect',
+      parentId: json['parent_id'] as String?,
+      orderIndex: (json['order_index'] as num?)?.toInt(),
     );
   }
 }
@@ -2884,6 +3370,129 @@ class _ResourceFile {
       }
     }
     return null;
+  }
+}
+
+class _GridFileCard extends StatelessWidget {
+  final _ResourceFile file;
+  const _GridFileCard({required this.file});
+
+  @override
+  Widget build(BuildContext context) {
+    // 고정형 카드 스타일: 일관된 크기/패딩, 드래그/리사이즈 없음
+    final hasForCurrent = (context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade) != null;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {},
+          splashColor: Colors.white.withOpacity(0.06),
+          highlightColor: Colors.white.withOpacity(0.03),
+          child: Container(
+            decoration: BoxDecoration(
+              color: (file.color ?? const Color(0xFF2B2B2B)),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.05), width: 0.8),
+              boxShadow: [
+                // iOS 느낌의 부드러운 듀얼 섀도우
+                BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 12)),
+                BoxShadow(color: Colors.white.withOpacity(0.03), blurRadius: 2, offset: const Offset(0, 1)),
+              ],
+            ),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    if (file.iconImagePath != null && file.iconImagePath!.isNotEmpty)
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(7),
+                          image: DecorationImage(image: FileImage(File(file.iconImagePath!)), fit: BoxFit.cover),
+                        ),
+                      )
+                    else
+                      Icon(file.icon ?? Icons.insert_drive_file, color: file.textColor ?? Colors.white70, size: 22),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        file.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: file.textColor ?? Colors.white, fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -0.2),
+                      ),
+                    ),
+                    // 즐겨찾기 토글
+                    InkWell(
+                      onTap: () async {
+                        final isFav = (context.findAncestorStateOfType<_ResourcesScreenState>()?._favoriteFileIds.contains(file.id)) ?? false;
+                        final state = context.findAncestorStateOfType<_ResourcesScreenState>();
+                        if (state != null) {
+                          if (isFav) {
+                            state._favoriteFileIds.remove(file.id);
+                            await DataManager.instance.removeResourceFavorite(file.id);
+                          } else {
+                            state._favoriteFileIds.add(file.id);
+                            await DataManager.instance.addResourceFavorite(file.id);
+                          }
+                          state.setState(() {});
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 6.0),
+                        child: Icon(
+                          Icons.star,
+                          size: 18,
+                          color: (context.findAncestorStateOfType<_ResourcesScreenState>()?._favoriteFileIds.contains(file.id) ?? false)
+                              ? Colors.amber
+                              : Colors.white38,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if ((file.description ?? '').isNotEmpty)
+                  Text(file.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white60, fontSize: 12.5)),
+                const Spacer(),
+                Row(
+                  children: [
+                    _MiniPill(text: '본문'),
+                    const SizedBox(width: 6),
+                    _MiniPill(text: '정답'),
+                    const SizedBox(width: 6),
+                    _MiniPill(text: '해설'),
+                    const Spacer(),
+                    Icon(Icons.more_horiz, size: 18, color: Colors.white.withOpacity(0.38)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniPill extends StatelessWidget {
+  final String text;
+  const _MiniPill({required this.text});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
+    );
   }
 }
 
@@ -3435,16 +4044,6 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
                 );
               }).toList(),
             ),
-            const SizedBox(height: 18),
-            const Text('모양', style: TextStyle(color: Colors.white70, fontSize: 15)),
-            const SizedBox(height: 8),
-            Row(children: [
-              _ShapeSelectButton(label: '직사각형', selected: _shape == 'rect', onTap: () => setState(() => _shape = 'rect')),
-              const SizedBox(width: 8),
-              _ShapeSelectButton(label: '평행사변형', selected: _shape == 'parallelogram', onTap: () => setState(() => _shape = 'parallelogram')),
-              const SizedBox(width: 8),
-              _ShapeSelectButton(label: '알약', selected: _shape == 'pill', onTap: () => setState(() => _shape = 'pill')),
-            ]),
           ],
         ),
       ),
