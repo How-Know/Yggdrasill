@@ -84,7 +84,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   Map<String, int> _gradeIconCodes = {};
   int _selectedGradeIndex = 0;
   int _lastGradeScrollMs = 0;
-  
+
   // 트리 레이아웃 상태
   String? _selectedFolderIdForTree; // null = 루트
   final Set<String> _expandedFolderIds = <String>{};
@@ -803,40 +803,40 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       builder: (context) => const _FolderCreateDialog(),
     );
     if (result == null) return;
-    // 기본 위치를 간단한 그리드 규칙으로 배치 (겹침 방지)
-    final double stepX = _defaultFolderSize.width + 20.0;
-    final double stepY = _defaultFolderSize.height + 20.0;
-    double baseX = 24.0 + (_folders.length % 4) * stepX;
-    double baseY = 24.0 + (_folders.length ~/ 4) * stepY;
-    Rect candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
-    int guard = 0;
-    while (_isOverlapping(result.id, candidate) && guard < 100) {
-      baseX += stepX;
-      if (baseX + _defaultFolderSize.width > MediaQuery.of(context).size.width - 24.0) {
-        baseX = 24.0;
-        baseY += stepY;
+      // 기본 위치를 간단한 그리드 규칙으로 배치 (겹침 방지)
+      final double stepX = _defaultFolderSize.width + 20.0;
+      final double stepY = _defaultFolderSize.height + 20.0;
+      double baseX = 24.0 + (_folders.length % 4) * stepX;
+      double baseY = 24.0 + (_folders.length ~/ 4) * stepY;
+      Rect candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
+      int guard = 0;
+      while (_isOverlapping(result.id, candidate) && guard < 100) {
+        baseX += stepX;
+        if (baseX + _defaultFolderSize.width > MediaQuery.of(context).size.width - 24.0) {
+          baseX = 24.0;
+          baseY += stepY;
+        }
+        candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
+        guard++;
       }
-      candidate = Rect.fromLTWH(baseX, baseY, _defaultFolderSize.width, _defaultFolderSize.height);
-      guard++;
-    }
-    setState(() {
-      _folders.add(
-        _ResourceFolder(
-          id: result.id,
-          name: result.name,
-          color: result.color,
-          description: result.description,
-          position: Offset(baseX, baseY),
-          size: _defaultFolderSize,
-          shape: result.shape,
+      setState(() {
+        _folders.add(
+          _ResourceFolder(
+            id: result.id,
+            name: result.name,
+            color: result.color,
+            description: result.description,
+            position: Offset(baseX, baseY),
+            size: _defaultFolderSize,
+            shape: result.shape,
           parentId: parentId,
           orderIndex: (_childFoldersOf(parentId).isNotEmpty ? (_childFoldersOf(parentId).map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1) : 0),
-        ),
-      );
+          ),
+        );
       // 컨텍스트 메뉴로 생성 시, 방금 추가한 부모를 확장
       if (parentId != null) _expandedFolderIds.add(parentId);
-    });
-    await _saveLayout();
+      });
+      await _saveLayout();
   }
 
   Future<void> _onAddFile() async {
@@ -1041,25 +1041,25 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                     children: [
                       SizedBox(
                         width: 240, // 폴더 리스트 폭과 일치
-                        child: OutlinedButton.icon(
-                          key: _gradeButtonKey,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.white38, width: 1.4),
+                  child: OutlinedButton.icon(
+                    key: _gradeButtonKey,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white38, width: 1.4),
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15.4),
-                          ),
-                          onPressed: () async {
-                            if (_isGradeMenuOpen) _closeGradeMenu();
-                            await _ensureGradesLoaded();
-                            _openGradeMenu();
-                          },
-                          icon: const Icon(Icons.school, size: 20),
-                          label: Text(
-                            _grades.isEmpty ? '' : _grades[_selectedGradeIndex],
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
+                    ),
+                    onPressed: () async {
+                      if (_isGradeMenuOpen) _closeGradeMenu();
+                      await _ensureGradesLoaded();
+                      _openGradeMenu();
+                    },
+                    icon: const Icon(Icons.school, size: 20),
+                    label: Text(
+                      _grades.isEmpty ? '' : _grades[_selectedGradeIndex],
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
                       const SizedBox(width: 15),
                       Expanded(
                         child: Builder(
@@ -1522,6 +1522,346 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           'width': updatedFile.size.width,
                           'height': updatedFile.size.height,
                           'text_color': updatedFile.textColor?.value,
+                          'icon_code': updatedFile.icon?.codePoint,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
+                      },
+                    ),
+                    _ResourcesCanvas(
+                      folders: _folders,
+                      files: _files,
+                      resizeMode: _resizeMode,
+                       editMode: _editMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
+                      onDeleteFolder: (folderId) async {
+                        setState(() { _folders.removeWhere((f) => f.id == folderId); });
+                        await _saveLayout();
+                      },
+                      onDeleteFile: (fileId) async {
+                        setState(() { _files.removeWhere((f) => f.id == fileId); });
+                        await DataManager.instance.deleteResourceFile(fileId);
+                      },
+                      onFolderMoved: (id, pos, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final prevPos = _folders[i].position;
+                            final size = _folders[i].size;
+                            final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
+                            final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onFolderResized: (id, newSize, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final minW = 160.0;
+                            final minH = 90.0;
+                            final pos = _folders[i].position;
+                            final maxW = (canvasSize.width - pos.dx).clamp(minW, canvasSize.width);
+                            final maxH = (canvasSize.height - pos.dy).clamp(minH, canvasSize.height);
+                            final w = newSize.width.clamp(minW, maxW);
+                            final h = newSize.height.clamp(minH, maxH);
+                            final clampedSize = Size(w, h);
+                            final candidate = Rect.fromLTWH(pos.dx, pos.dy, clampedSize.width, clampedSize.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(size: clampedSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onExitResizeMode: () {
+                        if (_resizeMode) setState(() => _resizeMode = false);
+                      },
+                      onMoveEnd: _saveLayout,
+                      onResizeEnd: _saveLayout,
+                      onEditFolder: (folder) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        final result = await showDialog<_ResourceFolder>(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            final idx = _folders.indexWhere((f) => f.id == folder.id);
+                            if (idx != -1) _folders[idx] = result;
+                          });
+                          await _saveLayout();
+                        }
+                      },
+                      onEditFile: (file) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
+                          context: context,
+                          builder: (ctx) => _FileMetaDialog(initial: file),
+                        );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_code': updatedFile.icon?.codePoint,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
+                      },
+                    ),
+                    _ResourcesCanvas(
+                      folders: _folders,
+                      files: _files,
+                      resizeMode: _resizeMode,
+                       editMode: _editMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
+                      onDeleteFolder: (folderId) async {
+                        setState(() { _folders.removeWhere((f) => f.id == folderId); });
+                        await _saveLayout();
+                      },
+                      onDeleteFile: (fileId) async {
+                        setState(() { _files.removeWhere((f) => f.id == fileId); });
+                        await DataManager.instance.deleteResourceFile(fileId);
+                      },
+                      onFolderMoved: (id, pos, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final prevPos = _folders[i].position;
+                            final size = _folders[i].size;
+                            final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
+                            final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onFolderResized: (id, newSize, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final minW = 160.0;
+                            final minH = 90.0;
+                            final pos = _folders[i].position;
+                            final maxW = (canvasSize.width - pos.dx).clamp(minW, canvasSize.width);
+                            final maxH = (canvasSize.height - pos.dy).clamp(minH, canvasSize.height);
+                            final w = newSize.width.clamp(minW, maxW);
+                            final h = newSize.height.clamp(minH, maxH);
+                            final clampedSize = Size(w, h);
+                            final candidate = Rect.fromLTWH(pos.dx, pos.dy, clampedSize.width, clampedSize.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(size: clampedSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onExitResizeMode: () {
+                        if (_resizeMode) setState(() => _resizeMode = false);
+                      },
+                      onMoveEnd: _saveLayout,
+                      onResizeEnd: _saveLayout,
+                      onEditFolder: (folder) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        final result = await showDialog<_ResourceFolder>(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            final idx = _folders.indexWhere((f) => f.id == folder.id);
+                            if (idx != -1) _folders[idx] = result;
+                          });
+                          await _saveLayout();
+                        }
+                      },
+                      onEditFile: (file) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
+                          context: context,
+                          builder: (ctx) => _FileMetaDialog(initial: file),
+                        );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_code': updatedFile.icon?.codePoint,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
+                      },
+                    ),
+                    _ResourcesCanvas(
+                      folders: _folders,
+                      files: _files,
+                      resizeMode: _resizeMode,
+                       editMode: _editMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
+                      onDeleteFolder: (folderId) async {
+                        setState(() { _folders.removeWhere((f) => f.id == folderId); });
+                        await _saveLayout();
+                      },
+                      onDeleteFile: (fileId) async {
+                        setState(() { _files.removeWhere((f) => f.id == fileId); });
+                        await DataManager.instance.deleteResourceFile(fileId);
+                      },
+                      onFolderMoved: (id, pos, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final prevPos = _folders[i].position;
+                            final size = _folders[i].size;
+                            final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
+                            final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onFolderResized: (id, newSize, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final minW = 160.0;
+                            final minH = 90.0;
+                            final pos = _folders[i].position;
+                            final maxW = (canvasSize.width - pos.dx).clamp(minW, canvasSize.width);
+                            final maxH = (canvasSize.height - pos.dy).clamp(minH, canvasSize.height);
+                            final w = newSize.width.clamp(minW, maxW);
+                            final h = newSize.height.clamp(minH, maxH);
+                            final clampedSize = Size(w, h);
+                            final candidate = Rect.fromLTWH(pos.dx, pos.dy, clampedSize.width, clampedSize.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(size: clampedSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onExitResizeMode: () {
+                        if (_resizeMode) setState(() => _resizeMode = false);
+                      },
+                      onMoveEnd: _saveLayout,
+                      onResizeEnd: _saveLayout,
+                      onEditFolder: (folder) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        final result = await showDialog<_ResourceFolder>(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            final idx = _folders.indexWhere((f) => f.id == folder.id);
+                            if (idx != -1) _folders[idx] = result;
+                          });
+                          await _saveLayout();
+                        }
+                      },
+                      onEditFile: (file) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
+                          context: context,
+                          builder: (ctx) => _FileMetaDialog(initial: file),
+                        );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_code': updatedFile.icon?.codePoint,
                           'icon_image_path': updatedFile.iconImagePath,
                           'description': updatedFile.description,
                         });
@@ -1552,10 +1892,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     final children = _childFoldersOf(f.id);
     return Material(
       color: Colors.transparent,
-      child: Container(
+              child: Container(
         width: 240,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
+                decoration: BoxDecoration(
           color: const Color(0xFF2A2A2A).withOpacity(0.92),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: Colors.white24),
@@ -1634,10 +1974,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           if (dy != 0) _changeGradeByDelta(dy > 0 ? 1 : -1);
         }
       },
-      child: Row(
+                child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
+                  children: [
+                    SizedBox(
             width: 260,
             child: Container(
               decoration: BoxDecoration(
@@ -1672,24 +2012,24 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(999),
                           onTap: () async {
-                            await _onAddFile();
+                              await _onAddFile();
                           },
                           child: const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            child: Row(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                          child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.add, color: Colors.white, size: 20),
-                                SizedBox(width: 8),
+                              Icon(Icons.add, color: Colors.white, size: 20),
+                                SizedBox(width: 10),
                                 Text('파일', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
+                        ),
+                      ),
+                    ),
               ],
             ),
           ),
@@ -1714,7 +2054,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        Padding(
+                    Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
@@ -1838,7 +2178,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           setState(() { 
                             if (sameLevel) {
                               _reorderTargetFolderId = f.id;
-                            } else {
+                          } else {
                               _moveToParentFolderId = f.id;
                             }
                           });
@@ -1918,7 +2258,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         // 즐겨찾기 고정 항목
         Container(
           height: 40,
-          child: InkWell(
+                        child: InkWell(
             onTap: () => setState(() => _selectedFolderIdForTree = '__FAVORITES__'),
             child: Row(
               children: [
@@ -1929,9 +2269,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   child: Text('즐겨찾기', style: TextStyle(color: Colors.white.withOpacity(0.95), fontWeight: FontWeight.w700)),
                 ),
               ],
-            ),
-          ),
-        ),
+                        ),
+                      ),
+                    ),
       ],
     );
   }
@@ -1968,7 +2308,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       hapticFeedbackOnStart: true,
                       feedback: Opacity(
                         opacity: 0.9,
-                        child: Material(
+                      child: Material(
                           color: Colors.transparent,
                           child: SizedBox(width: 210, height: 130, child: _GridFileCard(file: fi)),
                         ),
@@ -2051,9 +2391,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       ),
                     );
                   },
-                ),
-              ),
-            ],
+            ),
+          ),
+        ],
           );
         },
       ),
@@ -3228,8 +3568,12 @@ class _FolderEditDialogState extends State<_FolderEditDialog> {
               decoration: const InputDecoration(
                 labelText: '폴더명',
                 labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -3240,8 +3584,12 @@ class _FolderEditDialogState extends State<_FolderEditDialog> {
               decoration: const InputDecoration(
                 labelText: '설명',
                 labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
                 alignLabelWithHint: true,
               ),
             ),
@@ -3526,6 +3874,11 @@ class _FileMetaDialogState extends State<_FileMetaDialog> {
     _ResColors.blue3,
     _ResColors.blue4,
     _ResColors.blue5,
+    Color(0xFF212A31), // UltraDark c1
+    Color(0xFF1E252E), // UltraDark c2
+    Color(0xFF1B2029), // UltraDark c3
+    Color(0xFF181B24), // UltraDark c4
+    Color(0xFF15181F), // UltraDark c5
   ];
   @override
   void initState() {
@@ -3760,6 +4113,11 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
     _ResColors.blue3,
     _ResColors.blue4,
     _ResColors.blue5,
+    Color(0xFF212A31), // UltraDark c1
+    Color(0xFF1E252E), // UltraDark c2
+    Color(0xFF1B2029), // UltraDark c3
+    Color(0xFF181B24), // UltraDark c4
+    Color(0xFF15181F), // UltraDark c5
   ];
 
   @override
@@ -3990,7 +4348,7 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
               decoration: const InputDecoration(
                 labelText: '폴더명',
                 labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
+                enabledBorder:
                   borderSide: BorderSide(color: Colors.white24),
                 ),
                 focusedBorder: OutlineInputBorder(
@@ -4818,7 +5176,7 @@ class _PdfEditorDialog extends StatefulWidget {
   State<_PdfEditorDialog> createState() => _PdfEditorDialogState();
 }
 
-class _PdfEditorDialogState extends State<_PdfEditorDialog> {
+class _PdfEditorDialogState extends State<_PdfEditorDialog> with SingleTickerProviderStateMixin {
   final TextEditingController _inputPath = TextEditingController();
   final TextEditingController _ranges = TextEditingController();
   final TextEditingController _fileName = TextEditingController();
@@ -4831,9 +5189,12 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
   final GlobalKey _previewKey = GlobalKey();
   int _currentPreviewPage = 1;
   PdfDocument? _previewDoc;
+  late TabController _tabController;
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() { if (mounted) setState(() {}); });
     if (widget.initialInputPath != null && widget.initialInputPath!.isNotEmpty) {
       _inputPath.text = widget.initialInputPath!;
       final base = p.basenameWithoutExtension(widget.initialInputPath!);
@@ -4870,17 +5231,22 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
     _inputPath.dispose();
     _ranges.dispose();
     _fileName.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool isPreviewTab = _tabController.index == 1;
+    final double dialogWidth = isPreviewTab ? 1520 : 760;
+    final double dialogHeight = isPreviewTab ? 1248 : 624;
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('PDF 편집기', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
       content: SizedBox(
-        width: 760,
+        width: dialogWidth,
+        height: dialogHeight,
         child: DefaultTabController(
           length: 2,
           child: Column(
@@ -4895,15 +5261,14 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                     unselectedLabelColor: Colors.white54,
                   ),
                 ),
-                child: const TabBar(tabs: [
+                child: TabBar(controller: _tabController, tabs: const [
                   Tab(text: '범위 입력'),
                   Tab(text: '미리보기 선택'),
                 ]),
               ),
               const SizedBox(height: 8),
-              SizedBox(
-                height: 520,
-                child: TabBarView(children: <Widget>[
+              Expanded(
+                child: TabBarView(controller: _tabController, children: <Widget>[
                   // Tab 1: 텍스트 범위 입력
                   SingleChildScrollView(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4929,6 +5294,42 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                           backgroundColor: const Color(0xFF2A2A2A),
                         ))),
                       ]),
+                      const SizedBox(height: 10),
+                      // 드래그 박스: 여기에 PDF 파일을 드래그하여 선택
+                      DropTarget(
+                        onDragDone: (detail) {
+                          if (detail.files.isEmpty) return;
+                          final xf = detail.files.first;
+                          final path = xf.path;
+                          if (path != null && path.toLowerCase().endsWith('.pdf')) {
+                            setState(() {
+                              _inputPath.text = path;
+                              final base = p.basenameWithoutExtension(path);
+                              final suffix = widget.kindKey == 'body' ? '본문' : widget.kindKey == 'ans' ? '정답' : '해설';
+                              _fileName.text = '${base}_${widget.grade}_$suffix.pdf';
+                            });
+                          }
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          height: 120,
+                          alignment: Alignment.center,
+                          margin: const EdgeInsets.only(top: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2A2A2A),
+                            border: Border.all(color: Colors.white24, width: 1.2, style: BorderStyle.solid),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.picture_as_pdf, color: Colors.white60, size: 28),
+                              SizedBox(height: 8),
+                              Text('여기로 PDF를 드래그하여 선택', style: TextStyle(color: Colors.white60)),
+                            ],
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 12),
                       const Text('페이지 범위 (예: 1-3,5,7-9)', style: TextStyle(color: Colors.white70)),
                       const SizedBox(height: 6),
@@ -4956,11 +5357,12 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                   }
                                   final doc = snapshot.data!;
                                   final pageCount = doc.pages.length;
+                                  _previewDoc = doc;
                                   _currentPreviewPage = _currentPreviewPage.clamp(1, pageCount).toInt();
                                   return Row(
                                     children: [
                                       SizedBox(
-                                        width: 96,
+                                        width: 160,
                                         child: ListView.builder(
                                           itemCount: pageCount,
                                           itemBuilder: (c, i) => InkWell(
@@ -4987,7 +5389,38 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                           builder: (ctx, constraints) {
                                             final showPage = _currentPreviewPage;
                                             final regions = _regionsByPage[showPage] ?? [];
-                                            return GestureDetector(
+                                            return Column(
+                                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                                              children: [
+                                                Padding(
+                                                  padding: const EdgeInsets.only(bottom: 6),
+                                                  child: Row(
+                                                    children: [
+                                                      Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(0xFF2A2A2A),
+                                                          borderRadius: BorderRadius.circular(999),
+                                                          border: Border.all(color: Colors.white24),
+                                                        ),
+                                                        child: Text('$showPage / $pageCount', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  child: Listener(
+                                                    onPointerSignal: (signal) {
+                                                      if (signal is PointerScrollEvent) {
+                                                        final dy = signal.scrollDelta.dy;
+                                                        if (dy != 0) {
+                                                          setState(() {
+                                                            _currentPreviewPage = (_currentPreviewPage + (dy > 0 ? 1 : -1)).clamp(1, pageCount);
+                                                          });
+                                                        }
+                                                      }
+                                                    },
+                                                    child: GestureDetector(
                                               onPanStart: (d) {
                                                 setState(() {
                                                   _dragStart = d.localPosition;
@@ -5024,7 +5457,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                                 children: [
                                                   Container(
                                                     decoration: BoxDecoration(border: Border.all(color: Colors.white24)),
-                                                    child: PdfPageView(document: doc, pageNumber: showPage),
+                                                            child: PdfPageView(key: ValueKey('preview_'+showPage.toString()), document: doc, pageNumber: showPage),
                                                   ),
                                                   Positioned.fill(
                                                     child: Builder(
@@ -5065,8 +5498,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                                   ),
                                                 ],
                                               ),
-                                            );
-                                          },
+                                                    ),
                                         ),
                                       ),
                                     ],
@@ -5074,8 +5506,12 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                                 },
                               ),
                       ),
-                      const SizedBox(height: 8),
-                      Row(children: [
+                                      const SizedBox(width: 8),
+                                      SizedBox(
+                                        width: 160,
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                                          children: [
                         SizedBox(
                         height: 34,
                         child: OutlinedButton.icon(
@@ -5086,44 +5522,55 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                             });
                           },
                           icon: const Icon(Icons.add, size: 16),
-                          label: const Text('현재 페이지 추가'),
+                                                label: const Text('페이지 추가'),
                           style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Text('선택: ${_selectedPages.join(', ')}', style: const TextStyle(color: Colors.white60)),
-                      const SizedBox(width: 12),
-                      if (_previewDoc != null) Text('페이지: $_currentPreviewPage/${_previewDoc!.pages.length}', style: const TextStyle(color: Colors.white54)),
-                    ]),
                       const SizedBox(height: 8),
-                      SizedBox(
-                      height: 100,
+                                            Expanded(
                       child: ReorderableListView(
-                        scrollDirection: Axis.horizontal,
                         buildDefaultDragHandles: false,
                         children: [
                           for (int i = 0; i < _selectedPages.length; i++)
-                            Container(
-                              key: ValueKey('sel_$i'),
-                              margin: const EdgeInsets.only(right: 8),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                              decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
-                              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_indicator, color: Colors.white60)),
-                                const SizedBox(width: 6),
-                                SizedBox(
-                                  width: 56,
-                                  height: 78,
+                                                    LongPressDraggable<int>(
+                                                      key: ValueKey('sel_v_$i'),
+                                                      data: i,
+                                                      feedback: Material(
+                                                        color: Colors.transparent,
+                                                        child: ClipRRect(
+                                                          borderRadius: BorderRadius.circular(8),
+                                                          child: SizedBox(
+                                                            width: 86,
+                                                            height: 120,
+                                                            child: _previewDoc == null ? const SizedBox() : PdfPageView(document: _previewDoc!, pageNumber: _selectedPages[i]),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      child: ReorderableDelayedDragStartListener(
+                                                        index: i,
+                                                        child: Container(
+                                                          margin: const EdgeInsets.only(bottom: 8),
+                                                          padding: const EdgeInsets.all(8),
+                                                          decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)),
+                                                          child: Row(
+                                                            children: [
+                                                              Expanded(
+                                                                child: SizedBox(
+                                                                  height: 120,
                                   child: _previewDoc == null
                                       ? const SizedBox()
                                       : ClipRRect(
-                                          borderRadius: BorderRadius.circular(4),
+                                                                        borderRadius: BorderRadius.circular(8),
                                           child: PdfPageView(document: _previewDoc!, pageNumber: _selectedPages[i]),
+                                                                      ),
                                         ),
                                 ),
                                 const SizedBox(width: 6),
                                 InkWell(onTap: () => setState(() { _selectedPages.removeAt(i); }), child: const Icon(Icons.close, size: 16, color: Colors.white54)),
-                              ]),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
                             ),
                         ],
                         onReorder: (oldIndex, newIndex) {
@@ -5135,6 +5582,20 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> {
                         },
                       ),
                     ),
+                    ],
+                  ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        Text('선택: ${_selectedPages.join(', ')}', style: const TextStyle(color: Colors.white60)),
+                        const SizedBox(width: 12),
+                        if (_previewDoc != null) Text('페이지: $_currentPreviewPage/${_previewDoc!.pages.length}', style: const TextStyle(color: Colors.white54)),
+                      ]),
                     ],
                   ),
                 ]),
