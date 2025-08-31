@@ -2263,7 +2263,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
             child: Row(
               children: [
                 const SizedBox(width: 12),
-                Icon(Icons.star, color: _selectedFolderIdForTree == '__FAVORITES__' ? Colors.amber : Colors.white54, size: 18),
+                Icon(Icons.bookmark, color: _selectedFolderIdForTree == '__FAVORITES__' ? Colors.amber : Colors.white54, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text('즐겨찾기', style: TextStyle(color: Colors.white.withOpacity(0.95), fontWeight: FontWeight.w700)),
@@ -3726,27 +3726,46 @@ class _GridFileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 고정형 카드 스타일: 일관된 크기/패딩, 드래그/리사이즈 없음
-    final hasForCurrent = (context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade) != null;
+    final resState = context.findAncestorStateOfType<_ResourcesScreenState>();
+    final grades = resState?._grades ?? const <String>[];
+    final selectedIndex = resState?._selectedGradeIndex ?? -1;
+    final currentGrade = (selectedIndex >= 0 && selectedIndex < grades.length) ? grades[selectedIndex] : null;
+    final hasForCurrent = currentGrade != null && (file.linksByGrade['$currentGrade#body']?.trim().isNotEmpty ?? false);
+    final bg = hasForCurrent ? (file.color ?? const Color(0xFF2B2B2B)) : const Color(0xFF2B2B2B).withOpacity(0.22);
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () {},
+          onTap: () async {
+            if (currentGrade == null) return;
+            final key = '${currentGrade}#body';
+            final link = file.linksByGrade[key]?.trim() ?? '';
+            if (link.isEmpty) return;
+            try {
+              if (link.startsWith('http://') || link.startsWith('https://')) {
+                final uri = Uri.parse(link);
+                await launchUrl(uri, mode: LaunchMode.platformDefault);
+              } else {
+                await OpenFilex.open(link);
+              }
+            } catch (_) {}
+          },
           splashColor: Colors.white.withOpacity(0.06),
           highlightColor: Colors.white.withOpacity(0.03),
           child: Container(
             decoration: BoxDecoration(
-              color: (file.color ?? const Color(0xFF2B2B2B)),
+              color: bg,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: Colors.white.withOpacity(0.05), width: 0.8),
               boxShadow: [
-                // iOS 느낌의 부드러운 듀얼 섀도우
-                BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 12)),
-                BoxShadow(color: Colors.white.withOpacity(0.03), blurRadius: 2, offset: const Offset(0, 1)),
+                if (hasForCurrent) ...[
+                  BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 12)),
+                  BoxShadow(color: Colors.white.withOpacity(0.03), blurRadius: 2, offset: const Offset(0, 1)),
+                ],
               ],
             ),
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            padding: const EdgeInsets.fromLTRB(16, 14, 10, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -3762,17 +3781,17 @@ class _GridFileCard extends StatelessWidget {
                         ),
                       )
                     else
-                      Icon(file.icon ?? Icons.insert_drive_file, color: file.textColor ?? Colors.white70, size: 22),
+                      Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? (file.textColor ?? Colors.white70) : Colors.white24, size: 22),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         file.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: file.textColor ?? Colors.white, fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.2),
+                        style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38.withOpacity(0.6)), fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.2),
                       ),
                     ),
-                    // 즐겨찾기 토글
+                    // 즐겨찾기 토글 (아이콘: 북마크)
                     InkWell(
                       onTap: () async {
                         final isFav = (context.findAncestorStateOfType<_ResourcesScreenState>()?._favoriteFileIds.contains(file.id)) ?? false;
@@ -3791,7 +3810,7 @@ class _GridFileCard extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.only(left: 6.0),
                         child: Icon(
-                          Icons.star,
+                          Icons.bookmark,
                           size: 20,
                           color: (context.findAncestorStateOfType<_ResourcesScreenState>()?._favoriteFileIds.contains(file.id) ?? false)
                               ? Colors.amber
@@ -3803,17 +3822,18 @@ class _GridFileCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 if ((file.description ?? '').isNotEmpty)
-                  Text(file.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white60, fontSize: 12.5)),
+                  Text(file.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white60, fontSize: 13.5)),
                 const Spacer(),
                 Row(
                   children: [
-                    _MiniPill(text: '본문', fontSize: 13),
-                    const SizedBox(width: 6),
-                    _MiniPill(text: '정답', fontSize: 13),
-                    const SizedBox(width: 6),
-                    _MiniPill(text: '해설', fontSize: 13),
+                    // 새 가로 버튼 UI
+                    _SmallLinkButtonPill(file: file, kind: 'ans', currentGrade: currentGrade),
+                    const SizedBox(width: 8),
+                    _SmallLinkButtonPill(file: file, kind: 'sol', currentGrade: currentGrade),
+                    const SizedBox(width: 10),
+                    _BodyExtBadge(file: file, currentGrade: currentGrade),
                     const Spacer(),
-                    Icon(Icons.more_horiz, size: 18, color: Colors.white.withOpacity(0.38)),
+                    _MoreMenuButton(file: file),
                   ],
                 ),
               ],
@@ -3839,6 +3859,167 @@ class _MiniPill extends StatelessWidget {
         border: Border.all(color: Colors.white12),
       ),
       child: Text(text, style: TextStyle(color: Colors.white70, fontSize: fontSize, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _SmallLinkButton extends StatelessWidget {
+  final _ResourceFile file;
+  final String kind; // 'ans' | 'sol'
+  final String? currentGrade;
+  const _SmallLinkButton({required this.file, required this.kind, required this.currentGrade});
+  @override
+  Widget build(BuildContext context) {
+    final key = currentGrade != null ? '${currentGrade}#${kind}' : null;
+    final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
+    final enabled = link.isNotEmpty;
+    final icon = kind == 'ans' ? Icons.check_circle : Icons.menu_book;
+    return Tooltip(
+      message: kind == 'ans' ? '정답' : '해설',
+      child: InkWell(
+        onTap: !enabled ? null : () async {
+          if (link.startsWith('http://') || link.startsWith('https://')) {
+            final uri = Uri.parse(link);
+            await launchUrl(uri, mode: LaunchMode.platformDefault);
+          } else {
+            await OpenFilex.open(link);
+          }
+        },
+        borderRadius: BorderRadius.circular(6),
+        child: Icon(icon, size: 18, color: enabled ? Colors.white70 : Colors.white30),
+      ),
+    );
+  }
+}
+
+class _SmallLinkButtonPill extends StatelessWidget {
+  final _ResourceFile file;
+  final String kind; // 'ans' | 'sol'
+  final String? currentGrade;
+  const _SmallLinkButtonPill({required this.file, required this.kind, required this.currentGrade});
+  @override
+  Widget build(BuildContext context) {
+    final key = currentGrade != null ? '${currentGrade}#${kind}' : null;
+    final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
+    final enabled = link.isNotEmpty;
+    final isAns = kind == 'ans';
+    // 확장자 계산 (호버 시에만 보여줌)
+    String? ext;
+    if (link.endsWith('.pdf')) ext = 'PDF';
+    else if (link.endsWith('.hwp')) ext = 'HWP';
+    return Tooltip(
+      message: ext ?? (isAns ? '정답' : '해설'),
+      child: InkWell(
+        onTap: !enabled ? null : () async {
+          if (link.startsWith('http://') || link.startsWith('https://')) {
+            final uri = Uri.parse(link);
+            await launchUrl(uri, mode: LaunchMode.platformDefault);
+          } else {
+            await OpenFilex.open(link);
+          }
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: enabled ? const Color(0xFF3A3F44) : const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(8),
+            // 윤곽선 제거
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(isAns ? '정답' : '해설', style: TextStyle(color: enabled ? Colors.white70 : Colors.white38, fontSize: 12, fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BodyExtBadge extends StatelessWidget {
+  final _ResourceFile file;
+  final String? currentGrade;
+  const _BodyExtBadge({required this.file, required this.currentGrade});
+  @override
+  Widget build(BuildContext context) {
+    final key = currentGrade != null ? '${currentGrade}#body' : null;
+    final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
+    if (link.isEmpty) return const SizedBox();
+    String? ext;
+    if (link.endsWith('.pdf')) ext = 'PDF';
+    else if (link.endsWith('.hwp')) ext = 'HWP';
+    else ext = null;
+    if (ext == null) return const SizedBox();
+    return Container(
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+        // 윤곽선 제거
+      ),
+      alignment: Alignment.center,
+      child: Text(ext!, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.2)),
+    );
+  }
+}
+
+class _MoreMenuButton extends StatelessWidget {
+  final _ResourceFile file;
+  const _MoreMenuButton({required this.file});
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: '메뉴',
+      position: PopupMenuPosition.under,
+      offset: const Offset(8, -6),
+      icon: Icon(Icons.more_horiz, size: 18, color: Colors.white.withOpacity(0.6)),
+      itemBuilder: (ctx) => <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(
+          value: 'edit',
+          child: Row(children: const [Icon(Icons.edit, size: 16, color: Colors.white70), SizedBox(width: 8), Text('수정', style: TextStyle(color: Colors.white))]),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(children: const [Icon(Icons.delete, size: 16, color: Colors.white70), SizedBox(width: 8), Text('삭제', style: TextStyle(color: Colors.white))]),
+        ),
+      ],
+      color: const Color(0xFF2A2A2A),
+      surfaceTintColor: Colors.transparent,
+      onSelected: (value) async {
+        if (value == 'edit') {
+          await showDialog(context: context, builder: (ctx) => _FileMetaDialog(initial: file));
+        } else if (value == 'delete') {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              title: const Text('삭제', style: TextStyle(color: Colors.white)),
+              content: const Text('이 파일을 삭제할까요?', style: TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('삭제')),
+              ],
+            ),
+          );
+          if (ok == true) {
+            // 화면 상단의 상태를 찾아 삭제 요청을 위임
+            final resourcesState = context.findAncestorStateOfType<_ResourcesScreenState>();
+            if (resourcesState != null) {
+              final idx = resourcesState._files.indexWhere((e) => e.id == file.id);
+              if (idx != -1) {
+                resourcesState.setState(() {
+                  resourcesState._files.removeAt(idx);
+                });
+                await DataManager.instance.deleteResourceFile(file.id);
+              }
+            }
+          }
+        }
+      },
     );
   }
 }
@@ -4348,7 +4529,7 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
               decoration: const InputDecoration(
                 labelText: '폴더명',
                 labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder:
+                enabledBorder: OutlineInputBorder(
                   borderSide: BorderSide(color: Colors.white24),
                 ),
                 focusedBorder: OutlineInputBorder(
@@ -4645,7 +4826,7 @@ class _FileCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final primaryGrade = (context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade) ?? file.primaryGrade;
     final hasForCurrent = primaryGrade != null && (file.linksByGrade['$primaryGrade#body']?.trim().isNotEmpty ?? false);
-    final bg = (hasForCurrent ? (file.color ?? const Color(0xFF2D2D2D)) : const Color(0xFF2D2D2D).withOpacity(0.5));
+    final bg = hasForCurrent ? (file.color ?? const Color(0xFF2D2D2D)) : const Color(0xFF2D2D2D).withOpacity(0.22);
     final primary = primaryGrade;
     return Container(
       width: file.size.width,
@@ -4654,7 +4835,7 @@ class _FileCard extends StatelessWidget {
         color: bg,
         borderRadius: BorderRadius.circular(10),
          border: Border.all(color: const Color(0xFF1F1F1F), width: 1.2),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))],
+        boxShadow: hasForCurrent ? [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))] : [],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
@@ -4670,24 +4851,24 @@ class _FileCard extends StatelessWidget {
                ),
              )
            else
-             Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white30, size: 22),
-          const SizedBox(width: 8),
+             Icon(file.icon ?? Icons.insert_drive_file, color: hasForCurrent ? Colors.white70 : Colors.white24, size: 22),
+          const SizedBox(width: 4),
           Expanded(
             child: Text(
               file.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38), fontSize: 17, fontWeight: FontWeight.w800),
+              style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38.withOpacity(0.6)), fontSize: 17, fontWeight: FontWeight.w800),
             ),
           ),
           const SizedBox(width: 8),
-          // 본문/정답/해설 아이콘 버튼 (현재 학년 기준으로 열기)
+          // 하단 액션: 정답/해설만 노출, 본문 버튼 제거
           _FileLinkButton(file: file, kind: 'ans'),
           const SizedBox(width: 6),
           _FileLinkButton(file: file, kind: 'sol'),
           const SizedBox(width: 6),
           _BookmarkButton(file: file),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
           if (primary != null)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -4713,8 +4894,8 @@ class _FileLinkButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final current = context.findAncestorStateOfType<_DraggableFileCardState>()?.widget.currentGrade;
-    final label = kind == 'body' ? '본문' : kind == 'ans' ? '정답' : '해설';
-    final icon = kind == 'body' ? Icons.description : kind == 'ans' ? Icons.check_circle : Icons.menu_book;
+    final label = kind == 'ans' ? '정답' : '해설';
+    final icon = kind == 'ans' ? Icons.check_circle : Icons.menu_book;
     final key = current != null ? '${current}#${kind}' : null;
     final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
     final enabled = link.isNotEmpty;
@@ -5530,48 +5711,50 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> with SingleTickerPro
                                             Expanded(
                       child: ReorderableListView(
                         buildDefaultDragHandles: false,
+                        proxyDecorator: (child, index, animation) {
+                          return Material(
+                            type: MaterialType.transparency,
+                            child: _SelectedPageThumb(
+                              document: _previewDoc,
+                              pageNumber: _selectedPages[index],
+                              height: 120,
+                              outerRadius: 12,
+                              innerRadius: 8,
+                              showNumberBadge: true,
+                            ),
+                          );
+                        },
                         children: [
                           for (int i = 0; i < _selectedPages.length; i++)
-                                                    LongPressDraggable<int>(
+                                                    ReorderableDelayedDragStartListener(
                                                       key: ValueKey('sel_v_$i'),
-                                                      data: i,
-                                                      feedback: Material(
-                                                        color: Colors.transparent,
-                                                        child: ClipRRect(
-                                                          borderRadius: BorderRadius.circular(8),
-                                                          child: SizedBox(
-                                                            width: 86,
-                                                            height: 120,
-                                                            child: _previewDoc == null ? const SizedBox() : PdfPageView(document: _previewDoc!, pageNumber: _selectedPages[i]),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                      child: ReorderableDelayedDragStartListener(
-                                                        index: i,
-                                                        child: Container(
-                                                          margin: const EdgeInsets.only(bottom: 8),
-                                                          padding: const EdgeInsets.all(8),
-                                                          decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)),
-                                                          child: Row(
-                                                            children: [
-                                                              Expanded(
-                                                                child: SizedBox(
+                                                      index: i,
+                                                      child: Container(
+                                                        margin: const EdgeInsets.only(bottom: 8),
+                                                        padding: const EdgeInsets.all(8),
+                                                        decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(12)),
+                                                        child: Row(
+                                                          children: [
+                                                            Expanded(
+                                                              child: SizedBox(
+                                                                height: 120,
+                                                                child: _SelectedPageThumb(
+                                                                  document: _previewDoc,
+                                                                  pageNumber: _selectedPages[i],
                                                                   height: 120,
-                                  child: _previewDoc == null
-                                      ? const SizedBox()
-                                      : ClipRRect(
-                                                                        borderRadius: BorderRadius.circular(8),
-                                          child: PdfPageView(document: _previewDoc!, pageNumber: _selectedPages[i]),
-                                                                      ),
-                                        ),
-                                ),
-                                const SizedBox(width: 6),
-                                InkWell(onTap: () => setState(() { _selectedPages.removeAt(i); }), child: const Icon(Icons.close, size: 16, color: Colors.white54)),
-                                                            ],
-                                                          ),
+                                                                  outerRadius: 8,
+                                                                  innerRadius: 8,
+                                                                  showNumberBadge: true,
+                                                                  numberText: '${_selectedPages[i]}',
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(width: 6),
+                                                            InkWell(onTap: () => setState(() { _selectedPages.removeAt(i); }), child: const Icon(Icons.close, size: 16, color: Colors.white54)),
+                                                          ],
                                                         ),
                                                       ),
-                            ),
+                                                    ),
                         ],
                         onReorder: (oldIndex, newIndex) {
                           setState(() {
@@ -5681,4 +5864,60 @@ class _ShapeSelectButton extends StatelessWidget {
 }
 
  
+
+class _SelectedPageThumb extends StatelessWidget {
+  final PdfDocument? document;
+  final int pageNumber;
+  final double? width;
+  final double? height;
+  final double outerRadius;
+  final double innerRadius;
+  final bool showNumberBadge;
+  final String? numberText;
+  const _SelectedPageThumb({super.key, required this.document, required this.pageNumber, this.width, this.height, this.outerRadius = 12, this.innerRadius = 8, this.showNumberBadge = false, this.numberText});
+  @override
+  Widget build(BuildContext context) {
+    final pdf = document;
+    final child = pdf == null
+        ? const SizedBox()
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(innerRadius),
+            clipBehavior: Clip.hardEdge,
+            child: Stack(
+              children: [
+                Positioned.fill(child: PdfPageView(document: pdf, pageNumber: pageNumber)),
+                if (showNumberBadge)
+                  Positioned(
+                    right: 6,
+                    bottom: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Text(numberText ?? '$pageNumber', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+              ],
+            ),
+          );
+    final a4 = AspectRatio(aspectRatio: 1 / 1.4, child: child);
+    final sized = width != null
+        ? SizedBox(width: width, child: a4)
+        : height != null
+            ? SizedBox(height: height, child: a4)
+            : a4;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(outerRadius),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: sized,
+    );
+  }
+}
 
