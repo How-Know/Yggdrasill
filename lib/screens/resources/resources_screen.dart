@@ -96,6 +96,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   String? _reorderTargetFolderId;
   bool _reorderInsertBefore = true;
   String? _moveToParentFolderId;
+  String? _fileDropTargetFolderId;
 
   List<_ResourceFolder> _childFoldersOf(String? parentId) {
     final list = _folders.where((f) => (f.parentId ?? '') == (parentId ?? '')).toList();
@@ -1065,21 +1066,35 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         child: Builder(
                           builder: (context) {
                             String desc = '';
+                            String folderName = '';
                             if (_selectedFolderIdForTree == '__FAVORITES__') {
-                              desc = '즐겨찾기';
+                              folderName = '즐겨찾기';
+                              desc = '';
                             } else {
                               final idx = _folders.indexWhere((x) => x.id == _selectedFolderIdForTree);
                               if (idx != -1) {
+                                folderName = _folders[idx].name;
                                 desc = _folders[idx].description;
                               }
                             }
                             return Padding(
                               padding: const EdgeInsets.only(left: 15),
-                              child: Text(
-                                desc,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.white70, fontSize: 15),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    folderName,
+                                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      desc,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: Colors.white70, fontSize: 15),
+                                    ),
+                                  ),
+                                ],
                               ),
                             );
                           },
@@ -2158,7 +2173,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         }
                       }
                     },
-                    child: LongPressDraggable<_ResourceFolder>(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        LongPressDraggable<_ResourceFolder>(
                       data: f,
                       hapticFeedbackOnStart: true,
                       feedback: _buildDragFeedback(f),
@@ -2169,6 +2187,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       onDragEnd: (_) {
                         setState(() { _draggingFolderId = null; _moveToParentFolderId = null; _reorderTargetFolderId = null;});
                       },
+                      // 1) 폴더 재정렬/이동 DragTarget
                       child: DragTarget<_ResourceFolder>(
                         onWillAccept: (incoming) {
                           if (incoming == null) return false;
@@ -2244,11 +2263,80 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                   bottom: 0,
                                   child: SizedBox(height: 2, child: DecoratedBox(decoration: BoxDecoration(color: const Color(0xFF64A6DD)))),
                                 ),
+                              Positioned.fill(
+                                child: DragTarget<_ResourceFile>(
+                                  onWillAccept: (incomingFile) {
+                                    final ok = incomingFile != null;
+                                    if (ok) setState(() { _fileDropTargetFolderId = f.id; });
+                                    return ok;
+                                  },
+                                  onAcceptWithDetails: (details) async {
+                                    final incoming = details.data;
+                                    final idx = _files.indexWhere((x) => x.id == incoming.id);
+                                    if (idx != -1) {
+                                      final childList = _childFilesOf(f.id);
+                                      final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
+                                      setState(() {
+                                        _files[idx] = _files[idx].copyWith(parentId: f.id, orderIndex: nextIndex);
+                                        _fileDropTargetFolderId = null;
+                                      });
+                                      await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id, 'order_index': nextIndex});
+                                    }
+                                  },
+                                  onLeave: (_) => setState(() { if (_fileDropTargetFolderId == f.id) _fileDropTargetFolderId = null; }),
+                                  builder: (context, candFiles, rejFiles) {
+                                    final active = _fileDropTargetFolderId == f.id && candFiles.isNotEmpty;
+                                    return AnimatedContainer(
+                                      duration: const Duration(milliseconds: 120),
+                                      decoration: active
+                                          ? BoxDecoration(
+                                              border: Border.all(color: const Color(0xFF64A6DD), width: 2),
+                                              borderRadius: BorderRadius.circular(8),
+                                            )
+                                          : const BoxDecoration(),
+                                    );
+                                  },
+                                ),
+                              ),
                             ],
                           );
                         },
                       ),
                     ),
+                    // 2) 파일을 이 폴더로 이동시키는 DragTarget (다른 타입)
+                    DragTarget<_ResourceFile>(
+                      onWillAccept: (incomingFile) {
+                        final ok = incomingFile != null; // 어떤 파일이든 허용
+                        if (ok) setState(() { _fileDropTargetFolderId = f.id; });
+                        return ok;
+                      },
+                      onAcceptWithDetails: (details) async {
+                        final incoming = details.data;
+                        final idx = _files.indexWhere((x) => x.id == incoming.id);
+                        if (idx != -1) {
+                          // 새 부모 폴더의 마지막 인덱스 계산
+                          final childList = _childFilesOf(f.id);
+                          final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
+                          setState(() {
+                            _files[idx] = _files[idx].copyWith(parentId: f.id, orderIndex: nextIndex);
+                            _fileDropTargetFolderId = null;
+                          });
+                          await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id, 'order_index': nextIndex});
+                        }
+                      },
+                      onLeave: (_) => setState(() { if (_fileDropTargetFolderId == f.id) _fileDropTargetFolderId = null; }),
+                      builder: (context, cand, rej) {
+                        final highlight = _fileDropTargetFolderId == f.id && cand.isNotEmpty;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 120),
+                          height: 2,
+                          margin: EdgeInsets.only(left: 12.0 + depth * 16.0),
+                          color: highlight ? const Color(0xFF64A6DD) : Colors.transparent,
+                        );
+                      },
+                    ),
+                  ],
+                ),
                   );
                 },
               );
@@ -2286,8 +2374,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          const double tileWidth = 210;
-          final cols = (constraints.maxWidth / (tileWidth + 16)).floor().clamp(1, 8);
+          const double baseTileWidth = 210; // 기준 폭
+          const double baseTileHeight = 130; // 기준 높이
+          const double tileWidth = baseTileWidth * 1.2; // 20% 확대
+          const double tileHeight = baseTileHeight * 1.1; // 10% 확대
+          final cols = (constraints.maxWidth / (tileWidth + 16)).floor().clamp(1, 999);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2298,7 +2389,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                     crossAxisCount: cols,
                     mainAxisSpacing: 16,
                     crossAxisSpacing: 16,
-                    childAspectRatio: 210 / 130,
+                    childAspectRatio: tileWidth / tileHeight, // 확대 비율 유지
                   ),
                   itemCount: files.length,
                   itemBuilder: (context, index) {
@@ -2310,14 +2401,27 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         opacity: 0.9,
                       child: Material(
                           color: Colors.transparent,
-                          child: SizedBox(width: 210, height: 130, child: _GridFileCard(file: fi)),
+                          child: SizedBox(width: tileWidth, height: tileHeight, child: _GridFileCard(file: fi)),
                         ),
                       ),
                       onDragStarted: () => setState(() { _draggingFileId = fi.id; }),
                       onDragEnd: (_) => setState(() { _draggingFileId = null; _reorderFileTargetId = null; }),
                       childWhenDragging: AnimatedOpacity(duration: const Duration(milliseconds: 150), opacity: 0.25, child: _GridFileCard(file: fi)),
                       dragAnchorStrategy: pointerDragAnchorStrategy,
-                      child: DragTarget<_ResourceFile>(
+                      child: Row(
+                        children: [
+                          // 왼쪽 폴더 트리 드롭 영역: 폴더로 이동 허용
+                          DragTarget<_ResourceFolder>(
+                            onWillAccept: (incomingFolder) {
+                              // 파일을 트리로 드롭할 때만 하이라이트 (incomingFolder는 null, candidate는 상위 DragTarget의 데이터)
+                              return false; // 폴더 재정렬용, 여기서는 파일 받지 않음
+                            },
+                            builder: (context, candF, rejF) {
+                              return const SizedBox(width: 0);
+                            },
+                          ),
+                          // 카드 간 재정렬 영역
+                          Expanded(child: DragTarget<_ResourceFile>(
                         onWillAccept: (incoming) {
                           final ok = incoming != null && incoming.id != fi.id;
                           if (ok) setState(() { _reorderFileTargetId = fi.id; });
@@ -2347,47 +2451,58 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                               setState(() {});
                             }
                           } else {
-                            // 다른 폴더로 이동
-                            final idx = _files.indexWhere((x) => x.id == incoming.id);
-                            if (idx != -1) {
-                              final targetParent = fi.parentId ?? _selectedFolderIdForTree;
-                              // 새 부모의 마지막 인덱스 계산
-                              final childList = _childFilesOf(targetParent);
-                              final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
-                              _files[idx] = _files[idx].copyWith(parentId: targetParent, orderIndex: nextIndex);
-                            }
-                            setState(() {});
-                            DataManager.instance.saveResourceFile({
-                              'id': incoming.id,
-                              'parent_id': fi.parentId ?? _selectedFolderIdForTree,
-                              'order_index': (_childFilesOf(fi.parentId ?? _selectedFolderIdForTree).map((e) => e.orderIndex ?? 0).fold<int>(-1, (a,b)=> a>b?a:b) + 1),
-                            });
+                            // 폴더 트리로의 이동은 폴더 DragTarget에서만 허용. 여기서는 막음.
                           }
                           setState(() { _reorderFileTargetId = null; });
                         },
                         onLeave: (_) => setState(() { if (_reorderFileTargetId == fi.id) _reorderFileTargetId = null; }),
                         builder: (context, cand, rej) {
-                          final highlight = _reorderFileTargetId == fi.id && _draggingFileId != null && _draggingFileId != fi.id;
-                          return Stack(children: [
-                            Row(children: [
-                              // 좌측 placeholder
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 120),
-                                width: highlight ? 10 : 0,
-                                height: double.infinity,
-                                decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
-                              ),
-                              Expanded(child: _GridFileCard(file: fi)),
-                              // 우측 placeholder
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 120),
-                                width: highlight ? 10 : 0,
-                                height: double.infinity,
-                                decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
-                              ),
-                            ]),
-                          ]);
+                          final draggingId = _draggingFileId;
+                          final isTarget = _reorderFileTargetId == fi.id && draggingId != null && draggingId != fi.id;
+                          // 마우스 x 기준으로 좌/우 표시를 나눔
+                          bool showLeft = false;
+                          bool showRight = false;
+                          // 포인터 접근을 제거하고 아래 LayoutBuilder에서 위치 기반으로만 판정합니다.
+                          return LayoutBuilder(builder: (ctx, cons) {
+                            // 더 정확한 좌/우 판정: 드래그 중 항목의 글로벌 중심과 대상 글로벌 중심 비교
+                            if (isTarget && cand.isNotEmpty) {
+                              // cand 첫 번째의 위치를 이용해 좌/우를 대략 판단
+                              // 드래그 중 대상의 글로벌 x는 알 수 없으므로, 대상 위젯 중심 기준으로 좌측 우선 강조
+                              showLeft = true;
+                              showRight = false;
+                            }
+                            return Stack(children: [
+                              Row(children: [
+                                // 좌측 placeholder
+                                AnimatedContainer(
+                                  duration: const Duration(milliseconds: 120),
+                                  width: isTarget && showLeft ? 10 : 0,
+                                  height: double.infinity,
+                                  decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
+                                ),
+                                Expanded(
+                                  child: AnimatedPadding(
+                                    duration: const Duration(milliseconds: 120),
+                                    padding: EdgeInsets.only(
+                                      left: isTarget && showLeft ? 8 : 0,
+                                      right: isTarget && showRight ? 8 : 0,
+                                    ),
+                                    child: _GridFileCard(file: fi),
+                                  ),
+                                ),
+                                // 우측 placeholder
+                                AnimatedContainer(
+                                  duration: const Duration(milliseconds: 120),
+                                  width: isTarget && showRight ? 10 : 0,
+                                  height: double.infinity,
+                                  decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
+                                ),
+                              ]),
+                            ]);
+                          });
                         },
+                      )),
+                        ],
                       ),
                     );
                   },
@@ -5458,7 +5573,7 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> with SingleTickerPro
                       Row(children: [
                         Expanded(child: TextField(controller: _inputPath, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
                         const SizedBox(width: 8),
-                        SizedBox(height: 36, child: OutlinedButton.icon(onPressed: () async {
+                        SizedBox(height: 36, width: 1.2 * 200, child: OutlinedButton.icon(onPressed: () async {
                           final typeGroup = XTypeGroup(label: 'pdf', extensions: ['pdf']);
                           final f = await openFile(acceptedTypeGroups: [typeGroup]);
                           if (f != null) setState(() {
