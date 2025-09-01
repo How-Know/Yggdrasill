@@ -1553,16 +1553,32 @@ class DataManager {
     await AcademyDbService.instance.saveResourceFolders(rows);
   }
 
+  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) async {
+    await AcademyDbService.instance.saveResourceFoldersForCategory(category, rows);
+  }
+
   Future<List<Map<String, dynamic>>> loadResourceFolders() async {
     return await AcademyDbService.instance.loadResourceFolders();
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) async {
+    return await AcademyDbService.instance.loadResourceFoldersForCategory(category);
   }
 
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
     await AcademyDbService.instance.saveResourceFile(row);
   }
 
+  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) async {
+    await AcademyDbService.instance.saveResourceFileWithCategory(row, category);
+  }
+
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {
     return await AcademyDbService.instance.loadResourceFiles();
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) async {
+    return await AcademyDbService.instance.loadResourceFilesForCategory(category);
   }
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {

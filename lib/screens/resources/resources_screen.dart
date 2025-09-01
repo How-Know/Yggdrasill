@@ -97,6 +97,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   bool _reorderInsertBefore = true;
   String? _moveToParentFolderId;
   String? _fileDropTargetFolderId;
+  String get _currentCategory => _customTabIndex == 0 ? 'textbook' : (_customTabIndex == 1 ? 'exam' : 'other');
 
   List<_ResourceFolder> _childFoldersOf(String? parentId) {
     final list = _folders.where((f) => (f.parentId ?? '') == (parentId ?? '')).toList();
@@ -795,7 +796,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 
   Future<void> _onAddFolder() async {
-    await _onAddFolderWithParent(_customTabIndex == 0 ? _selectedFolderIdForTree : null);
+    await _onAddFolderWithParent(_selectedFolderIdForTree);
   }
 
   Future<void> _onAddFolderWithParent(String? parentId) async {
@@ -856,9 +857,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     if (linksResult == null) return; // 취소 시 생성 중단 (버그 수정)
     final finalLinks = linksResult['links'] ?? <String, String>{};
     final merged = meta.copyWith(linksByGrade: finalLinks);
-    final merged2 = merged.copyWith(parentId: _customTabIndex == 0 ? _selectedFolderIdForTree : merged.parentId);
-      // 파일 메타 저장
-      await DataManager.instance.saveResourceFile({
+    final merged2 = merged.copyWith(parentId: _selectedFolderIdForTree);
+      // 파일 메타 저장 (탭 카테고리 부여)
+      await DataManager.instance.saveResourceFileWithCategory({
       'id': merged2.id,
       'name': merged2.name,
       'url': '',
@@ -873,7 +874,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       'icon_code': merged2.icon?.codePoint,
       'icon_image_path': merged2.iconImagePath,
       'description': merged2.description,
-      });
+      }, _currentCategory);
       // 학년별 링크 저장
     await DataManager.instance.saveResourceFileLinks(merged2.id, merged2.linksByGrade);
     // 상태 반영
@@ -915,7 +916,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         'parent_id': f.parentId,
         'order_index': f.orderIndex,
       }).toList();
-      await DataManager.instance.saveResourceFolders(rows);
+      await DataManager.instance.saveResourceFoldersForCategory(_currentCategory, rows);
     } catch (e) {
       // ignore errors silently for now
     }
@@ -923,7 +924,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   Future<void> _loadLayout() async {
     try {
-      final rows = await DataManager.instance.loadResourceFolders();
+      final rows = await DataManager.instance.loadResourceFoldersForCategory(_currentCategory);
       final loaded = rows.map<_ResourceFolder>((r) => _ResourceFolder(
         id: r['id'] as String,
         name: (r['name'] as String?) ?? '',
@@ -935,7 +936,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         parentId: r['parent_id'] as String?,
         orderIndex: (r['order_index'] as num?)?.toInt(),
       )).toList();
-      final fileRows = await DataManager.instance.loadResourceFiles();
+      final fileRows = await DataManager.instance.loadResourceFilesForCategory(_currentCategory);
       final List<_ResourceFile> loadedFiles = [];
       for (final r in fileRows) {
         final id = r['id'] as String;
@@ -1030,7 +1031,12 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                     // 탭 전환 시에는 드롭다운을 닫되, 탭 전환 직후 build 전에 닫기 로직이 다시 먹지 않도록 여기만 처리
                     if (_isGradeMenuOpen) _closeGradeMenu();
                     _customTabIndex = i;
+                    // 탭 변경 시 데이터 재로딩 및 트리 초기화
+                    _expandedFolderIds.clear();
+                    _selectedFolderIdForTree = '__FAVORITES__';
                   });
+                  // 카테고리별 데이터 로드
+                  _loadLayout();
                 },
               ),
               const SizedBox(height: 1),
@@ -1109,7 +1115,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 child: IndexedStack(
                   index: _customTabIndex,
                   children: [
-                    // 교재 탭: 좌측 트리 + 우측 그리드 레이아웃
+                    // 탭1: 교재
                     _buildTextbooksTreeLayout(),
                     _ResourcesCanvas(
                       folders: _folders,
@@ -1279,7 +1285,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         });
                       },
                     ),
-                    _ResourcesCanvas(
+                    /*
+                    // 탭2: 시험 - 트리+그리드 동일 레이아웃
+                    _buildTextbooksTreeLayout(),
                       folders: _folders,
                       files: _files,
                       resizeMode: _resizeMode,
@@ -1437,6 +1445,121 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         });
                       },
                     ),
+                    // 탭3: 기타 - 트리+그리드 동일 레이아웃
+                    _buildTextbooksTreeLayout(),
+                      folders: _folders,
+                      files: _files,
+                      resizeMode: _resizeMode,
+                       editMode: _editMode,
+                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
+                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
+                      onDeleteFolder: (folderId) async {
+                        setState(() { _folders.removeWhere((f) => f.id == folderId); });
+                        await _saveLayout();
+                      },
+                      onDeleteFile: (fileId) async {
+                        setState(() { _files.removeWhere((f) => f.id == fileId); });
+                        await DataManager.instance.deleteResourceFile(fileId);
+                      },
+                      onFolderMoved: (id, pos, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final prevPos = _folders[i].position;
+                            final size = _folders[i].size;
+                            final clamped = _clampPosition(pos, size, canvasSize);
+                            final delta = clamped - prevPos;
+                            final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(position: clamped);
+                              final movedRect = candidate;
+                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onFolderResized: (id, newSize, canvasSize) {
+                        setState(() {
+                          final i = _folders.indexWhere((f) => f.id == id);
+                          if (i >= 0) {
+                            final minW = 160.0;
+                            final minH = 90.0;
+                            final pos = _folders[i].position;
+                            final maxW = (canvasSize.width - pos.dx).clamp(minW, canvasSize.width);
+                            final maxH = (canvasSize.height - pos.dy).clamp(minH, canvasSize.height);
+                            final w = newSize.width.clamp(minW, maxW);
+                            final h = newSize.height.clamp(minH, maxH);
+                            final clampedSize = Size(w, h);
+                            final candidate = Rect.fromLTWH(pos.dx, pos.dy, clampedSize.width, clampedSize.height);
+                            if (!_isOverlapping(id, candidate)) {
+                              _folders[i] = _folders[i].copyWith(size: clampedSize);
+                            }
+                          }
+                        });
+                        _saveLayout();
+                      },
+                      onExitResizeMode: () {
+                        if (_resizeMode) setState(() => _resizeMode = false);
+                      },
+                      onMoveEnd: _saveLayout,
+                      onResizeEnd: _saveLayout,
+                      onEditFolder: (folder) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
+                        final result = await showDialog<_ResourceFolder>(
+                          context: context,
+                          builder: (ctx) => _FolderEditDialog(initial: folder),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            final idx = _folders.indexWhere((f) => f.id == folder.id);
+                            if (idx != -1) _folders[idx] = result;
+                          });
+                          await _saveLayout();
+                        }
+                      },
+                      onEditFile: (file) async {
+                        // ignore: avoid_print
+                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
+                        final metaUpdated = await showDialog<Map<String, dynamic>>(
+                          context: context,
+                          builder: (ctx) => _FileMetaDialog(initial: file),
+                        );
+                        if (metaUpdated == null) return;
+                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
+                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
+                          context: context,
+                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
+                        );
+                        final finalLinks = linksResult?['links'] ?? <String, String>{};
+                        await DataManager.instance.saveResourceFile({
+                          'id': updatedFile.id,
+                          'name': updatedFile.name,
+                          'url': '',
+                          'color': updatedFile.color?.value,
+                          'grade': updatedFile.primaryGrade ?? '',
+                          'parent_id': updatedFile.parentId,
+                          'pos_x': updatedFile.position.dx,
+                          'pos_y': updatedFile.position.dy,
+                          'width': updatedFile.size.width,
+                          'height': updatedFile.size.height,
+                          'text_color': updatedFile.textColor?.value,
+                          'icon_code': updatedFile.icon?.codePoint,
+                          'icon_image_path': updatedFile.iconImagePath,
+                          'description': updatedFile.description,
+                        });
+                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
+                        setState(() {
+                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
+                          if (idx != -1) {
+                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
+                          }
+                        });
+                      },
+                    ),
+                    */
                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
@@ -1550,6 +1673,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         });
                       },
                     ),
+                    /*
                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
@@ -1663,119 +1787,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                         });
                       },
                     ),
-                    _ResourcesCanvas(
-                      folders: _folders,
-                      files: _files,
-                      resizeMode: _resizeMode,
-                       editMode: _editMode,
-                      currentGrade: _grades.isEmpty ? null : _grades[_selectedGradeIndex],
-                      onScrollGrade: (delta) => _changeGradeByDelta(delta),
-                      onDeleteFolder: (folderId) async {
-                        setState(() { _folders.removeWhere((f) => f.id == folderId); });
-                        await _saveLayout();
-                      },
-                      onDeleteFile: (fileId) async {
-                        setState(() { _files.removeWhere((f) => f.id == fileId); });
-                        await DataManager.instance.deleteResourceFile(fileId);
-                      },
-                      onFolderMoved: (id, pos, canvasSize) {
-                        setState(() {
-                          final i = _folders.indexWhere((f) => f.id == id);
-                          if (i >= 0) {
-                            final prevPos = _folders[i].position;
-                            final size = _folders[i].size;
-                            final clamped = _clampPosition(pos, size, canvasSize);
-                            final delta = clamped - prevPos;
-                            final candidate = Rect.fromLTWH(clamped.dx, clamped.dy, size.width, size.height);
-                            if (!_isOverlapping(id, candidate)) {
-                              _folders[i] = _folders[i].copyWith(position: clamped);
-                              final movedRect = candidate;
-                              _moveNeighborsTogether(movedId: id, movedRect: movedRect, delta: delta, canvasSize: canvasSize);
-                            }
-                          }
-                        });
-                        _saveLayout();
-                      },
-                      onFolderResized: (id, newSize, canvasSize) {
-                        setState(() {
-                          final i = _folders.indexWhere((f) => f.id == id);
-                          if (i >= 0) {
-                            final minW = 160.0;
-                            final minH = 90.0;
-                            final pos = _folders[i].position;
-                            final maxW = (canvasSize.width - pos.dx).clamp(minW, canvasSize.width);
-                            final maxH = (canvasSize.height - pos.dy).clamp(minH, canvasSize.height);
-                            final w = newSize.width.clamp(minW, maxW);
-                            final h = newSize.height.clamp(minH, maxH);
-                            final clampedSize = Size(w, h);
-                            final candidate = Rect.fromLTWH(pos.dx, pos.dy, clampedSize.width, clampedSize.height);
-                            if (!_isOverlapping(id, candidate)) {
-                              _folders[i] = _folders[i].copyWith(size: clampedSize);
-                            }
-                          }
-                        });
-                        _saveLayout();
-                      },
-                      onExitResizeMode: () {
-                        if (_resizeMode) setState(() => _resizeMode = false);
-                      },
-                      onMoveEnd: _saveLayout,
-                      onResizeEnd: _saveLayout,
-                      onEditFolder: (folder) async {
-                        // ignore: avoid_print
-                        print('[EDIT] Open FolderEditDialog: id=${folder.id}');
-                        final result = await showDialog<_ResourceFolder>(
-                          context: context,
-                          builder: (ctx) => _FolderEditDialog(initial: folder),
-                        );
-                        if (result != null) {
-                          setState(() {
-                            final idx = _folders.indexWhere((f) => f.id == folder.id);
-                            if (idx != -1) _folders[idx] = result;
-                          });
-                          await _saveLayout();
-                        }
-                      },
-                      onEditFile: (file) async {
-                        // ignore: avoid_print
-                        print('[EDIT] Open FileEdit (2-step): id=${file.id}');
-                        final metaUpdated = await showDialog<Map<String, dynamic>>(
-                          context: context,
-                          builder: (ctx) => _FileMetaDialog(initial: file),
-                        );
-                        if (metaUpdated == null) return;
-                        final updatedFile = (metaUpdated['file'] as _ResourceFile?) ?? file;
-                        final existingLinks = await DataManager.instance.loadResourceFileLinks(file.id);
-                        final linksResult = await showDialog<Map<String, Map<String, String>>>(
-                          context: context,
-                          builder: (ctx) => _FileLinksDialog(meta: updatedFile, initialLinks: existingLinks),
-                        );
-                        final finalLinks = linksResult?['links'] ?? <String, String>{};
-                        await DataManager.instance.saveResourceFile({
-                          'id': updatedFile.id,
-                          'name': updatedFile.name,
-                          'url': '',
-                          'color': updatedFile.color?.value,
-                          'grade': updatedFile.primaryGrade ?? '',
-                          'parent_id': updatedFile.parentId,
-                          'pos_x': updatedFile.position.dx,
-                          'pos_y': updatedFile.position.dy,
-                          'width': updatedFile.size.width,
-                          'height': updatedFile.size.height,
-                          'text_color': updatedFile.textColor?.value,
-                          'icon_code': updatedFile.icon?.codePoint,
-                          'icon_image_path': updatedFile.iconImagePath,
-                          'description': updatedFile.description,
-                        });
-                        await DataManager.instance.saveResourceFileLinks(updatedFile.id, finalLinks);
-                        setState(() {
-                          final idx = _files.indexWhere((f) => f.id == updatedFile.id);
-                          if (idx != -1) {
-                            _files[idx] = updatedFile.copyWith(linksByGrade: finalLinks);
-                          }
-                        });
-                      },
-                    ),
+                    */
                     _ResourcesCanvas(
                       folders: _folders,
                       files: _files,
@@ -2015,7 +2027,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   ),
                 ),
                 Positioned(
-                  bottom: 16,
+                  bottom: 32,
                   left: 0,
                   right: 0,
                   child: Center(
@@ -2036,7 +2048,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                               children: [
                               Icon(Icons.add, color: Colors.white, size: 20),
                                 SizedBox(width: 10),
-                                Text('파일', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                                Text('파일 ', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                             ],
                           ),
                         ),
@@ -2104,7 +2116,16 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   final isExpanded = _expandedFolderIds.contains(f.id);
                   final isSelected = _selectedFolderIdForTree == f.id;
                   return InkWell(
-                    onTap: () => setState(() => _selectedFolderIdForTree = f.id),
+                    onTap: () => setState(() {
+                      _selectedFolderIdForTree = f.id;
+                      if (children.isNotEmpty) {
+                        if (isExpanded) {
+                          _expandedFolderIds.remove(f.id);
+                        } else {
+                          _expandedFolderIds.add(f.id);
+                        }
+                      }
+                    }),
                     onSecondaryTapDown: (details) async {
                       // 우클릭 컨텍스트 메뉴: 하위 폴더 만들기
                       final overlay = Overlay.of(context)?.context.findRenderObject();

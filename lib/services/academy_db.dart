@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 29,
+        version: 30,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -261,7 +261,8 @@ class AcademyDbService {
             height REAL,
             shape TEXT,
             parent_id TEXT,
-            order_index INTEGER
+            order_index INTEGER,
+            category TEXT
           )
         ''');
         await db.execute('''
@@ -280,7 +281,8 @@ class AcademyDbService {
             icon_code INTEGER,
             icon_image_path TEXT,
             description TEXT,
-            order_index INTEGER
+            order_index INTEGER,
+            category TEXT
           )
         ''');
         await db.execute('''
@@ -359,6 +361,26 @@ class AcademyDbService {
             ''');
           } catch (e) {
             print('[DB][마이그레이션] v29: resource_files.order_index/resource_favorites 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 30) {
+          try {
+            final colsF = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final hasCatF = colsF.any((c) => c['name'] == 'category');
+            if (!hasCatF) {
+              await db.execute('ALTER TABLE resource_folders ADD COLUMN category TEXT');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v30: resource_folders.category 추가 실패: $e');
+          }
+          try {
+            final colsFi = await db.rawQuery("PRAGMA table_info(resource_files)");
+            final hasCatFi = colsFi.any((c) => c['name'] == 'category');
+            if (!hasCatFi) {
+              await db.execute('ALTER TABLE resource_files ADD COLUMN category TEXT');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v30: resource_files.category 추가 실패: $e');
           }
         }
         if (oldVersion < 2) {
@@ -1028,10 +1050,39 @@ class AcademyDbService {
     });
   }
 
+  // Category-scoped save to avoid wiping other tabs' data
+  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      // v30+: category 열 기반으로 해당 카테고리만 정리
+      // 구버전 데이터(카테고리 null)는 교재(textbook)로 간주하여 함께 정리
+      if (category == 'textbook') {
+        await txn.delete('resource_folders', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+      } else {
+        await txn.delete('resource_folders', where: 'category = ?', whereArgs: [category]);
+      }
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw);
+        row['category'] = category;
+        await txn.insert('resource_folders', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
   Future<List<Map<String, dynamic>>> loadResourceFolders() async {
     final dbClient = await db;
     await ensureResourceTables();
     return await dbClient.query('resource_folders');
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    if (category == 'textbook') {
+      return await dbClient.query('resource_folders', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+    }
+    return await dbClient.query('resource_folders', where: 'category = ?', whereArgs: [category]);
   }
 
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
@@ -1048,10 +1099,33 @@ class AcademyDbService {
     await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    final String id = row['id'] as String;
+    final existingList = await dbClient.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+    Map<String, dynamic> merged = {};
+    if (existingList.isNotEmpty) {
+      merged = Map<String, dynamic>.from(existingList.first);
+    }
+    merged.addAll(row);
+    merged['category'] = category;
+    await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {
     final dbClient = await db;
     await ensureResourceTables();
     return await dbClient.query('resource_files');
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    if (category == 'textbook') {
+      return await dbClient.query('resource_files', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+    }
+    return await dbClient.query('resource_files', where: 'category = ?', whereArgs: [category]);
   }
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
