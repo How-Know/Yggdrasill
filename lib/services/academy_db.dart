@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 30,
+        version: 31,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -305,6 +305,16 @@ class AcademyDbService {
             order_index INTEGER
           )
         ''');
+        // v31: Tag presets
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS tag_presets (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            color INTEGER,
+            icon_code INTEGER,
+            order_index INTEGER
+          )
+        ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 26) {
@@ -381,6 +391,21 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v30: resource_files.category 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 31) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS tag_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                color INTEGER,
+                icon_code INTEGER,
+                order_index INTEGER
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v31: tag_presets 생성 실패: $e');
           }
         }
         if (oldVersion < 2) {

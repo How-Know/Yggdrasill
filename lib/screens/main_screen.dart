@@ -10,6 +10,8 @@ import 'home/home_screen.dart';
 import 'settings/settings_screen.dart';
 import 'resources/resources_screen.dart';
 import 'learning/learning_screen.dart';
+import '../services/tag_store.dart';
+import 'learning/tag_preset_dialog.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
@@ -142,10 +144,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 선택 가능한 태그 목록 (기본 + 사용자가 추가)
   final List<_ClassTag> _availableClassTags = [
     const _ClassTag(name: '졸음', color: Color(0xFF7E57C2), icon: Icons.bedtime),
-    const _ClassTag(name: '스마트폰 과다 사용', color: Color(0xFFF57C00), icon: Icons.phone_iphone),
-    const _ClassTag(name: '기록', color: Color(0xFF1976D2), icon: Icons.edit_note),
+    const _ClassTag(name: '스마트폰', color: Color(0xFFF57C00), icon: Icons.phone_iphone),
     const _ClassTag(name: '떠듬', color: Color(0xFFEF5350), icon: Icons.record_voice_over),
     const _ClassTag(name: '딴짓', color: Color(0xFF90A4AE), icon: Icons.gesture),
+    const _ClassTag(name: '기록', color: Color(0xFF1976D2), icon: Icons.edit_note),
   ];
 
   // OverlayEntry 툴팁 상태
@@ -962,7 +964,7 @@ extension on _MainScreenState {
                                           Text(e.tag.name, style: const TextStyle(color: Colors.white70)),
                                           if (e.note != null && e.note!.isNotEmpty) ...[
                                             const SizedBox(width: 8),
-                                            Text('"' + e.note! + '"', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                            Text(e.note!, style: const TextStyle(color: Colors.white54, fontSize: 12)),
                                           ],
                                         ],
                                       ),
@@ -989,19 +991,19 @@ extension on _MainScreenState {
                         children: [
                           const Text('추가 가능한 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
                           const Spacer(),
-                          TextButton.icon(
+                          // '새 태그 만들기' 버튼 제거: 태그 프리셋 관리에서 추가하도록 유도
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: '태그 관리',
                             onPressed: () async {
-                              newTag = await _createNewClassTag(ctx);
-                              if (newTag != null) {
-                                setLocal(() {
-                                  workingAvailable.add(newTag!);
-                                  workingApplied.add(_ClassTagEvent(tag: newTag!, timestamp: DateTime.now()));
-                                });
-                              }
+                              await showDialog(
+                                context: context,
+                                builder: (_) => const TagPresetDialog(),
+                              );
                             },
-                            icon: const Icon(Icons.add, color: Colors.white70, size: 18),
-                            label: const Text('새 태그 만들기', style: TextStyle(color: Colors.white70)),
-                            style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                            icon: const Icon(Icons.style, color: Colors.white70),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                           ),
                         ],
                       ),
@@ -1036,6 +1038,15 @@ extension on _MainScreenState {
       setState(() {
         _classTagEventsBySetId[target.setId] = result!;
       });
+      // 동기화: 학습 > 기록 타임라인에서 표시되도록 전역 TagStore에 반영
+      final events = result!.map((e) => TagEvent(
+        tagName: e.tag.name,
+        colorValue: e.tag.color.value,
+        iconCodePoint: e.tag.icon.codePoint,
+        timestamp: e.timestamp,
+        note: e.note,
+      )).toList();
+      TagStore.instance.setEventsForSet(target.setId, events);
     }
   }
 
