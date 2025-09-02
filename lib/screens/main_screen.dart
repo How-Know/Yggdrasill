@@ -9,6 +9,7 @@ import 'timetable/timetable_screen.dart';
 import 'home/home_screen.dart';
 import 'settings/settings_screen.dart';
 import 'resources/resources_screen.dart';
+import 'learning/learning_screen.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
@@ -134,6 +135,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 출석/하원 시간 기록용
   final Map<String, DateTime> _attendTimes = {};
   final Map<String, DateTime> _leaveTimes = {};
+
+  // 수업 태그(메모) - 세션(setId)별 적용 태그 이벤트 (메모리 전용)
+  // V2로 이름 변경하여 핫리로드 시 이전 타입과 충돌 방지
+  final Map<String, List<_ClassTagEvent>> _classTagEventsBySetId = {};
+  // 선택 가능한 태그 목록 (기본 + 사용자가 추가)
+  final List<_ClassTag> _availableClassTags = [
+    const _ClassTag(name: '졸음', color: Color(0xFF7E57C2), icon: Icons.bedtime),
+    const _ClassTag(name: '스마트폰 과다 사용', color: Color(0xFFF57C00), icon: Icons.phone_iphone),
+    const _ClassTag(name: '기록', color: Color(0xFF1976D2), icon: Icons.edit_note),
+    const _ClassTag(name: '떠듬', color: Color(0xFFEF5350), icon: Icons.record_voice_over),
+    const _ClassTag(name: '딴짓', color: Color(0xFF90A4AE), icon: Icons.gesture),
+  ];
 
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
@@ -332,7 +345,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 2:
         return TimetableScreen();
       case 3:
-        return const Center(child: Text('학습', style: TextStyle(color: Colors.white, fontSize: 24)));
+        return const LearningScreen();
       case 4:
         return const ResourcesScreen();
       default:
@@ -620,15 +633,25 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 'attended':
         borderColor = t.classInfo?.color ?? const Color(0xFF0F467D);
         textColor = Colors.white.withOpacity(0.9); // 파란네모 안은 톤을 살짝 낮춘 흰색
-        nameWidget = Text(
-          t.student.name,
-          style: TextStyle(
-            color: textColor,
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-            decoration: underlineColor != null ? TextDecoration.underline : null,
-            decorationColor: underlineColor,
-            decorationThickness: underlineColor != null ? 2 : null,
+        nameWidget = MouseRegion(
+          onEnter: (event) {
+            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+            final offset = overlay.globalToLocal(event.position);
+            final attendTime = _attendTimes[t.setId];
+            final tip = attendTime != null ? '등원: ' + _formatTime(attendTime) : '등원 시간 없음';
+            _showTooltip(offset, tip);
+          },
+          onExit: (_) => _removeTooltip(),
+          child: Text(
+            t.student.name,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              decoration: underlineColor != null ? TextDecoration.underline : null,
+              decorationColor: underlineColor,
+              decorationThickness: underlineColor != null ? 2 : null,
+            ),
           ),
         );
         break;
@@ -682,60 +705,105 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
     }
     // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
-    final Widget child = nameWidget;
-    return GestureDetector(
-      key: key,
-      onTap: () async {
-        final now = DateTime.now();
-        setState(() {
-          if (status == 'waiting') {
-            _attendedSetIds.add(t.setId);
-            _attendTimes[t.setId] = now;
-          } else if (status == 'attended') {
-            _leavedSetIds.add(t.setId);
-            _leaveTimes[t.setId] = now;
-          }
-        });
-        
-        // 출석 기록 업데이트
-        try {
-          final today = DateTime(now.year, now.month, now.day);
-          final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
-          
-          if (status == 'waiting') {
-            // 등원 체크 - 출석 기록 생성/업데이트
-            await DataManager.instance.saveOrUpdateAttendance(
-              studentId: t.student.id,
-              classDateTime: classDateTime,
-              classEndTime: classDateTime.add(t.duration),
-              className: t.classInfo?.name ?? '수업',
-              isPresent: true,
-              arrivalTime: now,
-            );
-          } else if (status == 'attended') {
-            // 하원 체크 - 하원 시간 업데이트
-            final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
-            if (existing != null) {
-              final updated = existing.copyWith(departureTime: now);
-              await DataManager.instance.updateAttendanceRecord(updated);
+    final Widget cardChild = nameWidget;
+    if (status == 'attended') {
+      // 출석(파란 네모) 카드: 학생 버튼 바깥 오른쪽에 + 버튼 배치
+      return Row(
+        key: key,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: () async {
+              final now = DateTime.now();
+              setState(() {
+                _leavedSetIds.add(t.setId);
+                _leaveTimes[t.setId] = now;
+              });
+              try {
+                final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+                final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
+                if (existing != null) {
+                  final updated = existing.copyWith(departureTime: now);
+                  await DataManager.instance.updateAttendanceRecord(updated);
+                }
+              } catch (e) {
+                print('[ERROR] 출석 기록 동기화 실패: $e');
+              }
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                border: Border.all(color: borderColor, width: 2),
+                borderRadius: BorderRadius.circular(25),
+              ),
+              child: cardChild,
+            ),
+          ),
+          const SizedBox(width: 1),
+          Tooltip(
+            message: '태그 추가',
+            child: IconButton(
+              onPressed: () => _openClassTagDialog(t),
+              icon: const Icon(Icons.add, color: Colors.white70),
+              iconSize: 18,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+            ),
+          ),
+        ],
+      );
+    } else {
+      return GestureDetector(
+        key: key,
+        onTap: () async {
+          final now = DateTime.now();
+          setState(() {
+            if (status == 'waiting') {
+              _attendedSetIds.add(t.setId);
+              _attendTimes[t.setId] = now;
+            } else if (status == 'attended') {
+              _leavedSetIds.add(t.setId);
+              _leaveTimes[t.setId] = now;
             }
+          });
+          try {
+            final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+            if (status == 'waiting') {
+              await DataManager.instance.saveOrUpdateAttendance(
+                studentId: t.student.id,
+                classDateTime: classDateTime,
+                classEndTime: classDateTime.add(t.duration),
+                className: t.classInfo?.name ?? '수업',
+                isPresent: true,
+                arrivalTime: now,
+              );
+            } else if (status == 'attended') {
+              final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
+              if (existing != null) {
+                final updated = existing.copyWith(departureTime: now);
+                await DataManager.instance.updateAttendanceRecord(updated);
+              }
+            }
+          } catch (e) {
+            print('[ERROR] 출석 기록 동기화 실패: $e');
           }
-        } catch (e) {
-          print('[ERROR] 출석 기록 동기화 실패: $e');
-        }
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: EdgeInsets.zero,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          border: Border.all(color: borderColor, width: 2),
-          borderRadius: BorderRadius.circular(25),
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: EdgeInsets.zero,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            border: Border.all(color: borderColor, width: 2),
+            borderRadius: BorderRadius.circular(25),
+          ),
+          child: cardChild,
         ),
-        child: child,
-      ),
-    );
+      );
+    }
   }
 }
 
@@ -792,3 +860,348 @@ String _getTodayDateString() {
   final week = ['월', '화', '수', '목', '금', '토', '일'];
   return '${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
 } 
+
+// 수업 태그 정의(메모리 전용)
+class _ClassTag {
+  final String name;
+  final Color color;
+  final IconData icon;
+  const _ClassTag({required this.name, required this.color, required this.icon});
+}
+
+// 태그 이벤트: 태그 + 적용 시각
+class _ClassTagEvent {
+  final _ClassTag tag;
+  final DateTime timestamp;
+  final String? note; // '기록' 등 메모성 태그용 텍스트
+  const _ClassTagEvent({required this.tag, required this.timestamp, this.note});
+}
+
+extension on _MainScreenState {
+  Future<void> _openClassTagDialog(_AttendanceTarget target) async {
+    final List<_ClassTagEvent> initialApplied = List<_ClassTagEvent>.from(_classTagEventsBySetId[target.setId] ?? const []);
+    List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(initialApplied);
+
+    List<_ClassTag> workingAvailable = List<_ClassTag>.from(_availableClassTags);
+
+    _ClassTag? newTag;
+
+    List<_ClassTagEvent>? result = await showDialog<List<_ClassTagEvent>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            Future<void> _handleTagPressed(_ClassTag tag) async {
+              if (tag.name == '기록') {
+                final note = await _openRecordNoteDialog(ctx);
+                if (note == null || note.trim().isEmpty) return;
+                setLocal(() {
+                  workingApplied.add(_ClassTagEvent(tag: tag, timestamp: DateTime.now(), note: note.trim()));
+                });
+              } else {
+                setLocal(() {
+                  workingApplied.add(_ClassTagEvent(tag: tag, timestamp: DateTime.now()));
+                });
+              }
+            }
+
+            Widget _buildAvailableTagChip(_ClassTag tag) {
+              return ActionChip(
+                onPressed: () => _handleTagPressed(tag),
+                backgroundColor: const Color(0xFF2A2A2A),
+                label: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(tag.icon, color: tag.color, size: 18),
+                    const SizedBox(width: 6),
+                    Text(tag.name, style: const TextStyle(color: Colors.white70)),
+                  ],
+                ),
+                shape: StadiumBorder(side: BorderSide(color: tag.color.withOpacity(0.6), width: 1.0)),
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              title: const Text('수업 태그', style: TextStyle(color: Colors.white, fontSize: 20)),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(target.student.name + ' · ' + _getTodayDateString(), style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                      const SizedBox(height: 12),
+                      const Text('적용된 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      if (workingApplied.isEmpty)
+                        const Text('아직 추가된 태그가 없습니다.', style: TextStyle(color: Colors.white38))
+                      else
+                        Column(
+                          children: [
+                            for (int i = workingApplied.length - 1; i >= 0; i--) ...[
+                              Builder(builder: (context) {
+                                final e = workingApplied[i];
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF22262C),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: e.tag.color.withOpacity(0.35), width: 1),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(e.tag.icon, color: e.tag.color, size: 18),
+                                          const SizedBox(width: 8),
+                                          Text(e.tag.name, style: const TextStyle(color: Colors.white70)),
+                                          if (e.note != null && e.note!.isNotEmpty) ...[
+                                            const SizedBox(width: 8),
+                                            Text('"' + e.note! + '"', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                          ],
+                                        ],
+                                      ),
+                                      const Spacer(),
+                                      Text(_formatTime(e.timestamp), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: () {
+                                          setLocal(() {
+                                            workingApplied.removeAt(i);
+                                          });
+                                        },
+                                        child: const Icon(Icons.close, color: Colors.white54, size: 16),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                          ],
+                        ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          const Text('추가 가능한 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: () async {
+                              newTag = await _createNewClassTag(ctx);
+                              if (newTag != null) {
+                                setLocal(() {
+                                  workingAvailable.add(newTag!);
+                                  workingApplied.add(_ClassTagEvent(tag: newTag!, timestamp: DateTime.now()));
+                                });
+                              }
+                            },
+                            icon: const Icon(Icons.add, color: Colors.white70, size: 18),
+                            label: const Text('새 태그 만들기', style: TextStyle(color: Colors.white70)),
+                            style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: workingAvailable.map(_buildAvailableTagChip).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(workingApplied),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null) {
+      setState(() {
+        _classTagEventsBySetId[target.setId] = result!;
+      });
+    }
+  }
+
+  Future<_ClassTag?> _createNewClassTag(BuildContext context) async {
+    final TextEditingController nameController = TextEditingController();
+    final List<Color> palette = const [
+      Color(0xFFEF5350), Color(0xFFAB47BC), Color(0xFF7E57C2), Color(0xFF5C6BC0),
+      Color(0xFF42A5F5), Color(0xFF26A69A), Color(0xFF66BB6A), Color(0xFFFFCA28),
+      Color(0xFFF57C00), Color(0xFF8D6E63), Color(0xFFBDBDBD), Color(0xFF90A4AE),
+    ];
+    final List<IconData> iconChoices = const [
+      Icons.bedtime, Icons.phone_iphone, Icons.edit_note, Icons.lightbulb, Icons.flag,
+      Icons.psychology, Icons.sports_esports, Icons.timer, Icons.warning, Icons.check_circle,
+      Icons.book, Icons.menu_book, Icons.school, Icons.sick, Icons.mood_bad, Icons.thumb_down,
+      Icons.thumb_up, Icons.self_improvement, Icons.local_cafe, Icons.code,
+    ];
+
+    Color selectedColor = palette[2];
+    IconData selectedIcon = iconChoices.first;
+
+    final _ClassTag? created = await showDialog<_ClassTag?>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              title: const Text('새 태그 만들기', style: TextStyle(color: Colors.white, fontSize: 20)),
+              content: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('이름', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          hintText: '예: 집중 저하',
+                          hintStyle: TextStyle(color: Colors.white38),
+                          filled: true,
+                          fillColor: Color(0xFF2A2A2A),
+                          border: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('색상', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final c in palette)
+                            GestureDetector(
+                              onTap: () => setLocal(() => selectedColor = c),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: c,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: c == selectedColor ? Colors.white : Colors.white24, width: c == selectedColor ? 2 : 1),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('아이콘', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final ic in iconChoices)
+                            GestureDetector(
+                              onTap: () => setLocal(() => selectedIcon = ic),
+                              child: Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2A2A2A),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: ic == selectedIcon ? Colors.white : Colors.white24),
+                                ),
+                                child: Icon(ic, color: ic == selectedIcon ? Colors.white : Colors.white70, size: 20),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final name = nameController.text.trim();
+                    if (name.isEmpty) {
+                      Navigator.of(ctx).pop(null);
+                      return;
+                    }
+                    Navigator.of(ctx).pop(_ClassTag(name: name, color: selectedColor, icon: selectedIcon));
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
+                  child: const Text('추가'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return created;
+  }
+
+  Future<String?> _openRecordNoteDialog(BuildContext context) async {
+    final TextEditingController controller = TextEditingController();
+    return showDialog<String?>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('기록 입력', style: TextStyle(color: Colors.white, fontSize: 20)),
+          content: SizedBox(
+            width: 520,
+            child: TextField(
+              controller: controller,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                hintText: '수업 중 있었던 일을 간단히 적어주세요',
+                hintStyle: TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: Color(0xFF2A2A2A),
+                border: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+              ),
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
+              child: const Text('저장'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
