@@ -226,6 +226,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    // 과제 데이터 DB에서 1회 로드
+    HomeworkStore.instance.loadAll();
     _rotationAnimation = AnimationController(
       duration: const Duration(milliseconds: 240),
       vsync: this,
@@ -808,6 +810,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   final updated = existing.copyWith(departureTime: now);
                   await DataManager.instance.updateAttendanceRecord(updated);
                 }
+                // 하원 시 미완료 과제들을 숙제로 표시
+                HomeworkStore.instance.markIncompleteAsHomework(t.student.id);
               } catch (e) {
                 print('[ERROR] 출석 기록 동기화 실패: $e');
               }
@@ -851,6 +855,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   if (item['studentId'] == t.student.id) {
                     // LearningScreen의 스토어를 통해 추가 (전역 스토어 사용)
                     HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
+                    // 출석 중에 추가된 과제는 오늘 내로 하원 시 숙제로 전환되도록 firstStartedAt가 설정될 수 있음
                     setState(() {});
                   }
                 }

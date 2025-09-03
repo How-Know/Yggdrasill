@@ -490,15 +490,6 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
                           Opacity(opacity: infoOpacity, child: Text(hw.body, style: const TextStyle(color: Colors.white70, fontSize: 15))),
                         ],
                         const SizedBox(height: 8),
-                        // 오른쪽 하단: 처음 시작한 날짜/시간
-                        Row(
-                          children: [
-                            const Spacer(),
-                            if (hw.firstStartedAt != null)
-                              Text('시작: ' + _formatDateTime(hw.firstStartedAt!), style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
                         Row(
                           children: [
                             // 진행/일시정지 (아이콘) - 배경/윤곽선 없음
@@ -545,6 +536,9 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
                               icon: const Icon(Icons.add_rounded, color: Colors.white70, size: 20),
                               tooltip: '이어가기',
                             ),
+                            const Spacer(),
+                            if (hw.firstStartedAt != null)
+                              Text('시작: ' + _formatDateTime(hw.firstStartedAt!), style: const TextStyle(color: Colors.white38, fontSize: 13)),
                           ],
                         ),
                       ],
@@ -570,7 +564,7 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
         _runningTimer?.cancel();
         _runningTimer = null;
       }
-      setState(() {});
+      setState(() {}); // 실시간 카운트 반영
     });
   }
 

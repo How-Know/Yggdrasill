@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'academy_db.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -158,7 +159,7 @@ class HomeworkStore {
       final nowTime = DateTime.now();
       item.runStart = nowTime;
       item.firstStartedAt ??= nowTime;
-      if (item.status == HomeworkStatus.completed) {
+      if (item.status == HomeworkStatus.completed || item.status == HomeworkStatus.homework) {
         item.status = HomeworkStatus.inProgress;
         item.completedAt = null;
       }
@@ -207,6 +208,31 @@ class HomeworkStore {
     final created = add(studentId, title: src.title, body: body, color: src.color);
     _persist(studentId);
     return created;
+  }
+
+  // 하원 시 미완료 과제들을 숙제로 표시
+  void markIncompleteAsHomework(String studentId) {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    bool changed = false;
+    for (final e in list) {
+      if (e.status != HomeworkStatus.completed) {
+        if (e.runStart != null) {
+          // 진행 중이면 일시정지 후 숙제로 전환
+          final now = DateTime.now();
+          e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
+          e.runStart = null;
+        }
+        if (e.status != HomeworkStatus.homework) {
+          e.status = HomeworkStatus.homework;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      _bump();
+      _persist(studentId);
+    }
   }
 
   void _bump() { revision.value++; }
