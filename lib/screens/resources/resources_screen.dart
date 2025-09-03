@@ -1103,6 +1103,62 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                       style: const TextStyle(color: Colors.white70, fontSize: 15),
                                     ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    height: 36,
+                                    child: OutlinedButton.icon(
+                                      onPressed: () async {
+                                        // ignore: avoid_print
+                                        print('[Header] 파일 추가 버튼 눌림');
+                                        final meta = await showDialog<Map<String, dynamic>>(
+                                          context: context,
+                                          builder: (ctx) => const _FileCreateDialog(),
+                                        );
+                                        if (meta == null || meta['meta'] is! _ResourceFile) return;
+                                        var created = meta['meta'] as _ResourceFile;
+                                        final parentId = _selectedFolderIdForTree;
+                                        final childList = _childFilesOf(parentId);
+                                        final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
+                                        created = created.copyWith(parentId: parentId, orderIndex: nextIndex);
+
+                                        final linksRes = await showDialog<Map<String, dynamic>>(
+                                          context: context,
+                                          builder: (ctx) => _FileLinksDialog(meta: created, initialLinks: const {}),
+                                        );
+                                        Map<String, String> links = {};
+                                        if (linksRes != null && linksRes['links'] is Map<String, String>) {
+                                          links = Map<String, String>.from(linksRes['links'] as Map);
+                                        }
+                                        created = created.copyWith(linksByGrade: links);
+
+                                        setState(() { _files.add(created); });
+                                        await DataManager.instance.saveResourceFile({
+                                          'id': created.id,
+                                          'name': created.name,
+                                          'description': created.description,
+                                          'parent_id': created.parentId,
+                                          'order_index': created.orderIndex,
+                                          'pos_x': created.position.dx,
+                                          'pos_y': created.position.dy,
+                                          'width': created.size.width,
+                                          'height': created.size.height,
+                                          'color': created.color?.value,
+                                          'text_color': created.textColor?.value,
+                                          'icon_code': created.icon?.codePoint,
+                                          'icon_image_path': created.iconImagePath,
+                                        });
+                                        await DataManager.instance.saveResourceFileLinks(created.id, links);
+                                      },
+                                      icon: const Icon(Icons.add, size: 18),
+                                      label: const Text('파일 추가'),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white70,
+                                        side: const BorderSide(color: Colors.white24),
+                                        shape: const StadiumBorder(),
+                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                                      ),
+                                    ),
+                                  ),
                                 ],
                               ),
                             );
@@ -1615,11 +1671,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          const double baseTileWidth = 210; // 기준 폭
-          const double baseTileHeight = 130; // 기준 높이
-          const double tileWidth = baseTileWidth * 1.2; // 20% 확대
-          const double tileHeight = baseTileHeight * 1.1; // 10% 확대
-          final cols = (constraints.maxWidth / (tileWidth + 16)).floor().clamp(1, 999);
+          const double gridCardWidth = 264; // 고정 폭 (20% 확대 적용 기준)
+          const double gridCardHeight = 154; // 고정 높이 (10% 확대 적용 기준)
+          final cols = (constraints.maxWidth / (gridCardWidth + 16)).floor().clamp(1, 999);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1630,7 +1684,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                     crossAxisCount: cols,
                     mainAxisSpacing: 16,
                     crossAxisSpacing: 16,
-                    childAspectRatio: tileWidth / tileHeight, // 확대 비율 유지
+                    childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
                   ),
                   itemCount: files.length,
                   itemBuilder: (context, index) {
@@ -1642,7 +1696,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         opacity: 0.9,
                       child: Material(
                           color: Colors.transparent,
-                          child: SizedBox(width: tileWidth, height: tileHeight, child: _GridFileCard(file: fi)),
+                          child: SizedBox(width: gridCardWidth, height: gridCardHeight, child: _GridFileCard(file: fi)),
                         ),
                       ),
                       onDragStarted: () => setState(() { _draggingFileId = fi.id; }),
@@ -1818,7 +1872,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                       const SizedBox(height: 6),
                       // 본문 행
                       Row(children: [
-                        Expanded(child: DropTarget(
+                        DropTarget(
                           onDragDone: (detail) {
                             if (detail.files.isEmpty) return;
                             final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
@@ -1826,7 +1880,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                             }
                           },
                           child: _LinkActionButtons(controller: _bodyCtrls[grade]!, onNameSuggestion: (name){}, label: '본문', grade: grade, kindKey: 'body'),
-                        )),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
                           controller: _bodyCtrls[grade],
@@ -1837,7 +1891,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                       const SizedBox(height: 6),
                       // 해설 행
                       Row(children: [
-                        Expanded(child: DropTarget(
+                        DropTarget(
                           onDragDone: (detail) {
                             if (detail.files.isEmpty) return;
                             final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
@@ -1845,7 +1899,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                             }
                           },
                           child: _LinkActionButtons(controller: _solutionCtrls[grade]!, onNameSuggestion: (name){}, label: '해설', grade: grade, kindKey: 'sol'),
-                        )),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
                           controller: _solutionCtrls[grade],
@@ -1856,7 +1910,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                       const SizedBox(height: 6),
                       // 정답 행
                       Row(children: [
-                        Expanded(child: DropTarget(
+                        DropTarget(
                           onDragDone: (detail) {
                             if (detail.files.isEmpty) return;
                             final xf = detail.files.first; final path = xf.path; if (path != null && path.isNotEmpty) {
@@ -1864,7 +1918,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                             }
                           },
                           child: _LinkActionButtons(controller: _answerCtrls[grade]!, onNameSuggestion: (name){}, label: '정답', grade: grade, kindKey: 'ans'),
-                        )),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(child: TextField(
                           controller: _answerCtrls[grade],
@@ -1928,18 +1982,6 @@ class _LinkActionButtons extends StatelessWidget {
           },
           icon: const Icon(Icons.folder_open, size: 16),
           label: Text(label),
-          style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
-        ),
-      ),
-      const SizedBox(width: 6),
-      SizedBox(
-        height: 34,
-        child: OutlinedButton.icon(
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('해당 행에 파일을 드래그해서 놓으면 등록됩니다.')));
-          },
-          icon: const Icon(Icons.file_download, size: 16),
-          label: const Text('드롭'),
           style: OutlinedButton.styleFrom(foregroundColor: Colors.white70, side: const BorderSide(color: Colors.white24), shape: const StadiumBorder()),
         ),
       ),
@@ -3082,6 +3124,8 @@ class _GridFileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 고정형 카드 스타일: 일관된 크기/패딩, 드래그/리사이즈 없음
+    // ignore: avoid_print
+    print('[GridFileCard] build id=' + file.id + ' size=' + file.size.toString());
     final resState = context.findAncestorStateOfType<_ResourcesScreenState>();
     final grades = resState?._grades ?? const <String>[];
     final selectedIndex = resState?._selectedGradeIndex ?? -1;
@@ -3094,6 +3138,8 @@ class _GridFileCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: () async {
+            // ignore: avoid_print
+            print('[GridFileCard] tap id=' + file.id);
             if (currentGrade == null) return;
             final key = '${currentGrade}#body';
             final link = file.linksByGrade[key]?.trim() ?? '';
@@ -3147,6 +3193,11 @@ class _GridFileCard extends StatelessWidget {
                         style: TextStyle(color: file.textColor ?? (hasForCurrent ? Colors.white : Colors.white38.withOpacity(0.6)), fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.2),
                       ),
                     ),
+                    if (currentGrade != null) ...[
+                      const SizedBox(width: 8),
+                      _MiniPill(text: currentGrade, fontSize: 12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5)),
+                    ],
+                    const SizedBox(width: 12),
                     // 즐겨찾기 토글 (아이콘: 북마크)
                     InkWell(
                       onTap: () async {
@@ -3204,15 +3255,15 @@ class _GridFileCard extends StatelessWidget {
 class _MiniPill extends StatelessWidget {
   final String text;
   final double fontSize;
-  const _MiniPill({required this.text, this.fontSize = 11});
+  final EdgeInsetsGeometry? padding;
+  const _MiniPill({required this.text, this.fontSize = 11, this.padding});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: padding ?? const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.2),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white12),
       ),
       child: Text(text, style: TextStyle(color: Colors.white70, fontSize: fontSize, fontWeight: FontWeight.w700)),
     );
@@ -3347,7 +3398,54 @@ class _MoreMenuButton extends StatelessWidget {
       surfaceTintColor: Colors.transparent,
       onSelected: (value) async {
         if (value == 'edit') {
-          await showDialog(context: context, builder: (ctx) => _FileMetaDialog(initial: file));
+          final metaRes = await showDialog<Map<String, dynamic>>(
+            context: context,
+            builder: (ctx) => _FileMetaDialog(initial: file),
+          );
+          if (metaRes != null && metaRes['file'] is _ResourceFile) {
+            var edited = metaRes['file'] as _ResourceFile;
+            // 링크 수정 다이얼로그로 이어짐 (기존 링크 불러와서 초기값으로)
+            Map<String, String> initialLinks = {};
+            try {
+              initialLinks = await DataManager.instance.loadResourceFileLinks(file.id);
+            } catch (_) {}
+            final linksRes = await showDialog<Map<String, dynamic>>(
+              context: context,
+              builder: (ctx) => _FileLinksDialog(meta: edited, initialLinks: initialLinks),
+            );
+            Map<String, String>? newLinks;
+            if (linksRes != null && linksRes['links'] is Map<String, String>) {
+              newLinks = Map<String, String>.from(linksRes['links'] as Map);
+            }
+
+            // 상태 업데이트
+            final resourcesState = context.findAncestorStateOfType<_ResourcesScreenState>();
+            if (resourcesState != null) {
+              final idx = resourcesState._files.indexWhere((e) => e.id == file.id);
+              if (idx != -1) {
+                if (newLinks != null) {
+                  edited = edited.copyWith(linksByGrade: newLinks);
+                }
+                resourcesState.setState(() {
+                  resourcesState._files[idx] = edited;
+                });
+              }
+            }
+            // 메타 저장 (이름/색상/텍스트색상/아이콘/이미지/설명) 반영
+            try {
+              await DataManager.instance.saveResourceFile({
+                'id': edited.id,
+                'name': edited.name,
+                'description': edited.description,
+                if (edited.color != null) 'color': edited.color!.value,
+                // 위치/사이즈/부모 등의 변경은 별도 흐름에서 저장됨
+              });
+            } catch (_) {}
+            // 링크 저장
+            if (newLinks != null) {
+              try { await DataManager.instance.saveResourceFileLinks(edited.id, newLinks); } catch (_) {}
+            }
+          }
         } else if (value == 'delete') {
           final ok = await showDialog<bool>(
             context: context,
@@ -3567,7 +3665,7 @@ class _FileMetaDialogState extends State<_FileMetaDialog> {
               ),
             });
           },
-          child: const Text('저장'),
+          child: const Text('다음'),
         ),
       ],
     );
@@ -3689,7 +3787,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
         description: _descController.text.trim(),
         parentId: null,
         position: const Offset(0, 0),
-        size: const Size(220, 70),
+        size: const Size(230, 80),
       )
     });
   }
@@ -4184,6 +4282,8 @@ class _FileCard extends StatelessWidget {
     final hasForCurrent = primaryGrade != null && (file.linksByGrade['$primaryGrade#body']?.trim().isNotEmpty ?? false);
     final bg = hasForCurrent ? (file.color ?? const Color(0xFF2D2D2D)) : const Color(0xFF2D2D2D).withOpacity(0.22);
     final primary = primaryGrade;
+    // ignore: avoid_print
+    print('[FileCard] build id=' + file.id + ' size=' + file.size.toString());
     return Container(
       width: file.size.width,
       height: file.size.height,
@@ -5166,21 +5266,39 @@ class _PdfEditorDialogState extends State<_PdfEditorDialog> with SingleTickerPro
               if (mounted) setState(() => _busy = false);
               return;
             }
-            final outPath = saveLoc.path;
-            // 2) Syncfusion로 inPath에서 ranges/선택 추출→ outPath 저장
+            var outPath = saveLoc.path;
+            if (!outPath.toLowerCase().endsWith('.pdf')) {
+              outPath = outPath + '.pdf';
+            }
+            // 2) Syncfusion로 inPath에서 선택 페이지를 "선택 순서대로" 새 문서에 복사 저장 (벡터 보존)
             final inputBytes = await File(inPath).readAsBytes();
             final src = sf.PdfDocument(inputBytes: inputBytes);
             final selected = _selectedPages.isNotEmpty ? List<int>.from(_selectedPages) : _parseRanges(ranges, src.pages.count);
 
-            // 임시: pdfrx API 정착 전까지는 선택된 페이지만 유지해 저장 (벡터 보존)
-            final keep = selected.toSet();
-            for (int i = src.pages.count - 1; i >= 0; i--) {
-              if (!keep.contains(i + 1)) {
-                src.pages.removeAt(i);
+            final dst = sf.PdfDocument();
+            // 원본 기본 페이지 설정을 가능하면 유지
+            try {
+              dst.pageSettings.size = src.pageSettings.size;
+              dst.pageSettings.orientation = src.pageSettings.orientation;
+              dst.pageSettings.margins.all = 0;
+            } catch (_) {}
+
+            for (final pageNum in selected) {
+              if (pageNum < 1 || pageNum > src.pages.count) continue;
+              final srcPage = src.pages[pageNum - 1];
+              final tmpl = srcPage.createTemplate();
+              final newPage = dst.pages.add();
+              // 템플릿을 좌상단(0,0)에 그려 원본 페이지 내용을 복사
+              try {
+                newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+              } catch (_) {
+                // draw 실패 시에도 페이지는 유지
               }
             }
-            final outBytes = await src.save();
+
+            final outBytes = await dst.save();
             src.dispose();
+            dst.dispose();
             await File(outPath).writeAsBytes(outBytes, flush: true);
             setState(() => _outputPath = outPath);
             if (context.mounted) {
