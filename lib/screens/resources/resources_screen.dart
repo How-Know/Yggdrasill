@@ -1014,6 +1014,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ignore: avoid_print
+    print('[RES] ResourcesScreen build');
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       appBar: const AppBarTitle(title: '자료'),
@@ -1302,37 +1304,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                     child: _buildFolderContentGrid(),
                   ),
                 ),
-                Positioned(
-                  bottom: 32,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: SizedBox(
-                      height: 44,
-                      child: Material(
-                        color: const Color(0xFF1976D2),
-                        borderRadius: BorderRadius.circular(999),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(999),
-                          onTap: () async {
-                              await _onAddFile();
-                          },
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 20),
-                          child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                              Icon(Icons.add, color: Colors.white, size: 20),
-                                SizedBox(width: 10),
-                                Text('파일 ', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                        ),
-                      ),
-                    ),
+                // [RES] bottom +파일 버튼 제거 (헤더 우측 버튼으로 대체)
               ],
             ),
           ),
@@ -1673,22 +1645,34 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         builder: (context, constraints) {
           const double gridCardWidth = 264; // 고정 폭 (20% 확대 적용 기준)
           const double gridCardHeight = 154; // 고정 높이 (10% 확대 적용 기준)
-          final cols = (constraints.maxWidth / (gridCardWidth + 16)).floor().clamp(1, 999);
+          const double spacing = 16;
+          final cols = (constraints.maxWidth / (gridCardWidth + spacing)).floor().clamp(1, 999);
+          final double gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
+          // ignore: avoid_print
+          print('[GRID] constraints=' + constraints.maxWidth.toStringAsFixed(1) + 'x' + constraints.maxHeight.toStringAsFixed(1) +
+              ', fixed=' + gridCardWidth.toString() + 'x' + gridCardHeight.toString() + ', cols=' + cols.toString() +
+              ', aspect=' + (gridCardWidth / gridCardHeight).toStringAsFixed(3));
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // 폴더 설명은 상단 행(과정 버튼 옆)으로 이동했으므로 여기서는 렌더링하지 않음
               Expanded(
-                child: GridView.builder(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
-                    mainAxisSpacing: 16,
-                    crossAxisSpacing: 16,
-                    childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
-                  ),
-                  itemCount: files.length,
-                  itemBuilder: (context, index) {
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(
+                    width: gridWidth,
+                    child: GridView.builder(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cols,
+                        mainAxisSpacing: spacing,
+                        crossAxisSpacing: spacing,
+                        childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
+                      ),
+                      itemCount: files.length,
+                      itemBuilder: (context, index) {
                     final fi = files[index];
+                    // ignore: avoid_print
+                    print('[GRID:item] idx=' + index.toString() + ' id=' + fi.id);
                     return LongPressDraggable<_ResourceFile>(
                       data: fi,
                       hapticFeedbackOnStart: true,
@@ -1754,45 +1738,50 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         builder: (context, cand, rej) {
                           final draggingId = _draggingFileId;
                           final isTarget = _reorderFileTargetId == fi.id && draggingId != null && draggingId != fi.id;
-                          // 마우스 x 기준으로 좌/우 표시를 나눔
+                          // 마우스 x 기준으로 좌/우 표시를 나눔 (기본 좌측 우선 강조)
                           bool showLeft = false;
                           bool showRight = false;
-                          // 포인터 접근을 제거하고 아래 LayoutBuilder에서 위치 기반으로만 판정합니다.
                           return LayoutBuilder(builder: (ctx, cons) {
-                            // 더 정확한 좌/우 판정: 드래그 중 항목의 글로벌 중심과 대상 글로벌 중심 비교
                             if (isTarget && cand.isNotEmpty) {
-                              // cand 첫 번째의 위치를 이용해 좌/우를 대략 판단
-                              // 드래그 중 대상의 글로벌 x는 알 수 없으므로, 대상 위젯 중심 기준으로 좌측 우선 강조
                               showLeft = true;
                               showRight = false;
                             }
                             return Stack(children: [
-                              Row(children: [
-                                // 좌측 placeholder
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 120),
-                                  width: isTarget && showLeft ? 10 : 0,
-                                  height: double.infinity,
-                                  decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
+                              // 고정 크기 카드 (그리드 셀 내에서 항상 동일 크기)
+                              Center(
+                                child: SizedBox(
+                                  width: gridCardWidth,
+                                  height: gridCardHeight,
+                                  child: _GridFileCard(file: fi),
                                 ),
-                                Expanded(
-                                  child: AnimatedPadding(
-                                    duration: const Duration(milliseconds: 120),
-                                    padding: EdgeInsets.only(
-                                      left: isTarget && showLeft ? 8 : 0,
-                                      right: isTarget && showRight ? 8 : 0,
+                              ),
+                              // 좌/우 하이라이트는 오버레이로 표시하여 실제 레이아웃에 영향 없음
+                              if (isTarget && showLeft)
+                                Positioned(
+                                  left: 0,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: 10,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF64A6DD).withOpacity(0.25),
+                                      borderRadius: BorderRadius.circular(4),
                                     ),
-                                    child: _GridFileCard(file: fi),
                                   ),
                                 ),
-                                // 우측 placeholder
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 120),
-                                  width: isTarget && showRight ? 10 : 0,
-                                  height: double.infinity,
-                                  decoration: BoxDecoration(color: const Color(0xFF64A6DD).withOpacity(0.25), borderRadius: BorderRadius.circular(4)),
+                              if (isTarget && showRight)
+                                Positioned(
+                                  right: 0,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: 10,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF64A6DD).withOpacity(0.25),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                  ),
                                 ),
-                              ]),
                             ]);
                           });
                         },
@@ -1801,8 +1790,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       ),
                     );
                   },
-            ),
-          ),
+                      ),
+                    ),
+                  ),
+                ),
         ],
           );
         },
@@ -3168,7 +3159,11 @@ class _GridFileCard extends StatelessWidget {
               ],
             ),
             padding: const EdgeInsets.fromLTRB(16, 14, 10, 8),
-            child: Column(
+            child: LayoutBuilder(
+              builder: (context, box) {
+                // ignore: avoid_print
+                print('[GridFileCard:layout] id=' + file.id + ' box=' + box.maxWidth.toStringAsFixed(1) + 'x' + box.maxHeight.toStringAsFixed(1) + ' model=' + file.size.toString());
+                return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -3244,6 +3239,8 @@ class _GridFileCard extends StatelessWidget {
                   ],
                 ),
               ],
+            );
+              },
             ),
           ),
         ),
@@ -4127,6 +4124,8 @@ class _DraggableFileCardState extends State<_DraggableFileCard> {
 
   @override
   Widget build(BuildContext context) {
+    // ignore: avoid_print
+    print('[Canvas] _DraggableFileCard used for id=' + widget.file.id + ' resizeMode=' + widget.resizeMode.toString());
     final effectivePos = _tempPosition ?? widget.file.position;
     final effectiveSize = _tempSize ?? widget.file.size;
     return Positioned(
