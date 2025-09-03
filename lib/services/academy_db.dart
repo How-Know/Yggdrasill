@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 31,
+        version: 33,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -43,6 +43,18 @@ class AcademyDbService {
             logo BLOB,
             session_cycle INTEGER DEFAULT 1, -- [추가] 수강 횟수
             openai_api_key TEXT
+          )
+        ''');
+        // tag_events: 수업 태그 이벤트 저장 테이블
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS tag_events (
+            id TEXT PRIMARY KEY,
+            set_id TEXT,
+            tag_name TEXT,
+            color_value INTEGER,
+            icon_code INTEGER,
+            timestamp TEXT,
+            note TEXT
           )
         ''');
         await db.execute('''
@@ -315,8 +327,64 @@ class AcademyDbService {
             order_index INTEGER
           )
         ''');
+        // homework_items: 학습 과제 저장 테이블
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS homework_items (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            title TEXT,
+            body TEXT,
+            color INTEGER,
+            status INTEGER,
+            accumulated_ms INTEGER,
+            run_start TEXT,
+            completed_at TEXT,
+            first_started_at TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
+        if (oldVersion < 32) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS tag_events (
+                id TEXT PRIMARY KEY,
+                set_id TEXT,
+                tag_name TEXT,
+                color_value INTEGER,
+                icon_code INTEGER,
+                timestamp TEXT,
+                note TEXT
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v32: tag_events 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 33) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS homework_items (
+                id TEXT PRIMARY KEY,
+                student_id TEXT,
+                title TEXT,
+                body TEXT,
+                color INTEGER,
+                status INTEGER,
+                accumulated_ms INTEGER,
+                run_start TEXT,
+                completed_at TEXT,
+                first_started_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v33: homework_items 생성 실패: $e');
+          }
+        }
         if (oldVersion < 26) {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS kakao_reservations (
@@ -2074,5 +2142,33 @@ class AcademyDbService {
   Future<List<Map<String, dynamic>>> getSessionOverridesAll() async {
     final dbClient = await db;
     return await dbClient.query('session_overrides', orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
+  }
+
+  // ======== TAG EVENTS PERSISTENCE ========
+  Future<void> setTagEventsForSet(String setId, List<Map<String, dynamic>> events) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      await txn.delete('tag_events', where: 'set_id = ?', whereArgs: [setId]);
+      for (final e in events) {
+        final map = Map<String, dynamic>.from(e);
+        map['set_id'] = setId;
+        await txn.insert('tag_events', map, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  Future<void> appendTagEvent(Map<String, dynamic> map) async {
+    final dbClient = await db;
+    await dbClient.insert('tag_events', map, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<Map<String, dynamic>>> getTagEventsForSet(String setId) async {
+    final dbClient = await db;
+    return await dbClient.query('tag_events', where: 'set_id = ?', whereArgs: [setId], orderBy: 'timestamp ASC');
+  }
+
+  Future<List<Map<String, dynamic>>> getAllTagEvents() async {
+    final dbClient = await db;
+    return await dbClient.query('tag_events', orderBy: 'timestamp ASC');
   }
 } 

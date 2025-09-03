@@ -98,8 +98,9 @@ class _StudentGroupedListPanelState extends State<StudentGroupedListPanel> {
                                 padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                                 child: Row(
                                   children: [
-                                    Text('  $key   ${list.length}명', style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 17, fontWeight: FontWeight.bold)),
+                                    Text('  $key', style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 17, fontWeight: FontWeight.bold)),
                                     const Spacer(),
+                                    Text('${list.length}명  ', style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
                                     Icon(isExpanded ? Icons.expand_less : Icons.expand_more, color: const Color(0xFFB0B0B0)),
                                   ],
                                 ),

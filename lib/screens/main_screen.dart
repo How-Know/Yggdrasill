@@ -22,6 +22,8 @@ import '../models/student_time_block.dart';
 import 'dart:collection';
 import '../models/education_level.dart';
 import 'package:collection/collection.dart';
+import '../services/homework_store.dart';
+import 'learning/homework_quick_add_proxy_dialog.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -39,6 +41,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late AnimationController _fabController;
   late Animation<double> _fabScaleAnimation;
   late Animation<double> _fabOpacityAnimation;
+  // 진단용: 사이드 시트 완료 상태 전이 추적
+  bool _sideSheetWasComplete = false;
+  // 사이드 시트 스크롤 컨트롤러 (경고/오버플로 방지)
+  late final ScrollController _leavedScrollCtrl;
+  late final ScrollController _attendedScrollCtrl;
+  late final ScrollController _waitingScrollCtrl;
   
   // StudentScreen 관련 상태
   final GlobalKey<StudentScreenState> _studentScreenKey = GlobalKey<StudentScreenState>();
@@ -254,6 +262,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         curve: Curves.easeInOut,
       ),
     );
+    // 스크롤 컨트롤러 초기화
+    _leavedScrollCtrl = ScrollController();
+    _attendedScrollCtrl = ScrollController();
+    _waitingScrollCtrl = ScrollController();
     _initializeData();
   }
 
@@ -265,6 +277,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     
     // 과거 수업 정리 로직 실행 (등원시간만 있는 경우 정상 출석 처리, 기록 없는 경우 무단결석 처리)
     await DataManager.instance.processPastClassesAttendance();
+    
+    // 태그 이벤트 DB → 메모리 적재
+    await TagStore.instance.loadAllFromDb();
     
     // 오늘의 출석 기록을 바탕으로 등원/하원 상태 복원
     _restoreTodayAttendanceStatus();
@@ -325,6 +340,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _rotationAnimation.dispose();
     _fabController.dispose();
     _searchController.dispose();
+    _leavedScrollCtrl.dispose();
+    _attendedScrollCtrl.dispose();
+    _waitingScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -393,6 +411,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 표시 시작)');
               }
               final bool isComplete = _rotationAnimation.status == AnimationStatus.completed && progress >= 1.0;
+              if (isComplete != _sideSheetWasComplete) {
+                print('[SIDE_SHEET] isComplete changed -> ' + isComplete.toString());
+                _sideSheetWasComplete = isComplete;
+              }
               final attendanceTargets = isComplete ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
               // 상태별 분류 (시트가 충분히 열린 뒤에만 실제 데이터 계산)
               final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
@@ -441,6 +463,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final maxWidth = screenWidth * baseRatio;
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
+              print('[SIDE_SHEET] containerWidth=' + containerWidth.toStringAsFixed(1) + ' / maxWidth=' + maxWidth.toStringAsFixed(1));
+              if (isComplete) {
+                print('[SIDE_SHEET] lists: leaved=' + leaved.length.toString() + ', attended=' + attended.length.toString() + ', waitingGroups=' + waitingByTime.length.toString());
+              }
+
+              // 애니메이션 진행 중에는 내용 위젯을 전혀 생성하지 않고, 빈 컨테이너만 렌더링
+              if (!isComplete) {
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeInOut,
+                  width: containerWidth,
+                  color: const Color(0xFF1F1F1F),
+                );
+              }
+
               return AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 curve: Curves.easeInOut,
@@ -450,138 +487,140 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   fit: StackFit.expand,
                   children: [
                     // 내용: 애니메이션 완료 후에만 실제로 구성
-                    if (isComplete)
-                      Column(
-                      children: [
-                        // 날짜/요일 표시
-                        Padding(
-                          padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
-                          child: Center(
-                            child: Text(
-                              _getTodayDateString(),
-                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 24),
-                        // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
-                        Container(
-                          constraints: BoxConstraints(
-                            minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                            maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _leavedMaxLines + _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_leavedMaxLines - 1) + 22 * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                          ),
-                          margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
-                          child: Scrollbar(
-                            thumbVisibility: true,
-                            child: SingleChildScrollView(
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Wrap(
-                                  spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                  runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                  verticalDirection: VerticalDirection.down,
-                                  children: leaved
-                                      .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
-                                      .toList(),
-                                ),
+                    Column(
+                        children: [
+                          // 날짜/요일 표시
+                          Padding(
+                            padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+                            child: Center(
+                              child: Text(
+                                _getTodayDateString(),
+                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                               ),
                             ),
                           ),
-                        ),
-                        // 파란 네모(출석 박스) - 최대 15줄, 스크롤
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 16),
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              color: Color(0xFF1E252E),
-                              border: Border.all(color: Color(0xFF1E252E), width: 2),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
+                          SizedBox(height: 24),
+                          // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
+                          Container(
                             constraints: BoxConstraints(
                               minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                              maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
+                              maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _leavedMaxLines + _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_leavedMaxLines - 1) + 22 * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+                            margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
                             child: Scrollbar(
+                              controller: _leavedScrollCtrl,
                               thumbVisibility: true,
                               child: SingleChildScrollView(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (attended.isEmpty)
-                                      const Center(
-                                        child: Text(
-                                          '출석',
-                                          style: TextStyle(
-                                            color: Color(0xFF0F467D),
-                                            fontSize: 22,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    if (attended.isNotEmpty)
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          for (int i = 0; i < attended.length; i++) ...[
-                                            _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                            if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                          ]
-                                        ],
-                                      ),
-                                  ],
+                                controller: _leavedScrollCtrl,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Wrap(
+                                    spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                    runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                    verticalDirection: VerticalDirection.down,
+                                    children: leaved
+                                        .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
+                                        .toList(),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                        // 출석 전 학생 리스트(가운데 정렬, 스크롤)
-                        if (waitingByTime.isNotEmpty)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                          // 파란 네모(출석 박스) - 최대 15줄, 스크롤
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 16),
+                              width: double.infinity,
+                              decoration: BoxDecoration(
+                                color: Color(0xFF1E252E),
+                                border: Border.all(color: Color(0xFF1E252E), width: 2),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              constraints: BoxConstraints(
+                                minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
                               child: Scrollbar(
+                                controller: _attendedScrollCtrl,
                                 thumbVisibility: true,
-                                child: ListView(
-                                  padding: EdgeInsets.zero,
-                                  children: [
-                                    for (final entry in waitingByTime.entries) ...[
-                                      Padding(
-                                        padding: const EdgeInsets.only(bottom: 4.0),
-                                        child: Center(
+                                child: SingleChildScrollView(
+                                  controller: _attendedScrollCtrl,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (attended.isEmpty)
+                                        const Center(
                                           child: Text(
-                                            _formatTime(entry.key),
-                                            style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                            '출석',
+                                            style: TextStyle(
+                                              color: Color(0xFF0F467D),
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      Center(
-                                        child: Wrap(
-                                          alignment: WrapAlignment.center,
-                                          spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                          runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                          children: entry.value
-                                              .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
-                                              .toList(),
+                                      if (attended.isNotEmpty)
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            for (int i = 0; i < attended.length; i++) ...[
+                                              _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                              if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                            ]
+                                          ],
                                         ),
-                                      ),
-                                      const SizedBox(height: 8),
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                      ],
-                    ),
-                    // 커버: 완료 전에는 동일 배경색으로 완전히 가림(착시/중간 노출 차단)
-                    if (!isComplete)
-                      const Positioned.fill(
-                        child: ColoredBox(color: Color(0xFF1F1F1F)),
+                          // 출석 전 학생 리스트(가운데 정렬, 스크롤)
+                          if (waitingByTime.isNotEmpty)
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                                child: Scrollbar(
+                                  controller: _waitingScrollCtrl,
+                                  thumbVisibility: true,
+                                  child: ListView(
+                                    controller: _waitingScrollCtrl,
+                                    padding: EdgeInsets.zero,
+                                    children: [
+                                      for (final entry in waitingByTime.entries) ...[
+                                        Padding(
+                                          padding: const EdgeInsets.only(bottom: 4.0),
+                                          child: Center(
+                                            child: Text(
+                                              _formatTime(entry.key),
+                                              style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                            ),
+                                          ),
+                                        ),
+                                        Center(
+                                          child: Wrap(
+                                            alignment: WrapAlignment.center,
+                                            spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                            runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                            children: entry.value
+                                                .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
+                                                .toList(),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
+                    // 커버: 완료 전에는 동일 배경색으로 완전히 가림(착시/중간 노출 차단)
+                    // 커버는 isComplete 분기에서 빈 컨테이너를 반환하므로 불필요
                   ],
                 ),
               );
@@ -707,12 +746,53 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
     }
     // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
-    final Widget cardChild = nameWidget;
+    // 이름 + 과제 요약 칩들
+    final List<Widget> chips = [];
+    final hwList = HomeworkStore.instance.items(t.student.id);
+    for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
+      chips.add(const SizedBox(width: 6));
+      chips.add(
+        MouseRegion(
+          onEnter: (e) {
+            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+            final offset = overlay.globalToLocal(e.position);
+            _showTooltip(offset, hw.body.isEmpty ? '(내용 없음)' : hw.body);
+          },
+          onExit: (_) => _removeTooltip(),
+          child: GestureDetector(
+            onTap: () {
+              // 진행 시작
+              HomeworkStore.instance.start(t.student.id, hw.id);
+              setState(() {});
+            },
+            onLongPress: () async {
+              // 이어가기: 동일 제목/색상으로 내용만 빈 과제 추가
+              HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: '');
+              setState(() {});
+            },
+            onSecondaryTap: () {
+              // 완료 처리
+              HomeworkStore.instance.complete(t.student.id, hw.id);
+              setState(() {});
+            },
+            child: Container(
+              height: 22,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999), border: Border.all(color: hw.color.withOpacity(0.6), width: 1)),
+              alignment: Alignment.center,
+              child: Text(hw.title, style: const TextStyle(color: Colors.white70, fontSize: 12), overflow: TextOverflow.ellipsis),
+            ),
+          ),
+        ),
+      );
+    }
+    final Widget cardChild = nameWidget; // 이름만 버튼 내부에 표시; 칩은 외부에서 렌더링
     if (status == 'attended') {
-      // 출석(파란 네모) 카드: 학생 버튼 바깥 오른쪽에 + 버튼 배치
-      return Row(
+      // 출석(파란 네모) 카드: 가로 공간 부족 시 줄바꿈 가능하도록 Wrap 사용
+      return Wrap(
         key: key,
-        mainAxisSize: MainAxisSize.min,
+        spacing: 0,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           GestureDetector(
             onTap: () async {
@@ -744,17 +824,45 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: cardChild,
             ),
           ),
-          const SizedBox(width: 1),
+          const SizedBox(width: 2),
           Tooltip(
             message: '태그 추가',
             child: IconButton(
               onPressed: () => _openClassTagDialog(t),
-              icon: const Icon(Icons.add, color: Colors.white70),
-              iconSize: 18,
+              icon: const Icon(Icons.circle_outlined, color: Colors.white70),
+              iconSize: 16,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
             ),
           ),
+          // 과제 추가(빠른 추가)
+          const SizedBox(width: 2),
+          Tooltip(
+            message: '과제 추가',
+            child: IconButton(
+              onPressed: () async {
+                // 빠른 추가: 제목/색상 간단 입력 다이얼로그 호출 대신 학습 화면과 동일 다이얼로그 재사용
+                final item = await showDialog<dynamic>(
+                  context: context,
+                  builder: (ctx) => HomeworkQuickAddProxyDialog(studentId: t.student.id, initialTitle: '', initialColor: const Color(0xFF1976D2)),
+                );
+                if (item is Map<String, dynamic>) {
+                  // 전달된 studentId, title, body, color 사용
+                  if (item['studentId'] == t.student.id) {
+                    // LearningScreen의 스토어를 통해 추가 (전역 스토어 사용)
+                    HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
+                    setState(() {});
+                  }
+                }
+              },
+              icon: const Icon(Icons.add_rounded, color: Colors.white70),
+              iconSize: 16,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+            ),
+          ),
+          // 이름 옆이 아니라 버튼들 오른쪽에 과제 요약 칩 렌더링
+          ..._buildHomeworkChips(t),
         ],
       );
     } else {
@@ -806,6 +914,96 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       );
     }
+  }
+
+  List<Widget> _buildHomeworkChips(_AttendanceTarget t) {
+    final List<Widget> chips = [];
+    final hwList = HomeworkStore.instance.items(t.student.id);
+    for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
+      if (chips.isNotEmpty) chips.add(const SizedBox(width: 6));
+      chips.add(
+        MouseRegion(
+          onEnter: (e) {
+            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+            final offset = overlay.globalToLocal(e.position);
+            _showTooltip(offset, hw.body.isEmpty ? '(내용 없음)' : hw.body);
+          },
+          onExit: (_) => _removeTooltip(),
+          child: GestureDetector(
+            onTap: () {
+              // 토글: 진행 ↔ 일시정지
+              final running = HomeworkStore.instance.runningOf(t.student.id);
+              if (running != null && running.id == hw.id) {
+                HomeworkStore.instance.pause(t.student.id, hw.id);
+              } else {
+                HomeworkStore.instance.start(t.student.id, hw.id);
+              }
+              setState(() {});
+            },
+            onLongPress: () async {
+              // 이어가기 다이얼로그 표시
+              final res = await showDialog<Map<String, dynamic>?>(
+                context: context,
+                builder: (_) => HomeworkContinueDialog(studentId: t.student.id, title: hw.title, color: hw.color),
+              );
+              if (res != null && (res['body'] as String).isNotEmpty) {
+                HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: res['body'] as String);
+                setState(() {});
+              }
+            },
+            onSecondaryTap: () {
+              // 완료 처리
+              HomeworkStore.instance.complete(t.student.id, hw.id);
+              setState(() {});
+            },
+            child: Builder(builder: (context) {
+              final style = TextStyle(
+                color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
+                    ? Colors.white
+                    : Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              );
+              // 긴 제목도 잘리지 않도록 실제 텍스트 폭을 모두 반영
+              final painter = TextPainter(
+                text: TextSpan(text: hw.title, style: style),
+                maxLines: 1,
+                textDirection: TextDirection.ltr,
+              )..layout(minWidth: 0, maxWidth: double.infinity);
+              const double leftPad = 10;
+              const double rightPad = 12; // 오른쪽 여백 살짝 증가로 시각 중심 보정
+              final double width = painter.width + leftPad + rightPad;
+              return SizedBox(
+                width: width.clamp(40.0, 560.0),
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2A2A2A),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
+                          ? hw.color.withOpacity(0.9)
+                          : Colors.white24,
+                      width: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id) ? 2 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    hw.title,
+                    style: style,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.visible, // 줄바꿈 방지
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      );
+    }
+    return chips;
   }
 }
 

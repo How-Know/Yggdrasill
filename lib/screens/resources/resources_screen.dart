@@ -1643,8 +1643,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          const double gridCardWidth = 264; // 고정 폭 (20% 확대 적용 기준)
-          const double gridCardHeight = 154; // 고정 높이 (10% 확대 적용 기준)
+          const double gridCardWidth = 290.0; // +10%
+          const double gridCardHeight = 170.0; // +10%
           const double spacing = 16;
           final cols = (constraints.maxWidth / (gridCardWidth + spacing)).floor().clamp(1, 999);
           final double gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
@@ -1790,11 +1790,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       ),
                     );
                   },
-                      ),
                     ),
                   ),
                 ),
-        ],
+              ),
+            ],
           );
         },
       ),
