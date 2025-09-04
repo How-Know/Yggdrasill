@@ -1076,15 +1076,13 @@ class DataManager {
   Future<void> loadPaymentRecords() async {
     _paymentRecords = await AcademyDbService.instance.getPaymentRecords();
     paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-    // 보정: 납부 완료된 마지막 사이클 다음 사이클의 예정일 레코드가 없다면 생성
-    await _ensureMissingNextCycleRecordsForAllStudents();
   }
 
   Future<void> addPaymentRecord(PaymentRecord record) async {
     final newRecord = await AcademyDbService.instance.addPaymentRecord(record);
     _paymentRecords.add(newRecord);
     paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-    await _ensureNextCycleDueRecordIfPaid(newRecord);
+    // 다음 사이클 자동 생성은 초기에는 비활성화 (DB 잠금/호환성 이슈 방지)
   }
 
   Future<void> updatePaymentRecord(PaymentRecord record) async {
@@ -1093,7 +1091,7 @@ class DataManager {
       _paymentRecords[index] = record;
       await AcademyDbService.instance.updatePaymentRecord(record);
       paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-      await _ensureNextCycleDueRecordIfPaid(record);
+      // 다음 사이클 자동 생성은 초기에는 비활성화 (DB 잠금/호환성 이슈 방지)
     }
   }
 
@@ -1117,59 +1115,7 @@ class DataManager {
     }
   }
 
-  // ========= PaymentRecord 보정 유틸 =========
-  Future<void> _ensureMissingNextCycleRecordsForAllStudents() async {
-    final Set<String> studentIds = _studentsWithInfo.map((s) => s.student.id).toSet();
-    for (final studentId in studentIds) {
-      await _ensureNextCycleDueForStudent(studentId);
-    }
-  }
-
-  Future<void> _ensureNextCycleDueForStudent(String studentId) async {
-    final info = getStudentPaymentInfo(studentId);
-    if (info == null) return;
-
-    final records = _paymentRecords.where((r) => r.studentId == studentId).toList();
-    if (records.isEmpty) {
-      // 최초 레코드 없으면 등록월을 첫 사이클로 생성 (미납)
-      final firstDue = DateTime(info.registrationDate.year, info.registrationDate.month, info.registrationDate.day);
-      final first = PaymentRecord(studentId: studentId, cycle: 1, dueDate: firstDue);
-      await addPaymentRecord(first);
-      return;
-    }
-
-    // 납부 완료된 마지막 사이클 찾기
-    records.sort((a, b) => a.cycle.compareTo(b.cycle));
-    final paidRecords = records.where((r) => r.paidDate != null).toList();
-    if (paidRecords.isEmpty) return; // 아직 납부 없음
-    final lastPaid = paidRecords.last;
-
-    // 다음 사이클이 존재하는지 확인
-    final int nextCycle = lastPaid.cycle + 1;
-    final existingNext = getPaymentRecord(studentId, nextCycle);
-    if (existingNext != null) return;
-
-    // 다음 사이클 기본 예정일 계산 (등록일 기준 주기)
-    final DateTime nextDue = _calculateDueDateForCycle(info.registrationDate, nextCycle);
-    final PaymentRecord nextRecord = PaymentRecord(
-      studentId: studentId,
-      cycle: nextCycle,
-      dueDate: nextDue,
-      paidDate: null,
-    );
-    await addPaymentRecord(nextRecord);
-  }
-
-  Future<void> _ensureNextCycleDueRecordIfPaid(PaymentRecord record) async {
-    if (record.paidDate == null) return;
-    await _ensureNextCycleDueForStudent(record.studentId);
-  }
-
-  DateTime _calculateDueDateForCycle(DateTime registrationDate, int cycle) {
-    // cycle은 1부터 시작. cycle-1개월을 등록일 기준으로 더한다.
-    final int monthOffset = cycle - 1;
-    return DateTime(registrationDate.year, registrationDate.month + monthOffset, registrationDate.day);
-  }
+  // 결제 보정 로직 완전 제거 (요청에 따라 비활성화)
 
   // =================== ATTENDANCE RECORDS ===================
   

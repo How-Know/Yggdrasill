@@ -329,6 +329,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const SizedBox(height: 28),
+                // 결제 데이터 보정 섹션은 요청으로 제거되었습니다.
                 // 카카오 연동
                 const Padding(
                   padding: EdgeInsets.only(top: 24),

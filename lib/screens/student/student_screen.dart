@@ -1157,51 +1157,44 @@ class StudentScreenState extends State<StudentScreen> {
       }
     }
 
-    // 위에서 선언한 monthStart/nextMonthStart 재사용 + 지난달
-        final int prevMonthNumber = (now.month == 1) ? 12 : now.month - 1;
-        final int prevMonthYear = (now.month == 1) ? now.year - 1 : now.year;
-        final int thisMonthNumber = now.month;
-        final int thisMonthYear = now.year;
+    // 지난달/이번달 납입 요약(기록이 없는 학생은 앱 상태로 미납 표시)
+        final DateTime thisMonth = DateTime(now.year, now.month);
+        final DateTime prevMonth = DateTime(now.year, now.month - 1);
+        final DateTime prevMonthEnd = DateTime(
+          prevMonth.year,
+          prevMonth.month,
+          DateUtils.getDaysInMonth(prevMonth.year, prevMonth.month),
+        );
         final Map<String, DateTime> monthPaidByStudent = {};
         final Map<String, DateTime> prevMonthPaidByStudent = {};
         final Map<String, DateTime> monthDueByStudent = {};
         final Map<String, DateTime> prevMonthDueByStudent = {};
-        const String debugStudentId = '366a50af-44c9-442c-b674-0769e40b20fc';
-        final bool debugIsActive = activeStudentIds.contains(debugStudentId);
-        try {
-          final debugStudent = DataManager.instance.students.firstWhere((s) => s.student.id == debugStudentId);
-          // ignore: avoid_print
-          print('[DEBUG][Payments] 학생 존재 확인: id=$debugStudentId, name=${debugStudent.student.name}, active=$debugIsActive');
-        } catch (_) {
-          // ignore: avoid_print
-          print('[DEBUG][Payments] 학생 미존재: id=$debugStudentId, active=$debugIsActive');
+        DateTime _clampToMonthLastDay(DateTime candidate) {
+          // 월말 초과 시 해당 월의 마지막 날로 클램프
+          final int y = candidate.year, m = candidate.month;
+          final int lastDay = DateUtils.getDaysInMonth(y, m);
+          final int day = candidate.day > lastDay ? lastDay : candidate.day;
+          return DateTime(y, m, day);
         }
-        for (final pr in DataManager.instance.paymentRecords) {
-      // 퇴원한 학생 제외: 활성 학생만 포함
-      if (!activeStudentIds.contains(pr.studentId)) continue;
-      final paid = pr.paidDate;
-      final due = pr.dueDate;
-      // 이번달: due 월/연 기준으로 계산 (타임존 경계 이슈 회피)
-      if (pr.studentId == debugStudentId) {
-        // ignore: avoid_print
-        print('[DEBUG][Payments][THIS] id=$debugStudentId due=${due.toIso8601String()} paid=${paid?.toIso8601String()}');
-      }
-      if (due.year == thisMonthYear && due.month == thisMonthNumber) {
-        monthDueByStudent[pr.studentId] = due;
-        if (paid != null) {
-          monthPaidByStudent[pr.studentId] = paid;
-        }
-      }
-      // 지난달
-      if (pr.studentId == debugStudentId) {
-        // ignore: avoid_print
-        print('[DEBUG][Payments][PREV] id=$debugStudentId due=${due.toIso8601String()} paid=${paid?.toIso8601String()}');
-      }
-      if (due.year == prevMonthYear && due.month == prevMonthNumber) {
-        prevMonthDueByStudent[pr.studentId] = due;
-        if (paid != null) {
-          prevMonthPaidByStudent[pr.studentId] = paid;
-        }
+        for (final s in DataManager.instance.students) {
+      final String sid = s.student.id;
+      if (!activeStudentIds.contains(sid)) continue; // 퇴원 제외
+      final DateTime reg = (s.registrationDate ?? s.basicInfo.registrationDate) ?? DateTime.now();
+      // 이번달
+      final DateTime baseDueThis = DateTime(thisMonth.year, thisMonth.month, reg.day);
+      final DateTime dueThis = _clampToMonthLastDay(baseDueThis);
+      final int cycleThis = _calculateCycleNumber(reg, dueThis);
+      final recordThis = DataManager.instance.getPaymentRecord(sid, cycleThis);
+      monthDueByStudent[sid] = recordThis?.dueDate ?? dueThis;
+      if (recordThis?.paidDate != null) monthPaidByStudent[sid] = recordThis!.paidDate!;
+      // 지난달: 등록일 이전에는 기록 생성하지 않음
+      if (!reg.isAfter(prevMonthEnd)) {
+        final DateTime baseDuePrev = DateTime(prevMonth.year, prevMonth.month, reg.day);
+        final DateTime duePrev = _clampToMonthLastDay(baseDuePrev);
+        final int cyclePrev = _calculateCycleNumber(reg, duePrev);
+        final recordPrev = DataManager.instance.getPaymentRecord(sid, cyclePrev);
+        prevMonthDueByStudent[sid] = recordPrev?.dueDate ?? duePrev;
+        if (recordPrev?.paidDate != null) prevMonthPaidByStudent[sid] = recordPrev!.paidDate!;
       }
     }
 
@@ -1255,12 +1248,18 @@ class StudentScreenState extends State<StudentScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1행: 이름 + 상태
+            // 1행: 이름 + 상태 (붙여서 표시)
             Row(
               children: [
-                Expanded(child: Text(left, style: TextStyle(color: Colors.white, fontSize: nameFontSize, fontWeight: FontWeight.w700))),
-                const SizedBox(width: 8),
-                statusLine,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(left, style: TextStyle(color: Colors.white, fontSize: nameFontSize, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+                      const SizedBox(width: 6),
+                      statusLine,
+                    ],
+                  ),
+                ),
               ],
             ),
             if (timeLine != null) ...[
@@ -1407,7 +1406,21 @@ class StudentScreenState extends State<StudentScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  tile('지난달 납입', '납부 ${prevMonthPaidByStudent.length} · 총 인원 ${prevMonthDueByStudent.length}', '${now.month - 1}월 납부 현황', accent: const Color(0xFF90CAF9)),
+                  tile(
+                    '지난달 납입',
+                    '납부 ${prevMonthPaidByStudent.length} · 총 인원 ${prevMonthDueByStudent.length}',
+                    '${now.month - 1}월 납부 현황',
+                    accent: const Color(0xFF90CAF9),
+                    trailing: TextButton.icon(
+                      onPressed: () => _showRecentAttendanceDialog(),
+                      icon: const Icon(Icons.list, color: Colors.white70, size: 19.8),
+                      label: const Text('리스트', style: TextStyle(color: Colors.white70)),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
+                        foregroundColor: Colors.white70,
+                      ),
+                    ),
+                  ),
                   listFor(prevMonthPaymentByStudent, isAttendance: false, sortByDue: true),
                 ],
               ),
@@ -2757,9 +2770,16 @@ class StudentScreenState extends State<StudentScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
                               children: [
-                                Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
-                                const SizedBox(width: 8),
-                                status,
+                                Expanded(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                      const SizedBox(width: 6),
+                                      status,
+                                    ],
+                                  ),
+                                ),
                                 const SizedBox(width: 12),
                                 Text(
                                   '등원 ${_hhmm(r.arrivalTime)} · 하원 ${_hhmm(r.departureTime)}',
