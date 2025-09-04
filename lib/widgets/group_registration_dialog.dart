@@ -188,6 +188,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
       );
       print('[DEBUG] _handleSave: updatedGroup 저장');
       widget.onSave(updatedGroup);
+      if (mounted) Navigator.of(context).pop(updatedGroup);
     } else {
       final newGroup = GroupInfo(
         id: const Uuid().v4(),
@@ -199,6 +200,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
       );
       print('[DEBUG] _handleSave: newGroup 저장');
       widget.onSave(newGroup);
+      if (mounted) Navigator.of(context).pop(newGroup);
     }
   }
 

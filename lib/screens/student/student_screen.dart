@@ -752,7 +752,13 @@ class StudentScreenState extends State<StudentScreen> {
                   showAppSnackBar(context, '그룹에서 제외되었습니다.');
                 }
               },
-              onReorder: (oldIndex, newIndex) {},
+              onReorder: (oldIndex, newIndex) {
+                if (newIndex > oldIndex) newIndex--;
+                final current = List<GroupInfo>.from(groups);
+                final item = current.removeAt(oldIndex);
+                current.insert(newIndex, item);
+                DataManager.instance.setGroupsOrder(current);
+              },
               onDeleteStudent: (studentWithInfo) async {
                 print('[DEBUG][StudentScreen] onDeleteStudent 호출: ' + studentWithInfo.student.id);
                 final confirmed = await showDialog<bool>(
@@ -807,64 +813,54 @@ class StudentScreenState extends State<StudentScreen> {
           child: Row(
             children: [
               // 왼쪽 학생 리스트 컨테이너
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  // Row 하위에서는 constraints.maxWidth가 무한대가 될 수 있으므로 화면 폭으로 분기
-                  final double screenW = MediaQuery.of(context).size.width;
-                  // 기본 폭은 320. 1600px 이하에서는 절반(160)로 축소
-                  const double baseWidth = 320.0;
-                  const double halfWidth = 160.0;
-                  const double minWidth = 150.0;
-                  double w = screenW <= 1600 ? halfWidth : baseWidth;
-                  w = w < minWidth ? minWidth : w;
-                  return Container(
-                    width: w,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1F1F1F),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    margin: const EdgeInsets.only(right: 16, left: 15),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 헤더
-                        const SizedBox(height: 18),
-                        const Padding(
-                          padding: EdgeInsets.all(8),
-                          child: Text(
-                            '학생 목록',
-                            style: TextStyle(
-                              color: Colors.grey,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w600,
-                            ),
+              SizedBox(
+                width: 240,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1F1F1F),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  margin: const EdgeInsets.only(right: 16, left: 15),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 헤더
+                      const SizedBox(height: 18),
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Text(
+                          '학생 목록',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        // 학생 리스트
-                        Expanded(
-                          child: ValueListenableBuilder<List<StudentWithInfo>>(
-                            valueListenable: DataManager.instance.studentsNotifier,
-                            builder: (context, students, child) {
-                              final gradeGroups = _groupStudentsByGrade(students);
-                              return ListView(
-                                padding: const EdgeInsets.symmetric(horizontal: 8),
-                                children: [
-                                  ...gradeGroups.entries.map((entry) {
-                                    return Padding(
-                                      padding: const EdgeInsets.only(bottom: 4),
-                                      child: _buildGradeGroup(entry.key, entry.value),
-                                    );
-                                  }).toList(),
-                                  const SizedBox(height: 32),
-                                ],
-                              );
-                            },
-                          ),
+                      ),
+                      // 학생 리스트
+                      Expanded(
+                        child: ValueListenableBuilder<List<StudentWithInfo>>(
+                          valueListenable: DataManager.instance.studentsNotifier,
+                          builder: (context, students, child) {
+                            final gradeGroups = _groupStudentsByGrade(students);
+                            return ListView(
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              children: [
+                                ...gradeGroups.entries.map((entry) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: _buildGradeGroup(entry.key, entry.value),
+                                  );
+                                }).toList(),
+                                const SizedBox(height: 32),
+                              ],
+                            );
+                          },
                         ),
-                      ],
-                    ),
-                  );
-                },
+                      ),
+                    ],
+                  ),
+                ),
               ),
               // 오른쪽 영역: (학생정보 + 달력) + 수강료 납부
               Expanded(
@@ -1080,28 +1076,26 @@ class StudentScreenState extends State<StudentScreen> {
         } else {
           if (isLate) tLate++; else tPresent++;
         }
+
+        
       }
     }
 
-    // 납부 요약(이번달/오늘)
+    // 납부 요약(이번달)
         final DateTime monthStart = DateTime(now.year, now.month, 1);
         final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
-    int monthPaid = 0, monthDue = 0, todayPaid = 0, todayDue = 0;
+    int monthPaid = 0, monthDue = 0;
     for (final pr in DataManager.instance.paymentRecords) {
       if (!activeStudentIds.contains(pr.studentId)) continue;
       final due = pr.dueDate;
       final paid = pr.paidDate;
       final isThisMonth = due.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) && due.isBefore(nextMonthStart);
-      final isTodayDue = due.isAfter(todayStart.subtract(const Duration(milliseconds: 1))) && due.isBefore(todayEnd);
       if (isThisMonth) {
         if (paid != null) monthPaid++; else monthDue++;
       }
-      if (isTodayDue) {
-        if (paid != null) todayPaid++; else todayDue++;
-      }
     }
 
-        Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9)}) {
+        Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9), Widget? trailing}) {
           final double screenW = MediaQuery.of(context).size.width;
           // 최소창(≈1430)에서 17, 넓을수록 23까지 선형 증가
           const double minW = 1430;
@@ -1122,7 +1116,13 @@ class StudentScreenState extends State<StudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
+            Row(
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                if (trailing != null) trailing,
+              ],
+            ),
             const SizedBox(height: 8),
             Text(big, style: TextStyle(color: accent, fontSize: bigFontSize, fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
@@ -1157,20 +1157,76 @@ class StudentScreenState extends State<StudentScreen> {
       }
     }
 
-    // 위에서 선언한 monthStart/nextMonthStart 재사용
+    // 위에서 선언한 monthStart/nextMonthStart 재사용 + 지난달
+        final int prevMonthNumber = (now.month == 1) ? 12 : now.month - 1;
+        final int prevMonthYear = (now.month == 1) ? now.year - 1 : now.year;
+        final int thisMonthNumber = now.month;
+        final int thisMonthYear = now.year;
         final Map<String, DateTime> monthPaidByStudent = {};
-        final Map<String, DateTime> todayPaidByStudent = {};
+        final Map<String, DateTime> prevMonthPaidByStudent = {};
+        final Map<String, DateTime> monthDueByStudent = {};
+        final Map<String, DateTime> prevMonthDueByStudent = {};
+        const String debugStudentId = '366a50af-44c9-442c-b674-0769e40b20fc';
+        final bool debugIsActive = activeStudentIds.contains(debugStudentId);
+        try {
+          final debugStudent = DataManager.instance.students.firstWhere((s) => s.student.id == debugStudentId);
+          // ignore: avoid_print
+          print('[DEBUG][Payments] 학생 존재 확인: id=$debugStudentId, name=${debugStudent.student.name}, active=$debugIsActive');
+        } catch (_) {
+          // ignore: avoid_print
+          print('[DEBUG][Payments] 학생 미존재: id=$debugStudentId, active=$debugIsActive');
+        }
         for (final pr in DataManager.instance.paymentRecords) {
+      // 퇴원한 학생 제외: 활성 학생만 포함
       if (!activeStudentIds.contains(pr.studentId)) continue;
-      if (pr.paidDate == null) continue;
-      final paid = pr.paidDate!;
-      if (paid.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) && paid.isBefore(nextMonthStart)) {
-        monthPaidByStudent[pr.studentId] = paid;
+      final paid = pr.paidDate;
+      final due = pr.dueDate;
+      // 이번달: due 월/연 기준으로 계산 (타임존 경계 이슈 회피)
+      if (pr.studentId == debugStudentId) {
+        // ignore: avoid_print
+        print('[DEBUG][Payments][THIS] id=$debugStudentId due=${due.toIso8601String()} paid=${paid?.toIso8601String()}');
       }
-      if (paid.isAfter(todayStart) && paid.isBefore(todayEnd)) {
-        todayPaidByStudent[pr.studentId] = paid;
+      if (due.year == thisMonthYear && due.month == thisMonthNumber) {
+        monthDueByStudent[pr.studentId] = due;
+        if (paid != null) {
+          monthPaidByStudent[pr.studentId] = paid;
+        }
+      }
+      // 지난달
+      if (pr.studentId == debugStudentId) {
+        // ignore: avoid_print
+        print('[DEBUG][Payments][PREV] id=$debugStudentId due=${due.toIso8601String()} paid=${paid?.toIso8601String()}');
+      }
+      if (due.year == prevMonthYear && due.month == prevMonthNumber) {
+        prevMonthDueByStudent[pr.studentId] = due;
+        if (paid != null) {
+          prevMonthPaidByStudent[pr.studentId] = paid;
+        }
       }
     }
+
+    // 납입 리스트용 데이터(납부/미납 포함)
+        final Map<String, _AttendanceInfo> thisMonthPaymentByStudent = {
+      for (final entry in monthDueByStudent.entries)
+        entry.key: _AttendanceInfo(
+          arrival: monthPaidByStudent[entry.key],
+          departure: null,
+          isPresent: monthPaidByStudent[entry.key] != null,
+          isLate: false,
+          classDateTime: entry.value, // due date 보관
+        )
+    };
+
+        final Map<String, _AttendanceInfo> prevMonthPaymentByStudent = {
+      for (final entry in prevMonthDueByStudent.entries)
+        entry.key: _AttendanceInfo(
+          arrival: prevMonthPaidByStudent[entry.key],
+          departure: null,
+          isPresent: prevMonthPaidByStudent[entry.key] != null,
+          isLate: false,
+          classDateTime: entry.value,
+        )
+    };
 
         String _nameOf(String studentId) {
           try {
@@ -1217,7 +1273,7 @@ class StudentScreenState extends State<StudentScreen> {
         }
 
     // 각 타일별 개별 리스트를 같은 칼럼에 배치
-        Widget listFor(Map<String, _AttendanceInfo> data, {required bool isAttendance}) {
+        Widget listFor(Map<String, _AttendanceInfo> data, {required bool isAttendance, bool showListButton = false, bool sortByDue = false}) {
           // 부모 컨테이너(타일과 동일 너비/여백)로 래핑하여 너비 일치
           return Container(
         margin: const EdgeInsets.symmetric(horizontal: 10),
@@ -1227,13 +1283,22 @@ class StudentScreenState extends State<StudentScreen> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: const Color(0xFF2A2A2A)),
         ),
-        child: (data.isEmpty)
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 리스트 버튼은 타이틀 우측에 배치되므로 여기선 사용하지 않음
+            (data.isEmpty)
             ? const Align(
                 alignment: Alignment.centerLeft,
                 child: Text('기록 없음', style: TextStyle(color: Colors.white54, fontSize: 13)),
               )
             : Column(
-                children: data.entries.map((e) {
+                children: (() {
+                  final entries = data.entries.toList();
+                  if (!isAttendance && sortByDue) {
+                    entries.sort((a, b) => a.value.classDateTime.compareTo(b.value.classDateTime));
+                  }
+                  return entries.map((e) {
                   final name = _nameOf(e.key);
                   final info = e.value;
                       Widget rightWidget;
@@ -1247,7 +1312,7 @@ class StudentScreenState extends State<StudentScreen> {
                     double tFS = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
                     final double statusFontSize = fsMin + (fsMax - fsMin) * tFS;
                     if (!info.isPresent) {
-                          rightWidget = Text('무단결석', style: TextStyle(color: const Color(0xFFE53E3E), fontSize: statusFontSize, fontWeight: FontWeight.w700));
+                          rightWidget = Text('결석', style: TextStyle(color: const Color(0xFFE53E3E), fontSize: statusFontSize, fontWeight: FontWeight.w700));
                     } else {
                       final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
                       final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
@@ -1260,19 +1325,17 @@ class StudentScreenState extends State<StudentScreen> {
                           );
                     }
                   } else {
-                    // 수강료는 날짜만 표시
+                    // 납부/미납 표시 (due: info.classDateTime, paid: info.arrival)
                         final paid = info.arrival;
-                        final due = DataManager.instance.paymentRecords
-                            .firstWhere(
-                              (r) => r.studentId == e.key,
-                              orElse: () => PaymentRecord(id: -1, studentId: e.key, cycle: 0, dueDate: DateTime(0), paidDate: null),
-                            )
-                            .dueDate;
+                        final due = info.classDateTime;
                         rightWidget = Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(paid != null ? '납부 ${paid.month}/${paid.day}' : '미납', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                            if (paid != null)
+                              Text('납부 ${paid.month}/${paid.day}', style: const TextStyle(color: Colors.white70, fontSize: 13))
+                            else
+                              const Text('미납', style: TextStyle(color: Color(0xFFE53E3E), fontSize: 13, fontWeight: FontWeight.w700)),
                             Text('예정 ${due.month}/${due.day}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                           ],
                         );
@@ -1283,24 +1346,23 @@ class StudentScreenState extends State<StudentScreen> {
                       onTap: isAttendance
                           ? () async {
                               // 출석체크 카드의 체크박스 동작과 동일한 액션 연결
-                              // 바로 출석시간 수정/무단결석 토글로 진입
+                              // 바로 출석시간 수정/결석 토글로 진입
                               await _jumpToAttendanceEdit(e.key, info.classDateTime, info.isPresent);
                             }
                           : null,
                           child: _simpleRow(
                             name,
                             statusLine: rightWidget,
-                            timeLine: isAttendance
-                                ? (info.isPresent
-                                    ? '등원 ${info.arrival != null ? info.arrival!.hour.toString().padLeft(2,'0') + ':' + info.arrival!.minute.toString().padLeft(2,'0') : '--:--'} · 하원 ${info.departure != null ? info.departure!.hour.toString().padLeft(2,'0') + ':' + info.departure!.minute.toString().padLeft(2,'0') : '--:--'}'
-                                    : null)
-                                : null,
+                            timeLine: isAttendance ? _formatAttendanceTimeLine(info) : null,
                           ),
                     ),
                   );
-                }).toList(),
+                  }).toList();
+                })(),
               ),
-          );
+          ],
+        ),
+        );
         }
 
         return SingleChildScrollView(
@@ -1313,8 +1375,22 @@ class StudentScreenState extends State<StudentScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  tile('어제 출결', '출석 ${yPresent + yLate} · 결석 $yAbsent', '지각 $yLate', accent: const Color(0xFF64B5F6)),
-                  listFor(yesterdayAttendanceByStudent, isAttendance: true),
+                  tile(
+                    '어제 출결',
+                    '출석 ${yPresent + yLate} · 결석 $yAbsent',
+                    '지각 $yLate',
+                    accent: const Color(0xFF64B5F6),
+                    trailing: TextButton.icon(
+                      onPressed: () => _showRecentAttendanceDialog(),
+                      icon: const Icon(Icons.list, color: Colors.white70, size: 19.8),
+                      label: const Text('리스트', style: TextStyle(color: Colors.white70)),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
+                        foregroundColor: Colors.white70,
+                      ),
+                    ),
+                  ),
+                  listFor(yesterdayAttendanceByStudent, isAttendance: true, showListButton: false),
                 ],
               ),
             ),
@@ -1323,7 +1399,7 @@ class StudentScreenState extends State<StudentScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   tile('오늘 출결', '출석 ${tPresent + tLate} · 결석 $tAbsent', '지각 $tLate', accent: const Color(0xFF64B5F6)),
-                  listFor(todayAttendanceByStudent, isAttendance: true),
+                  listFor(todayAttendanceByStudent, isAttendance: true, showListButton: false),
                 ],
               ),
             ),
@@ -1331,20 +1407,8 @@ class StudentScreenState extends State<StudentScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  tile('이번달 납입', '완료 $monthPaid · 예정 $monthDue', '${now.month}월 납부 현황', accent: const Color(0xFF90CAF9)),
-                  listFor(
-                    monthPaidByStudent.map((k, v) => MapEntry(
-                      k,
-                      _AttendanceInfo(
-                        arrival: v,
-                        departure: null,
-                        isPresent: true,
-                        isLate: false,
-                        classDateTime: v,
-                      ),
-                    )),
-                    isAttendance: false,
-                  ),
+                  tile('지난달 납입', '납부 ${prevMonthPaidByStudent.length} · 총 인원 ${prevMonthDueByStudent.length}', '${now.month - 1}월 납부 현황', accent: const Color(0xFF90CAF9)),
+                  listFor(prevMonthPaymentByStudent, isAttendance: false, sortByDue: true),
                 ],
               ),
             ),
@@ -1352,20 +1416,8 @@ class StudentScreenState extends State<StudentScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  tile('오늘 납입', '완료 $todayPaid · 예정 $todayDue', '오늘(${now.month}/${now.day}) 납부', accent: const Color(0xFF90CAF9)),
-                  listFor(
-                    todayPaidByStudent.map((k, v) => MapEntry(
-                      k,
-                      _AttendanceInfo(
-                        arrival: v,
-                        departure: null,
-                        isPresent: true,
-                        isLate: false,
-                        classDateTime: v,
-                      ),
-                    )),
-                    isAttendance: false,
-                  ),
+                  tile('이번달 납입', '납부 ${monthPaidByStudent.length} · 총 인원 ${monthDueByStudent.length}', '${now.month}월 납부 현황', accent: const Color(0xFF90CAF9)),
+                  listFor(thisMonthPaymentByStudent, isAttendance: false, sortByDue: true),
                 ],
               ),
             ),
@@ -1448,7 +1500,7 @@ class StudentScreenState extends State<StudentScreen> {
               child: Row(
                 children: [
                   Text(
-                    '  $grade   ${students.length}명', // 인원수 추가
+                    '  $grade',
                     style: const TextStyle(
                       color: Color(0xFFB0B0B0), // 덜 밝은 흰색
                       fontSize: 17,
@@ -1456,6 +1508,15 @@ class StudentScreenState extends State<StudentScreen> {
                     ),
                   ),
                   const Spacer(),
+                  Text(
+                    '${students.length}명',
+                    style: const TextStyle(
+                      color: Color(0xFFB0B0B0),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
                   Icon(
                     isExpanded ? Icons.expand_less : Icons.expand_more,
                     color: const Color(0xFFB0B0B0), // 덜 밝은 흰색
@@ -2580,7 +2641,7 @@ class StudentScreenState extends State<StudentScreen> {
       final int duration = DataManager.instance.academySettings.lessonDuration;
       final String className = '-';
       if (record == null || !record.isPresent) {
-        // 무단결석 → 정상 출석(시작~종료)으로 전환
+        // 결석 → 정상 출석(시작~종료)으로 전환
         await DataManager.instance.saveOrUpdateAttendance(
           studentId: studentId,
           classDateTime: classDateTime,
@@ -2603,6 +2664,215 @@ class StudentScreenState extends State<StudentScreen> {
     } catch (e) {
       // noop
     }
+  }
+
+  String _hhmm(DateTime? dateTime) {
+    if (dateTime == null) return '--:--';
+    final String hours = dateTime.hour.toString().padLeft(2, '0');
+    final String minutes = dateTime.minute.toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  String _lookupStudentName(String studentId) {
+    try {
+      return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+    } catch (_) {
+      return studentId;
+    }
+  }
+
+  String? _formatAttendanceTimeLine(_AttendanceInfo info) {
+    if (!info.isPresent) return null;
+    return '등원 ${_hhmm(info.arrival)} · 하원 ${_hhmm(info.departure)}';
+  }
+
+  Future<void> _showRecentAttendanceDialog() async {
+    await showDialog(
+      context: context,
+      builder: (context) {
+        DateTime anchor = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            final DateTime start = anchor.subtract(const Duration(days: 5));
+            final DateTime end = anchor;
+            final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+            final Map<DateTime, List<AttendanceRecord>> byDay = {};
+            for (final r in DataManager.instance.attendanceRecords) {
+              if (!activeStudentIds.contains(r.studentId)) continue;
+              final d = DateTime(r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
+              if (d.isAfter(start.subtract(const Duration(milliseconds: 1))) && d.isBefore(end.add(const Duration(days: 1)))) {
+                (byDay[d] ??= []).add(r);
+              }
+            }
+
+            List<DateTime> days = List.generate(5, (i) => anchor.subtract(Duration(days: i))).toList();
+            days.sort();
+
+            Widget dayTile(DateTime day) {
+              final items = (byDay[day] ?? []).toList()
+                ..sort((a, b) => a.studentId.compareTo(b.studentId));
+              return Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF3A3A3A)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '${day.month}/${day.day}',
+                          style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '총 ${items.length}건',
+                          style: const TextStyle(color: Colors.white38, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (items.isEmpty)
+                      const Text('기록 없음', style: TextStyle(color: Colors.white54, fontSize: 13))
+                    else
+                      Column(
+                        children: items.map((r) {
+                          final name = _lookupStudentName(r.studentId);
+                          final lateThreshold = DataManager.instance.getStudentPaymentInfo(r.studentId)?.latenessThreshold ?? 10;
+                          final isLate = r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(Duration(minutes: lateThreshold)));
+                          final status = !r.isPresent
+                              ? const Text('결석', style: TextStyle(color: Color(0xFFE53E3E), fontWeight: FontWeight.w700))
+                              : Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (isLate)
+                                      const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w700)),
+                                  ],
+                                );
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600))),
+                                const SizedBox(width: 8),
+                                status,
+                                const SizedBox(width: 12),
+                                Text(
+                                  '등원 ${_hhmm(r.arrivalTime)} · 하원 ${_hhmm(r.departureTime)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                  ],
+                ),
+              );
+            }
+
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              backgroundColor: const Color(0xFF1F1F1F),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double dialogWidth = (constraints.maxWidth * 0.64).clamp(768.0, constraints.maxWidth);
+                  final double dialogHeight = (constraints.maxHeight * 0.64).clamp(448.0, constraints.maxHeight);
+                  return ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: dialogWidth,
+                      maxHeight: dialogHeight,
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.max,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => setLocalState(() => anchor = anchor.subtract(const Duration(days: 5))),
+                          icon: const Icon(Icons.chevron_left, color: Colors.white70),
+                        ),
+                        IconButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: anchor,
+                              firstDate: DateTime(anchor.year - 5, 1, 1),
+                              lastDate: DateTime(anchor.year + 5, 12, 31),
+                              locale: const Locale('ko', 'KR'),
+                              builder: (context, child) {
+                                return Theme(
+                                  data: Theme.of(context).copyWith(
+                                    colorScheme: const ColorScheme.dark(
+                                      primary: Color(0xFF1976D2),
+                                      onPrimary: Colors.white,
+                                      surface: Color(0xFF2A2A2A),
+                                      onSurface: Colors.white,
+                                    ),
+                                  ),
+                                  child: child!,
+                                );
+                              },
+                            );
+                            if (picked != null) {
+                              setLocalState(() => anchor = DateTime(picked.year, picked.month, picked.day));
+                            }
+                          },
+                          icon: const Icon(Icons.calendar_month, color: Colors.white70),
+                          tooltip: '날짜 선택',
+                        ),
+                        const SizedBox(width: 8),
+                        Text('최근 출결 ( ${anchor.month}/${anchor.day} 기준 )', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                        const Spacer(),
+                        IconButton(
+                          onPressed: () => setLocalState(() => anchor = anchor.add(const Duration(days: 5))),
+                          icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (context, box) {
+                                const int columns = 5;
+                                const double spacing = 16.0;
+                                final double colWidth = (box.maxWidth - spacing * (columns - 1)) / columns;
+                                final List<Widget> children = [];
+                                for (int i = 0; i < days.length; i++) {
+                                  children.add(SizedBox(width: colWidth, child: dayTile(days[i])));
+                                  if (i < days.length - 1) {
+                                    children.add(const SizedBox(width: spacing));
+                                  }
+                                }
+                                return SingleChildScrollView(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
 }

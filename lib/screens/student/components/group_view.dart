@@ -526,8 +526,8 @@ class _GroupViewState extends State<GroupView> {
                                     );
 
                                     return Container(
-                                      // compact에서는 높이를 내용에 맡기고, 기본에서는 미세 축소 반영
-                                      padding: EdgeInsets.symmetric(vertical: compact ? 12 * scale : 14 * scale),
+                                      // 높이를 20% 증가
+                                      padding: EdgeInsets.symmetric(vertical: (compact ? 12 * scale : 14 * scale) * 1.2),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF121212),
                                         borderRadius: candidateData.isNotEmpty

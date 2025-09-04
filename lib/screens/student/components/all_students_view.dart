@@ -571,7 +571,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                 );
 
                                                 return Container(
-                                                  padding: EdgeInsets.symmetric(vertical: compact ? 12 * scale : 14 * scale),
+                                                  padding: EdgeInsets.symmetric(vertical: (compact ? 12 * scale : 14 * scale) * 1.2),
                                                   decoration: BoxDecoration(
                                                     color: const Color(0xFF121212),
                                                     borderRadius: BorderRadius.circular(12),
