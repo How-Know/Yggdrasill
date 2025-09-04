@@ -39,6 +39,13 @@ class StudentScreenState extends State<StudentScreen> {
   StudentViewType _viewType = StudentViewType.all;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  // 학생 탭 상단: 스플릿 버튼 및 검색 확장 상태
+  String _studentAddSelection = '학생';
+  bool _studentDropdownOpen = false;
+  bool _isSearchExpanded = false;
+  final FocusNode _searchFocusNode = FocusNode();
+  final GlobalKey _studentDropdownKey = GlobalKey();
+  OverlayEntry? _studentDropdownEntry;
   final Set<GroupInfo> _expandedGroups = {};
   int _customTabIndex = 0;
   Map<String, Set<String>>? _activeFilter;
@@ -101,15 +108,87 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
+    _removeStudentSplitDropdown();
     _searchController.dispose();
     super.dispose();
   }
 
   List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
-    if (_searchQuery.isEmpty) return students;
+    if (!_isSearchExpanded || _searchQuery.isEmpty) return students;
     return students.where((studentWithInfo) =>
       studentWithInfo.student.name.toLowerCase().contains(_searchQuery.toLowerCase())
     ).toList();
+  }
+
+  void _showStudentSplitDropdown() {
+    _removeStudentSplitDropdown();
+    final overlay = Overlay.of(context);
+    final box = _studentDropdownKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final buttonPos = box.localToGlobal(Offset.zero);
+    final buttonSize = box.size;
+    _studentDropdownEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        left: buttonPos.dx,
+        top: buttonPos.dy + buttonSize.height + 4,
+        child: Material(
+          color: Colors.transparent,
+          child: _studentSplitDropdown(
+            selected: _studentAddSelection,
+            onSelected: (value) {
+              setState(() {
+                _studentAddSelection = value;
+                _studentDropdownOpen = false;
+              });
+              _removeStudentSplitDropdown();
+            },
+          ),
+        ),
+      ),
+    );
+    overlay.insert(_studentDropdownEntry!);
+  }
+
+  void _removeStudentSplitDropdown() {
+    _studentDropdownEntry?.remove();
+    _studentDropdownEntry = null;
+  }
+
+  // 시간표 드롭다운과 동일한 스타일의 항목을 생성 (호버 효과 포함)
+  Widget _buildDropdownHoverItem(String label, bool selected, VoidCallback onTap) {
+    bool hovered = false;
+    return StatefulBuilder(
+      builder: (context, setState) {
+        final highlight = hovered || selected;
+        return MouseRegion(
+          onEnter: (_) => setState(() => hovered = true),
+          onExit: (_) => setState(() => hovered = false),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              width: 140,
+              height: 40,
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+              decoration: BoxDecoration(
+                color: highlight ? const Color(0xFF383838).withOpacity(0.7) : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              alignment: Alignment.centerLeft,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildContent() {
@@ -316,6 +395,38 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
+  // 스플릿 드롭다운 오버레이용 간단 메뉴 위젯
+  // 선택지: 학생 / 그룹
+  Widget _studentSplitDropdown({
+    required String selected,
+    required ValueChanged<String> onSelected,
+  }) {
+    final List<String> labels = ['학생', '그룹'];
+    return Container(
+      width: 140,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2A2A2A), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final label in labels)
+            _buildDropdownHoverItem(label, selected == label, () => onSelected(label)),
+        ],
+      ),
+    );
+  }
+
   void showStudentRegistrationDialog() {
     showDialog(
       context: context,
@@ -352,110 +463,188 @@ class StudentScreenState extends State<StudentScreen> {
               Row(
                 children: [
                   const SizedBox(width: 24),
-                  // 좌측: 등록 버튼 (고정 너비, 왼쪽 정렬)
+                  // 좌측: 추가 스플릿 버튼 (고정 너비, 왼쪽 정렬)
                   SizedBox(
-                    width: 131, // 고정 너비 (등록 버튼)
+                    width: 160, // 본 버튼 112 + 구분선 4 + 드롭다운 44
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: SizedBox(
-                        width: 131,
-                        height: 44,
-                        child: FilledButton.icon(
-                          onPressed: () {
-                            showStudentRegistrationDialog();
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1976D2),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                            minimumSize: const Size(0, 44),
-                            maximumSize: const Size(double.infinity, 44),
-                          ),
-                          icon: const Icon(Icons.add, size: 26),
-                          label: const Text(
-                            '학생',
-                            style: TextStyle(
-                              fontSize: 16.5,
-                              fontWeight: FontWeight.w500,
+                      child: Row(children: [
+                        // 좌: 본 버튼 (추가)
+                        SizedBox(
+                          width: 112,
+                          height: 44,
+                          child: Material(
+                            color: const Color(0xFF1976D2),
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(32),
+                              bottomLeft: Radius.circular(32),
+                              topRight: Radius.circular(6),
+                              bottomRight: Radius.circular(6),
+                            ),
+                            child: InkWell(
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(32),
+                                bottomLeft: Radius.circular(32),
+                                topRight: Radius.circular(6),
+                                bottomRight: Radius.circular(6),
+                              ),
+                              onTap: () {
+                                if (_studentAddSelection == '학생') {
+                                  showStudentRegistrationDialog();
+                                } else {
+                                  showClassRegistrationDialog();
+                                }
+                              },
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.add, color: Colors.white, size: 20),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '추가',
+                                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
+                        // 구분선
+                        Container(
+                          height: 44,
+                          width: 4,
+                          color: Colors.transparent,
+                          child: Center(
+                            child: Container(
+                              width: 2,
+                              height: 28,
+                              color: Colors.white.withOpacity(0.1),
+                            ),
+                          ),
+                        ),
+                        // 드롭다운 버튼
+                        GestureDetector(
+                          key: _studentDropdownKey,
+                          onTap: () {
+                            setState(() {
+                              _studentDropdownOpen = !_studentDropdownOpen;
+                            });
+                            if (_studentDropdownOpen) {
+                              _showStudentSplitDropdown();
+                            } else {
+                              _removeStudentSplitDropdown();
+                            }
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 250),
+                            width: 44,
+                            height: 44,
+                            decoration: ShapeDecoration(
+                              color: const Color(0xFF1976D2),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: _studentDropdownOpen
+                                  ? BorderRadius.circular(50)
+                                  : const BorderRadius.only(
+                                      topLeft: Radius.circular(6),
+                                      bottomLeft: Radius.circular(6),
+                                      topRight: Radius.circular(32),
+                                      bottomRight: Radius.circular(32),
+                                    ),
+                              ),
+                            ),
+                            child: Center(
+                              child: AnimatedRotation(
+                                turns: _studentDropdownOpen ? 0.5 : 0.0,
+                                duration: const Duration(milliseconds: 250),
+                                curve: Curves.easeInOut,
+                                child: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 26),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ]),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // 우측: 검색 바 (고정 너비, 등록 버튼과 동일 너비, 왼쪽 정렬로 바로 붙임)
+                  // 우측: 검색 (아이콘 → 확장 알약형 입력)
                   SizedBox(
-                    width: 151, // +20 확장
+                    width: 151,
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: SizedBox(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 250),
                         height: 44,
-                        child: Stack(
-                          alignment: Alignment.center,
+                        width: _isSearchExpanded ? 151 : 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A2A),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: Colors.white.withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            SearchBar(
-                              controller: _searchController,
-                              onChanged: (value) {
-                                setState(() {
-                                  _searchQuery = value;
-                                });
-                              },
-                              hintText: '',
-                              leading: const Padding(
-                                padding: EdgeInsets.only(left: 6, right: 4),
-                                child: Icon(
-                                  Icons.search,
-                                  color: Colors.white70,
-                                  size: 20,
-                                ),
+                            Transform.translate(
+                              offset: _isSearchExpanded ? Offset.zero : const Offset(1, 0),
+                              child: IconButton(
+                                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+                                onPressed: () {
+                                  setState(() {
+                                    _isSearchExpanded = !_isSearchExpanded;
+                                  });
+                                  if (_isSearchExpanded) {
+                                    Future.delayed(const Duration(milliseconds: 50), () {
+                                      _searchFocusNode.requestFocus();
+                                    });
+                                  } else {
+                                    setState(() {
+                                      _searchController.clear();
+                                      _searchQuery = '';
+                                    });
+                                    FocusScope.of(context).unfocus();
+                                  }
+                                },
                               ),
-                              trailing: [
-                                if (_searchQuery.isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 4),
-                                    child: IconButton(
-                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                                      tooltip: '지우기',
-                                      icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-                                      onPressed: () {
-                                        print('[DEBUG][StudentScreen] 검색어 초기화 버튼 클릭');
-                                        setState(() {
-                                          _searchController.clear();
-                                          _searchQuery = '';
-                                        });
-                                        FocusScope.of(context).unfocus();
-                                      },
-                                    ),
-                                  ),
-                              ],
-                              backgroundColor: MaterialStateColor.resolveWith(
-                                (states) => const Color(0xFF2A2A2A),
-                              ),
-                              elevation: MaterialStateProperty.all(0),
-                              padding: const MaterialStatePropertyAll<EdgeInsets>(
-                                EdgeInsets.symmetric(horizontal: 10.0),
-                              ),
-                              textStyle: const MaterialStatePropertyAll<TextStyle>(
-                                TextStyle(color: Colors.white, fontSize: 16.5),
-                              ),
-                              hintStyle: const MaterialStatePropertyAll<TextStyle>(
-                                TextStyle(color: Colors.white54, fontSize: 16.5),
-                              ),
-                              side: MaterialStatePropertyAll<BorderSide>(
-                                BorderSide(color: Colors.white.withOpacity(0.2)),
-                              ),
-                              constraints: const BoxConstraints(minHeight: 44, maxHeight: 44),
                             ),
-                            if (_searchQuery.isEmpty)
-                              IgnorePointer(
-                                child: Text(
-                                  '검색',
-                                  style: const TextStyle(color: Colors.white54, fontSize: 16.5),
-                                  textAlign: TextAlign.center,
+                            if (_isSearchExpanded) const SizedBox(width: 10),
+                            if (_isSearchExpanded)
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextField(
+                                    controller: _searchController,
+                                    focusNode: _searchFocusNode,
+                                    style: const TextStyle(color: Colors.white, fontSize: 16.5),
+                                    decoration: const InputDecoration(
+                                      hintText: '검색',
+                                      hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
+                                      border: InputBorder.none,
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                    onChanged: (value) {
+                                      setState(() { _searchQuery = value; });
+                                    },
+                                  ),
                                 ),
+                              ),
+                            if (_isSearchExpanded && _searchQuery.isNotEmpty)
+                              IconButton(
+                                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                padding: const EdgeInsets.only(right: 10),
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                tooltip: '지우기',
+                                icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                onPressed: () {
+                                  setState(() {
+                                    _searchController.clear();
+                                    _searchQuery = '';
+                                  });
+                                  FocusScope.of(context).requestFocus(_searchFocusNode);
+                                },
                               ),
                           ],
                         ),
@@ -463,37 +652,7 @@ class StudentScreenState extends State<StudentScreen> {
                     ),
                   ),
                   const Spacer(),
-                  // 우측: 그룹 버튼 (학생 버튼과 동일한 크기/스타일, 오른쪽 정렬)
-                  SizedBox(
-                    width: 131,
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: SizedBox(
-                        width: 131,
-                        height: 44,
-                        child: FilledButton.icon(
-                          onPressed: () {
-                            showClassRegistrationDialog();
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1976D2),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                            minimumSize: const Size(0, 44),
-                            maximumSize: const Size(double.infinity, 44),
-                          ),
-                          icon: const Icon(Icons.add, size: 26),
-                          label: const Text(
-                            '그룹',
-                            style: TextStyle(
-                              fontSize: 16.5,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+                  // 우측: 그룹 버튼 제거 (스플릿 버튼 드롭다운으로 통합)
                   const SizedBox(width: 24),
                 ],
               ),
