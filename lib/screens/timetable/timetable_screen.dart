@@ -1243,10 +1243,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onRegisterPressed: () {
             if (_splitButtonSelected == '학생') {
               _handleRegistrationButton();
+            } else if (_splitButtonSelected == '수업') {
+              // 수업 등록 다이얼로그로 연결
+              _contentViewKey.currentState?.openClassRegistrationDialog();
             } else if (_splitButtonSelected == '보강') {
               // TODO: 보강 등록 모드 구현
-            } else if (_splitButtonSelected == '자습') {
-              _handleSelfStudyRegistration();
             }
           },
           splitButtonSelected: _splitButtonSelected,

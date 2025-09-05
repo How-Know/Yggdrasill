@@ -61,6 +61,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   String _searchQuery = '';
   List<StudentWithInfo> _searchResults = [];
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  bool _isSearchExpanded = false;
   bool isClassRegisterMode = false;
 
   @override
@@ -103,7 +105,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                ...['학생', '보강', '자습'].map((label) => _DropdownMenuHoverItem(
+                ...['학생', '수업'].map((label) => _DropdownMenuHoverItem(
                   label: label,
                   selected: widget.splitButtonSelected == label,
                   onTap: () {
@@ -128,10 +130,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
   }
 
+  // 외부에서 수업 등록 다이얼로그를 열 수 있도록 공개 메서드
+  void openClassRegistrationDialog() {
+    _showClassRegistrationDialog();
+  }
+
   @override
   void dispose() {
     // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
     _removeDropdownMenu(false);
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -381,20 +389,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             children: [
               Expanded(
                 flex: 1, // 1:1 비율로 수정
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 16, top: 8, left: 4, right: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.13),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -508,6 +504,23 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         ),
                                       ),
                                     ),
+                                    const SizedBox(width: 8),
+                                    // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
+                                    SizedBox(
+                                      height: h,
+                                      child: Material(
+                                        color: const Color(0xFF1976D2),
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(8),
+                                          onTap: () {},
+                                          child: const Padding(
+                                            padding: EdgeInsets.symmetric(horizontal: 12.0),
+                                            child: Icon(Icons.event_repeat_rounded, color: Colors.white, size: 20),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
@@ -515,34 +528,64 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               Expanded(
                                 child: Align(
                                   alignment: Alignment.centerRight,
-                                  child: SizedBox(
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 250),
                                     height: h,
-                                    child: SearchBar(
-                                      controller: _searchController,
-                                      onChanged: _onSearchChanged,
-                                      hintText: '검색',
-                                      leading: const Icon(
-                                        Icons.search,
-                                        color: Colors.white70,
-                                        size: 24,
-                                      ),
-                                      backgroundColor: MaterialStateColor.resolveWith(
-                                        (states) => const Color(0xFF2A2A2A),
-                                      ),
-                                      elevation: MaterialStateProperty.all(0),
-                                      padding: const MaterialStatePropertyAll<EdgeInsets>(
-                                        EdgeInsets.symmetric(horizontal: 18.0),
-                                      ),
-                                      textStyle: const MaterialStatePropertyAll<TextStyle>(
-                                        TextStyle(color: Colors.white, fontSize: 16.5),
-                                      ),
-                                      hintStyle: const MaterialStatePropertyAll<TextStyle>(
-                                        TextStyle(color: Colors.white54, fontSize: 16.5),
-                                      ),
-                                      side: MaterialStatePropertyAll<BorderSide>(
-                                        BorderSide(color: Colors.white.withOpacity(0.2), width: 1, style: BorderStyle.solid),
-                                      ),
-                                      constraints: BoxConstraints(minHeight: h, maxHeight: h),
+                                    width: _isSearchExpanded ? 150 : h,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF2A2A2A),
+                                      borderRadius: BorderRadius.circular(h/2),
+                                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                      children: [
+                                        IconButton(
+                                          visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                          padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                          icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+                                          onPressed: () {
+                                            setState(() { _isSearchExpanded = !_isSearchExpanded; });
+                                            if (_isSearchExpanded) {
+                                              Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
+                                            } else {
+                                              setState(() { _searchController.clear(); _searchQuery = ''; });
+                                              FocusScope.of(context).unfocus();
+                                            }
+                                          },
+                                        ),
+                                        if (_isSearchExpanded) const SizedBox(width: 10),
+                                        if (_isSearchExpanded)
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _searchController,
+                                              focusNode: _searchFocusNode,
+                                              style: const TextStyle(color: Colors.white, fontSize: 16.5),
+                                              decoration: const InputDecoration(
+                                                hintText: '검색',
+                                                hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
+                                                border: InputBorder.none,
+                                                isDense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                              ),
+                                              onChanged: _onSearchChanged,
+                                            ),
+                                          ),
+                                        if (_isSearchExpanded && _searchQuery.isNotEmpty)
+                                          IconButton(
+                                            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                            padding: const EdgeInsets.only(right: 10),
+                                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                            tooltip: '지우기',
+                                            icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                            onPressed: () {
+                                              setState(() { _searchController.clear(); _searchQuery = ''; });
+                                              FocusScope.of(context).requestFocus(_searchFocusNode);
+                                            },
+                                          ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -647,49 +690,69 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               ),
                             ),
                           ),
-                          // 학생 메뉴와 동일한 SearchBar (오른쪽 정렬, 고정 너비, 스타일 일치)
+                          // 학생 메뉴와 동일한 검색 버튼(아이콘→확장 알약)
                           Expanded(
                             child: Align(
                               alignment: Alignment.centerRight,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SizedBox(width: 16),
-                                  SizedBox(
-                                    width: 150,
-                                    height: 40,
-                                    child: SearchBar(
-                                      controller: _searchController,
-                                      onChanged: _onSearchChanged,
-                                      hintText: '검색',
-                                      leading: const Icon(
-                                        Icons.search,
-                                        color: Colors.white70,
-                                        size: 24,
-                                      ),
-                                      backgroundColor: MaterialStateColor.resolveWith(
-                                        (states) => const Color(0xFF2A2A2A),
-                                      ),
-                                      elevation: MaterialStateProperty.all(0),
-                                      padding: const MaterialStatePropertyAll<EdgeInsets>(
-                                        EdgeInsets.symmetric(horizontal: 18.0),
-                                      ),
-                                      textStyle: const MaterialStatePropertyAll<TextStyle>(
-                                        TextStyle(color: Colors.white, fontSize: 16.5),
-                                      ),
-                                      hintStyle: MaterialStatePropertyAll<TextStyle>(
-                                        TextStyle(color: Colors.white54, fontSize: 16.5),
-                                      ),
-                                      side: MaterialStatePropertyAll<BorderSide>(
-                                        BorderSide(color: Colors.white.withOpacity(0.2), width: 1, style: BorderStyle.solid),
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minHeight: 40,
-                                        maxHeight: 40,
-                                      ),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 250),
+                                height: 40,
+                                width: _isSearchExpanded ? 150 : 40,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2A2A2A),
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    IconButton(
+                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                      padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+                                      onPressed: () {
+                                        setState(() { _isSearchExpanded = !_isSearchExpanded; });
+                                        if (_isSearchExpanded) {
+                                          Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
+                                        } else {
+                                          setState(() { _searchController.clear(); _searchQuery = ''; });
+                                          FocusScope.of(context).unfocus();
+                                        }
+                                      },
                                     ),
-                                  ),
-                                ],
+                                    if (_isSearchExpanded) const SizedBox(width: 10),
+                                    if (_isSearchExpanded)
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _searchController,
+                                          focusNode: _searchFocusNode,
+                                          style: const TextStyle(color: Colors.white, fontSize: 16.5),
+                                          decoration: const InputDecoration(
+                                            hintText: '검색',
+                                            hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
+                                            border: InputBorder.none,
+                                            isDense: true,
+                                            contentPadding: EdgeInsets.zero,
+                                          ),
+                                          onChanged: _onSearchChanged,
+                                        ),
+                                      ),
+                                    if (_isSearchExpanded && _searchQuery.isNotEmpty)
+                                      IconButton(
+                                        visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                        padding: const EdgeInsets.only(right: 10),
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        tooltip: '지우기',
+                                        icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                        onPressed: () {
+                                          setState(() { _searchController.clear(); _searchQuery = ''; });
+                                          FocusScope.of(context).requestFocus(_searchFocusNode);
+                                        },
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -763,44 +826,38 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
                                   print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
                                   
-                                  // 학생이 없는 경우 기본 메시지 표시
-                                  if (cellStudents.isEmpty && cellSelfStudyStudents.isEmpty) {
-                                    return Container(
-                                      alignment: Alignment.center,
-                                      child: const Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                                    );
-                                  }
-                                  
-                                  return SingleChildScrollView(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        if (cellStudents.isNotEmpty)
-                                          _buildStudentCardList(
-                                            cellStudents,
-                                            dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
-                                          ),
-                                        if (cellSelfStudyStudents.isNotEmpty) ...[
-                                          Padding(
-                                            padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
-                                            child: Text(
-                                              '자습',
-                                              style: const TextStyle(color: Colors.white70, fontSize: 20),
+                                  // 컨테이너는 항상 렌더링(내용은 조건부), 영역 높이에 비례하도록 확장
+                                  return Expanded(
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                                        return Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Container(
+                                              margin: const EdgeInsets.only(top: 24), // 등록 버튼과 간격 24
+                                              height: containerHeight,
+                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF18181A),
+                                                borderRadius: BorderRadius.circular(18),
+                                              ),
+                                              alignment: Alignment.topLeft,
+                                              child: SingleChildScrollView(
+                                                child: (cellStudents.isNotEmpty)
+                                                  ? _buildStudentCardList(
+                                                      cellStudents,
+                                                      dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                                    )
+                                                  : const Padding(
+                                                      padding: EdgeInsets.all(4.0),
+                                                      child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                                    ),
+                                              ),
                                             ),
-                                          ),
-                                          Padding(
-                                            padding: const EdgeInsets.only(top: 4.0),
-                                            child: Wrap(
-                                              spacing: 8,
-                                              runSpacing: 8,
-                                              children: cellSelfStudyStudents.map<Widget>((info) {
-                                                // print('[DEBUG][자습카드렌더링] 자습 카드 생성: student=${info.student.name}, dayIndex=${widget.selectedCellDayIndex}, startTime=${widget.selectedCellStartTime}');
-                                                return _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: cellSelfStudyStudents, isSelfStudy: true);
-                                              }).toList(),
-                                            ),
-                                          ),
-                                        ],
-                                      ],
+                                          ],
+                                        );
+                                      },
                                     ),
                                   );
                                 },
@@ -809,15 +866,22 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           ),
                         )
                       else
-                        const Expanded(
-                          child: Center(
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                              ],
-                            ),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                              return Container(
+                                margin: const EdgeInsets.only(top: 24),
+                                height: containerHeight,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF18181A),
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                alignment: Alignment.centerLeft,
+                                child: const Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                              );
+                            },
                           ),
                         ),
                   // 삭제 드롭존
@@ -985,110 +1049,73 @@ class TimetableContentViewState extends State<TimetableContentView> {
               ),
               Expanded(
                 flex: 1, // 1:1 비율로 수정
-                child: Container(
-                  margin: const EdgeInsets.only(top: 16, left: 4, right: 4, bottom: 0),
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.13),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 상단 타이틀 + 버튼 Row
-                      Row(
-                        children: [
-                          // 수업 타이틀 + 스위치
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12, right: 8),
-                            child: Row(
-                              children: [
-                                if (MediaQuery.of(context).size.width > 1600)
-                                  Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                                SizedBox(width: 6),
-                                Tooltip(
-                                  message: '수업 등록 모드',
-                                  child: Switch(
-                                    value: isClassRegisterMode,
-                                    onChanged: (val) => setState(() => isClassRegisterMode = val),
-                                    activeColor: const Color(0xFF1976D2),
-                                    inactiveThumbColor: Colors.white,
-                                    inactiveTrackColor: Colors.white24,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Spacer(),
-                          SizedBox(
-                            height: 38,
-                            child: FilledButton(
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1976D2),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(22),
-                                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 상단 타이틀 + 버튼 Row
+                    Row(
+                      children: [
+                        // 수업 타이틀 + 스위치
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12, right: 8),
+                          child: Row(
+                            children: [
+                              if (MediaQuery.of(context).size.width > 1600)
+                                Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                              SizedBox(width: 6),
+                              Tooltip(
+                                message: '수업 등록 모드',
+                                child: SizedBox.shrink(),
                               ),
-                              onPressed: () => _showClassRegistrationDialog(),
-                              child: const Row(
-                                children: [
-                                  Icon(Icons.add, color: Colors.white, size: 20),
-                                  SizedBox(width: 6),
-                                  Text('수업 관리', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500)),
-                                ],
-                              ),
-                            ),
+                            ],
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      // 수업 카드 리스트
-                      Expanded(
-                        child: ValueListenableBuilder<List<ClassInfo>>(
-                          valueListenable: DataManager.instance.classesNotifier,
-                          builder: (context, classes, _) {
-                            return classes.isEmpty
-                              ? const Center(
-                                  child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                                )
-                              : ReorderableListView.builder(
-                                  itemCount: classes.length,
-                                  buildDefaultDragHandles: false,
-                                  onReorder: _onReorder,
-                                  proxyDecorator: (child, index, animation) {
-                                    return Material(
-                                      color: Colors.transparent,
-                                      child: Container(
-                                        margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-                                        child: child,
-                                      ),
-                                    );
-                                  },
-                                  itemBuilder: (context, idx) {
-                                    final c = classes[idx];
-                                    return _ClassCard(
-                                      key: ValueKey(c.id),
-                                      classInfo: c,
-                                      onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
-                                      onDelete: () => _deleteClass(idx),
-                                      reorderIndex: idx,
-                                      registrationModeType: widget.registrationModeType,
-                                    );
-                                  },
-                                );
-                          },
                         ),
+                        const Spacer(),
+                        SizedBox(
+                          height: 38,
+                          child: SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    // 수업 카드 리스트
+                    Expanded(
+                      child: ValueListenableBuilder<List<ClassInfo>>(
+                        valueListenable: DataManager.instance.classesNotifier,
+                        builder: (context, classes, _) {
+                          return classes.isEmpty
+                            ? const Center(
+                                child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                              )
+                            : ReorderableListView.builder(
+                                itemCount: classes.length,
+                                buildDefaultDragHandles: false,
+                                onReorder: _onReorder,
+                                proxyDecorator: (child, index, animation) {
+                                  return Material(
+                                    color: Colors.transparent,
+                                    child: Container(
+                                      margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                itemBuilder: (context, idx) {
+                                  final c = classes[idx];
+                                  return _ClassCard(
+                                    key: ValueKey(c.id),
+                                    classInfo: c,
+                                    onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
+                                    onDelete: () => _deleteClass(idx),
+                                    reorderIndex: idx,
+                                    registrationModeType: widget.registrationModeType,
+                                  );
+                                },
+                              );
+                        },
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1388,7 +1415,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       children: [
         if (dayTimeLabel != null)
           Padding(
-            padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 8.0),
+            padding: const EdgeInsets.only(top: 8.0, bottom: 8.0, left: 8.0),
             child: Text(
               dayTimeLabel,
               style: const TextStyle(color: Colors.white70, fontSize: 20),
