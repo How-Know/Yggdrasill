@@ -171,7 +171,8 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
         );
       },
     );
-    Overlay.of(context).insert(_menuOverlay!);
+    // 루트 오버레이에 삽입하여 전역 오버레이(플로팅 메모 등)보다 위에 올라오도록 함
+    Overlay.of(context, rootOverlay: true).insert(_menuOverlay!);
   }
 
   void _removeMenuOverlay() {

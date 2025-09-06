@@ -14,6 +14,8 @@ import 'screens/timetable/timetable_screen.dart';
 import 'services/data_manager.dart';
 import 'services/sync_service.dart';
 import 'models/memo.dart';
+import 'models/student.dart';
+import 'models/education_level.dart';
 import 'services/ai_summary.dart';
 import 'dart:async';
 import 'services/exam_mode.dart';
@@ -137,20 +139,13 @@ class MyApp extends StatelessWidget {
               ),
             ),
             builder: (context, child) {
-              // Overlay를 직접 제공하여 Tooltip/Overlay.of(context) 요구 충족
-              return Overlay(
-                initialEntries: [
-                  // 기본 컨텐츠 + 사이드 패널
-                  OverlayEntry(builder: (ctx) => Stack(children: [
-                    child ?? const SizedBox.shrink(),
-                    const _GlobalMemoOverlay(),
-                  ])),
-                  // 메모 플로팅 배너 (FAB보다 아래)
-                  OverlayEntry(builder: (ctx) => const _GlobalMemoFloatingBanners()),
-                  // 시험기간 FAB/인디케이터 (최상단)
-                  OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
-                ],
-              );
+              // 최종 요구 순서: 화면 → 플로팅 메모 → FAB(+ 및 드롭다운) → 메모 슬라이드
+              return Overlay(initialEntries: [
+                OverlayEntry(builder: (ctx) => child ?? const SizedBox.shrink()),
+                OverlayEntry(builder: (ctx) => const _GlobalMemoFloatingBanners()),
+                OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
+                OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
+              ]);
             },
             home: const MainScreen(),
             routes: {
@@ -162,6 +157,65 @@ class MyApp extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _openRangeAddDialog(BuildContext context) async {
+  await showDialog(
+    context: context,
+    builder: (ctx) {
+      final ctrlName = TextEditingController();
+      final ctrlRange = TextEditingController();
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('시험명/범위 추가', style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 520,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ctrlName,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: '시험명',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrlRange,
+                minLines: 2,
+                maxLines: 4,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: '범위',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  hintText: '예: 수학 I 1~3단원',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            child: const Text('추가'),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 class _GlobalMemoOverlay extends StatefulWidget {
@@ -193,8 +247,9 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
           isOpenListenable: _isOpen,
           memosListenable: DataManager.instance.memosNotifier,
           onAddMemo: (ctx) async {
+            final dlgCtx = rootNavigatorKey.currentContext ?? context;
             final text = await showDialog<String>(
-              context: context,
+              context: dlgCtx,
               builder: (_) => const _MemoInputDialog(),
             );
             if (text == null || text.trim().isEmpty) return;
@@ -215,8 +270,9 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
             } catch (_) {}
           },
           onEditMemo: (ctx, item) async {
+            final dlgCtx = rootNavigatorKey.currentContext ?? context;
             final edited = await showDialog<_MemoEditResult>(
-              context: context,
+              context: dlgCtx,
               builder: (_) => _MemoEditDialog(initial: item.original, initialScheduledAt: item.scheduledAt),
             );
             if (edited == null) return;
@@ -306,9 +362,9 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
 
   @override
   Widget build(BuildContext context) {
-    // FAB 버튼을 가리지 않도록 위로 띄움 (기존 FAB 하단 패딩과 동일 오프셋 적용)
+    // FAB 드롭다운과 겹치지 않도록 좌측 하단으로 이동
     return Positioned(
-      right: 24,
+      right: 30,
       bottom: 100,
       child: ValueListenableBuilder<List<Memo>>(
         valueListenable: DataManager.instance.memosNotifier,
@@ -466,8 +522,8 @@ class _ExamFabCluster extends StatelessWidget {
               );
             }),
             const SizedBox(width: 12),
-            _ExamActionButton(icon: Icons.crop_free, label: '범위', onPressed: () {
-              rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험기간: 범위')));
+            _ExamActionButton(icon: Icons.assignment_turned_in, label: '기출', onPressed: () {
+              rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('기출 기능은 준비 중입니다.')));
             }),
             const SizedBox(width: 12),
             // 설정 버튼은 아이콘만
@@ -630,19 +686,47 @@ class _ExamScheduleDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final students = DataManager.instance.students;
-    // 학교+학년 문자열 예: "대륜중 2학년"(교육단계도 반영 가능하지만 우선 학년 숫자만)
-    final List<String> schoolGrade = students.map((s) {
+    // 중학교 → 고등학교 순, 같은 과정 내에서는 학교명 가나다순, 학년은 저학년→고학년
+    int levelRank(EducationLevel l){
+      if (l == EducationLevel.middle) return 0; // 중
+      if (l == EducationLevel.high) return 1;   // 고
+      return 2; // 그 외는 뒤로
+    }
+    // 중/고생만 대상으로 중복 제거 (같은 학교/학년 1회만)
+    final Set<String> seen = {};
+    final List<Map<String, dynamic>> items = [];
+    for (final s in students) {
+      final level = s.student.educationLevel;
+      if (level == EducationLevel.elementary) continue; // 초등 제외
       final school = s.student.school.trim();
       final grade = s.student.grade;
+      final key = '${level.index}|$school|$grade';
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      items.add({'school': school, 'level': level, 'grade': grade});
+    }
+    items.sort((a,b){
+      final lr = levelRank(a['level'] as EducationLevel).compareTo(levelRank(b['level'] as EducationLevel));
+      if (lr != 0) return lr;
+      final sr = (a['school'] as String).compareTo(b['school'] as String);
+      if (sr != 0) return sr;
+      return (a['grade'] as int).compareTo(b['grade'] as int);
+    });
+    final List<String> schoolGrade = items.map((m){
+      final school = m['school'] as String;
+      final grade = m['grade'] as int;
       return grade > 0 ? '$school ${grade}학년' : school;
-    }).toSet().toList()
-      ..sort();
+    }).toList();
 
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: const Text('시험 일정 등록', style: TextStyle(color: Colors.white)),
-      content: _ExamScheduleWizard(schoolGrade: schoolGrade),
+      content: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.40, // 요청: 40%
+        width: 680,
+        child: _ExamScheduleWizard(schoolGrade: schoolGrade),
+      ),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
       ],
@@ -658,7 +742,7 @@ class _ExamScheduleWizard extends StatefulWidget {
 }
 
 class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
-  int _step = 0; // 0: 학교/학년 선택, 1: 날짜 다중 선택, 2: 시험명 매핑
+  int _step = 0; // 0: 학교/학년 선택, 1: 날짜 다중 선택, 2: 날짜 카드 관리
   String? _selectedSchoolGrade;
   final Set<DateTime> _selectedDays = {};
   final Map<DateTime, List<String>> _titlesByDate = {};
@@ -689,19 +773,55 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
-            constraints: const BoxConstraints(maxHeight: 280),
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.30),
             child: ListView.separated(
               shrinkWrap: true,
               itemCount: widget.schoolGrade.length,
               separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
               itemBuilder: (context, i) {
                 final item = widget.schoolGrade[i];
-                final selected = _selectedSchoolGrade == item;
-                return ListTile(
-                  dense: true,
-                  title: Text(item, style: TextStyle(color: selected ? Colors.white : Colors.white70)),
-                  selected: selected,
-                  onTap: () => setState(() => _selectedSchoolGrade = item),
+                final partsIdx = item.lastIndexOf(' ');
+                final schoolName = partsIdx > 0 ? item.substring(0, partsIdx) : item;
+                final gradeText = partsIdx > 0 ? item.substring(partsIdx + 1) : '';
+                final isSelectedSchool = _selectedSchoolGrade == item;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(schoolName, style: TextStyle(color: isSelectedSchool ? Colors.white : Colors.white70, fontSize: 16), overflow: TextOverflow.ellipsis)),
+                            SizedBox(
+                              width: 64,
+                              child: Text(
+                                gradeText,
+                                style: TextStyle(color: isSelectedSchool ? Colors.white : Colors.white60, fontSize: 16),
+                                textAlign: TextAlign.left,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      TextButton(
+                        onPressed: () {
+                          setState(() { _selectedSchoolGrade = item; _selectedDays.clear(); _step = 1; });
+                        },
+                        style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                        child: const Text('일정'),
+                      ),
+                      const SizedBox(width: 6),
+                      TextButton(
+                        onPressed: () async {
+                          setState(() { _selectedSchoolGrade = item; });
+                          await _openRangeAddDialog(context);
+                        },
+                        style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                        child: const Text('범위'),
+                      ),
+                    ],
+                  ),
                 );
               },
             ),
@@ -719,135 +839,281 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
       );
     }
     if (_step == 1) {
-      // 달력: 간단히 한 달 범위 다중 선택 (좌/우 이동 버튼 포함)
+      // 일정탭의 _MonthlyCalendar 스타일 차용
       final now = DateTime.now();
       DateTime _displayMonth = DateTime(now.year, now.month, 1);
       return StatefulBuilder(builder: (context, setStateSB) {
-        Widget dayCell(DateTime d) {
-          final dateOnly = DateTime(d.year, d.month, d.day);
-          final sel = _selectedDays.contains(dateOnly);
-          return GestureDetector(
-            onTap: () {
-              setStateSB(() {
-                if (sel) _selectedDays.remove(dateOnly); else _selectedDays.add(dateOnly);
-              });
-            },
-            child: Container(
-              margin: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: sel ? const Color(0xFF1976D2) : Colors.transparent,
-                border: Border.all(color: sel ? const Color(0xFF1976D2) : Colors.white24),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(child: Text('${d.day}', style: TextStyle(color: sel ? Colors.white : Colors.white70))),
-            ),
-          );
-        }
-
         List<Widget> buildCalendar(DateTime month) {
           final first = DateTime(month.year, month.month, 1);
-          final firstWeekday = first.weekday; // 1..7
+          final firstWeekday = first.weekday; // 1..7 (Mon..Sun)
           final leading = (firstWeekday - 1) % 7;
-          final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
-          final cells = <DateTime>[];
-          for (int i = 0; i < leading; i++) { cells.add(first.subtract(Duration(days: leading - i))); }
-          for (int d = 0; d < daysInMonth; d++) { cells.add(DateTime(month.year, month.month, d + 1)); }
-          while (cells.length % 7 != 0) { cells.add(cells.last.add(const Duration(days: 1))); }
+          final totalCells = 42; // 6주 그리드
+          final cells = List<DateTime>.generate(totalCells, (i) {
+            final dayOffset = i - leading;
+            return DateTime(month.year, month.month, 1 + dayOffset);
+          });
+
+          TextStyle numStyle(bool current) => TextStyle(color: current ? Colors.white70 : Colors.white30, fontSize: 21, fontWeight: current ? FontWeight.w700 : FontWeight.w600);
           return [
             Row(
               children: [
                 IconButton(onPressed: () => setStateSB(() => _displayMonth = DateTime(_displayMonth.year, _displayMonth.month - 1, 1)), icon: const Icon(Icons.chevron_left, color: Colors.white70)),
-                Expanded(child: Center(child: Text('${_displayMonth.year}.${_displayMonth.month}', style: const TextStyle(color: Colors.white)))),
+                Expanded(child: GestureDetector(
+                  onTap: () async {
+                    // 간단 월/년 선택 생략
+                  },
+                  child: Center(child: Text('${_displayMonth.year}년 ${_displayMonth.month}월', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700))),
+                )),
                 IconButton(onPressed: () => setStateSB(() => _displayMonth = DateTime(_displayMonth.year, _displayMonth.month + 1, 1)), icon: const Icon(Icons.chevron_right, color: Colors.white70)),
               ],
             ),
-            const SizedBox(height: 6),
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, mainAxisSpacing: 4, crossAxisSpacing: 4),
-              itemCount: cells.length,
-              itemBuilder: (context, i) => dayCell(cells[i]),
-            )
+            const SizedBox(height: 8),
+            Row(children: const [
+              Expanded(child: Center(child: Text('월', style: TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('화', style: TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('수', style: TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('목', style: TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('금', style: TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('토', style: TextStyle(color: Color(0xFF64A6DD), fontSize: 15, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('일', style: TextStyle(color: Color(0xFFEF6E6E), fontSize: 15, fontWeight: FontWeight.w600)))),
+            ]),
+            const SizedBox(height: 8),
+            Expanded(
+              child: GridView.builder(
+                padding: EdgeInsets.zero,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 7,
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
+                ),
+                itemCount: totalCells,
+                itemBuilder: (context, i) {
+                  final d = cells[i];
+                  final isCurrentMonth = d.month == _displayMonth.month;
+                  final key = DateTime(d.year, d.month, d.day);
+                  final sel = _selectedDays.contains(key);
+                  return GestureDetector(
+                    onTap: () {
+                      setStateSB(() {
+                        if (sel) {
+                          _selectedDays.remove(key);
+                        } else {
+                          _selectedDays.add(key);
+                        }
+                      });
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      decoration: BoxDecoration(
+                        color: sel ? const Color(0xFF1976D2).withOpacity(0.22) : Colors.transparent,
+                        border: Border.all(color: sel ? const Color(0xFF1976D2) : Colors.white12, width: sel ? 1.6 : 1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: Text('${d.day}', style: numStyle(isCurrentMonth)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: _selectedDays.isEmpty ? null : () async {
+                  // 선택된 날짜 중 하나를 골라 시험명 입력만 진행
+                  final picked = await showDialog<DateTime>(
+                    context: context,
+                    builder: (ctx) {
+                      final list = _selectedDays.toList()..sort();
+                      return AlertDialog(
+                        backgroundColor: const Color(0xFF1F1F1F),
+                        title: const Text('날짜 선택', style: TextStyle(color: Colors.white)),
+                        content: SizedBox(
+                          width: 360,
+                          height: 240,
+                          child: ListView.builder(
+                            itemCount: list.length,
+                            itemBuilder: (c, i) {
+                              final d = list[i];
+                              return ListTile(
+                                title: Text('${d.year}.${d.month}.${d.day}', style: const TextStyle(color: Colors.white)),
+                                onTap: () => Navigator.of(ctx).pop(d),
+                              );
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                  if (picked != null) {
+                    final name = await showDialog<String>(
+                      context: context,
+                      builder: (ctx) {
+                        final ctrl = TextEditingController();
+                        return AlertDialog(
+                          backgroundColor: const Color(0xFF1F1F1F),
+                          title: Text('${picked.year}.${picked.month}.${picked.day} 시험명', style: const TextStyle(color: Colors.white)),
+                          content: SizedBox(width: 420, child: TextField(controller: ctrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '예: 중간고사 수학', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                            FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('저장')),
+                          ],
+                        );
+                      },
+                    );
+                    if (name != null && name.isNotEmpty) {
+                      final key = DateTime(picked.year, picked.month, picked.day);
+                      final titles = _titlesByDate[key] ?? [];
+                      setState(() { _titlesByDate[key] = [...titles, name]; });
+                      rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험명이 등록되었습니다.')));
+                    }
+                  }
+                },
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                child: const Text('등록'),
+              ),
+            ),
           ];
         }
 
         return Column(
           key: const ValueKey('step1'),
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ...buildCalendar(_displayMonth),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: _selectedDays.isEmpty ? null : () => setState(() => _step = 2),
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                child: const Text('다음'),
-              ),
-            ),
-          ],
+          mainAxisSize: MainAxisSize.max,
+          children: buildCalendar(_displayMonth),
         );
       });
     }
-    // step 2: 날짜별 시험명 추가
+    // step 2: 날짜 카드만 먼저 보여주고, 카드 탭 시 시험명/범위 입력, 상단에 '일정','범위' 추가 버튼 제공
     final dates = _selectedDays.toList()..sort();
     return Column(
       key: const ValueKey('step2'),
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Text('시험 날짜', style: TextStyle(color: Colors.white70)),
-            const Spacer(),
-            TextButton.icon(onPressed: () => setState(() => _step = 1), icon: const Icon(Icons.add, size: 16), label: const Text('날짜 추가')),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Container(
-          constraints: const BoxConstraints(maxHeight: 240),
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: dates.length,
-            itemBuilder: (context, i) {
-              final d = dates[i];
-              final key = DateTime(d.year, d.month, d.day);
-              final titles = _titlesByDate[key] ?? [];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${key.year}.${key.month}.${key.day}', style: const TextStyle(color: Colors.white)),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        ...titles.map((t) => Chip(label: Text(t), backgroundColor: Colors.white12, deleteIcon: const Icon(Icons.close, size: 16), onDeleted: () { setState(() { _titlesByDate[key] = List.from(titles)..remove(t); }); })),
-                        SizedBox(
-                          width: 260,
-                          child: Row(children: [
-                            Expanded(child: TextField(controller: _titleCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '시험명', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
-                            const SizedBox(width: 6),
-                            FilledButton(onPressed: () {
-                              final t = _titleCtrl.text.trim();
-                              if (t.isEmpty) return;
-                              setState(() {
-                                _titlesByDate[key] = [...titles, t];
-                                _titleCtrl.clear();
-                              });
-                            }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
-                          ]),
-                        ),
-                      ],
-                    ),
+        Row(children: [
+          Text(_selectedSchoolGrade ?? '', style: const TextStyle(color: Colors.white70)),
+          const Spacer(),
+          TextButton.icon(onPressed: () async {
+            // 일정 추가: 기존 날짜에 시간/장소 등 상세 입력을 붙이는 자리(임시로 시험명 입력 다이얼로그 재사용)
+            if (dates.isEmpty) return;
+            final key = dates.first; // 예시: 첫 날짜에 추가
+            final text = await showDialog<String>(
+              context: context,
+              builder: (ctx) {
+                final ctrl = TextEditingController();
+                return AlertDialog(
+                  backgroundColor: const Color(0xFF1F1F1F),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  title: const Text('일정 추가', style: TextStyle(color: Colors.white)),
+                  content: SizedBox(width: 420, child: TextField(controller: ctrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '예: 시험 시작 15:00', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                    FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
                   ],
+                );
+              },
+            );
+            if (text != null && text.isNotEmpty) {
+              final titles = _titlesByDate[key] ?? [];
+              setState(() { _titlesByDate[key] = [...titles, text]; });
+            }
+          }, icon: const Icon(Icons.event, size: 16), label: const Text('일정')),
+          const SizedBox(width: 6),
+          TextButton.icon(onPressed: () async {
+            if (dates.isEmpty) return;
+            final key = dates.first;
+            final text = await showDialog<String>(
+              context: context,
+              builder: (ctx) {
+                final ctrl = TextEditingController();
+                return AlertDialog(
+                  backgroundColor: const Color(0xFF1F1F1F),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  title: const Text('범위 추가', style: TextStyle(color: Colors.white)),
+                  content: SizedBox(width: 420, child: TextField(controller: ctrl, minLines: 2, maxLines: 4, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '예: 수학 I 1~3단원', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                    FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
+                  ],
+                );
+              },
+            );
+            if (text != null && text.isNotEmpty) {
+              final titles = _titlesByDate[key] ?? [];
+              setState(() { _titlesByDate[key] = [...titles, '범위|$text']; });
+            }
+          }, icon: const Icon(Icons.notes, size: 16), label: const Text('범위')),
+          const SizedBox(width: 12),
+          TextButton.icon(onPressed: () => setState(() => _step = 1), icon: const Icon(Icons.arrow_back, size: 16), label: const Text('뒤로')),
+        ]),
+        const Text('선택한 날짜', style: TextStyle(color: Colors.white70)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: dates.map((d) {
+            final key = DateTime(d.year, d.month, d.day);
+            final titles = _titlesByDate[key] ?? [];
+            return GestureDetector(
+              onTap: () async {
+                // 시험명 입력 다이얼로그
+                final text = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) {
+                    final ctrl = TextEditingController();
+                    final rangeCtrl = TextEditingController();
+                    return AlertDialog(
+                      backgroundColor: const Color(0xFF1F1F1F),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      title: Text('${key.year}.${key.month}.${key.day} 시험 정보', style: const TextStyle(color: Colors.white)),
+                      content: SizedBox(
+                        width: 460,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TextField(controller: ctrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: '시험명', labelStyle: TextStyle(color: Colors.white70), hintText: '예: 중간고사 수학', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+                            const SizedBox(height: 8),
+                            TextField(controller: rangeCtrl, minLines: 2, maxLines: 4, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: '시험 범위', labelStyle: TextStyle(color: Colors.white70), hintText: '예: 수학 I 1~3단원', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))))),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                        FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim().isEmpty ? null : '${ctrl.text.trim()}|${rangeCtrl.text.trim()}'), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
+                      ],
+                    );
+                  },
+                );
+                if (text != null && text.isNotEmpty) {
+                  setState(() { _titlesByDate[key] = [...titles, text]; });
+                }
+              },
+              child: Container(
+                width: 160,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white24),
                 ),
-              );
-            },
-          ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${key.year}.${key.month}.${key.day}', style: const TextStyle(color: Colors.white)),
+                  const SizedBox(height: 6),
+                  if (titles.isEmpty) const Text('시험명/범위 추가 (+)', style: TextStyle(color: Colors.white38)) else ...titles.map((t) {
+                    final parts = t.split('|');
+                    final name = parts.isNotEmpty ? parts[0] : t;
+                    final range = parts.length > 1 && parts[1].isNotEmpty ? ' (${parts[1]})' : '';
+                    return Text('• $name$range', style: const TextStyle(color: Colors.white70));
+                  }).toList(),
+                ]),
+              ),
+            );
+          }).toList(),
         ),
         const SizedBox(height: 8),
         Align(
@@ -1128,8 +1394,9 @@ class _MemoPanel extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: TextButton.icon(
                   onPressed: () async {
+                    final dlgCtx = rootNavigatorKey.currentContext ?? context;
                     await showDialog(
-                      context: context,
+                      context: dlgCtx,
                       builder: (context) {
                         return AlertDialog(
                           backgroundColor: const Color(0xFF18181A),
@@ -1173,7 +1440,7 @@ class _MemoPanel extends StatelessWidget {
                             ),
                           ),
                           actions: [
-                            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+                            TextButton(onPressed: () => Navigator.of(dlgCtx).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
                           ],
                         );
                       },
