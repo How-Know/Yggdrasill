@@ -16,6 +16,7 @@ import 'services/sync_service.dart';
 import 'models/memo.dart';
 import 'services/ai_summary.dart';
 import 'dart:async';
+import 'services/exam_mode.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -135,14 +136,23 @@ class MyApp extends StatelessWidget {
                 foregroundColor: Colors.white,
               ),
             ),
-            home: Stack(
-              children: const [
-                MainScreen(),
-                // 전역 메모 패널 오버레이
-                _GlobalMemoOverlay(),
-                _GlobalMemoFloatingBanners(),
-              ],
-            ),
+            builder: (context, child) {
+              // Overlay를 직접 제공하여 Tooltip/Overlay.of(context) 요구 충족
+              return Overlay(
+                initialEntries: [
+                  // 기본 컨텐츠 + 사이드 패널
+                  OverlayEntry(builder: (ctx) => Stack(children: [
+                    child ?? const SizedBox.shrink(),
+                    const _GlobalMemoOverlay(),
+                  ])),
+                  // 메모 플로팅 배너 (FAB보다 아래)
+                  OverlayEntry(builder: (ctx) => const _GlobalMemoFloatingBanners()),
+                  // 시험기간 FAB/인디케이터 (최상단)
+                  OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
+                ],
+              );
+            },
+            home: const MainScreen(),
             routes: {
               '/settings': (context) => const SettingsScreen(),
               '/students': (context) => const StudentScreen(),
@@ -361,6 +371,498 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
           );
         },
       ),
+    );
+  }
+}
+
+// ---------------- 시험기간 모드 전역 오버레이 ----------------
+class _GlobalExamOverlay extends StatefulWidget {
+  const _GlobalExamOverlay();
+  @override
+  State<_GlobalExamOverlay> createState() => _GlobalExamOverlayState();
+}
+
+class _GlobalExamOverlayState extends State<_GlobalExamOverlay> with SingleTickerProviderStateMixin {
+  late final AnimationController _indicatorCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _indicatorCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+  }
+
+  @override
+  void dispose() {
+    _indicatorCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: false,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: ExamModeService.instance.isOn,
+          builder: (context, isOn, _) {
+            if (!isOn) return const SizedBox.shrink();
+            return Stack(
+              children: [
+                // 하단 전역 인디케이터(직선, 밝기 시퀀셜 애니메이션)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 3,
+                  child: AnimatedBuilder(
+                    animation: _indicatorCtrl,
+                    builder: (context, _) {
+                      return RepaintBoundary(child: _AnimatedLinearGlow(
+                        progress: _indicatorCtrl.value,
+                        baseColor: const Color(0xFFE53935),
+                        dimOpacity: 0.35,
+                        glowOpacity: 1.0,
+                        bandFraction: 0.18,
+                      ));
+                    },
+                  ),
+                ),
+                // 하단 중앙 FAB 클러스터: 기존 전역 FAB라인보다 더 아래 정렬 (정밀 조정)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 30, // 필요 시 더 낮추려면 값 감소 (예: 48/40)
+                  child: Center(child: _ExamFabCluster()),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ExamFabCluster extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xCC202024),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white12),
+          boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10, spreadRadius: 2)],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ExamActionButton(icon: Icons.event_note, label: '일정', onPressed: () async {
+              await showDialog(
+                context: rootNavigatorKey.currentContext!,
+                builder: (ctx) => const _ExamScheduleDialog(),
+              );
+            }),
+            const SizedBox(width: 12),
+            _ExamActionButton(icon: Icons.crop_free, label: '범위', onPressed: () {
+              rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험기간: 범위')));
+            }),
+            const SizedBox(width: 12),
+            // 설정 버튼은 아이콘만
+            _ExamIconOnlyButton(icon: Icons.settings, onPressed: () {
+              rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험기간: 설정')));
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExamActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+  const _ExamActionButton({required this.icon, required this.label, required this.onPressed});
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 49, // 10% 감소
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: onPressed,
+          child: Ink(
+            decoration: const ShapeDecoration(
+              color: Color(0xFF1976D2),
+              shape: StadiumBorder(side: BorderSide(color: Colors.transparent, width: 0)),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 22),
+                const SizedBox(width: 9),
+                Text(label, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExamIconOnlyButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+  const _ExamIconOnlyButton({required this.icon, required this.onPressed});
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 49, // 10% 감소
+      width: 49,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: onPressed,
+          child: Ink(
+            decoration: const ShapeDecoration(
+              color: Color(0xFF1976D2),
+              shape: StadiumBorder(side: BorderSide(color: Colors.transparent, width: 0)),
+            ),
+            child: const Center(
+              child: Icon(Icons.settings, color: Colors.white, size: 22),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 직선 모양을 유지하면서 밝기가 좌->우로 흐르는 효과
+class _AnimatedLinearGlow extends StatelessWidget {
+  final double progress; // 0..1
+  final Color baseColor;
+  final double dimOpacity;
+  final double glowOpacity;
+  final double bandFraction; // 화면폭 대비 하이라이트 밴드 비율(0..1)
+  const _AnimatedLinearGlow({
+    required this.progress,
+    required this.baseColor,
+    this.dimOpacity = 0.4,
+    this.glowOpacity = 1.0,
+    this.bandFraction = 0.2,
+  });
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _LinearGlowPainter(
+        progress: progress,
+        baseColor: baseColor,
+        dimOpacity: dimOpacity,
+        glowOpacity: glowOpacity,
+        bandFraction: bandFraction,
+      ),
+    );
+  }
+}
+
+class _LinearGlowPainter extends CustomPainter {
+  final double progress;
+  final Color baseColor;
+  final double dimOpacity;
+  final double glowOpacity;
+  final double bandFraction;
+  _LinearGlowPainter({
+    required this.progress,
+    required this.baseColor,
+    required this.dimOpacity,
+    required this.glowOpacity,
+    required this.bandFraction,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final width = size.width;
+    final height = size.height;
+    final Paint base = Paint()..color = baseColor.withOpacity(dimOpacity);
+    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), base);
+
+    final double band = (width * bandFraction).clamp(24.0, width);
+    final double center = progress * (width + band) - band / 2;
+    final double left = (center - band / 2).clamp(0.0, width);
+    final double right = (center + band / 2).clamp(0.0, width);
+    if (right <= 0 || left >= width) return;
+
+    final Rect rect = Rect.fromLTRB(left, 0, right, height);
+    final Gradient grad = LinearGradient(
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+      colors: [
+        baseColor.withOpacity(dimOpacity),
+        baseColor.withOpacity(glowOpacity),
+        baseColor.withOpacity(dimOpacity),
+      ],
+      stops: const [0.0, 0.5, 1.0],
+    );
+    final Paint glow = Paint()..shader = grad.createShader(rect);
+    canvas.drawRect(rect, glow);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LinearGlowPainter old) {
+    return old.progress != progress ||
+        old.baseColor != baseColor ||
+        old.dimOpacity != dimOpacity ||
+        old.glowOpacity != glowOpacity ||
+        old.bandFraction != bandFraction;
+  }
+}
+
+class _ExamScheduleDialog extends StatelessWidget {
+  const _ExamScheduleDialog();
+  @override
+  Widget build(BuildContext context) {
+    final students = DataManager.instance.students;
+    // 학교+학년 문자열 예: "대륜중 2학년"(교육단계도 반영 가능하지만 우선 학년 숫자만)
+    final List<String> schoolGrade = students.map((s) {
+      final school = s.student.school.trim();
+      final grade = s.student.grade;
+      return grade > 0 ? '$school ${grade}학년' : school;
+    }).toSet().toList()
+      ..sort();
+
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: const Text('시험 일정 등록', style: TextStyle(color: Colors.white)),
+      content: _ExamScheduleWizard(schoolGrade: schoolGrade),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+      ],
+    );
+  }
+}
+
+class _ExamScheduleWizard extends StatefulWidget {
+  final List<String> schoolGrade;
+  const _ExamScheduleWizard({required this.schoolGrade});
+  @override
+  State<_ExamScheduleWizard> createState() => _ExamScheduleWizardState();
+}
+
+class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
+  int _step = 0; // 0: 학교/학년 선택, 1: 날짜 다중 선택, 2: 시험명 매핑
+  String? _selectedSchoolGrade;
+  final Set<DateTime> _selectedDays = {};
+  final Map<DateTime, List<String>> _titlesByDate = {};
+  final TextEditingController _titleCtrl = TextEditingController();
+
+  @override
+  void dispose() { _titleCtrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 620,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: _buildStep(),
+      ),
+    );
+  }
+
+  Widget _buildStep() {
+    if (_step == 0) {
+      return Column(
+        key: const ValueKey('step0'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('학교/학년 선택', style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+            constraints: const BoxConstraints(maxHeight: 280),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: widget.schoolGrade.length,
+              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+              itemBuilder: (context, i) {
+                final item = widget.schoolGrade[i];
+                final selected = _selectedSchoolGrade == item;
+                return ListTile(
+                  dense: true,
+                  title: Text(item, style: TextStyle(color: selected ? Colors.white : Colors.white70)),
+                  selected: selected,
+                  onTap: () => setState(() => _selectedSchoolGrade = item),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: _selectedSchoolGrade == null ? null : () => setState(() => _step = 1),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              child: const Text('다음'),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_step == 1) {
+      // 달력: 간단히 한 달 범위 다중 선택 (좌/우 이동 버튼 포함)
+      final now = DateTime.now();
+      DateTime _displayMonth = DateTime(now.year, now.month, 1);
+      return StatefulBuilder(builder: (context, setStateSB) {
+        Widget dayCell(DateTime d) {
+          final dateOnly = DateTime(d.year, d.month, d.day);
+          final sel = _selectedDays.contains(dateOnly);
+          return GestureDetector(
+            onTap: () {
+              setStateSB(() {
+                if (sel) _selectedDays.remove(dateOnly); else _selectedDays.add(dateOnly);
+              });
+            },
+            child: Container(
+              margin: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: sel ? const Color(0xFF1976D2) : Colors.transparent,
+                border: Border.all(color: sel ? const Color(0xFF1976D2) : Colors.white24),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(child: Text('${d.day}', style: TextStyle(color: sel ? Colors.white : Colors.white70))),
+            ),
+          );
+        }
+
+        List<Widget> buildCalendar(DateTime month) {
+          final first = DateTime(month.year, month.month, 1);
+          final firstWeekday = first.weekday; // 1..7
+          final leading = (firstWeekday - 1) % 7;
+          final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+          final cells = <DateTime>[];
+          for (int i = 0; i < leading; i++) { cells.add(first.subtract(Duration(days: leading - i))); }
+          for (int d = 0; d < daysInMonth; d++) { cells.add(DateTime(month.year, month.month, d + 1)); }
+          while (cells.length % 7 != 0) { cells.add(cells.last.add(const Duration(days: 1))); }
+          return [
+            Row(
+              children: [
+                IconButton(onPressed: () => setStateSB(() => _displayMonth = DateTime(_displayMonth.year, _displayMonth.month - 1, 1)), icon: const Icon(Icons.chevron_left, color: Colors.white70)),
+                Expanded(child: Center(child: Text('${_displayMonth.year}.${_displayMonth.month}', style: const TextStyle(color: Colors.white)))),
+                IconButton(onPressed: () => setStateSB(() => _displayMonth = DateTime(_displayMonth.year, _displayMonth.month + 1, 1)), icon: const Icon(Icons.chevron_right, color: Colors.white70)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, mainAxisSpacing: 4, crossAxisSpacing: 4),
+              itemCount: cells.length,
+              itemBuilder: (context, i) => dayCell(cells[i]),
+            )
+          ];
+        }
+
+        return Column(
+          key: const ValueKey('step1'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...buildCalendar(_displayMonth),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: _selectedDays.isEmpty ? null : () => setState(() => _step = 2),
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                child: const Text('다음'),
+              ),
+            ),
+          ],
+        );
+      });
+    }
+    // step 2: 날짜별 시험명 추가
+    final dates = _selectedDays.toList()..sort();
+    return Column(
+      key: const ValueKey('step2'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('시험 날짜', style: TextStyle(color: Colors.white70)),
+            const Spacer(),
+            TextButton.icon(onPressed: () => setState(() => _step = 1), icon: const Icon(Icons.add, size: 16), label: const Text('날짜 추가')),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(
+          constraints: const BoxConstraints(maxHeight: 240),
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: dates.length,
+            itemBuilder: (context, i) {
+              final d = dates[i];
+              final key = DateTime(d.year, d.month, d.day);
+              final titles = _titlesByDate[key] ?? [];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${key.year}.${key.month}.${key.day}', style: const TextStyle(color: Colors.white)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        ...titles.map((t) => Chip(label: Text(t), backgroundColor: Colors.white12, deleteIcon: const Icon(Icons.close, size: 16), onDeleted: () { setState(() { _titlesByDate[key] = List.from(titles)..remove(t); }); })),
+                        SizedBox(
+                          width: 260,
+                          child: Row(children: [
+                            Expanded(child: TextField(controller: _titleCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '시험명', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
+                            const SizedBox(width: 6),
+                            FilledButton(onPressed: () {
+                              final t = _titleCtrl.text.trim();
+                              if (t.isEmpty) return;
+                              setState(() {
+                                _titlesByDate[key] = [...titles, t];
+                                _titleCtrl.clear();
+                              });
+                            }, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('추가')),
+                          ]),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton(
+            onPressed: () {
+              // TODO: 저장 로직(추후 DB 반영)
+              Navigator.of(context).pop();
+              rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험 일정이 임시 저장되었습니다.')));
+            },
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            child: const Text('저장'),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -8,6 +8,7 @@ import '../../../services/data_manager.dart';
 import '../../../models/memo.dart';
 import '../../../services/ai_summary.dart';
 import '../../../main.dart'; // rootNavigatorKey
+import '../../../services/exam_mode.dart';
 
 class ScheduleView extends StatefulWidget {
   final DateTime selectedDate;
@@ -28,11 +29,13 @@ class _ScheduleViewState extends State<ScheduleView> {
   DateTime? _previewEnd;
   String _todoFilter = 'all'; // all | incomplete | complete
   final Set<int> _loadedHolidayYears = <int>{};
+  bool _isExamPeriodMode = false; // 시험기간 모드 스위치 상태
 
   @override
   void initState() {
     super.initState();
     _ensureHolidaysForYear(DateTime.now().year);
+    _isExamPeriodMode = ExamModeService.instance.isOn.value;
   }
 
   Future<void> _ensureHolidaysForYear(int year) async {
@@ -136,10 +139,12 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(
+    return Stack(
       children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Row(
+          children: [
         // Left 3 (split vertically 3:1)
         Expanded(
           flex: 3,
@@ -241,6 +246,21 @@ class _ScheduleViewState extends State<ScheduleView> {
                                   ),
                                 ),
                               ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Tooltip(
+                            message: '시험기간 모드',
+                            child: Switch(
+                              value: _isExamPeriodMode,
+                              onChanged: (val) {
+                                setState(() => _isExamPeriodMode = val);
+                                ExamModeService.instance.isOn.value = val; // 전역 반영
+                              },
+                              activeColor: const Color(0xFF1976D2),
+                              inactiveThumbColor: Colors.white,
+                              inactiveTrackColor: Colors.white24,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
                           ),
                         ],
@@ -381,6 +401,8 @@ class _ScheduleViewState extends State<ScheduleView> {
         ),
       ],
       ),
+        ),
+      ],
     );
   }
 }
@@ -1008,6 +1030,8 @@ class _EventTile extends StatelessWidget {
     );
   }
 }
+
+// (전역 시험기간 FAB/인디케이터는 main.dart의 _GlobalExamOverlay에서 관리)
 
 IconData _iconFromKey(String? key) {
   switch (key) {
