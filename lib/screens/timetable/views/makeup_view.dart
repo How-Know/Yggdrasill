@@ -22,62 +22,27 @@ class _MakeupViewState extends State<MakeupView> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 24, left: 24, right: 24),
-      decoration: BoxDecoration(
-        color: const Color(0xFF18181A),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF18181A), width: 1),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(26, 26, 26, 16),
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
                 const Text(
-                  '보강/예외 관리',
+                  '보강 관리',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w600,
                     color: Colors.white,
                   ),
                 ),
-                Expanded(
-                  child: Center(
-                    child: SizedBox(
-                      width: 320,
-                      child: SegmentedButton<int>(
-                        segments: const [
-                          ButtonSegment(value: 0, label: Text('예정')),
-                          ButtonSegment(value: 1, label: Text('삭제')),
-                        ],
-                        selected: {_segmentIndex},
-                        onSelectionChanged: (selection) => setState(() => _segmentIndex = selection.first),
-                        style: ButtonStyle(
-                          backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                          foregroundColor: MaterialStateProperty.resolveWith<Color>((states) {
-                            if (states.contains(MaterialState.selected)) return Colors.white;
-                            return Colors.white70;
-                          }),
-                          textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _onAddMakeupPressed,
-                  icon: const Icon(Icons.add, size: 26),
-                  label: const Text('추가 수업', style: TextStyle(fontSize: 17)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1976D2),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                    minimumSize: const Size(0, 54),
-                  ),
+                const Spacer(),
+                IconButton(
+                  tooltip: '닫기',
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.close, color: Colors.white70),
                 ),
               ],
             ),
@@ -134,6 +99,45 @@ class _MakeupViewState extends State<MakeupView> {
                             final now = DateTime.now();
                             _selectedMonthStart = DateTime(now.year, now.month, 1);
                           }),
+                          onPickMonth: (picked) => setState(() {
+                            _selectedMonthStart = DateTime(picked.year, picked.month, 1);
+                          }),
+                          center: SizedBox(
+                            width: 192,
+                            child: SegmentedButton<int>(
+                              segments: const [
+                                ButtonSegment(value: 0, label: Text('예정')),
+                                ButtonSegment(value: 1, label: Text('삭제')),
+                              ],
+                              selected: {_segmentIndex},
+                              onSelectionChanged: (selection) => setState(() => _segmentIndex = selection.first),
+                              style: ButtonStyle(
+                                backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                                foregroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+                                  if (states.contains(MaterialState.selected)) return Colors.white;
+                                  return Colors.white70;
+                                }),
+                                textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                              ),
+                            ),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _onAddMakeupPressed,
+                                icon: const Icon(Icons.add, size: 23),
+                                label: const Text('추가 수업', style: TextStyle(fontSize: 15.3)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF1976D2),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 21.6, vertical: 14.4),
+                                  minimumSize: const Size(0, 48.6),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 8),
                         // 컬럼 헤더 (글자 크기 2배, 가운데 세로 구분선)
@@ -143,13 +147,13 @@ class _MakeupViewState extends State<MakeupView> {
                               Expanded(
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
-                                  child: Text('예정', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 28)),
+                                  child: Text('예정', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 22)),
                                 ),
                               ),
                               Expanded(
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6),
-                                  child: Text('완료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 28)),
+                                  child: Text('완료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 22)),
                                 ),
                               ),
                             ],
@@ -227,7 +231,6 @@ class _MakeupViewState extends State<MakeupView> {
             ),
           ],
         ),
-      ),
     );
   }
 }
@@ -237,7 +240,10 @@ class _MonthToolbar extends StatelessWidget {
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onThisMonth;
-  const _MonthToolbar({required this.monthStart, required this.onPrev, required this.onNext, required this.onThisMonth});
+  final ValueChanged<DateTime>? onPickMonth;
+  final Widget? center; // 중앙 위젯 삽입용 (세그먼트 버튼 등)
+  final Widget? trailing; // 오른쪽 정렬 영역
+  const _MonthToolbar({required this.monthStart, required this.onPrev, required this.onNext, required this.onThisMonth, this.center, this.trailing, this.onPickMonth});
 
   String _label(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
 
@@ -245,6 +251,26 @@ class _MonthToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        // 이번달 버튼을 왼쪽으로 배치
+        Tooltip(
+          message: '이번달',
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: IconButton(
+              onPressed: onThisMonth,
+              icon: const Icon(Icons.today, color: Colors.white70, size: 18),
+              splashRadius: 18,
+              tooltip: '이번달',
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
         IconButton(
           onPressed: onPrev,
           icon: const Icon(Icons.chevron_left, color: Colors.white70),
@@ -256,19 +282,56 @@ class _MonthToolbar extends StatelessWidget {
             color: const Color(0xFF2A2A2A),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Text(_label(monthStart), style: const TextStyle(color: Colors.white)),
+          child: InkWell(
+            onTap: () async {
+              final initial = monthStart;
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: DateTime(initial.year, initial.month, 1),
+                firstDate: DateTime(2000, 1, 1),
+                lastDate: DateTime(2100, 12, 31),
+                helpText: '달 선택',
+                builder: (context, child) {
+                  final ThemeData base = Theme.of(context);
+                  return Theme(
+                    data: base.copyWith(
+                      dialogBackgroundColor: const Color(0xFF1F1F1F),
+                      colorScheme: base.colorScheme.copyWith(
+                        primary: const Color(0xFF1976D2),
+                        surface: const Color(0xFF1F1F1F),
+                        onSurface: Colors.white,
+                        onPrimary: Colors.white,
+                      ),
+                      textButtonTheme: TextButtonThemeData(
+                        style: TextButton.styleFrom(foregroundColor: Colors.white),
+                      ),
+                      // dialogTheme 타입 변경 이슈 회피: 배경/모양은 dialogBackgroundColor와 DatePicker 자체 스타일로 통일
+                    ),
+                    child: child ?? const SizedBox.shrink(),
+                  );
+                },
+              );
+              if (picked != null && onPickMonth != null) {
+                onPickMonth!(picked);
+              }
+            },
+            child: Text(_label(monthStart), style: const TextStyle(color: Colors.white)),
+          ),
         ),
         IconButton(
           onPressed: onNext,
           icon: const Icon(Icons.chevron_right, color: Colors.white70),
           tooltip: '다음 달',
         ),
-        const SizedBox(width: 8),
-        TextButton(
-          onPressed: onThisMonth,
-          child: const Text('이번달', style: TextStyle(color: Colors.white)),
-          style: TextButton.styleFrom(backgroundColor: const Color(0xFF1976D2), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
-        ),
+        if (center != null)
+          Expanded(
+            child: Center(child: center!),
+          ),
+        // 오른쪽 여백 보정용 사이즈박스 (필요 시 수동 조절)
+        const SizedBox(width: 240),
+        if (trailing != null) ...[
+          trailing!,
+        ],
       ],
     );
   }

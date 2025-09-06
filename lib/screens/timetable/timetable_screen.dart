@@ -34,15 +34,12 @@ import '../../services/schedule_store.dart';
 
 enum TimetableViewType {
   classes,    // 수업
-  makeup,     // 보강
   schedule;   // 일정
 
   String get name {
     switch (this) {
       case TimetableViewType.classes:
         return '수업';
-      case TimetableViewType.makeup:
-        return '보강';
       case TimetableViewType.schedule:
         return '일정';
     }
@@ -738,15 +735,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   children: [
                     SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
                     CustomTabBar(
-                      selectedIndex: TimetableViewType.values.indexOf(_viewType),
-                      tabs: TimetableViewType.values.map((e) => e.name).toList(),
+                      selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
+                      tabs: const ['수업', '일정'],
                       onTabSelected: (i) {
                         setState(() {
-                          _viewType = TimetableViewType.values[i];
+                          _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
                         });
                         
                         // 수업 탭 클릭 시에만 스크롤
-                        if (TimetableViewType.values[i] == TimetableViewType.classes && 
+                        if ((i == 0) && 
                             !_hasScrolledOnTabClick) {
                           WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
                           _hasScrolledOnTabClick = true;
@@ -1295,8 +1292,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           },
           onExitSelectMode: exitSelectMode, // 콜백 전달
         );
-      case TimetableViewType.makeup:
-        return const MakeupView();
+      // 보강 탭 제거됨
       case TimetableViewType.schedule:
         return ScheduleView(
           selectedDate: _selectedDate,

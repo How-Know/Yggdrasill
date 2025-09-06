@@ -67,11 +67,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
       builder: (context) {
         return Dialog(
           backgroundColor: const Color(0xFF1F1F1F),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           child: SizedBox(
-            width: 920,
-            height: 640,
+            width: 1104, // 920 * 1.2
+            height: 800, // 640 * 1.2
             child: const MakeupView(),
           ),
         );
@@ -885,7 +885,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                     )
                                                   : const Padding(
                                                       padding: EdgeInsets.all(4.0),
-                                                      child: Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                                      child: Text('셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
                                                     ),
                                               ),
                                             ),
@@ -912,8 +912,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   color: const Color(0xFF18181A),
                                   borderRadius: BorderRadius.circular(18),
                                 ),
-                                alignment: Alignment.centerLeft,
-                                child: const Text('학생을 검색하거나 셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                alignment: Alignment.center,
+                                child: const Text('셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 17)),
                               );
                             },
                           ),
