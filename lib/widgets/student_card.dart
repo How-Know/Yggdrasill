@@ -370,7 +370,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
           onEnd: _onAnimEnd,
           padding: const EdgeInsets.symmetric(horizontal: 8.0),
           child: SizedBox(
-            width: widget.showCheckbox ? 135 : 110,
+            width: double.infinity,
             child: Stack(
               alignment: Alignment.center,
               children: [
@@ -387,7 +387,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                     ),
                   ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: EdgeInsets.only(left: 12, right: widget.showCheckbox ? 32 : 12),
                   child: Text(
                     student.name,
                     textAlign: TextAlign.center,

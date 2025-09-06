@@ -165,6 +165,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               child: Center( // Align 대신 Center 사용으로 완전 중앙 고정
                 child: SizedBox(
                   width: 220, // 기존 440에서 220으로 축소
+                  height: 35, // 선택 버튼과 동일 높이
                   child: SegmentedButton<int>(
                     segments: const [
                       ButtonSegment(value: 0, label: Text('메인')),

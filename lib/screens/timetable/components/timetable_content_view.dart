@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/student.dart';
@@ -8,6 +9,7 @@ import '../../../models/student_time_block.dart';
 import '../../../models/self_study_time_block.dart';
 import '../../../widgets/app_snackbar.dart';
 import '../../../models/class_info.dart';
+import '../views/makeup_view.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -58,6 +60,24 @@ class TimetableContentViewState extends State<TimetableContentView> {
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
+  Future<void> _showMakeupListDialog() async {
+    await showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: SizedBox(
+            width: 920,
+            height: 640,
+            child: const MakeupView(),
+          ),
+        );
+      },
+    );
+  }
   String _searchQuery = '';
   List<StudentWithInfo> _searchResults = [];
   final TextEditingController _searchController = TextEditingController();
@@ -390,7 +410,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
               Expanded(
                 flex: 1, // 1:1 비율로 수정
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  padding: const EdgeInsets.only(left: 4, right: 8, top: 8, bottom: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -521,75 +541,73 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         ),
                                       ),
                                     ),
+                                    const SizedBox(width: 8),
+                                    // 검색 버튼 (학생메뉴와 동일한 애니메이션)
+                                    AnimatedContainer(
+                                      duration: const Duration(milliseconds: 250),
+                                      height: h,
+                                      width: _isSearchExpanded ? searchW : h,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2A2A2A),
+                                        borderRadius: BorderRadius.circular(h/2),
+                                        border: Border.all(color: Colors.white.withOpacity(0.2)),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                        children: [
+                                          IconButton(
+                                            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                            padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+                                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                            icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+                                            onPressed: () {
+                                              setState(() { _isSearchExpanded = !_isSearchExpanded; });
+                                              if (_isSearchExpanded) {
+                                                Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
+                                              } else {
+                                                setState(() { _searchController.clear(); _searchQuery = ''; });
+                                                FocusScope.of(context).unfocus();
+                                              }
+                                            },
+                                          ),
+                                          if (_isSearchExpanded) const SizedBox(width: 10),
+                                          if (_isSearchExpanded)
+                                            SizedBox(
+                                              width: searchW - 50,
+                                              child: TextField(
+                                                controller: _searchController,
+                                                focusNode: _searchFocusNode,
+                                                style: const TextStyle(color: Colors.white, fontSize: 16.5),
+                                                decoration: const InputDecoration(
+                                                  hintText: '검색',
+                                                  hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
+                                                  border: InputBorder.none,
+                                                  isDense: true,
+                                                  contentPadding: EdgeInsets.zero,
+                                                ),
+                                                onChanged: _onSearchChanged,
+                                              ),
+                                            ),
+                                          if (_isSearchExpanded && _searchQuery.isNotEmpty)
+                                            IconButton(
+                                              visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                              padding: const EdgeInsets.only(right: 10),
+                                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                              tooltip: '지우기',
+                                              icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                              onPressed: () {
+                                                setState(() { _searchController.clear(); _searchQuery = ''; });
+                                                FocusScope.of(context).requestFocus(_searchFocusNode);
+                                              },
+                                            ),
+                                        ],
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Align(
-                                  alignment: Alignment.centerRight,
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 250),
-                                    height: h,
-                                    width: _isSearchExpanded ? 150 : h,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF2A2A2A),
-                                      borderRadius: BorderRadius.circular(h/2),
-                                      border: Border.all(color: Colors.white.withOpacity(0.2)),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-                                      crossAxisAlignment: CrossAxisAlignment.center,
-                                      children: [
-                                        IconButton(
-                                          visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                          padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
-                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                          icon: const Icon(Icons.search, color: Colors.white70, size: 20),
-                                          onPressed: () {
-                                            setState(() { _isSearchExpanded = !_isSearchExpanded; });
-                                            if (_isSearchExpanded) {
-                                              Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
-                                            } else {
-                                              setState(() { _searchController.clear(); _searchQuery = ''; });
-                                              FocusScope.of(context).unfocus();
-                                            }
-                                          },
-                                        ),
-                                        if (_isSearchExpanded) const SizedBox(width: 10),
-                                        if (_isSearchExpanded)
-                                          Expanded(
-                                            child: TextField(
-                                              controller: _searchController,
-                                              focusNode: _searchFocusNode,
-                                              style: const TextStyle(color: Colors.white, fontSize: 16.5),
-                                              decoration: const InputDecoration(
-                                                hintText: '검색',
-                                                hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
-                                                border: InputBorder.none,
-                                                isDense: true,
-                                                contentPadding: EdgeInsets.zero,
-                                              ),
-                                              onChanged: _onSearchChanged,
-                                            ),
-                                          ),
-                                        if (_isSearchExpanded && _searchQuery.isNotEmpty)
-                                          IconButton(
-                                            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                            padding: const EdgeInsets.only(right: 10),
-                                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                            tooltip: '지우기',
-                                            icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-                                            onPressed: () {
-                                              setState(() { _searchController.clear(); _searchQuery = ''; });
-                                              FocusScope.of(context).requestFocus(_searchFocusNode);
-                                            },
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
+                              // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
                             ],
                           );
                         }
@@ -690,70 +708,86 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               ),
                             ),
                           ),
-                          // 학생 메뉴와 동일한 검색 버튼(아이콘→확장 알약)
-                          Expanded(
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 250),
-                                height: 40,
-                                width: _isSearchExpanded ? 150 : 40,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF2A2A2A),
-                                  borderRadius: BorderRadius.circular(22),
-                                  border: Border.all(color: Colors.white.withOpacity(0.2)),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    IconButton(
-                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                      padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                      icon: const Icon(Icons.search, color: Colors.white70, size: 20),
-                                      onPressed: () {
-                                        setState(() { _isSearchExpanded = !_isSearchExpanded; });
-                                        if (_isSearchExpanded) {
-                                          Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
-                                        } else {
-                                          setState(() { _searchController.clear(); _searchQuery = ''; });
-                                          FocusScope.of(context).unfocus();
-                                        }
-                                      },
-                                    ),
-                                    if (_isSearchExpanded) const SizedBox(width: 10),
-                                    if (_isSearchExpanded)
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _searchController,
-                                          focusNode: _searchFocusNode,
-                                          style: const TextStyle(color: Colors.white, fontSize: 16.5),
-                                          decoration: const InputDecoration(
-                                            hintText: '검색',
-                                            hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
-                                            border: InputBorder.none,
-                                            isDense: true,
-                                            contentPadding: EdgeInsets.zero,
-                                          ),
-                                          onChanged: _onSearchChanged,
-                                        ),
-                                      ),
-                                    if (_isSearchExpanded && _searchQuery.isNotEmpty)
-                                      IconButton(
-                                        visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                        padding: const EdgeInsets.only(right: 10),
-                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                        tooltip: '지우기',
-                                        icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-                                        onPressed: () {
-                                          setState(() { _searchController.clear(); _searchQuery = ''; });
-                                          FocusScope.of(context).requestFocus(_searchFocusNode);
-                                        },
-                                      ),
-                                  ],
+                          const SizedBox(width: 6),
+                          // 보강 버튼 (아이콘만, 강조 색상, 툴팁)
+                          Tooltip(
+                            message: '보강',
+                            child: SizedBox(
+                              height: 44,
+                              child: Material(
+                                color: const Color(0xFF1565C0), // 기존보다 약간 진하게
+                                borderRadius: BorderRadius.circular(8),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: _showMakeupListDialog,
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 12.0),
+                                    child: Icon(Symbols.push_pin_rounded, color: Colors.white, size: 22, weight: 600, opticalSize: 48),
+                                  ),
                                 ),
                               ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 검색 버튼 (학생메뉴와 동일한 애니메이션, 왼쪽 정렬)
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 250),
+                            height: 44,
+                            width: _isSearchExpanded ? 160 : 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2A2A2A),
+                              borderRadius: BorderRadius.circular(22),
+                              border: Border.all(color: Colors.white.withOpacity(0.2)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                  padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                  icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+                                  onPressed: () {
+                                    setState(() { _isSearchExpanded = !_isSearchExpanded; });
+                                    if (_isSearchExpanded) {
+                                      Future.delayed(const Duration(milliseconds: 50), () { _searchFocusNode.requestFocus(); });
+                                    } else {
+                                      setState(() { _searchController.clear(); _searchQuery = ''; });
+                                      FocusScope.of(context).unfocus();
+                                    }
+                                  },
+                                ),
+                                if (_isSearchExpanded) const SizedBox(width: 10),
+                                if (_isSearchExpanded)
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _searchController,
+                                      focusNode: _searchFocusNode,
+                                      style: const TextStyle(color: Colors.white, fontSize: 16.5),
+                                      decoration: const InputDecoration(
+                                        hintText: '검색',
+                                        hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
+                                        border: InputBorder.none,
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                      onChanged: _onSearchChanged,
+                                    ),
+                                  ),
+                                if (_isSearchExpanded && _searchQuery.isNotEmpty)
+                                  IconButton(
+                                    visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                    padding: const EdgeInsets.only(right: 10),
+                                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                    tooltip: '지우기',
+                                    icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+                                    onPressed: () {
+                                      setState(() { _searchController.clear(); _searchQuery = ''; });
+                                      FocusScope.of(context).requestFocus(_searchFocusNode);
+                                    },
+                                  ),
+                              ],
                             ),
                           ),
                         ],
@@ -1060,24 +1094,29 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           padding: const EdgeInsets.only(top: 12, right: 8),
                           child: Row(
                             children: [
-                              if (MediaQuery.of(context).size.width > 1600)
-                                Text('수업', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                              SizedBox(width: 6),
+                              if (MediaQuery.of(context).size.width > 1600) ...[
+                                SizedBox(width: 6),
+                                Text('수업', style: TextStyle(color: Colors.white70, fontSize: 25, fontWeight: FontWeight.bold)),
+                              ],
+                              SizedBox(width: 8),
                               Tooltip(
                                 message: '수업 등록 모드',
-                                child: SizedBox.shrink(),
+                                child: Switch(
+                                  value: isClassRegisterMode,
+                                  onChanged: (val) => setState(() => isClassRegisterMode = val),
+                                  activeColor: const Color(0xFF1976D2),
+                                  inactiveThumbColor: Colors.white,
+                                  inactiveTrackColor: Colors.white24,
+                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
                               ),
                             ],
                           ),
                         ),
                         const Spacer(),
-                        SizedBox(
-                          height: 38,
-                          child: SizedBox.shrink(),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 8),
                     // 수업 카드 리스트
                     Expanded(
                       child: ValueListenableBuilder<List<ClassInfo>>(
@@ -1425,8 +1464,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           Padding(
             padding: const EdgeInsets.only(top: 16.0),
             child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 0,
+              runSpacing: 6.4,
               children: noSession.map((info) =>
                 _buildDraggableStudentCard(info, dayIndex: widget.selectedCellDayIndex, startTime: widget.selectedCellStartTime, cellStudents: students)
               ).toList(),
@@ -1441,21 +1480,23 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(left: 8.0),
-                    child: Text(
-                      (() {
-                        final c = classCards.firstWhere(
-                          (c) => c.id == sessionId,
-                          orElse: () => ClassInfo(id: '', name: '', color: null, description: '', capacity: null),
-                        );
-                        return c.id.isEmpty ? '수업' : c.name;
-                      })(),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
+                    child: Builder(builder: (context) {
+                      final c = classCards.firstWhere(
+                        (c) => c.id == sessionId,
+                        orElse: () => ClassInfo(id: '', name: '', color: null, description: '', capacity: null),
+                      );
+                      final String name = c.id.isEmpty ? '수업' : c.name;
+                      final Color color = c.color ?? Colors.white70;
+                      return Text(
+                        name,
+                        style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 17),
+                      );
+                    }),
                   ),
                   const SizedBox(height: 4),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 6.4,
+                    runSpacing: 6.4,
                     children: (() {
                       final sessionStudents = sessionMap[sessionId]!;
                       sessionStudents.sort((a, b) => a.student.name.compareTo(b.student.name));
@@ -2099,7 +2140,7 @@ class _ClassCardState extends State<_ClassCard> {
             borderRadius: BorderRadius.circular(12),
             side: _isHovering
               ? BorderSide(color: c.color ?? const Color(0xFFB0B0B0), width: 2.5)
-              : const BorderSide(color: Colors.transparent, width: 1.2),
+              : const BorderSide(color: Color(0xFF3A3A3A), width: 2.0),
           ),
           child: Padding(
             padding: const EdgeInsets.all(16),
