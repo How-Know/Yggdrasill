@@ -213,17 +213,137 @@ class _MakeupViewState extends State<MakeupView> {
                       });
 
                     if (canceled.isEmpty) {
-                      return const Center(
-                        child: Text('항목이 없습니다', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _MonthToolbar(
+                            monthStart: _selectedMonthStart,
+                            onPrev: () => setState(() {
+                              _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month - 1, 1);
+                            }),
+                            onNext: () => setState(() {
+                              _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month + 1, 1);
+                            }),
+                            onThisMonth: () => setState(() {
+                              final now = DateTime.now();
+                              _selectedMonthStart = DateTime(now.year, now.month, 1);
+                            }),
+                            onPickMonth: (picked) => setState(() {
+                              _selectedMonthStart = DateTime(picked.year, picked.month, 1);
+                            }),
+                            center: SizedBox(
+                              width: 192,
+                              child: SegmentedButton<int>(
+                                segments: const [
+                                  ButtonSegment(value: 0, label: Text('예정')),
+                                  ButtonSegment(value: 1, label: Text('삭제')),
+                                ],
+                                selected: {_segmentIndex},
+                                onSelectionChanged: (selection) => setState(() => _segmentIndex = selection.first),
+                                style: ButtonStyle(
+                                  backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                                  foregroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+                                    if (states.contains(MaterialState.selected)) return Colors.white;
+                                    return Colors.white70;
+                                  }),
+                                  textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                                ),
+                              ),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ElevatedButton.icon(
+                                  onPressed: _onAddMakeupPressed,
+                                  icon: const Icon(Icons.add, size: 23),
+                                  label: const Text('추가 수업', style: TextStyle(fontSize: 15.3)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1976D2),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 21.6, vertical: 14.4),
+                                    minimumSize: const Size(0, 48.6),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Expanded(
+                            child: Center(
+                              child: Text('항목이 없습니다', style: TextStyle(color: Colors.white54, fontSize: 16)),
+                            ),
+                          ),
+                        ],
                       );
                     }
-                    return ListView.separated(
-                      itemCount: canceled.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 16),
-                      itemBuilder: (context, idx) {
-                        final item = canceled[idx];
-                        return _OverrideTile(item: item);
-                      },
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _MonthToolbar(
+                          monthStart: _selectedMonthStart,
+                          onPrev: () => setState(() {
+                            _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month - 1, 1);
+                          }),
+                          onNext: () => setState(() {
+                            _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month + 1, 1);
+                          }),
+                          onThisMonth: () => setState(() {
+                            final now = DateTime.now();
+                            _selectedMonthStart = DateTime(now.year, now.month, 1);
+                          }),
+                          onPickMonth: (picked) => setState(() {
+                            _selectedMonthStart = DateTime(picked.year, picked.month, 1);
+                          }),
+                          center: SizedBox(
+                            width: 192,
+                            child: SegmentedButton<int>(
+                              segments: const [
+                                ButtonSegment(value: 0, label: Text('예정')),
+                                ButtonSegment(value: 1, label: Text('삭제')),
+                              ],
+                              selected: {_segmentIndex},
+                              onSelectionChanged: (selection) => setState(() => _segmentIndex = selection.first),
+                              style: ButtonStyle(
+                                backgroundColor: MaterialStateProperty.all(Colors.transparent),
+                                foregroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+                                  if (states.contains(MaterialState.selected)) return Colors.white;
+                                  return Colors.white70;
+                                }),
+                                textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                              ),
+                            ),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _onAddMakeupPressed,
+                                icon: const Icon(Icons.add, size: 23),
+                                label: const Text('추가 수업', style: TextStyle(fontSize: 15.3)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF1976D2),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 21.6, vertical: 14.4),
+                                  minimumSize: const Size(0, 48.6),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: canceled.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 16),
+                            itemBuilder: (context, idx) {
+                              final item = canceled[idx];
+                              return _OverrideTile(item: item);
+                            },
+                          ),
+                        ),
+                      ],
                     );
                   }
                 },
@@ -296,16 +416,20 @@ class _MonthToolbar extends StatelessWidget {
                   return Theme(
                     data: base.copyWith(
                       dialogBackgroundColor: const Color(0xFF1F1F1F),
-                      colorScheme: base.colorScheme.copyWith(
-                        primary: const Color(0xFF1976D2),
-                        surface: const Color(0xFF1F1F1F),
+                      colorScheme: const ColorScheme.dark(
+                        primary: Color(0xFF1976D2),
+                        surface: Color(0xFF1F1F1F),
                         onSurface: Colors.white,
                         onPrimary: Colors.white,
+                        secondary: Colors.white70,
+                      ),
+                      datePickerTheme: const DatePickerThemeData(
+                        backgroundColor: Color(0xFF1F1F1F),
+                        surfaceTintColor: Colors.transparent,
                       ),
                       textButtonTheme: TextButtonThemeData(
                         style: TextButton.styleFrom(foregroundColor: Colors.white),
                       ),
-                      // dialogTheme 타입 변경 이슈 회피: 배경/모양은 dialogBackgroundColor와 DatePicker 자체 스타일로 통일
                     ),
                     child: child ?? const SizedBox.shrink(),
                   );
@@ -328,7 +452,7 @@ class _MonthToolbar extends StatelessWidget {
             child: Center(child: center!),
           ),
         // 오른쪽 여백 보정용 사이즈박스 (필요 시 수동 조절)
-        const SizedBox(width: 240),
+        const SizedBox(width: 60),
         if (trailing != null) ...[
           trailing!,
         ],
