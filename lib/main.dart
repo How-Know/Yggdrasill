@@ -302,6 +302,196 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
   }
 }
 
+// 날짜 선택 다이얼로그(저장 가능, 이름 입력 다이얼로그에서 복귀)
+Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(BuildContext context, List<DateTime> days) async {
+  final List<DateTime> sorted = [...days]..sort();
+  final Map<DateTime, List<String>> localTitles = {};
+  Map<DateTime, List<String>>? result;
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    builder: (ctx) {
+      return StatefulBuilder(builder: (ctxSB, setSB) {
+        Future<void> addTitleFor(DateTime d) async {
+          final text = await showDialog<String>(
+            context: ctxSB,
+            builder: (ctx2) {
+              final ctrl = TextEditingController();
+              return AlertDialog(
+                backgroundColor: const Color(0xFF1F1F1F),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                title: Text('${d.year}.${d.month}.${d.day} 시험명', style: const TextStyle(color: Colors.white)),
+                content: SizedBox(
+                  width: 420,
+                  child: TextField(
+                    controller: ctrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: '예: 중간고사 수학',
+                      hintStyle: TextStyle(color: Colors.white38),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.of(ctx2).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+                  FilledButton(onPressed: () => Navigator.of(ctx2).pop(ctrl.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('저장')),
+                ],
+              );
+            },
+          );
+          if (text != null && text.isNotEmpty) {
+            setSB(() {
+              final key = DateTime(d.year, d.month, d.day);
+              final cur = localTitles[key] ?? [];
+              localTitles[key] = [...cur, text];
+            });
+          }
+        }
+
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('날짜 선택', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: 360,
+            height: 300,
+            child: ListView.builder(
+              itemCount: sorted.length,
+              itemBuilder: (c, i) {
+                final d = sorted[i];
+                final key = DateTime(d.year, d.month, d.day);
+                final titles = localTitles[key] ?? [];
+                return ListTile(
+                  title: Text('${d.year}.${d.month}.${d.day}', style: const TextStyle(color: Colors.white)),
+                  subtitle: null,
+                  trailing: titles.isEmpty
+                      ? TextButton(
+                          onPressed: () => addTitleFor(d),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            backgroundColor: Colors.white12,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          child: const Text('시험명'),
+                        )
+                      : Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2A2A2A),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: Text(titles.first, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                        ),
+                  onTap: () => addTitleFor(d),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctxSB).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+            FilledButton(
+              onPressed: () {
+                result = localTitles;
+                Navigator.of(ctxSB).pop();
+              },
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              child: const Text('저장'),
+            ),
+          ],
+        );
+      });
+    },
+  );
+  return result;
+}
+
+// 범위 편집 다이얼로그: 이미 등록된 시험명이 있을 때 날짜별로 범위를 추가/수정
+Future<void> _openRangeEditDialog(BuildContext context, String schoolGradeKey, Map<DateTime, List<String>> savedNames) async {
+  final Map<DateTime, String> localRanges = {};
+  savedNames.forEach((date, names) {
+    final existing = (_ExamScheduleWizardState()._rangesBySchoolGrade[schoolGradeKey] ?? {})[DateTime(date.year, date.month, date.day)] ?? '';
+    localRanges[DateTime(date.year, date.month, date.day)] = existing;
+  });
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    builder: (ctx) {
+      final sorted = savedNames.keys.toList()..sort();
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1F1F1F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('범위 입력', style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 460,
+          height: 360,
+          child: ListView.builder(
+            itemCount: sorted.length,
+            itemBuilder: (c, i) {
+              final d = sorted[i];
+              final names = savedNames[d] ?? [];
+              final dateLabel = '${d.year}.${d.month}.${d.day}';
+              final firstName = names.isNotEmpty ? names.first : '';
+              final ctrl = TextEditingController(text: localRanges[DateTime(d.year, d.month, d.day)] ?? '');
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: Text('$dateLabel  $firstName', style: const TextStyle(color: Colors.white))),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 260,
+                      child: TextField(
+                        controller: ctrl,
+                        minLines: 1,
+                        maxLines: 3,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          hintText: '범위 입력',
+                          hintStyle: TextStyle(color: Colors.white38),
+                          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                        ),
+                        onChanged: (v) {
+                          localRanges[DateTime(d.year, d.month, d.day)] = v;
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+          FilledButton(
+            onPressed: () {
+              // 저장: 상태 객체를 찾아 업데이트 (Navigator context로 접근)
+              final state = (rootNavigatorKey.currentContext?.findAncestorStateOfType<_ExamScheduleWizardState>());
+              if (state != null) {
+                state.setState(() {
+                  final map = state._rangesBySchoolGrade[schoolGradeKey] ?? {};
+                  map
+                    ..clear()
+                    ..addAll(localRanges);
+                  state._rangesBySchoolGrade[schoolGradeKey] = map;
+                });
+              }
+              Navigator.of(ctx).pop();
+            },
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            child: const Text('저장'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 class _GlobalMemoFloatingBanners extends StatefulWidget {
   const _GlobalMemoFloatingBanners();
   @override
@@ -727,9 +917,6 @@ class _ExamScheduleDialog extends StatelessWidget {
         width: 680,
         child: _ExamScheduleWizard(schoolGrade: schoolGrade),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
-      ],
     );
   }
 }
@@ -747,6 +934,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   final Set<DateTime> _selectedDays = {};
   final Map<DateTime, List<String>> _titlesByDate = {};
   final TextEditingController _titleCtrl = TextEditingController();
+  final Map<String, Map<DateTime, List<String>>> _savedBySchoolGrade = {};
+  final Map<String, Set<DateTime>> _hoverDaysBySchoolGrade = {};
+  // 날짜별 범위 메모: 학교/학년 → 날짜 → 범위 텍스트
+  final Map<String, Map<DateTime, String>> _rangesBySchoolGrade = {};
 
   @override
   void dispose() { _titleCtrl.dispose(); super.dispose(); }
@@ -766,74 +957,155 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
     if (_step == 0) {
       return Column(
         key: const ValueKey('step0'),
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('학교/학년 선택', style: TextStyle(color: Colors.white70)),
           const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
-            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.30),
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: widget.schoolGrade.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
-              itemBuilder: (context, i) {
-                final item = widget.schoolGrade[i];
-                final partsIdx = item.lastIndexOf(' ');
-                final schoolName = partsIdx > 0 ? item.substring(0, partsIdx) : item;
-                final gradeText = partsIdx > 0 ? item.substring(partsIdx + 1) : '';
-                final isSelectedSchool = _selectedSchoolGrade == item;
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Expanded(child: Text(schoolName, style: TextStyle(color: isSelectedSchool ? Colors.white : Colors.white70, fontSize: 16), overflow: TextOverflow.ellipsis)),
-                            SizedBox(
-                              width: 64,
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: widget.schoolGrade.length,
+                separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+                itemBuilder: (context, i) {
+                  final item = widget.schoolGrade[i];
+                  final partsIdx = item.lastIndexOf(' ');
+                  final schoolName = partsIdx > 0 ? item.substring(0, partsIdx) : item;
+                  final gradeText = partsIdx > 0 ? item.substring(partsIdx + 1) : '';
+                  final isSelectedSchool = _selectedSchoolGrade == item;
+                  final saved = _savedBySchoolGrade[item];
+                  final int savedCount = saved == null ? 0 : saved.values.fold(0, (p, e) => p + e.length);
+                  // 호버 시 날짜선택 다이얼로그에서 선택한 날짜 모두 표시
+                  final hoverDays = _hoverDaysBySchoolGrade[item];
+                  final String? hoverMsg = (hoverDays == null || hoverDays.isEmpty)
+                      ? null
+                      : '선택한 날짜: ' + (hoverDays.toList()..sort((a,b)=>a.compareTo(b)))
+                          .map((d) => '${d.year}.${d.month}.${d.day}')
+                          .join(', ');
+                  // 시험명이 등록된 날짜만 요약으로 표시
+                  final namedEntries = (saved ?? {}).entries
+                      .where((e) => (e.value).isNotEmpty)
+                      .toList()
+                    ..sort((a, b) => a.key.compareTo(b.key));
+                  // 날짜별 시험명 목록을 배지로 나열하기 위해 평탄화
+                  final List<MapEntry<DateTime, String>> named = [];
+                  for (final e in namedEntries) {
+                    for (final t in e.value) {
+                      final tt = t.trim();
+                      if (tt.isNotEmpty) named.add(MapEntry(e.key, tt));
+                    }
+                  }
+                  named.sort((a, b) => a.key.compareTo(b.key));
+                  return Tooltip(
+                    message: hoverMsg ?? '',
+                    waitDuration: const Duration(milliseconds: 200),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          // 학교 카드(고정 폭)
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 90, maxWidth: 120),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.transparent),
+                              ),
+                              child: Text(
+                                schoolName,
+                                style: TextStyle(color: isSelectedSchool ? Colors.white : Colors.white70, fontSize: 16),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 학년(고정 폭)
+                          SizedBox(
+                            width: 56,
+                            child: Align(
+                              alignment: Alignment.centerLeft,
                               child: Text(
                                 gradeText,
                                 style: TextStyle(color: isSelectedSchool ? Colors.white : Colors.white60, fontSize: 16),
-                                textAlign: TextAlign.left,
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 시험 배지들
+                          Expanded(
+                            child: Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: named.map((e) {
+                                final sg = item; // 현재 학교/학년 키
+                                final range = _rangesBySchoolGrade[sg]?[DateTime(e.key.year, e.key.month, e.key.day)];
+                                final label = '${e.value} ${e.key.month}.${e.key.day}';
+                                return Tooltip(
+                                  message: (range == null || range.isEmpty) ? '' : '범위: $range',
+                                  waitDuration: const Duration(milliseconds: 200),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF2A2A2A),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: Colors.white24),
+                                    ),
+                                    child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () {
+                              setState(() { _selectedSchoolGrade = item; _selectedDays.clear(); _step = 1; });
+                            },
+                            style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                            child: const Text('일정'),
+                          ),
+                          const SizedBox(width: 6),
+                          TextButton(
+                            onPressed: () async {
+                              setState(() { _selectedSchoolGrade = item; });
+                              final savedMap = _savedBySchoolGrade[item] ?? {};
+                              final hasNames = savedMap.values.any((v) => v.isNotEmpty);
+                              if (hasNames) {
+                                await _openRangeEditDialog(context, item, savedMap);
+                              } else {
+                                await _openRangeAddDialog(context);
+                              }
+                            },
+                            style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                            child: const Text('범위'),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      TextButton(
-                        onPressed: () {
-                          setState(() { _selectedSchoolGrade = item; _selectedDays.clear(); _step = 1; });
-                        },
-                        style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
-                        child: const Text('일정'),
-                      ),
-                      const SizedBox(width: 6),
-                      TextButton(
-                        onPressed: () async {
-                          setState(() { _selectedSchoolGrade = item; });
-                          await _openRangeAddDialog(context);
-                        },
-                        style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
-                        child: const Text('범위'),
-                      ),
-                    ],
-                  ),
-                );
-              },
+                    ),
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton(
-              onPressed: _selectedSchoolGrade == null ? null : () => setState(() => _step = 1),
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-              child: const Text('다음'),
-            ),
+          Row(
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                child: const Text('닫기'),
+              ),
+              const Spacer(),
+              FilledButton(
+                onPressed: _selectedSchoolGrade == null ? null : () => setState(() => _step = 1),
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                child: const Text('다음'),
+              ),
+            ],
           ),
         ],
       );
@@ -921,62 +1193,45 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
               ),
             ),
             const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: _selectedDays.isEmpty ? null : () async {
-                  // 선택된 날짜 중 하나를 골라 시험명 입력만 진행
-                  final picked = await showDialog<DateTime>(
-                    context: context,
-                    builder: (ctx) {
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => setState(() => _step = 0),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                  child: const Text('뒤로'),
+                ),
+                if (_selectedDays.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: () async {
                       final list = _selectedDays.toList()..sort();
-                      return AlertDialog(
-                        backgroundColor: const Color(0xFF1F1F1F),
-                        title: const Text('날짜 선택', style: TextStyle(color: Colors.white)),
-                        content: SizedBox(
-                          width: 360,
-                          height: 240,
-                          child: ListView.builder(
-                            itemCount: list.length,
-                            itemBuilder: (c, i) {
-                              final d = list[i];
-                              return ListTile(
-                                title: Text('${d.year}.${d.month}.${d.day}', style: const TextStyle(color: Colors.white)),
-                                onTap: () => Navigator.of(ctx).pop(d),
-                              );
-                            },
-                          ),
-                        ),
-                      );
+                      final Map<DateTime, List<String>>? added = await _openDateSelectAndSaveDialog(context, list);
+                      if (added != null) {
+                        setState(() {
+                          // 현재 선택한 학교-학년의 저장 정보에 합치기
+                          final sg = _selectedSchoolGrade;
+                          if (sg != null) {
+                            final existing = _savedBySchoolGrade[sg] ?? {};
+                            added.forEach((k, v) {
+                              final cur = existing[k] ?? [];
+                              existing[k] = [...cur, ...v];
+                              final curLocal = _titlesByDate[k] ?? [];
+                              _titlesByDate[k] = [...curLocal, ...v];
+                            });
+                            _savedBySchoolGrade[sg] = existing;
+                            _hoverDaysBySchoolGrade[sg] = list.toSet();
+                          }
+                          // 저장 후 학교 리스트로 복귀
+                          _step = 0;
+                        });
+                      }
                     },
-                  );
-                  if (picked != null) {
-                    final name = await showDialog<String>(
-                      context: context,
-                      builder: (ctx) {
-                        final ctrl = TextEditingController();
-                        return AlertDialog(
-                          backgroundColor: const Color(0xFF1F1F1F),
-                          title: Text('${picked.year}.${picked.month}.${picked.day} 시험명', style: const TextStyle(color: Colors.white)),
-                          content: SizedBox(width: 420, child: TextField(controller: ctrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: '예: 중간고사 수학', hintStyle: TextStyle(color: Colors.white38), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))))),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-                            FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)), child: const Text('저장')),
-                          ],
-                        );
-                      },
-                    );
-                    if (name != null && name.isNotEmpty) {
-                      final key = DateTime(picked.year, picked.month, picked.day);
-                      final titles = _titlesByDate[key] ?? [];
-                      setState(() { _titlesByDate[key] = [...titles, name]; });
-                      rootScaffoldMessengerKey.currentState?.showSnackBar(const SnackBar(content: Text('시험명이 등록되었습니다.')));
-                    }
-                  }
-                },
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                child: const Text('등록'),
-              ),
+                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                    child: const Text('등록'),
+                  ),
+                ],
+              ],
             ),
           ];
         }
@@ -1103,13 +1358,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('${key.year}.${key.month}.${key.day}', style: const TextStyle(color: Colors.white)),
-                  const SizedBox(height: 6),
-                  if (titles.isEmpty) const Text('시험명/범위 추가 (+)', style: TextStyle(color: Colors.white38)) else ...titles.map((t) {
-                    final parts = t.split('|');
-                    final name = parts.isNotEmpty ? parts[0] : t;
-                    final range = parts.length > 1 && parts[1].isNotEmpty ? ' (${parts[1]})' : '';
-                    return Text('• $name$range', style: const TextStyle(color: Colors.white70));
-                  }).toList(),
+                  // 날짜 카드 하단의 시험명 표기는 제거 (중복 노출 방지)
                 ]),
               ),
             );
@@ -1751,4 +2000,5 @@ class _MemoBanner extends StatelessWidget {
   }
 }
 
+ 
  
