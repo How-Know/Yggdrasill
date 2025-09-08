@@ -168,57 +168,90 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
   await showDialog(
     context: context,
     builder: (ctx) {
-      final ctrlName = TextEditingController();
       final ctrlRange = TextEditingController();
-      return AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('시험명/범위 추가', style: TextStyle(color: Colors.white)),
-        content: SizedBox(
-          width: 520,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: ctrlName,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: '시험명',
-                  labelStyle: TextStyle(color: Colors.white70),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+      final List<String> candidates = _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value]..sort();
+      String selectedName = candidates.first;
+      return StatefulBuilder(builder: (ctxSB, setSB) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('시험명/범위 추가', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonHideUnderline(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white24),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: DropdownButton<String>(
+                      value: selectedName,
+                      dropdownColor: const Color(0xFF1F1F1F),
+                      iconEnabledColor: Colors.white70,
+                      style: const TextStyle(color: Colors.white),
+                      items: candidates
+                          .map((e) => DropdownMenuItem<String>(value: e, child: Text(e)))
+                          .toList(),
+                      onChanged: (v) => setSB(() { if (v != null) selectedName = v; }),
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: ctrlRange,
-                minLines: 2,
-                maxLines: 4,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: '범위',
-                  labelStyle: TextStyle(color: Colors.white70),
-                  hintText: '예: 수학 I 1~3단원',
-                  hintStyle: TextStyle(color: Colors.white38),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: ctrlRange,
+                  minLines: 2,
+                  maxLines: 4,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: '범위',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    hintText: '예: 수학 I 1~3단원',
+                    hintStyle: TextStyle(color: Colors.white38),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('취소', style: TextStyle(color: Colors.white70)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-            child: const Text('추가'),
-          ),
-        ],
-      );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctxSB).pop(),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            FilledButton(
+              onPressed: () {
+                // DEBUG: 범위 추가 저장 시도
+                // ignore: avoid_print
+                print('[RANGE_ADD] try save: selectedName=$selectedName, text="${ctrlRange.text}"');
+                final state = context.findAncestorStateOfType<_ExamScheduleWizardState>();
+                // ignore: avoid_print
+                print('[RANGE_ADD] found wizard state? ${state != null}');
+                final sg = state?._selectedSchoolGrade;
+                if (state != null && sg != null) {
+                  state.setState(() {
+                    final list = state._rangeBadgesBySchoolGrade[sg] ?? <String>[];
+                    final text = ctrlRange.text.trim();
+                    if (text.isNotEmpty) {
+                      list.add('$selectedName: $text');
+                      state._rangeBadgesBySchoolGrade[sg] = list;
+                      // ignore: avoid_print
+                      print('[RANGE_ADD] saved temp badge: sg=$sg, list=${state._rangeBadgesBySchoolGrade[sg]}');
+                    }
+                  });
+                }
+                Navigator.of(ctxSB).pop();
+              },
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              child: const Text('추가'),
+            ),
+          ],
+        );
+      });
     },
   );
 }
@@ -447,13 +480,22 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(BuildContext c
 }
 
 // 범위 편집 다이얼로그: 이미 등록된 시험명이 있을 때 날짜별로 범위를 추가/수정
-Future<void> _openRangeEditDialog(BuildContext context, String schoolGradeKey, Map<DateTime, List<String>> savedNames) async {
+Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context, String schoolGradeKey, Map<DateTime, List<String>> savedNames) async {
   final Map<DateTime, String> localRanges = {};
+  // DEBUG: 초기 상태 로깅
+  // ignore: avoid_print
+  print('[RANGE_EDIT][init] schoolGrade=$schoolGradeKey, saved dates=${savedNames.keys.toList()}');
+  // 참고: 여기서는 기존 구현과 동일하게 임시 값으로 채우되, 실제 상태 객체 값도 비교 로그로 남긴다.
   savedNames.forEach((date, names) {
-    final existing = (_ExamScheduleWizardState()._rangesBySchoolGrade[schoolGradeKey] ?? {})[DateTime(date.year, date.month, date.day)] ?? '';
-    localRanges[DateTime(date.year, date.month, date.day)] = existing;
+    final key = DateTime(date.year, date.month, date.day);
+    final existingWrong = (_ExamScheduleWizardState()._rangesBySchoolGrade[schoolGradeKey] ?? {})[key] ?? '';
+    final st = context.findAncestorStateOfType<_ExamScheduleWizardState>();
+    final existingActual = st?._rangesBySchoolGrade[schoolGradeKey]?[key] ?? '';
+    // ignore: avoid_print
+    print('[RANGE_EDIT][init] date=$key, existing(wrongCtor)="$existingWrong", existing(actual)="$existingActual"');
+    localRanges[key] = existingWrong;
   });
-  await showDialog<void>(
+  final result = await showDialog<Map<DateTime, String>>(
     context: context,
     barrierDismissible: true,
     builder: (ctx) {
@@ -476,9 +518,9 @@ Future<void> _openRangeEditDialog(BuildContext context, String schoolGradeKey, M
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Expanded(child: Text('$dateLabel  $firstName', style: const TextStyle(color: Colors.white))),
+                    Expanded(child: Text('$dateLabel  $firstName', style: const TextStyle(color: Colors.white, fontSize: 17))),
                     const SizedBox(width: 8),
                     SizedBox(
                       width: 260,
@@ -508,18 +550,10 @@ Future<void> _openRangeEditDialog(BuildContext context, String schoolGradeKey, M
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
           FilledButton(
             onPressed: () {
-              // 저장: 상태 객체를 찾아 업데이트 (Navigator context로 접근)
-              final state = (rootNavigatorKey.currentContext?.findAncestorStateOfType<_ExamScheduleWizardState>());
-              if (state != null) {
-                state.setState(() {
-                  final map = state._rangesBySchoolGrade[schoolGradeKey] ?? {};
-                  map
-                    ..clear()
-                    ..addAll(localRanges);
-                  state._rangesBySchoolGrade[schoolGradeKey] = map;
-                });
-              }
-              Navigator.of(ctx).pop();
+              final map = <DateTime, String>{}..addAll(localRanges);
+              // ignore: avoid_print
+              print('[RANGE_EDIT][save] schoolGrade=$schoolGradeKey, savedKeys=${map.keys.toList()} values=${map.values.toList()}');
+              Navigator.of(ctx).pop(map);
             },
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
             child: const Text('저장'),
@@ -528,6 +562,7 @@ Future<void> _openRangeEditDialog(BuildContext context, String schoolGradeKey, M
       );
     },
   );
+  return result;
 }
 
 class _GlobalMemoFloatingBanners extends StatefulWidget {
@@ -909,8 +944,73 @@ class _LinearGlowPainter extends CustomPainter {
   }
 }
 
-class _ExamScheduleDialog extends StatelessWidget {
+class _ExamScheduleDialog extends StatefulWidget {
   const _ExamScheduleDialog();
+  @override
+  State<_ExamScheduleDialog> createState() => _ExamScheduleDialogState();
+}
+
+class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
+  // 과정별 학년 필터: 'M1','M2','M3','H1','H2','H3'
+  final Set<String> _gradeFilter = <String>{};
+
+  Future<void> _openGradeFilterDialog(BuildContext context) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctxSB, setSB) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1F1F1F),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            title: const Text('학년 선택', style: TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: 420,
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                children: const [
+                  ['중1','M1'], ['중2','M2'], ['중3','M3'],
+                  ['고1','H1'], ['고2','H2'], ['고3','H3'],
+                ].map((pair) {
+                  // pair[0]: label, pair[1]: key
+                  return pair;
+                }).toList().map((pair) {
+                  final String label = pair[0] as String;
+                  final String key = pair[1] as String;
+                  final bool selected = _gradeFilter.contains(key);
+                  return FilterChip(
+                    label: Text(label),
+                    selected: selected,
+                    onSelected: (val) {
+                      setSB(() {
+                        setState(() {
+                          if (val) {
+                            _gradeFilter.add(key);
+                          } else {
+                            _gradeFilter.remove(key);
+                          }
+                        });
+                      });
+                    },
+                    backgroundColor: const Color(0xFF232326),
+                    selectedColor: const Color(0xFF2A2A2A),
+                    labelStyle: TextStyle(color: selected ? Colors.white : Colors.white70),
+                    side: BorderSide(color: selected ? const Color(0xFF1976D2) : Colors.white24, width: selected ? 1.6 : 1.0),
+                    showCheckmark: true,
+                    checkmarkColor: const Color(0xFF1976D2),
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctxSB).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+            ],
+          );
+        });
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final students = DataManager.instance.students;
@@ -940,7 +1040,15 @@ class _ExamScheduleDialog extends StatelessWidget {
       if (sr != 0) return sr;
       return (a['grade'] as int).compareTo(b['grade'] as int);
     });
-    final List<String> schoolGrade = items.map((m){
+    String _prefix(EducationLevel l) => l == EducationLevel.middle ? 'M' : (l == EducationLevel.high ? 'H' : '');
+    final List<String> schoolGrade = items.where((m) {
+      // 아무 학년도 선택하지 않으면 아무 항목도 표시하지 않음
+      if (_gradeFilter.isEmpty) return false;
+      final level = m['level'] as EducationLevel;
+      final grade = m['grade'] as int;
+      final key = '${_prefix(level)}$grade';
+      return _gradeFilter.contains(key);
+    }).map((m){
       final school = m['school'] as String;
       final grade = m['grade'] as int;
       return grade > 0 ? '$school ${grade}학년' : school;
@@ -953,6 +1061,17 @@ class _ExamScheduleDialog extends StatelessWidget {
         children: [
           const Text('시험 일정 등록', style: TextStyle(color: Colors.white)),
           const Spacer(),
+          TextButton.icon(
+            onPressed: () => _openGradeFilterDialog(context),
+            icon: const Icon(Icons.grade, size: 18),
+            label: const Text('학년'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white70,
+              backgroundColor: Colors.white12,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            ),
+          ),
+          const SizedBox(width: 8),
           TextButton.icon(
             onPressed: () => _openSubjectListDialog(context),
             icon: const Icon(Icons.menu_book, size: 18),
@@ -1033,7 +1152,7 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                       ..sort();
                     final rightText = schools.isEmpty ? '' : schools.join(' · ');
                     return ListTile(
-                      title: Text(name, style: const TextStyle(color: Colors.white)),
+                      title: Text(name, style: const TextStyle(color: Colors.white, fontSize: 20)),
                       subtitle: null,
                       trailing: SizedBox(
                         width: 260,
@@ -1044,7 +1163,7 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                             textAlign: TextAlign.right,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 2,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                            style: const TextStyle(color: Colors.white54, fontSize: 14),
                           ),
                         ),
                       ),
@@ -1153,7 +1272,7 @@ Future<void> _openSchoolGradeMultiSelectDialog(BuildContext context, String exam
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           title: Text('학교·학년 선택 - $examName', style: const TextStyle(color: Colors.white)),
           content: SizedBox(
-            width: MediaQuery.of(ctxSB).size.width * 0.60,
+            width: 460,
             height: MediaQuery.of(ctxSB).size.height * 0.60,
             child: ListView.separated(
               itemCount: keys.length,
@@ -1179,7 +1298,7 @@ Future<void> _openSchoolGradeMultiSelectDialog(BuildContext context, String exam
                         runSpacing: 6,
                         children: grades.map((g) {
                           final checked = selected.contains(g);
-                          return ChoiceChip(
+                          return FilterChip(
                             label: Text('${g}학년'),
                             selected: checked,
                             onSelected: (val) {
@@ -1193,10 +1312,12 @@ Future<void> _openSchoolGradeMultiSelectDialog(BuildContext context, String exam
                                 }
                               });
                             },
-                            selectedColor: const Color(0xFF2A2A2A),
                             backgroundColor: const Color(0xFF232326),
+                            selectedColor: const Color(0xFF2A2A2A),
                             labelStyle: TextStyle(color: checked ? Colors.white : Colors.white70),
-                            side: BorderSide(color: checked ? const Color(0xFF64A6DD) : Colors.white24),
+                            side: BorderSide(color: checked ? const Color(0xFF1976D2) : Colors.white24, width: checked ? 1.6 : 1.0),
+                            showCheckmark: true,
+                            checkmarkColor: const Color(0xFF1976D2),
                           );
                         }).toList(),
                       ),
@@ -1243,6 +1364,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   final Map<String, Set<DateTime>> _selectedDaysBySchoolGrade = {};
   // 날짜별 범위 메모: 학교/학년 → 날짜 → 범위 텍스트
   final Map<String, Map<DateTime, String>> _rangesBySchoolGrade = {};
+  // 학교/학년별 추가 범위 배지(시험명: 범위) 임시 표시용
+  final Map<String, List<String>> _rangeBadgesBySchoolGrade = {};
+  // 리스트 행 호버 상태(날짜 표시용)
+  String? _hoveredSchoolGrade;
 
   @override
   void dispose() { _titleCtrl.dispose(); super.dispose(); }
@@ -1303,8 +1428,29 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                     }
                   }
                   named.sort((a, b) => a.key.compareTo(b.key));
-                  return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  // 배지/버튼 상태 계산
+                  final Set<String> _distinctNames = named.map((e) => e.value).toSet();
+                  final bool _hasMultipleExamNames = _distinctNames.length > 1;
+                  final bool _hasSchedule = (saved?.values.any((v) => v.isNotEmpty) ?? false);
+                  // 각 날짜별로 범위가 모두 채워진 경우에만 범위 버튼 숨김
+                  bool _allRangesCompletedForSaved() {
+                    final map = _savedBySchoolGrade[item] ?? const <DateTime, List<String>>{};
+                    if (map.isEmpty) return false;
+                    for (final entry in map.entries) {
+                      final dateKey = DateTime(entry.key.year, entry.key.month, entry.key.day);
+                      final names = entry.value;
+                      if (names.isEmpty) return false;
+                      final hasRange = (_rangesBySchoolGrade[item] ?? const <DateTime, String>{})[dateKey];
+                      if (hasRange == null || hasRange.trim().isEmpty) return false;
+                    }
+                    return true;
+                  }
+                  final bool _hasRangeForSg = _allRangesCompletedForSaved();
+                  return MouseRegion(
+                    onEnter: (_) => setState(() => _hoveredSchoolGrade = item),
+                    onExit:  (_) => setState(() => _hoveredSchoolGrade = null),
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: _hasMultipleExamNames ? 16 : 10),
                       child: Row(
                         children: [
                           // 학교 카드(고정 폭)
@@ -1337,33 +1483,73 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // 시험 배지들
+                          // 시험/날짜/범위 배지 (고정 순서: 시험명 → 날짜 → 범위)
                           Expanded(
                             child: Wrap(
                               spacing: 6,
                               runSpacing: 6,
-                              children: named.map((e) {
-                                final sg = item; // 현재 학교/학년 키
-                                final range = _rangesBySchoolGrade[sg]?[DateTime(e.key.year, e.key.month, e.key.day)];
-                                final label = '${e.value} ${e.key.month}.${e.key.day}';
-                                return Tooltip(
-                                  message: (range == null || range.isEmpty) ? '' : '범위: $range',
-                                  waitDuration: const Duration(milliseconds: 200),
-                                  child: Container(
+                              children: [
+                                // 저장된 일정 기반 배지: 시험명 → 날짜 → 범위
+                                // 한 시험의 (시험명, 날짜, 범위)를 세트로 묶어서 한 줄로 유지
+                                ...named.map((e) {
+                                  final sg = item;
+                                  final range = _rangesBySchoolGrade[sg]?[DateTime(e.key.year, e.key.month, e.key.day)];
+                                  Widget chip(String text, {double fs = 14, bool transparentBorder = false}) => Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                     decoration: BoxDecoration(
                                       color: const Color(0xFF2A2A2A),
                                       borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: Colors.white24),
+                                      border: Border.all(color: transparentBorder ? Colors.transparent : Colors.white24),
                                     ),
-                                    child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                                  ),
-                                );
-                              }).toList(),
+                                    child: Text(text, style: TextStyle(color: Colors.white70, fontSize: fs)),
+                                  );
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      chip(e.value),
+                                      const SizedBox(width: 6),
+                                      chip('${e.key.month}.${e.key.day}', fs: 13),
+                                      if (range != null && range.trim().isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        chip(range, fs: 13, transparentBorder: true),
+                                      ],
+                                    ],
+                                  );
+                                }).toList(),
+                                // 범위만 추가된 임시 배지: "이름: 범위" → 시험명 → (날짜 없음) → 범위
+                                ...(_rangeBadgesBySchoolGrade[item] ?? const <String>[]).map((text) {
+                                  final idx = text.indexOf(':');
+                                  String name = text;
+                                  String range = '';
+                                  if (idx >= 0) {
+                                    name = text.substring(0, idx).trim();
+                                    range = text.substring(idx + 1).trim();
+                                  }
+                                  Widget chip(String t, {double fs = 14, bool transparentBorder = false}) => Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF2A2A2A),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: transparentBorder ? Colors.transparent : Colors.white24),
+                                    ),
+                                    child: Text(t, style: TextStyle(color: Colors.white70, fontSize: fs)),
+                                  );
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      chip(name),
+                                      if (range.isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        chip(range, fs: 13, transparentBorder: true),
+                                      ],
+                                    ],
+                                  );
+                                }).toList(),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          if (dateInline.isNotEmpty)
+                          if (_hoveredSchoolGrade == item) ...[
+                            const SizedBox(width: 8),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                               decoration: BoxDecoration(
@@ -1371,34 +1557,47 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(color: Colors.white24),
                               ),
-                              child: Text(dateInline, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                              child: Text(dateInline.isEmpty ? '날짜 선택 없음' : dateInline, style: const TextStyle(color: Colors.white60, fontSize: 13)),
                             ),
-                          const SizedBox(width: 8),
-                          TextButton(
-                            onPressed: () {
-                              setState(() { _selectedSchoolGrade = item; _selectedDays.clear(); _step = 1; });
-                            },
-                            style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
-                            child: const Text('일정'),
-                          ),
-                          const SizedBox(width: 6),
-                          TextButton(
-                            onPressed: () async {
-                              setState(() { _selectedSchoolGrade = item; });
-                              final savedMap = _savedBySchoolGrade[item] ?? {};
-                              final hasNames = savedMap.values.any((v) => v.isNotEmpty);
-                              if (hasNames) {
-                                await _openRangeEditDialog(context, item, savedMap);
-                              } else {
-                                await _openRangeAddDialog(context);
-                              }
-                            },
-                            style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
-                            child: const Text('범위'),
-                          ),
+                          ],
+                          if (!_hasSchedule) ...[
+                            const SizedBox(width: 8),
+                            TextButton(
+                              onPressed: () {
+                                setState(() { _selectedSchoolGrade = item; _selectedDays.clear(); _step = 1; });
+                              },
+                              style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                              child: const Text('일정'),
+                            ),
+                          ],
+                          if (!_hasRangeForSg) ...[
+                            const SizedBox(width: 6),
+                            TextButton(
+                              onPressed: () async {
+                                setState(() { _selectedSchoolGrade = item; });
+                                final savedMap = _savedBySchoolGrade[item] ?? {};
+                                final hasNames = savedMap.values.any((v) => v.isNotEmpty);
+                                if (hasNames) {
+                                  final res = await _openRangeEditDialog(context, item, savedMap);
+                                  if (res != null) {
+                                    setState(() {
+                                      _rangesBySchoolGrade[item] = res;
+                                      // ignore: avoid_print
+                                      print('[RANGE_EDIT][apply] schoolGrade=$item, keys=${res.keys.toList()}');
+                                    });
+                                  }
+                                } else {
+                                  await _openRangeAddDialog(context);
+                                }
+                              },
+                              style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                              child: const Text('범위'),
+                            ),
+                          ],
                         ],
                       ),
-                    );
+                    ),
+                  );
                 },
               ),
             ),
@@ -1533,6 +1732,48 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                             });
                             _savedBySchoolGrade[sg] = existing;
                             _selectedDaysBySchoolGrade[sg] = list.toSet();
+
+                            // 범위-먼저 추가된 임시 배지와 새 일정 매칭: 같은 시험명에 범위를 결합하고 임시 배지는 제거
+                            final pending = _rangeBadgesBySchoolGrade[sg] ?? <String>[];
+                            if (pending.isNotEmpty) {
+                              // ignore: avoid_print
+                              print('[RANGE_MATCH] pending before match: $pending');
+                              final Map<String, String> rangeByName = {};
+                              for (final entry in pending) {
+                                final idx = entry.indexOf(':');
+                                if (idx > 0) {
+                                  final name = entry.substring(0, idx).trim();
+                                  final range = entry.substring(idx + 1).trim();
+                                  if (name.isNotEmpty && range.isNotEmpty) {
+                                    rangeByName[name] = range;
+                                  }
+                                }
+                              }
+                              if (rangeByName.isNotEmpty) {
+                                final Map<DateTime, String> map = _rangesBySchoolGrade[sg] ?? <DateTime, String>{};
+                                final Set<String> usedNames = <String>{};
+                                added.forEach((date, names) {
+                                  for (final n in names) {
+                                    final name = (n.trim().isEmpty) ? '수학' : n.trim();
+                                    final r = rangeByName[name];
+                                    if (r != null && r.isNotEmpty) {
+                                      map[DateTime(date.year, date.month, date.day)] = r;
+                                      usedNames.add(name);
+                                    }
+                                  }
+                                });
+                                _rangesBySchoolGrade[sg] = map;
+                                if (usedNames.isNotEmpty) {
+                                  _rangeBadgesBySchoolGrade[sg] = pending.where((e) {
+                                    final idx = e.indexOf(':');
+                                    final name = idx > 0 ? e.substring(0, idx).trim() : e.trim();
+                                    return !usedNames.contains(name);
+                                  }).toList();
+                                  // ignore: avoid_print
+                                  print('[RANGE_MATCH] after match: used=$usedNames, remain=${_rangeBadgesBySchoolGrade[sg]}');
+                                }
+                              }
+                            }
                           }
                           // 저장 후 학교 리스트로 복귀
                           _step = 0;
