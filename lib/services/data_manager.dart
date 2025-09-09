@@ -96,6 +96,14 @@ class DataManager {
 
   List<SelfStudyTimeBlock> _selfStudyTimeBlocks = [];
   final ValueNotifier<List<SelfStudyTimeBlock>> selfStudyTimeBlocksNotifier = ValueNotifier<List<SelfStudyTimeBlock>>([]);
+  // ===== EXAM DATA CACHE =====
+  // key: '${level.index}|$school|$grade'
+  final Map<String, Map<DateTime, List<String>>> _examTitlesBySg = {};
+  final Map<String, Map<DateTime, String>> _examRangesBySg = {};
+  final Map<String, Set<DateTime>> _examDaysBySg = {};
+
+  String _sgKey(String school, EducationLevel level, int grade) => '${level.index}|$school|$grade';
+
 
   List<SelfStudyTimeBlock> get selfStudyTimeBlocks => List.unmodifiable(_selfStudyTimeBlocks);
   set selfStudyTimeBlocks(List<SelfStudyTimeBlock> value) {
@@ -147,6 +155,7 @@ class DataManager {
       await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
       await loadAttendanceRecords(); // 출석 기록 로딩 추가
       await loadMemos();
+      await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');
@@ -1678,14 +1687,81 @@ class DataManager {
       titlesByDateIso: titlesByIso,
       rangesByDateIso: rangesByIso,
     );
+    // update cache
+    final key = _sgKey(school, level, grade);
+    _examTitlesBySg[key] = {
+      for (final e in titles.entries) DateTime(e.key.year, e.key.month, e.key.day): List<String>.from(e.value)
+    };
+    _examRangesBySg[key] = {
+      for (final e in ranges.entries) DateTime(e.key.year, e.key.month, e.key.day): e.value
+    };
   }
 
   Future<Map<String, dynamic>> loadExamFor(String school, EducationLevel level, int grade) async {
-    return await AcademyDbService.instance.loadExamDataForSchoolGrade(
+    final key = _sgKey(school, level, grade);
+    if (_examTitlesBySg.containsKey(key) || _examRangesBySg.containsKey(key) || _examDaysBySg.containsKey(key)) {
+      // compose DB-like rows from cache
+      final List<Map<String, dynamic>> schedules = [];
+      (_examTitlesBySg[key] ?? const <DateTime, List<String>>{}).forEach((d, names) {
+        schedules.add({
+          'school': school,
+          'level': level.index,
+          'grade': grade,
+          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+          'names_json': names.isEmpty ? '[]' : jsonEncode(names),
+        });
+      });
+      final List<Map<String, dynamic>> ranges = [];
+      (_examRangesBySg[key] ?? const <DateTime, String>{}).forEach((d, text) {
+        ranges.add({
+          'school': school,
+          'level': level.index,
+          'grade': grade,
+          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+          'range_text': text,
+        });
+      });
+      final List<Map<String, dynamic>> days = [];
+      for (final d in (_examDaysBySg[key] ?? const <DateTime>{})) {
+        days.add({
+          'school': school,
+          'level': level.index,
+          'grade': grade,
+          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+        });
+      }
+      return {'schedules': schedules, 'ranges': ranges, 'days': days};
+    }
+    // fallback DB and warm cache
+    final res = await AcademyDbService.instance.loadExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
     );
+    final titles = <DateTime, List<String>>{};
+    for (final row in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
+      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      List<dynamic> list; try { list = jsonDecode((row['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
+      titles[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+    }
+    final rangesMap = <DateTime, String>{};
+    for (final row in (res['ranges'] as List).cast<Map<String, dynamic>>()) {
+      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      rangesMap[DateTime(d.year, d.month, d.day)] = (row['range_text'] as String?) ?? '';
+    }
+    final daysSet = <DateTime>{};
+    for (final row in (res['days'] as List).cast<Map<String, dynamic>>()) {
+      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      daysSet.add(DateTime(d.year, d.month, d.day));
+    }
+    final key2 = _sgKey(school, level, grade);
+    _examTitlesBySg[key2] = titles;
+    _examRangesBySg[key2] = rangesMap;
+    _examDaysBySg[key2] = daysSet;
+    return res;
   }
 
   Future<void> deleteExamData(String school, EducationLevel level, int grade) async {
@@ -1704,5 +1780,50 @@ class DataManager {
       grade: grade,
       daysIso: list,
     );
+    final key = _sgKey(school, level, grade);
+    _examDaysBySg[key] = days.map((d)=>DateTime(d.year, d.month, d.day)).toSet();
+  }
+
+  Future<void> preloadAllExamData() async {
+    try {
+      final schedules = await AcademyDbService.instance.loadAllExamSchedules();
+      for (final r in schedules) {
+        final school = (r['school'] as String?) ?? '';
+        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+        final grade = (r['grade'] as int?) ?? 0;
+        final iso = (r['date'] as String?) ?? '';
+        if (school.isEmpty || iso.isEmpty) continue;
+        final d = DateTime.parse(iso);
+        List<dynamic> list; try { list = jsonDecode((r['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
+        final key = _sgKey(school, level, grade);
+        final map = _examTitlesBySg.putIfAbsent(key, ()=>{});
+        map[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+      }
+      final ranges = await AcademyDbService.instance.loadAllExamRanges();
+      for (final r in ranges) {
+        final school = (r['school'] as String?) ?? '';
+        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+        final grade = (r['grade'] as int?) ?? 0;
+        final iso = (r['date'] as String?) ?? '';
+        final text = (r['range_text'] as String?) ?? '';
+        if (school.isEmpty || iso.isEmpty) continue;
+        final d = DateTime.parse(iso);
+        final key = _sgKey(school, level, grade);
+        final map = _examRangesBySg.putIfAbsent(key, ()=>{});
+        map[DateTime(d.year, d.month, d.day)] = text;
+      }
+      final days = await AcademyDbService.instance.loadAllExamDays();
+      for (final r in days) {
+        final school = (r['school'] as String?) ?? '';
+        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+        final grade = (r['grade'] as int?) ?? 0;
+        final iso = (r['date'] as String?) ?? '';
+        if (school.isEmpty || iso.isEmpty) continue;
+        final d = DateTime.parse(iso);
+        final key = _sgKey(school, level, grade);
+        final set = _examDaysBySg.putIfAbsent(key, ()=>{});
+        set.add(DateTime(d.year, d.month, d.day));
+      }
+    } catch (_) {}
   }
 } 

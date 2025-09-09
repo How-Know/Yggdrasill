@@ -22,6 +22,7 @@ import 'dart:convert';
 import 'services/exam_mode.dart';
 import 'services/academy_db.dart';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -845,12 +846,14 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay> with SingleTicke
   void initState() {
     super.initState();
     _indicatorCtrl = AnimationController(vsync: this);
-    _indicatorCtrl.repeat(period: const Duration(milliseconds: 1400));
+    final double v0 = ExamModeService.instance.speed.value.clamp(1.0, 30.0);
+    final int sec0 = (31 - v0).clamp(1.0, 30.0).round();
+    _indicatorCtrl.repeat(period: Duration(seconds: sec0));
     ExamModeService.instance.speed.addListener(() {
-      final spd = ExamModeService.instance.speed.value.clamp(0.3, 3.0);
-      final ms = (1400 ~/ spd);
+      final double v = ExamModeService.instance.speed.value.clamp(1.0, 30.0);
+      final int sec = (31 - v).clamp(1.0, 30.0).round();
       _indicatorCtrl.stop();
-      _indicatorCtrl.repeat(period: Duration(milliseconds: ms));
+      _indicatorCtrl.repeat(period: Duration(seconds: sec));
     });
   }
 
@@ -974,6 +977,8 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   List<Map<String, dynamic>> _items = [];
   int _index = 0;
   Timer? _timer;
+  final double _fixedWidth = 220; // 고정 너비
+  int? _hoverIndex;
 
   @override
   void initState() {
@@ -1004,7 +1009,8 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   Widget build(BuildContext context) {
     if (_items.isEmpty) {
       return Container(
-        constraints: const BoxConstraints(minWidth: 220, maxWidth: 320, minHeight: 36),
+        width: _fixedWidth,
+        constraints: const BoxConstraints(minHeight: 36),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(color: const Color(0xFF232326), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white24)),
         child: const Text('등록된 시험일정 없음', style: TextStyle(color: Colors.white38)),
@@ -1021,11 +1027,18 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
       }
     } catch (_) {}
     final label = '${it['school']} ${it['grade']}학년 · ${date != null ? '${date.month}.${date.day}' : ''}${names.isNotEmpty ? ' · $names' : ''}';
-    return Container(
-      constraints: const BoxConstraints(minWidth: 220, maxWidth: 320, minHeight: 36),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(color: const Color(0xFF232326), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white24)),
-      child: Text(label, style: const TextStyle(color: Colors.white70)),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hoverIndex = _index),
+      onExit: (_) => setState(() => _hoverIndex = null),
+      child: Container(
+        width: _fixedWidth,
+        constraints: const BoxConstraints(minHeight: 36),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(color: const Color(0xFF232326), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white24)),
+        child: _hoverIndex == _index && names.isNotEmpty
+            ? Text('범위: $names', style: const TextStyle(color: Colors.white60), maxLines: 1, overflow: TextOverflow.ellipsis)
+            : Text(label, style: const TextStyle(color: Colors.white70), maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
     );
   }
 }
@@ -1136,9 +1149,11 @@ class _ExamSettingsDialogState extends State<_ExamSettingsDialog> {
                 GestureDetector(
                   onPanDown: (d) => _pickFromWheel(context, d.localPosition),
                   onPanUpdate: (d) => _pickFromWheel(context, d.localPosition),
-                  child: CustomPaint(
-                    size: const Size(180, 180),
-                    painter: _ColorWheelPainter(),
+                  child: ClipOval(
+                    child: CustomPaint(
+                      size: const Size(180, 180),
+                      painter: _ColorWheelPainter(),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1190,7 +1205,7 @@ class _ExamSettingsDialogState extends State<_ExamSettingsDialog> {
             ),
             const SizedBox(height: 12),
             const Text('속도', style: TextStyle(color: Colors.white70)),
-            Slider(value: _speed, min: 0.3, max: 3.0, divisions: 27, onChanged: (v) async {
+            Slider(value: _speed, min: 1.0, max: 30.0, divisions: 290, onChanged: (v) async {
               setState(() => _speed = v);
               // 즉시 반영: 저장 없이도 미리보기 되도록 서비스에 반영
               await ExamModeService.instance.setSpeed(v);
@@ -1284,31 +1299,41 @@ class _ColorWheelPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final double radius = size.shortestSide / 2;
     final Offset center = Offset(size.width / 2, size.height / 2);
-    // 원형 그라디언트(단순 구현): 각도에 따른 H 변화, 중심→바깥 S 증가
-    final int steps = 360;
-    for (int i = 0; i < steps; i++) {
-      final double startAngle = (i) * math.pi / 180;
-      final double sweep = math.pi / 180;
-      final double h = i.toDouble();
-      final Path path = Path();
-      path.moveTo(center.dx, center.dy);
-      path.arcTo(Rect.fromCircle(center: center, radius: radius), startAngle, sweep, false);
-      path.close();
-      // 외곽 색상(채도=1, 명도=1 기준)으로 스트로크를 깔고 중심 방향으로 알파 그라디언트
-      final Color outer = _hsvToColorStatic(h, 1.0, 1.0);
-      final Paint paint = Paint()
-        ..shader = RadialGradient(
-          colors: [Colors.white, outer],
-          stops: const [0.0, 1.0],
-        ).createShader(Rect.fromCircle(center: center, radius: radius));
-      canvas.drawPath(path, paint);
-    }
+    // Shader 기반 그리기(더 매끈한 경계)
+    // FragmentShader 없이도 각도/반경 보간 느낌을 만들기 위해 스윕 그라디언트와 방사형 그라디언트를 합성
+    // 1) 바탕: 흰색→투명(중심) + 바깥쪽 색 → 투명(내부) 혼합
+    final Rect circle = Rect.fromCircle(center: center, radius: radius);
+    // 바깥쪽 색상 스윕(채도=1, 명도=1)
+    final SweepGradient sweep = const SweepGradient(
+      colors: [
+        Colors.red, Color(0xFFFF00FF), Colors.blue, Colors.cyan, Colors.green, Colors.yellow, Colors.red,
+      ],
+      stops: [0.0, 1/6, 2/6, 3/6, 4/6, 5/6, 1.0],
+    );
+    // 반径 방향으로 채도 보정: 중심은 흰색, 바깥은 색
+    final RadialGradient radial = const RadialGradient(colors: [Colors.white, Colors.transparent], stops: [0.0, 1.0]);
+    final Paint paint = Paint()..isAntiAlias = true;
+    // 먼저 sweep 채색
+    canvas.save();
+    canvas.clipPath(Path()..addOval(circle));
+    final Paint pSweep = Paint()
+      ..isAntiAlias = true
+      ..shader = sweep.createShader(circle);
+    canvas.drawCircle(center, radius, pSweep);
+    // 중심 밝기 보정(흰색 → 투명)
+    final Paint pRadial = Paint()
+      ..isAntiAlias = true
+      ..blendMode = BlendMode.srcOver
+      ..shader = radial.createShader(circle);
+    canvas.drawCircle(center, radius, pRadial);
+    canvas.restore();
     // 외곽 라인
     final border = Paint()
       ..style = PaintingStyle.stroke
+      ..isAntiAlias = true
       ..strokeWidth = 1
       ..color = Colors.white24;
-    canvas.drawCircle(center, radius, border);
+    canvas.drawPath(Path()..addOval(Rect.fromCircle(center: center, radius: radius)), border);
   }
 
   static Color _hsvToColorStatic(double h, double s, double v) {

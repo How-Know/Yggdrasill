@@ -1159,6 +1159,12 @@ class AcademyDbService {
     return await dbClient.query('exam_days', orderBy: 'date ASC');
   }
 
+  Future<List<Map<String, dynamic>>> loadAllExamRanges() async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_ranges', orderBy: 'date ASC');
+  }
+
   Future<void> deleteExamDataForSchoolGrade({
     required String school,
     required int level,

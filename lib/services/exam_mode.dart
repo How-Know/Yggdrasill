@@ -27,7 +27,8 @@ class ExamModeService {
     // 색/효과/속도
     final colorValue = prefs.getInt(_kColorKey);
     if (colorValue != null) indicatorColor.value = Color(colorValue);
-    speed.value = prefs.getDouble(_kSpeedKey) ?? 1.0;
+    final spd = prefs.getDouble(_kSpeedKey) ?? 5.0; // 기본 주기(초)
+    speed.value = spd.clamp(1.0, 30.0);
     effect.value = prefs.getString(_kEffectKey) ?? 'glow';
 
     // 모드 ON/OFF 자동 복원
@@ -108,7 +109,7 @@ class ExamModeService {
   }
 
   Future<void> setSpeed(double v) async {
-    speed.value = v.clamp(0.3, 3.0);
+    speed.value = v.clamp(1.0, 30.0);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kSpeedKey, speed.value);
   }
