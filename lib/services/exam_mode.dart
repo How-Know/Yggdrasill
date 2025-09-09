@@ -13,6 +13,7 @@ class ExamModeService {
   final ValueNotifier<Color> indicatorColor = ValueNotifier<Color>(const Color(0xFFE53935));
   final ValueNotifier<double> speed = ValueNotifier<double>(1.0); // 1.0 = 기본 속도
   final ValueNotifier<String> effect = ValueNotifier<String>('glow');
+  // effect: 'glow' | 'solid' | 'breath'
 
   static const String _kOnKey = 'exam_mode_on';
   static const String _kUntilKey = 'exam_mode_until_iso';

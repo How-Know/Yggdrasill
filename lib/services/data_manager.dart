@@ -1688,6 +1688,14 @@ class DataManager {
     );
   }
 
+  Future<void> deleteExamData(String school, EducationLevel level, int grade) async {
+    await AcademyDbService.instance.deleteExamDataForSchoolGrade(
+      school: school,
+      level: level.index,
+      grade: grade,
+    );
+  }
+
   Future<void> saveExamDays(String school, EducationLevel level, int grade, Set<DateTime> days) async {
     final list = days.map((d) => DateTime(d.year, d.month, d.day).toIso8601String()).toList();
     await AcademyDbService.instance.saveExamDaysForSchoolGrade(

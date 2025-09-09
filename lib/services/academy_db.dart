@@ -1159,6 +1159,20 @@ class AcademyDbService {
     return await dbClient.query('exam_days', orderBy: 'date ASC');
   }
 
+  Future<void> deleteExamDataForSchoolGrade({
+    required String school,
+    required int level,
+    required int grade,
+  }) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+    });
+  }
+
   Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade}) async {
     print('[DB][경로] 실제 사용 DB 파일 경로: $path');
     
