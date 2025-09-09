@@ -1660,4 +1660,41 @@ class DataManager {
   Future<void> deleteResourceGradeIcon(String name) async {
     await AcademyDbService.instance.deleteResourceGradeIcon(name);
   }
+
+  // ===== EXAM (persisted) =====
+  Future<void> saveExamFor(String school, EducationLevel level, int grade, Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
+    final Map<String, List<String>> titlesByIso = {
+      for (final e in titles.entries)
+        DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+    };
+    final Map<String, String> rangesByIso = {
+      for (final e in ranges.entries)
+        DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+    };
+    await AcademyDbService.instance.saveExamDataForSchoolGrade(
+      school: school,
+      level: level.index,
+      grade: grade,
+      titlesByDateIso: titlesByIso,
+      rangesByDateIso: rangesByIso,
+    );
+  }
+
+  Future<Map<String, dynamic>> loadExamFor(String school, EducationLevel level, int grade) async {
+    return await AcademyDbService.instance.loadExamDataForSchoolGrade(
+      school: school,
+      level: level.index,
+      grade: grade,
+    );
+  }
+
+  Future<void> saveExamDays(String school, EducationLevel level, int grade, Set<DateTime> days) async {
+    final list = days.map((d) => DateTime(d.year, d.month, d.day).toIso8601String()).toList();
+    await AcademyDbService.instance.saveExamDaysForSchoolGrade(
+      school: school,
+      level: level.index,
+      grade: grade,
+      daysIso: list,
+    );
+  }
 } 

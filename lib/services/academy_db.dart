@@ -30,7 +30,7 @@ class AcademyDbService {
     final path = join(documentsDirectory.path, 'academy.db');
     return await openDatabaseWithLog(
       path,
-        version: 33,
+        version: 35,
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -260,6 +260,36 @@ class AcademyDbService {
             updated_at TEXT
           )
         ''');
+        // exam schedules/ranges
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS exam_schedules (
+            school TEXT,
+            level INTEGER,
+            grade INTEGER,
+            date TEXT,
+            names_json TEXT,
+            PRIMARY KEY (school, level, grade, date)
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS exam_ranges (
+            school TEXT,
+            level INTEGER,
+            grade INTEGER,
+            date TEXT,
+            range_text TEXT,
+            PRIMARY KEY (school, level, grade, date)
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS exam_days (
+            school TEXT,
+            level INTEGER,
+            grade INTEGER,
+            date TEXT,
+            PRIMARY KEY (school, level, grade, date)
+          )
+        ''');
         // Resources tables (folders/files)
         await db.execute('''
           CREATE TABLE IF NOT EXISTS resource_folders (
@@ -383,6 +413,47 @@ class AcademyDbService {
             ''');
           } catch (e) {
             print('[DB][마이그레이션] v33: homework_items 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 34) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS exam_schedules (
+                school TEXT,
+                level INTEGER,
+                grade INTEGER,
+                date TEXT,
+                names_json TEXT,
+                PRIMARY KEY (school, level, grade, date)
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS exam_ranges (
+                school TEXT,
+                level INTEGER,
+                grade INTEGER,
+                date TEXT,
+                range_text TEXT,
+                PRIMARY KEY (school, level, grade, date)
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v34 exam tables 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 35) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS exam_days (
+                school TEXT,
+                level INTEGER,
+                grade INTEGER,
+                date TEXT,
+                PRIMARY KEY (school, level, grade, date)
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v35 exam_days 생성 실패: $e');
           }
         }
         if (oldVersion < 26) {
@@ -969,6 +1040,123 @@ class AcademyDbService {
         }
       },
     );
+  }
+  // ======== EXAM SCHEDULE/RANGE PERSISTENCE ========
+  Future<void> ensureExamTables() async {
+    final dbClient = await db;
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS exam_schedules (
+        school TEXT,
+        level INTEGER,
+        grade INTEGER,
+        date TEXT,
+        names_json TEXT,
+        PRIMARY KEY (school, level, grade, date)
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS exam_ranges (
+        school TEXT,
+        level INTEGER,
+        grade INTEGER,
+        date TEXT,
+        range_text TEXT,
+        PRIMARY KEY (school, level, grade, date)
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS exam_days (
+        school TEXT,
+        level INTEGER,
+        grade INTEGER,
+        date TEXT,
+        PRIMARY KEY (school, level, grade, date)
+      )
+    ''');
+  }
+
+  Future<void> saveExamDataForSchoolGrade({
+    required String school,
+    required int level,
+    required int grade,
+    required Map<String, List<String>> titlesByDateIso,
+    required Map<String, String> rangesByDateIso,
+  }) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    await dbClient.transaction((txn) async {
+      // 기존 데이터 삭제 후 저장 (해당 school/level/grade 범위)
+      await txn.delete('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      for (final e in titlesByDateIso.entries) {
+        await txn.insert('exam_schedules', {
+          'school': school,
+          'level': level,
+          'grade': grade,
+          'date': e.key,
+          'names_json': e.value.isEmpty ? '[]' : jsonEncode(e.value),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final e in rangesByDateIso.entries) {
+        await txn.insert('exam_ranges', {
+          'school': school,
+          'level': level,
+          'grade': grade,
+          'date': e.key,
+          'range_text': e.value,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  Future<Map<String, dynamic>> loadExamDataForSchoolGrade({
+    required String school,
+    required int level,
+    required int grade,
+  }) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    final schedules = await dbClient.query('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+    final ranges = await dbClient.query('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+    final days = await dbClient.query('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+    return {
+      'schedules': schedules,
+      'ranges': ranges,
+      'days': days,
+    };
+  }
+
+  Future<void> saveExamDaysForSchoolGrade({
+    required String school,
+    required int level,
+    required int grade,
+    required List<String> daysIso,
+  }) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      for (final d in daysIso) {
+        await txn.insert('exam_days', {
+          'school': school,
+          'level': level,
+          'grade': grade,
+          'date': d,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> loadAllExamSchedules() async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_schedules', orderBy: 'date ASC');
+  }
+
+  Future<List<Map<String, dynamic>>> loadAllExamDays() async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_days', orderBy: 'date ASC');
   }
 
   Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade}) async {
