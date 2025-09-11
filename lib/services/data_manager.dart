@@ -17,6 +17,7 @@ import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
+import 'sync_service.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import '../models/memo.dart';
@@ -1171,6 +1172,8 @@ class DataManager {
     await AcademyDbService.instance.addAttendanceRecord(recordData);
     _attendanceRecords.add(record);
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    // 백엔드 증분 동기화 큐에 등록 (비동기, 실패시 큐가 재시도)
+    unawaited(SyncService.instance.enqueueAttendanceRecord(record));
   }
 
   Future<void> updateAttendanceRecord(AttendanceRecord record) async {
@@ -1184,6 +1187,8 @@ class DataManager {
       _attendanceRecords[index] = record;
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
     }
+    // 백엔드 증분 동기화 큐에 등록
+    unawaited(SyncService.instance.enqueueAttendanceRecord(record));
   }
 
   Future<void> deleteAttendanceRecord(String id) async {
@@ -1293,6 +1298,13 @@ class DataManager {
     } else {
       print('[ERROR] DB 저장 확인 실패!');
     }
+    // 큐로 전송 (최종 저장 확인 후)
+    try {
+      final toSend = saved ?? getAttendanceRecord(studentId, classDateTime);
+      if (toSend != null) {
+        unawaited(SyncService.instance.enqueueAttendanceRecord(toSend));
+      }
+    } catch (_) {}
   }
 
   // replacementClassDateTime와 동일한 planned override(add/replace)를 completed로 전환

@@ -17,6 +17,7 @@ import '../../widgets/teacher_details_dialog.dart';
 import 'package:animations/animations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import '../../services/sync_service.dart';
 
 enum SettingType {
   academy,
@@ -451,6 +452,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     );
                   },
+                ),
+                const SizedBox(height: 12),
+                // 내부 동기화 토큰(SYNC_TOKEN) 입력
+                FutureBuilder<String?>(
+                  future: SharedPreferences.getInstance().then((p) => p.getString('kakao_internal_token')),
+                  builder: (context, snapshot) {
+                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            style: const TextStyle(color: Colors.white),
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: '내부 동기화 토큰 (SYNC_TOKEN)',
+                              labelStyle: TextStyle(color: Colors.white70),
+                              hintText: '배포 서버의 SYNC_TOKEN 값을 입력하세요',
+                              hintStyle: TextStyle(color: Colors.white24),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Colors.white24),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final value = controller.text.trim();
+                            if (value.isEmpty) {
+                              await prefs.remove('kakao_internal_token');
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('내부 동기화 토큰이 제거되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            } else {
+                              await prefs.setString('kakao_internal_token', value);
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('내부 동기화 토큰이 저장되었습니다.', style: TextStyle(color: Colors.white)),
+                                backgroundColor: Color(0xFF1976D2),
+                              ));
+                            }
+                            setState(() {});
+                          },
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: const Text('저장'),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon((snapshot.data != null && (snapshot.data ?? '').isNotEmpty) ? Icons.check_circle : Icons.error_outline,
+                            color: (snapshot.data != null && (snapshot.data ?? '').isNotEmpty) ? Colors.lightGreen : Colors.orangeAccent, size: 18),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                // 데이터 동기화 섹션
+                const Text(
+                  '데이터 동기화',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    FilledButton(
+                      onPressed: () async {
+                        final scaffold = ScaffoldMessenger.of(context);
+                        scaffold.showSnackBar(const SnackBar(
+                          content: Text('초기 동기화 재실행 중...', style: TextStyle(color: Colors.white)),
+                          backgroundColor: Color(0xFF1976D2),
+                          duration: Duration(milliseconds: 1200),
+                        ));
+                        await SyncService.instance.resetInitialSyncFlag();
+                        await SyncService.instance.runInitialSyncIfNeeded();
+                        scaffold.showSnackBar(const SnackBar(
+                          content: Text('초기 동기화 트리거 완료', style: TextStyle(color: Colors.white)),
+                          backgroundColor: Color(0xFF1976D2),
+                        ));
+                      },
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                      child: const Text('초기 동기화 재실행'),
+                    ),
+                    const SizedBox(width: 8),
+                    // 학생-전화 동기화 토글(기본 off)
+                    FutureBuilder<bool>(
+                      future: SharedPreferences.getInstance().then((p) => p.getBool('enable_students_sync') ?? false),
+                      builder: (context, snap) {
+                        final enabled = snap.data ?? false;
+                        return Row(children: [
+                          Switch(
+                            value: enabled,
+                            onChanged: (v) async {
+                              final prefs = await SharedPreferences.getInstance();
+                              await prefs.setBool('enable_students_sync', v);
+                              setState(() {});
+                            },
+                            activeColor: const Color(0xFF1976D2),
+                          ),
+                          const Text('학생/전화 동기화', style: TextStyle(color: Colors.white70)),
+                        ]);
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final scaffold = ScaffoldMessenger.of(context);
+                        scaffold.showSnackBar(const SnackBar(
+                          content: Text('수동 동기화(최근 7주) 시작', style: TextStyle(color: Colors.white)),
+                          backgroundColor: Color(0xFF1976D2),
+                          duration: Duration(milliseconds: 800),
+                        ));
+                        await SyncService.instance.manualSync(days: 49);
+                        scaffold.showSnackBar(const SnackBar(
+                          content: Text('수동 동기화 완료', style: TextStyle(color: Colors.white)),
+                          backgroundColor: Color(0xFF1976D2),
+                        ));
+                      },
+                      style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1976D2), side: const BorderSide(color: Color(0xFF1976D2))),
+                      child: const Text('지금 동기화(7주)'),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 28),
                 // 테마 설정
