@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../services/data_manager.dart';
 import 'kakao_reservation_service.dart';
+import 'package:uuid/uuid.dart';
 
 class SyncService {
   SyncService._internal();
@@ -32,6 +33,12 @@ class SyncService {
   }
 
   Future<void> manualSync({int days = 49}) async {
+    // 최신 로컬 데이터 적재 보장
+    try {
+      await DataManager.instance.loadAttendanceRecords();
+      // ignore: avoid_print
+      print('[SYNC][manual] local attendance loaded: ${DataManager.instance.attendanceRecords.length}');
+    } catch (_) {}
     await _maybeSyncStudents();
     await _syncAttendance(days: days);
   }
@@ -54,8 +61,14 @@ class SyncService {
 
   Future<bool> _syncStudents() async {
     final baseUrl = await KakaoReservationService.instance.getBaseUrl();
-    if (baseUrl == null || baseUrl.isEmpty) return false;
+    if (baseUrl == null || baseUrl.isEmpty) {
+      // ignore: avoid_print
+      print('[SYNC][students][SKIP] baseUrl not configured');
+      return false;
+    }
     final token = await KakaoReservationService.instance.getAuthToken();
+    final prefs = await SharedPreferences.getInstance();
+    final internalToken = prefs.getString('kakao_internal_token');
     final headers = <String, String>{
       'Content-Type': 'application/json',
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
@@ -65,6 +78,12 @@ class SyncService {
       if (b.endsWith('/api')) return b;
       if (b.endsWith('/api/')) return b.substring(0, b.length - 1);
       return b + '/api';
+    }
+    String stripApiBase(String b) {
+      String u = b;
+      if (u.endsWith('/api/')) return u.substring(0, u.length - 5);
+      if (u.endsWith('/api')) return u.substring(0, u.length - 4);
+      return u;
     }
 
     final data = <Map<String, dynamic>>[];
@@ -86,12 +105,39 @@ class SyncService {
       });
     }
     try {
+      // 1) 내부 토큰 우선 시도
+      if (internalToken != null && internalToken.isNotEmpty) {
+        final baseNoApi = stripApiBase(baseUrl);
+        final internalUri = Uri.parse('$baseNoApi/internal/sync/students');
+        final internalHeaders = <String, String>{
+          'Content-Type': 'application/json',
+          'X-Internal-Token': internalToken,
+        };
+        // ignore: avoid_print
+        print('[SYNC][students][POST] url=$internalUri payloadCount=${data.length} token=internal');
+        final res = await http
+            .post(internalUri, headers: internalHeaders, body: jsonEncode({'data': data}))
+            .timeout(const Duration(seconds: 12));
+        // ignore: avoid_print
+        print('[SYNC][students][RESP] status=${res.statusCode} len=${res.body.length}');
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          return true;
+        }
+      }
+
+      // 2) 퍼블릭 경로로 폴백 (Bearer)
       final uri = Uri.parse('${withApi(baseUrl)}/sync/students');
+      // ignore: avoid_print
+      print('[SYNC][students][POST] url=$uri payloadCount=${data.length} token=bearer:${token != null && token.isNotEmpty}');
       final res = await http
           .post(uri, headers: headers, body: jsonEncode({'data': data}))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 12));
+      // ignore: avoid_print
+      print('[SYNC][students][RESP] status=${res.statusCode} len=${res.body.length}');
       return res.statusCode >= 200 && res.statusCode < 300;
     } catch (_) {
+      // ignore: avoid_print
+      print('[SYNC][students][ERROR] request failed');
       return false;
     }
   }
@@ -102,6 +148,7 @@ class SyncService {
     final prefs = await SharedPreferences.getInstance();
     final internalToken = prefs.getString('kakao_internal_token');
     final bearerToken = await KakaoReservationService.instance.getAuthToken();
+    final String reqId = const Uuid().v4();
 
     final now = DateTime.now();
     final from = now.subtract(Duration(days: days));
@@ -111,7 +158,9 @@ class SyncService {
       return b + '/api';
     }
 
-    // 내부 토큰이 있으면 B 형식(items/records)으로 /internal/sync/attendance로 전송
+    // 내부 토큰이 있으면 B 형식(items/records)을 우선 시도하되, 실패 시 즉시 폴백을 재시도한다.
+    bool attemptedInternal = false;
+    bool internalOk = false;
     if (internalToken != null && internalToken.isNotEmpty) {
       String stripApiBase(String b) {
         String u = b;
@@ -135,6 +184,12 @@ class SyncService {
           if (arrivedAt != null) 'arrivedAt': arrivedAt,
           if (leftAt != null) 'leftAt': leftAt,
           'updatedAt': updatedIso,
+          // 추가: 내부 동기화에도 수업 시간과 ISO 등/하원 시간을 함께 전달하여
+          // 서버가 지각/수업중 계산과 주간 응답에 반영할 수 있도록 한다 (하위호환 유지)
+          'classStart': r.classDateTime.toUtc().toIso8601String(),
+          'classEnd': r.classEndTime.toUtc().toIso8601String(),
+          if (r.arrivalTime != null) 'arrival': r.arrivalTime!.toUtc().toIso8601String(),
+          if (r.departureTime != null) 'departure': r.departureTime!.toUtc().toIso8601String(),
         });
         totalRecords += 1;
       }
@@ -155,25 +210,34 @@ class SyncService {
         'X-Internal-Token': internalToken,
       };
       try {
+        attemptedInternal = true;
         // 내부 엔드포인트는 /internal/* (prefix에 /api 없음)
         final uri = Uri.parse('$baseNoApi/internal/sync/attendance');
         // ignore: avoid_print
-        print('[SYNC][attendance][POST] url=$uri students=${byStudent.length} records=$totalRecords');
+        print('[SYNC][attendance][POST] url=$uri students=${byStudent.length} records=$totalRecords token=internal reqId=$reqId');
         final res = await http
-            .post(uri, headers: headers, body: jsonEncode(payload))
+            .post(uri, headers: {...headers, 'X-Client-Request-Id': reqId}, body: jsonEncode(payload))
             .timeout(const Duration(seconds: 12));
         // ignore: avoid_print
-        print('[SYNC][attendance][RESP] status=${res.statusCode} len=${res.body.length} body=${res.body.length > 300 ? res.body.substring(0, 300) + '...' : res.body}');
-        return res.statusCode >= 200 && res.statusCode < 300;
-      } catch (_) {
-        return false;
+        print('[SYNC][attendance][RESP] status=${res.statusCode} len=${res.body.length} reqId=$reqId');
+        internalOk = res.statusCode >= 200 && res.statusCode < 300;
+      } catch (e) {
+        // ignore: avoid_print
+        print('[SYNC][attendance][ERROR][internal] $e reqId=$reqId');
+        internalOk = false;
       }
+    }
+
+    // 내부 실패 시 또는 내부 토큰이 없는 경우: 폴백 A 형식으로 /api/sync/attendance 재시도
+    if (attemptedInternal && internalOk) {
+      return true;
     }
 
     // 폴백: 기존 A 형식으로 /sync/attendance (인증 없음 또는 Bearer)
     final headers = <String, String>{
       'Content-Type': 'application/json',
       if (bearerToken != null && bearerToken.isNotEmpty) 'Authorization': 'Bearer $bearerToken',
+      'X-Client-Request-Id': reqId,
     };
     final data = <Map<String, dynamic>>[];
     for (final r in DataManager.instance.attendanceRecords) {
@@ -194,12 +258,12 @@ class SyncService {
     try {
       final uri = Uri.parse('${withApi(baseUrl)}/sync/attendance');
       // ignore: avoid_print
-      print('[SYNC][attendance][POST][fallback] url=$uri records=${data.length}');
+      print('[SYNC][attendance][POST][fallback] url=$uri records=${data.length} reqId=$reqId');
       final res = await http
           .post(uri, headers: headers, body: jsonEncode({'data': data}))
           .timeout(const Duration(seconds: 12));
       // ignore: avoid_print
-      print('[SYNC][attendance][RESP][fallback] status=${res.statusCode} len=${res.body.length}');
+      print('[SYNC][attendance][RESP][fallback] status=${res.statusCode} len=${res.body.length} reqId=$reqId');
       return res.statusCode >= 200 && res.statusCode < 300;
     } catch (_) {
       return false;
@@ -302,7 +366,9 @@ class SyncService {
         final sid = (m['studentId'] as String?) ?? '';
         if (sid.isEmpty) continue;
         final classStartIso = m['classStart'] as String?; // 과거 포맷 호환
+        final classEndIso = m['classEnd'] as String?;
         final DateTime? classStart = classStartIso != null ? DateTime.tryParse(classStartIso)?.toLocal() : null;
+        final DateTime? classEnd = classEndIso != null ? DateTime.tryParse(classEndIso)?.toLocal() : null;
         final DateTime? arrivalDt = (m['arrival'] as String?) != null ? DateTime.tryParse(m['arrival'] as String)?.toLocal() : null;
         final DateTime? departureDt = (m['departure'] as String?) != null ? DateTime.tryParse(m['departure'] as String)?.toLocal() : null;
         final DateTime? updated = (m['updatedAt'] as String?) != null ? DateTime.tryParse(m['updatedAt'] as String)?.toLocal() : null;
@@ -320,6 +386,11 @@ class SyncService {
           if (arrivedAt != null) 'arrivedAt': arrivedAt,
           if (leftAt != null) 'leftAt': leftAt,
           'updatedAt': updatedIso,
+          // 추가: 내부 동기화에도 수업 시작/종료 및 ISO 등/하원 포함
+          if (classStart != null) 'classStart': classStart.toUtc().toIso8601String(),
+          if (classEnd != null) 'classEnd': classEnd.toUtc().toIso8601String(),
+          if (arrivalDt != null) 'arrival': arrivalDt.toUtc().toIso8601String(),
+          if (departureDt != null) 'departure': departureDt.toUtc().toIso8601String(),
         });
       }
 
@@ -340,20 +411,34 @@ class SyncService {
         return u;
       }
       final baseNoApi = stripApiBase(baseUrl);
-      final Uri uri = useInternal
-          // 내부는 /internal/* (API prefix 없음)
+      final String reqId = const Uuid().v4();
+      Uri uri = useInternal
           ? Uri.parse('$baseNoApi/internal/sync/attendance')
-          // 폴백은 /api/sync/attendance
           : Uri.parse('${withApi(baseUrl)}/sync/attendance');
       try {
         // ignore: avoid_print
         final total = byStudent.values.fold<int>(0, (acc, v) => acc + v.length);
-        print('[SYNC][attendance][flush] url=$uri students=${byStudent.length} records=$total');
-        final res = await http
-            .post(uri, headers: headers, body: jsonEncode(body))
+        print('[SYNC][attendance][flush] url=$uri students=${byStudent.length} records=$total reqId=$reqId');
+        var res = await http
+            .post(uri, headers: {...headers, 'X-Client-Request-Id': reqId}, body: jsonEncode(body))
             .timeout(const Duration(seconds: 8));
+        // 내부 경로 사용 중 실패하면 폴백으로 재시도
+        if (useInternal && !(res.statusCode >= 200 && res.statusCode < 300)) {
+          uri = Uri.parse('${withApi(baseUrl)}/sync/attendance');
+          // ignore: avoid_print
+          print('[SYNC][attendance][flush][fallback] url=$uri (retry public) reqId=$reqId');
+          final fallbackHeaders = <String, String>{
+            'Content-Type': 'application/json',
+            if ((await KakaoReservationService.instance.getAuthToken()) != null)
+              'Authorization': 'Bearer ${await KakaoReservationService.instance.getAuthToken()}',
+            'X-Client-Request-Id': reqId,
+          };
+          res = await http
+              .post(uri, headers: fallbackHeaders, body: jsonEncode(body))
+              .timeout(const Duration(seconds: 8));
+        }
         // ignore: avoid_print
-        print('[SYNC][attendance][flush][resp] status=${res.statusCode} len=${res.body.length}');
+        print('[SYNC][attendance][flush][resp] status=${res.statusCode} len=${res.body.length} reqId=$reqId');
       } catch (_) {
         // if failed, re-enqueue to avoid data loss
         for (final m in pending) {

@@ -60,10 +60,12 @@ class ParentLinkService {
           final students = DataManager.instance.students;
           String digits(String? s) => (s ?? '').replaceAll(RegExp(r'[^0-9]'), '');
           final phoneToStudentName = <String, String>{};
+          final phoneToStudentId = <String, String>{};
           for (final si in students) {
             final p = digits(si.student.parentPhoneNumber ?? si.basicInfo.parentPhoneNumber);
             if (p.isNotEmpty) {
               phoneToStudentName[p] = si.student.name;
+              phoneToStudentId[p] = si.student.id;
             }
           }
 
@@ -82,13 +84,16 @@ class ParentLinkService {
 
           // 백그라운드로 서버에 매칭 결과 업로드
           for (final link in toPush) {
+            final phone = digits(link.phone);
+            final sid = phoneToStudentId[phone];
+            if (sid == null || sid.isEmpty) {
+              debugPrint('[ParentLinkService] skip pushMatch: no local student for phone=$phone');
+              continue; // 잘못된 매핑을 방지하기 위해 폴백 금지
+            }
             _pushMatch(
               kakaoUserId: link.kakaoUserId,
-              phoneDigits: digits(link.phone),
-              studentId: students.firstWhere(
-                (s) => digits(s.student.parentPhoneNumber ?? s.basicInfo.parentPhoneNumber) == digits(link.phone),
-                orElse: () => students.first,
-              ).student.id,
+              phoneDigits: phone,
+              studentId: sid,
               studentName: link.matchedStudentName,
             );
           }
