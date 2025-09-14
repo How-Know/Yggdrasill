@@ -296,13 +296,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][ClassesView] build 호출, filteredStudentIds= [33m${widget.filteredStudentIds} [0m');
+    // print('[DEBUG][ClassesView] build 호출, filteredStudentIds=${widget.filteredStudentIds}');
     if (!widget.isRegistrationMode && _hoveredCellKey != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _hoveredCellKey = null; });
       });
     }
-    print('[DEBUG][ClassesView.build] isRegistrationMode= [33m${widget.isRegistrationMode} [0m, registrationModeType= [33m${widget.registrationModeType} [0m, selectedStudentWithInfo= [33m${widget.selectedStudentWithInfo} [0m, selectedSelfStudyStudent= [33m${widget.selectedSelfStudyStudent} [0m');
+    // print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, registrationModeType=${widget.registrationModeType}');
     final timeBlocks = _generateTimeBlocks();
     final double blockHeight = 90.0;
     return Stack(
@@ -469,6 +469,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               );
                               // replace 보강의 원래 회차는 "원래 수업 종료 시간"까지 가림 처리
                               final Set<String> _hiddenOriginalStudentIds = {};
+                              final Set<String> _hiddenStudentSetPairs = {}; // key: studentId|setId
                               final DateTime _now = DateTime.now();
                               final int _defaultLessonMinutes = DataManager.instance.academySettings.lessonDuration;
                               for (final ov in DataManager.instance.sessionOverrides) {
@@ -478,17 +479,69 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 final orig = ov.originalClassDateTime;
                                 if (orig == null) continue;
                                 if (orig.isBefore(_weekStart) || !orig.isBefore(_weekEnd)) continue;
-                                if (orig.year == _cellDate.year && orig.month == _cellDate.month && orig.day == _cellDate.day &&
-                                    orig.hour == _cellDate.hour && orig.minute == _cellDate.minute) {
-                                  final int minutes = ov.durationMinutes ?? _defaultLessonMinutes;
-                                  final DateTime origEnd = DateTime(orig.year, orig.month, orig.day, orig.hour, orig.minute)
-                                      .add(Duration(minutes: minutes));
-                                  if (_now.isBefore(origEnd)) {
-                                    _hiddenOriginalStudentIds.add(ov.studentId);
+                                // 같은 주의 같은 날짜(YMD)가 대상이면 setId 기준으로 블라인드 확장
+                                final bool sameYmd = (orig.year == _cellDate.year && orig.month == _cellDate.month && orig.day == _cellDate.day);
+                                if (sameYmd) {
+                                  // setId 해석: ov.setId 우선, 없으면 학생의 블록에서 유추
+                                  String? setId = ov.setId;
+                                  if (setId == null || setId.isEmpty) {
+                                    final blocksByStudent = filteredStudentBlocks.where((b) => b.studentId == ov.studentId && b.dayIndex == dayIdx).toList();
+                                    if (blocksByStudent.isNotEmpty) {
+                                      // 가장 가까운 시간의 블록 setId 사용
+                                      int origMin = orig.hour * 60 + orig.minute;
+                                      int bestDiff = 1 << 30;
+                                      for (final b in blocksByStudent) {
+                                        final int bm = b.startHour * 60 + b.startMinute;
+                                        final int diff = (bm - origMin).abs();
+                                        if (diff < bestDiff && b.setId != null) {
+                                          bestDiff = diff;
+                                          setId = b.setId;
+                                        }
+                                      }
+                                    }
+                                  }
+                                  // DIAG-1: ov.setId와 해당 날짜 학생 블록들의 setId 집합을 출력(요약)
+                                  try {
+                                    final todaysSetIds = filteredStudentBlocks
+                                        .where((b) => b.studentId == ov.studentId && b.dayIndex == dayIdx)
+                                        .map((b) => b.setId ?? '')
+                                        .toSet();
+                                    if (todaysSetIds.isNotEmpty) {
+                                      // ignore: avoid_print
+                                      print('[BLIND][check] YMD=${_cellDate.toString().substring(0,10)} ov.student=${ov.studentId} ov.setId=$setId todays.setIds=$todaysSetIds');
+                                    }
+                                  } catch (_) {}
+                                  if (setId != null && setId.isNotEmpty) {
+                                    _hiddenStudentSetPairs.add('${ov.studentId}|$setId');
+                                  } else {
+                                    // fallback: 시간 일치(시:분)인 경우에 한해 studentId 블라인드 유지
+                                    if (orig.hour == _cellDate.hour && orig.minute == _cellDate.minute) {
+                                      final int minutes = ov.durationMinutes ?? _defaultLessonMinutes;
+                                      final DateTime origEnd = DateTime(orig.year, orig.month, orig.day, orig.hour, orig.minute)
+                                          .add(Duration(minutes: minutes));
+                                      if (_now.isBefore(origEnd)) {
+                                        _hiddenOriginalStudentIds.add(ov.studentId);
+                                      }
+                                    }
                                   }
                                 }
                               }
-                              final filteredActiveBlocks = activeBlocks.where((b) => !_hiddenOriginalStudentIds.contains(b.studentId)).toList();
+                              final filteredActiveBlocks = activeBlocks.where((b) {
+                                final sid = b.studentId;
+                                final setId = b.setId ?? '';
+                                if (_hiddenOriginalStudentIds.contains(sid)) return false;
+                                if (_hiddenStudentSetPairs.contains('$sid|$setId')) return false;
+                                return true;
+                              }).toList();
+                              // DIAG-2: 셀의 active 블록 setId와 숨김 페어 매칭 요약
+                              // try {
+                              //   final cellSetIds = activeBlocks.map((b) => b.setId ?? '').toSet();
+                              //   final anyPairHit = activeBlocks.any((b) => _hiddenStudentSetPairs.contains('${b.studentId}|${b.setId ?? ''}'));
+                              //   if (cellSetIds.isNotEmpty) {
+                              //     // ignore: avoid_print
+                              //     print('[BLIND][check] cell=${_cellDate.toString().substring(0,16)} active.setIds=$cellSetIds pairHit=$anyPairHit');
+                              //   }
+                              // } catch (_) {}
                               final cellStudentWithInfos = filteredActiveBlocks.map((b) => studentsWithInfo.firstWhere(
                                 (s) => s.student.id == b.studentId,
                                 orElse: () => StudentWithInfo(
@@ -547,15 +600,44 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 return false;
                               }
                               // 학생별 중복 없이, 요일+시:분이 같은 학생만 카운트
-                              final activeStudentIds = filteredStudentBlocks
-                                .where((b) =>
-                                  b.dayIndex == dayIdx &&
-                                  isSameTime(b, timeBlocks[blockIdx].startTime)
-                                )
+                              // 카운트 및 beforeIds 모두 set_id 블라인드 반영
+                              final beforeIds = activeBlocks
                                 .map((b) => b.studentId)
-                                .toSet()
-                                .difference(_hiddenOriginalStudentIds);
-                              final activeStudentCount = activeStudentIds.length;
+                                .toSet();
+                              final activeStudentIds = filteredActiveBlocks
+                                .map((b) => b.studentId)
+                                .toSet();
+                              int activeStudentCount = activeStudentIds.length;
+                              // 보강(add/replace) 인원 가산: replacement 시작시간 기준 LESSON_DURATION 범위 내 셀에 +1 (중복 학생 제외)
+                              final Set<String> countedStudentIds = Set.of(activeStudentIds);
+                              for (final ov in DataManager.instance.sessionOverrides) {
+                                if (ov.reason != OverrideReason.makeup) continue;
+                                if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+                                if (ov.status == OverrideStatus.completed || ov.status == OverrideStatus.canceled) continue;
+                                final rep = ov.replacementClassDateTime;
+                                if (rep == null) continue;
+                                // 주간 범위 일치
+                                if (rep.isBefore(_weekStart) || !rep.isBefore(_weekEnd)) continue;
+                                // 필터가 있으면 해당 학생만
+                                if (widget.filteredStudentIds != null && !widget.filteredStudentIds!.contains(ov.studentId)) continue;
+                                // 같은 날짜(YMD)인지 확인
+                                if (!(rep.year == _cellDate.year && rep.month == _cellDate.month && rep.day == _cellDate.day)) continue;
+                                final int durationMin = ov.durationMinutes ?? _defaultLessonMinutes;
+                                final int repStartMin = rep.hour * 60 + rep.minute;
+                                final int repEndMin = repStartMin + durationMin; // [start, end)
+                                final int cellStartMin = timeBlocks[blockIdx].startTime.hour * 60 + timeBlocks[blockIdx].startTime.minute;
+                                if (cellStartMin >= repStartMin && cellStartMin < repEndMin) {
+                                  if (!countedStudentIds.contains(ov.studentId)) {
+                                    countedStudentIds.add(ov.studentId);
+                                    activeStudentCount += 1;
+                                  }
+                                }
+                              }
+                              // // BLIND 진단 로그(요약) - 필요 시만 활성화
+                              // if (_hiddenOriginalStudentIds.isNotEmpty || _hiddenStudentSetPairs.isNotEmpty || activeStudentIds.length < beforeIds.length) {
+                              //   // ignore: avoid_print
+                              //   print('[BLIND][cls] cell=$_cellDate hideIds=${_hiddenOriginalStudentIds} hidePairs=${_hiddenStudentSetPairs.length} before=${beforeIds.length} after=$activeStudentCount');
+                              // }
                               Color? countColor;
                               if (activeStudentCount > 0) {
                                 if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.7) {

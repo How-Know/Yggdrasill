@@ -10,6 +10,7 @@ import '../../../models/self_study_time_block.dart';
 import '../../../widgets/app_snackbar.dart';
 import '../../../models/class_info.dart';
 import '../views/makeup_view.dart';
+import '../../../models/session_override.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -814,18 +815,99 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     b.startHour == widget.selectedCellStartTime!.hour &&
                                     b.startMinute == widget.selectedCellStartTime!.minute
                                   ).toList();
+                                  // 보강 원본 블라인드(set_id 우선): 같은 날짜(YMD)의 replace 원본이 있으면 해당 (studentId,setId) 전체를 제외
+                                  final DateTime weekStart = DateTime(widget.selectedCellStartTime!.year, widget.selectedCellStartTime!.month, widget.selectedCellStartTime!.day)
+                                      .subtract(Duration(days: widget.selectedCellStartTime!.weekday - DateTime.monday));
+                                  final DateTime weekEnd = weekStart.add(const Duration(days: 7));
+                                  final int selDayIdx = widget.selectedCellDayIndex ?? 0; // 0=월
+                                  final DateTime cellYmd = weekStart.add(Duration(days: selDayIdx));
+                                  final DateTime cellDate = DateTime(
+                                    cellYmd.year,
+                                    cellYmd.month,
+                                    cellYmd.day,
+                                    widget.selectedCellStartTime!.hour,
+                                    widget.selectedCellStartTime!.minute,
+                                  );
+                                  final Set<String> hiddenPairs = {};
+                                  for (final ov in DataManager.instance.sessionOverrides) {
+                                    if (ov.reason != OverrideReason.makeup) continue;
+                                    if (ov.overrideType != OverrideType.replace) continue;
+                                    if (ov.status == OverrideStatus.canceled) continue;
+                                    final orig = ov.originalClassDateTime;
+                                    if (orig == null) continue;
+                                    if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd)) continue;
+                                    final bool sameYmd = orig.year == cellDate.year && orig.month == cellDate.month && orig.day == cellDate.day;
+                                    if (!sameYmd) continue;
+                                    String? setId = ov.setId;
+                                    if (setId == null || setId.isEmpty) {
+                                      // 학생의 같은 요일 블록에서 원본 시간과 가장 가까운 블록의 setId 추정
+                                      final blocksByStudent = studentTimeBlocks.where((b) => b.studentId == ov.studentId && b.dayIndex == widget.selectedCellDayIndex).toList();
+                                      if (blocksByStudent.isNotEmpty) {
+                                        int origMin = orig.hour * 60 + orig.minute;
+                                        int bestDiff = 1 << 30;
+                                        for (final b in blocksByStudent) {
+                                          final int bm = b.startHour * 60 + b.startMinute;
+                                          final int diff = (bm - origMin).abs();
+                                          if (diff < bestDiff && b.setId != null && b.setId!.isNotEmpty) {
+                                            bestDiff = diff;
+                                            setId = b.setId;
+                                          }
+                                        }
+                                      }
+                                    }
+                                    if (setId != null && setId.isNotEmpty) {
+                                      hiddenPairs.add('${ov.studentId}|$setId');
+                                    }
+                                  }
+                                  // DIAG: hiddenPairs 요약 출력(있을 때만)
+                                  if (hiddenPairs.isNotEmpty) {
+                                    // ignore: avoid_print
+                                    print('[BLIND][list] cell=${cellDate.toString().substring(0,16)} hiddenPairs=$hiddenPairs');
+                                  }
+                                  final selectedDate = widget.selectedCellStartTime!;
+                                  final studentIdSet = (widget.filteredStudentIds ?? DataManager.instance.students.map((s) => s.student.id).toList()).toSet();
+                                  List<StudentTimeBlock> filteredBlocks = [];
+                                  for (final b in blocks) {
+                                    if (!studentIdSet.contains(b.studentId)) continue;
+                                    final pairKey = '${b.studentId}|${b.setId ?? ''}';
+                                    if (hiddenPairs.isNotEmpty) {
+                                      final hit = hiddenPairs.contains(pairKey);
+                                      // ignore: avoid_print
+                                      print('[BLIND][list] check pairKey=$pairKey setId=${b.setId} hit=$hit');
+                                    }
+                                    if (hiddenPairs.contains(pairKey)) {
+                                      continue; // set_id 블라인드 적용
+                                    }
+                                    // 주차 계산 (등록일 기반)
+                                    DateTime? reg;
+                                    try { reg = DataManager.instance.students.firstWhere((s) => s.student.id == b.studentId).basicInfo.registrationDate; } catch (_) { reg = null; }
+                                    if (reg == null) { filteredBlocks.add(b); continue; }
+                                    DateTime toMonday(DateTime x) { final off = x.weekday - DateTime.monday; return DateTime(x.year, x.month, x.day).subtract(Duration(days: off)); }
+                                    final week = (() { final rm = toMonday(reg!); final sm = toMonday(selectedDate); final diff = sm.difference(rm).inDays; return (diff >= 0 ? (diff ~/ 7) : 0) + 1; })();
+                                    final startMin = b.startHour * 60 + b.startMinute;
+                                    final blind = _shouldBlindBlock(
+                                      studentId: b.studentId,
+                                      weekNumber: week,
+                                      weeklyOrder: b.weeklyOrder,
+                                      sessionTypeId: b.sessionTypeId,
+                                      dayIdx: b.dayIndex,
+                                      startMin: startMin,
+                                    );
+                                    if (!blind) filteredBlocks.add(b);
+                                  }
+                                  final blocksToUse = filteredBlocks;
                                   final allStudents = DataManager.instance.students;
-                                  print('[DEBUG][학생카드리스트] 전체 학생 수: ${allStudents.length}');
-                                  print('[DEBUG][학생카드리스트] 필터링된 학생 ID: ${widget.filteredStudentIds}');
-                                  print('[DEBUG][학생카드리스트] 해당 셀의 블록 수: ${blocks.length}');
+                                  // print('[DEBUG][학생카드리스트] 전체 학생 수: ${allStudents.length}');
+                                  // print('[DEBUG][학생카드리스트] 필터링된 학생 ID: ${widget.filteredStudentIds}');
+                                  // print('[DEBUG][학생카드리스트] 해당 셀의 블록 수(필터 전): ${blocks.length}, (블라인드 후): ${blocksToUse.length}');
                                   
                                   // 필터링 적용: 필터가 있으면 필터링된 학생만, 없으면 전체 학생
                                   final students = widget.filteredStudentIds == null 
                                     ? allStudents 
                                     : allStudents.where((s) => widget.filteredStudentIds!.contains(s.student.id)).toList();
-                                  print('[DEBUG][학생카드리스트] 필터링 후 학생 수: ${students.length}');
+                                  // print('[DEBUG][학생카드리스트] 필터링 후 학생 수: ${students.length}');
                                   
-                                  final cellStudents = blocks.map((b) =>
+                                  final cellStudents = blocksToUse.map((b) =>
                                     students.firstWhere(
                                       (s) => s.student.id == b.studentId,
                                       orElse: () => StudentWithInfo(
@@ -834,8 +916,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       ),
                                     )
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
-                                  print('[DEBUG][학생카드리스트] 최종 셀 학생 수: ${cellStudents.length}');
-                                  print('[DEBUG][학생카드리스트] 최종 셀 학생 이름들: ${cellStudents.map((s) => s.student.name).toList()}');
+                                  // print('[DEBUG][학생카드리스트] 최종 셀 학생 수: ${cellStudents.length}');
+                                  // print('[DEBUG][학생카드리스트] 최종 셀 학생 이름들: ${cellStudents.map((s) => s.student.name).toList()}');
                                   // 자습 블록 필터링
                                   // print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
                                   // print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
@@ -858,7 +940,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       ),
                                     )
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
-                                  print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
+                                  // print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
                                   
                                   // 컨테이너는 항상 렌더링(내용은 조건부), 영역 높이에 비례하도록 확장
                                   return Expanded(
@@ -1791,6 +1873,94 @@ class TimetableContentViewState extends State<TimetableContentView> {
     } else {
       print('[DEBUG][cleanupOrphanedSessionTypeIds] 완료: 정리할 블록 없음');
     }
+  }
+
+  // ===== 보강(Replace) 원본 블라인드 맵 =====
+  // key: weekNumber|weeklyOrder|sessionTypeId|dayIndex|startMinuteRounded
+  Set<String> _makeupOriginalBlindKeysFor(String studentId) {
+    final keys = <String>{};
+    // DEBUG (quiet)
+    // print('[BLIND][map] building keys for student=$studentId');
+    // 학생 등록일로 주차 계산
+    final registrationDate = () {
+      try {
+        return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).basicInfo.registrationDate;
+      } catch (_) {
+        return null;
+      }
+    }();
+    if (registrationDate == null) return keys;
+
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+    int computeWeekNumber(DateTime d) {
+      DateTime toMonday(DateTime x) {
+        final offset = x.weekday - DateTime.monday;
+        return DateTime(x.year, x.month, x.day).subtract(Duration(days: offset));
+      }
+      final regMon = toMonday(registrationDate);
+      final sesMon = toMonday(d);
+      final diff = sesMon.difference(regMon).inDays;
+      final weeks = diff >= 0 ? (diff ~/ 7) : 0;
+      return weeks + 1;
+    }
+
+    // 학생의 timeBlocks (weeklyOrder 추정용)
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+
+    int? weeklyOrderFor(DateTime original, String? setId) {
+      if (setId != null) {
+        try {
+          return blocks.firstWhere((b) => b.setId == setId).weeklyOrder;
+        } catch (_) {}
+      }
+      // 시간 근접 set 추정 (±30분)
+      final dayIdx = (original.weekday - 1).clamp(0, 6);
+      final origMin = original.hour * 60 + original.minute;
+      int bestDiff = 1 << 30;
+      int? bestOrder;
+      for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        final start = b.startHour * 60 + b.startMinute;
+        final diff = (start - origMin).abs();
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestOrder = b.weeklyOrder;
+        }
+      }
+      return bestOrder;
+    }
+
+    String keyOf({required int week, required int? order, required String? sessionTypeId, required int dayIdx, required int startMin}) {
+      final rounded = (startMin / 5).round() * 5; // 5분 단위 라운딩으로 근접 허용
+      return '$week|${order ?? -1}|${sessionTypeId ?? 'null'}|$dayIdx|$rounded';
+    }
+
+    final overrides = DataManager.instance.getSessionOverridesForStudent(studentId);
+    for (final ov in overrides) {
+      if (ov.status == OverrideStatus.canceled) continue;
+      if (ov.overrideType != OverrideType.replace) continue;
+      final orig = ov.originalClassDateTime;
+      if (orig == null) continue;
+      final week = computeWeekNumber(orig);
+      final order = weeklyOrderFor(orig, ov.setId);
+      final dayIdx = (orig.weekday - 1).clamp(0, 6);
+      final startMin = orig.hour * 60 + orig.minute;
+      final sessionTypeId = ov.sessionTypeId; // 없을 수 있음
+      keys.add(keyOf(week: week, order: order, sessionTypeId: sessionTypeId, dayIdx: dayIdx, startMin: startMin));
+      // print('[BLIND][map] add key week=$week order=$order set=${ov.setId} stId=${sessionTypeId} day=$dayIdx start=$startMin orig=$orig');
+    }
+    // print('[BLIND][map] total keys=${keys.length}');
+    return keys;
+  }
+
+  bool _shouldBlindBlock({required String studentId, required int weekNumber, required int? weeklyOrder, required String? sessionTypeId, required int dayIdx, required int startMin}) {
+    final keys = _makeupOriginalBlindKeysFor(studentId);
+    final rounded = (startMin / 5).round() * 5;
+    final key = '$weekNumber|${weeklyOrder ?? -1}|${sessionTypeId ?? 'null'}|$dayIdx|$rounded';
+    final hit = keys.contains(key);
+    // print('[BLIND][check] week=$weekNumber order=$weeklyOrder stId=$sessionTypeId day=$dayIdx start=$startMin -> rounded=$rounded hit=$hit');
+    return hit;
   }
 }
 
