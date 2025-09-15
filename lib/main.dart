@@ -713,10 +713,6 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
   Timer? _ticker;
   // 세션 내에서만 유지되는 닫힘 기록 (앱 재시작 시 초기화)
   final Set<String> _sessionDismissed = <String>{};
-  // 자정까지 유지되는 닫힘 기록(영속) - 일정 있는 메모용
-  final Set<String> _persistDismissed = <String>{};
-  // 일정 없는 메모 영구 해제 목록(메모 ID 기준)
-  final Set<String> _persistDismissedUnscheduled = <String>{};
 
   String _keyFor(Memo m) {
     // 메모의 예정일(YYYYMMDD) 기준으로 키 생성 → 해당 날짜 자정까지 표시/해제 동작 유지
@@ -725,32 +721,13 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
     return '${m.id}:${dt.year}${two(dt.month)}${two(dt.day)}';
   }
 
-  Future<void> _loadPersistDismissed() async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList('memo_dismissed_today') ?? <String>[];
-    _persistDismissed
-      ..clear()
-      ..addAll(list);
-    final uns = prefs.getStringList('memo_dismissed_unscheduled') ?? <String>[];
-    _persistDismissedUnscheduled
-      ..clear()
-      ..addAll(uns);
-  }
-
-  Future<void> _savePersistDismissed() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('memo_dismissed_today', _persistDismissed.toList());
-    await prefs.setStringList('memo_dismissed_unscheduled', _persistDismissedUnscheduled.toList());
-  }
+  
 
   @override
   void initState() {
     super.initState();
     // 주기적으로 현재 시간을 반영해 표시 대상 갱신
     _ticker = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) setState(() {});
-    });
-    _loadPersistDismissed().then((_) {
       if (mounted) setState(() {});
     });
   }
@@ -770,27 +747,22 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
       child: ValueListenableBuilder<List<Memo>>(
         valueListenable: DataManager.instance.memosNotifier,
         builder: (context, memos, _) {
-          // 가까운 미래 순 정렬, 해제되지 않은 배너만
-          final now = DateTime.now();
-          final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+          // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
           // 디버그: 전체/필터 단계별 카운트
           print('[FLOAT][DEBUG] total memos=${memos.length}');
           final withSchedule = memos.where((m) => m.scheduledAt != null).toList();
           print('[FLOAT][DEBUG] with scheduledAt != null: ${withSchedule.length}');
           final notDismissedFlag = withSchedule.where((m) => !m.dismissed).toList();
-          print('[FLOAT][DEBUG] !dismissed: ${notDismissedFlag.length}');
+          print('[FLOAT][DEBUG] !dismissed (scheduled): ${notDismissedFlag.length}');
           final notSessionDismissed = notDismissedFlag.where((m) => !_sessionDismissed.contains(m.id)).toList();
-          print('[FLOAT][DEBUG] !sessionDismissed: ${notSessionDismissed.length}');
-          // 오늘(자정)까지 도래한 모든 일정 포함 (과거+오늘, 미래 제외)
-          final dueUntilToday = notSessionDismissed.where((m) => !m.scheduledAt!.isAfter(endOfToday)).toList();
-          print('[FLOAT][DEBUG] dueUntilToday(<= today EOD): ${dueUntilToday.length}');
-          // 일정 있는 메모 중 오늘까지 + 오늘 날짜 키로 해제되지 않은 항목
-          final scheduledCandidates = dueUntilToday
+          print('[FLOAT][DEBUG] !sessionDismissed (scheduled): ${notSessionDismissed.length}');
+          // 일정 있는 메모: 미래 포함, 세션 해제/영구 해제 제외
+          final scheduledCandidates = notSessionDismissed
               .toList()
             ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
-          // 일정 없는 메모: 생성 시점부터 X 누르기 전까지 항상 표시(영구 해제 목록 제외)
+          // 일정 없는 메모: 삭제 전까지 항상 표시 (dismissed/세션 해제 무시)
           final unscheduledCandidates = memos
-              .where((m) => m.scheduledAt == null && !m.dismissed && !_sessionDismissed.contains(m.id))
+              .where((m) => m.scheduledAt == null)
               .toList();
           print('[FLOAT][DEBUG] unscheduled candidates: ${unscheduledCandidates.length}');
           // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
@@ -812,11 +784,15 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
               return _MemoBanner(
                 memo: m,
                 onClose: () async {
+                  // 무일정 메모는 삭제 전까지 항상 표시: X 동작 무시
+                  if (m.scheduledAt == null) {
+                    return;
+                  }
+                  // 일정 있는 메모: 세션 동안 숨김, 지난 일정이면 영구 숨김
                   setState(() {
                     _sessionDismissed.add(m.id);
                   });
-                  // 일정이 지난 메모에서 X를 누른 경우에만 영구 해제(전역 DB 저장)
-                  if (m.scheduledAt != null && DateTime.now().isAfter(m.scheduledAt!)) {
+                  if (DateTime.now().isAfter(m.scheduledAt!)) {
                     await DataManager.instance.updateMemo(
                       m.copyWith(dismissed: true, updatedAt: DateTime.now()),
                     );
