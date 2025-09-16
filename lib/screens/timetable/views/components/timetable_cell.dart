@@ -25,7 +25,8 @@ import '../../../../models/session_override.dart';
 class OverlayLabel {
   final String text;
   final OverrideType type; // add 또는 replace
-  const OverlayLabel({required this.text, required this.type});
+  final bool isCompleted; // 출석(등원+하원) 완료된 보강/추가수업 표시용
+  const OverlayLabel({required this.text, required this.type, this.isCompleted = false});
 }
 
 class TimetableCell extends StatelessWidget {
@@ -328,9 +329,12 @@ class TimetableCell extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: makeupOverlays.map((item) {
                       final bool isReplace = item.type == OverrideType.replace;
-                      final Color bg = isReplace
-                          ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
-                          : const Color(0xFF4CAF50).withOpacity(0.18); // 초록 형광펜 (추가수업)
+                      // 완료된 보강/추가수업은 회색으로 구분
+                      final Color bg = item.isCompleted
+                          ? Colors.grey.withOpacity(0.22)
+                          : (isReplace
+                              ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
+                              : const Color(0xFF4CAF50).withOpacity(0.18)); // 초록 형광펜 (추가수업)
                       return Container(
                         width: double.infinity,
                         margin: const EdgeInsets.only(bottom: 2.0),

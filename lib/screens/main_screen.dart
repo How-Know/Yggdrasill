@@ -334,6 +334,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           }
         }
       }
+
+      // 보강/추가수업(오버라이드) 매핑: replacement 시간과 출석 기록(classDateTime)이 같으면 ov.id를 setId로 간주하여 복원
+      bool sameMinute(DateTime a, DateTime b) =>
+          a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+      for (final ov in DataManager.instance.sessionOverrides) {
+        if (ov.studentId != record.studentId) continue;
+        if (ov.reason != OverrideReason.makeup) continue; // 보강만 대상
+        if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+        if (ov.status == OverrideStatus.canceled) continue; // 취소 제외 (planned/completed 모두 복원)
+        final rep = ov.replacementClassDateTime;
+        if (rep == null) continue;
+        if (!sameMinute(rep, record.classDateTime)) continue;
+        final String key = ov.id;
+        if (record.arrivalTime != null) {
+          _attendedSetIds.add(key);
+          _attendTimes[key] = record.arrivalTime!;
+        }
+        if (record.departureTime != null) {
+          _leavedSetIds.add(key);
+          _leaveTimes[key] = record.departureTime!;
+        }
+      }
     }
   }
 

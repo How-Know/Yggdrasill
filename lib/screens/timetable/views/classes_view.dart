@@ -558,15 +558,24 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               for (final ov in DataManager.instance.sessionOverrides) {
                                 if (ov.reason != OverrideReason.makeup) continue;
                                 if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
-                                if (ov.status == OverrideStatus.completed || ov.status == OverrideStatus.canceled) continue;
+                                // completed도 표시 대상으로 포함. canceled만 제외
+                                if (ov.status == OverrideStatus.canceled) continue;
                                 final rep = ov.replacementClassDateTime;
                                 if (rep == null) continue;
                                 if (rep.isBefore(_weekStart) || !rep.isBefore(_weekEnd)) continue;
                                 if (!(rep.weekday - 1 == dayIdx && rep.hour == timeBlocks[blockIdx].startTime.hour && rep.minute == timeBlocks[blockIdx].startTime.minute)) continue;
+                                // 출석 완료 여부 판단: 해당 replacement 시간의 출석 레코드에 arrival+departure가 모두 있으면 완료로 간주
+                                bool isCompleted = false;
+                                try {
+                                  final record = DataManager.instance.getAttendanceRecord(ov.studentId, rep);
+                                  if (record != null && record.arrivalTime != null && record.departureTime != null) {
+                                    isCompleted = true;
+                                  }
+                                } catch (_) {}
                                 final student = DataManager.instance.students.firstWhereOrNull((s) => s.student.id == ov.studentId);
                                 final name = student?.student.name ?? '학생';
                                 final label = ov.overrideType == OverrideType.add ? '$name 추가수업' : '$name 보강';
-                                makeupOverlays.add(OverlayLabel(text: label, type: ov.overrideType));
+                                makeupOverlays.add(OverlayLabel(text: label, type: ov.overrideType, isCompleted: isCompleted));
                               }
 
                               final isExpanded = _expandedCellKey == cellKey;
