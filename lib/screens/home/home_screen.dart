@@ -205,6 +205,30 @@ class _ParentLinkPanel extends StatefulWidget {
 }
 
 class _ParentLinkPanelState extends State<_ParentLinkPanel> {
+  bool _deleting = false;
+  String? _deletingId;
+
+  String _maskPhone(String raw) {
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length >= 7) {
+      final head = digits.substring(0, 3);
+      final tail = digits.substring(digits.length - 4);
+      return '$head-****-$tail';
+    }
+    return raw;
+  }
+
+  String _shortenId(String? id) {
+    if (id == null || id.isEmpty) return '';
+    return id.length <= 8 ? id : id.substring(0, 8) + '…';
+  }
+
+  String _formatDateTime(DateTime? dt) {
+    if (dt == null) return '';
+    final local = dt.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(local.month)}/${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
   @override
   void initState() {
     super.initState();
@@ -250,35 +274,92 @@ class _ParentLinkPanelState extends State<_ParentLinkPanel> {
               return SizedBox(
                 height: 360,
                 child: ListView.separated(
+                  key: const Key('list-parent-links'),
                   shrinkWrap: false,
                   physics: const AlwaysScrollableScrollPhysics(),
                   itemCount: list.length,
                   separatorBuilder: (_, __) => const Divider(color: Colors.white12),
                   itemBuilder: (context, index) {
                     final p = list[index];
-                    final title = ((p.matchedStudentName ?? '').isNotEmpty)
+                    final studentTitle = ((p.matchedStudentName ?? '').isNotEmpty)
                         ? '${p.matchedStudentName} 부모님'
-                        : (p.kakaoUserId ?? '(알 수 없음)');
-                    final phone = p.phone ?? '';
+                        : null;
+                    final idTitle = (p.kakaoUserId ?? '').isNotEmpty
+                        ? _shortenId(p.kakaoUserId)
+                        : '(알 수 없음)';
+                    final title = studentTitle ?? idTitle;
+                    final phoneMasked = _maskPhone(p.phone ?? '');
                     final status = p.status ?? '';
+                    final created = _formatDateTime(p.createdAt);
                     return ListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis),
                       subtitle: Padding(
                         padding: const EdgeInsets.only(top: 4.0),
-                        child: Text(
-                          '번호: ' + phone + (status.isNotEmpty ? ' · 상태: ' + status : ''),
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                '번호: ' + phoneMasked + (status.isNotEmpty ? ' · 상태: ' + status : '') + (created.isNotEmpty ? ' · 연결: ' + created : ''),
+                                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        key: Key('button-delete-mapping-${p.id}'),
+                        icon: (_deleting && _deletingId == p.id)
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.redAccent)))
+                            : const Icon(Icons.delete_outline, color: Colors.redAccent),
                         tooltip: '삭제',
-                        onPressed: () async {
-                          await ParentLinkService.instance.deleteLink(p);
-                        },
+                        onPressed: (_deleting && _deletingId == p.id)
+                            ? null
+                            : () async {
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) {
+                                    return AlertDialog(
+                                      key: const Key('dialog-confirm-delete'),
+                                      backgroundColor: const Color(0xFF1F1F1F),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      title: const Text('매핑 삭제', style: TextStyle(color: Colors.white)),
+                                      content: const Text(
+                                        '정말로 이 매핑을 삭제하시겠습니까?\n삭제하면 챗봇에서 출석 조회가 불가능해집니다.',
+                                        style: TextStyle(color: Colors.white70),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(ctx).pop(false),
+                                          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.of(ctx).pop(true),
+                                          child: const Text('삭제', style: TextStyle(color: Color(0xFFE53E3E))),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+                                if (confirmed != true) return;
+                                setState(() { _deleting = true; _deletingId = p.id; });
+                                try {
+                                  final ok = await ParentLinkService.instance.deleteLink(p);
+                                  if (ok) {
+                                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('삭제 완료')));
+                                    // 안전 동기화 (낙관적 업데이트 이후 서버 상태 재확인)
+                                    await ParentLinkService.instance.fetchRecentLinks();
+                                  } else {
+                                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('삭제 실패')));
+                                  }
+                                } catch (e) {
+                                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 중 오류: $e')));
+                                } finally {
+                                  if (mounted) setState(() { _deleting = false; _deletingId = null; });
+                                }
+                              },
                       ),
                     );
                   },

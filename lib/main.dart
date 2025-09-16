@@ -1975,9 +1975,85 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   final Map<String, List<String>> _rangeBadgesBySchoolGrade = {};
   // 리스트 행 호버 상태(날짜 표시용)
   String? _hoveredSchoolGrade;
+  // 호버 툴팁 오버레이 상태
+  OverlayEntry? _hoverTooltip;
+  Offset _hoverTooltipPos = Offset.zero;
+  String _hoverTooltipText = '';
 
   @override
-  void dispose() { _titleCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _hideHoverTooltip();
+    _titleCtrl.dispose();
+    super.dispose();
+  }
+
+  void _hideHoverTooltip() {
+    try {
+      _hoverTooltip?.remove();
+    } catch (_) {}
+    _hoverTooltip = null;
+  }
+
+  void _ensureHoverTooltip(BuildContext context) {
+    if (_hoverTooltip != null) return;
+    final overlay = Overlay.of(context);
+    if (overlay == null) return;
+    _hoverTooltip = OverlayEntry(builder: (ctx) {
+      return Positioned(
+        left: _hoverTooltipPos.dx + 12,
+        top: _hoverTooltipPos.dy + 12,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 280),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF232326),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.white24),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.24), blurRadius: 10, offset: const Offset(0, 6)),
+              ],
+            ),
+            child: Text(_hoverTooltipText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+        ),
+      );
+    });
+    overlay.insert(_hoverTooltip!);
+  }
+
+  void _updateHoverTooltip(BuildContext context, String text, Offset globalPos) {
+    _hoverTooltipText = text;
+    _hoverTooltipPos = globalPos;
+    _ensureHoverTooltip(context);
+    try { _hoverTooltip?.markNeedsBuild(); } catch (_) {}
+  }
+
+  String _buildHoverPeriodLabelFor(String schoolGradeKey) {
+    // 1) 현재 세션에서 달력으로 선택한 날짜 우선
+    final Set<DateTime> sessionPicked = (_selectedDaysBySchoolGrade[schoolGradeKey] ?? <DateTime>{});
+    Set<DateTime> picked;
+    if (sessionPicked.isNotEmpty) {
+      picked = sessionPicked.map((d) => DateTime(d.year, d.month, d.day)).toSet();
+    } else {
+      // 2) 없으면 DB의 exam_days 사용
+      final idx = schoolGradeKey.lastIndexOf(' ');
+      final schoolName = idx > 0 ? schoolGradeKey.substring(0, idx) : schoolGradeKey;
+      final gradeText = idx > 0 ? schoolGradeKey.substring(idx + 1) : '';
+      final gradeNum = int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
+      final level = widget.level ?? EducationLevel.middle;
+      picked = DataManager.instance.getExamDaysForSchoolGrade(
+        school: schoolName,
+        level: level,
+        grade: gradeNum,
+      );
+    }
+    if (picked.isEmpty) return '시험기간 : (선택 없음)';
+    final dates = picked.toList()..sort();
+    final label = dates.map((d) => '${d.month}/${d.day}').join(', ');
+    return '시험기간 : $label';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2096,8 +2172,19 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   }
                   final bool _hasRangeForSg = _allRangesCompletedForSaved();
                   return MouseRegion(
-                    onEnter: (_) => setState(() => _hoveredSchoolGrade = item),
-                    onExit:  (_) => setState(() => _hoveredSchoolGrade = null),
+                    onEnter: (e) {
+                      setState(() => _hoveredSchoolGrade = item);
+                      final tip = _buildHoverPeriodLabelFor(item);
+                      _updateHoverTooltip(context, tip, e.position);
+                    },
+                    onHover: (e) {
+                      final tip = _buildHoverPeriodLabelFor(item);
+                      _updateHoverTooltip(context, tip, e.position);
+                    },
+                    onExit:  (_) {
+                      setState(() => _hoveredSchoolGrade = null);
+                      _hideHoverTooltip();
+                    },
                     child: Container(
                       padding: EdgeInsets.symmetric(horizontal: 12, vertical: _hasMultipleExamNames ? 16 : 10),
                       child: Row(

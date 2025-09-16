@@ -1796,6 +1796,21 @@ class DataManager {
     _examDaysBySg[key] = days.map((d)=>DateTime(d.year, d.month, d.day)).toSet();
   }
 
+  // exam_days(DB) 기반으로 저장된 날짜 집합 조회용 공개 getter
+  // 주의: 외부 변조를 막기 위해 날짜만 남긴 사본(Set)을 반환합니다.
+  Set<DateTime> getExamDaysForSchoolGrade({
+    required String school,
+    required EducationLevel level,
+    required int grade,
+  }) {
+    final key = _sgKey(school, level, grade);
+    final set = _examDaysBySg[key];
+    if (set == null || set.isEmpty) {
+      return <DateTime>{};
+    }
+    return set.map((d) => DateTime(d.year, d.month, d.day)).toSet();
+  }
+
   Future<void> preloadAllExamData() async {
     try {
       final schedules = await AcademyDbService.instance.loadAllExamSchedules();
