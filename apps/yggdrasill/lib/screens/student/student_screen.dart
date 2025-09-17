@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/custom_tab_bar.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
+import 'components/tendency_webview.dart';
 import '../../widgets/student_details_dialog.dart';
 import '../../models/payment_record.dart';
 import '../../models/student_time_block.dart';
@@ -668,8 +669,16 @@ class StudentScreenState extends State<StudentScreen> {
                   // 수강
                   return _buildGroupView();
                 } else {
-                  // 성향
-                  return _buildDateView();
+                  // 성향 → 웹 설문 임베드
+                  return Container(
+                    margin: const EdgeInsets.only(right: 24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F1F1F),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.transparent, width: 1),
+                    ),
+                    child: const TendencyWebView(),
+                  );
                 }
               },
             ),

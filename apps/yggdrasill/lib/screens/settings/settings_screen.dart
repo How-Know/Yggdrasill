@@ -397,6 +397,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const SizedBox(height: 12),
+                // 설문 웹 Base URL
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: Text(
+                    '설문 웹',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FutureBuilder<String?>(
+                  future: SharedPreferences.getInstance().then((p) => p.getString('survey_base_url')),
+                  builder: (context, snapshot) {
+                    final controller = TextEditingController(text: snapshot.data ?? 'http://localhost:5173');
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: '설문 웹 주소 (예: http://localhost:5173 또는 배포 URL)',
+                              labelStyle: TextStyle(color: Colors.white70),
+                              hintText: '설문 웹의 기본 주소를 입력하세요',
+                              hintStyle: TextStyle(color: Colors.white24),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Colors.white24),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final value = controller.text.trim();
+                            if (value.isEmpty) {
+                              await prefs.remove('survey_base_url');
+                            } else {
+                              await prefs.setString('survey_base_url', value);
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text('설문 웹 주소가 저장되었습니다.', style: TextStyle(color: Colors.white)),
+                              backgroundColor: Color(0xFF1976D2),
+                            ));
+                            setState(() {});
+                          },
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: const Text('저장'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
                 // API 토큰 입력
                 FutureBuilder<String?>(
                   future: SharedPreferences.getInstance().then((p) => p.getString('kakao_api_token')),
