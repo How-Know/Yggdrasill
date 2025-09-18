@@ -1,0 +1,6 @@
+project_id = ""
+
+# This file will be updated by `supabase link`.
+# Keeping it minimal to avoid local Docker dev setup for now.
+
+
