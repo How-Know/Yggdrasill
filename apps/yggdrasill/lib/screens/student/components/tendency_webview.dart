@@ -48,17 +48,36 @@ class _TendencyWebViewState extends State<TendencyWebView> {
     return Column(
       children: [
         Container(
-          height: 40,
+          height: 60,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           alignment: Alignment.centerLeft,
           child: Row(
             children: [
-              Text('설문(웹) · ${_baseUrl}', style: const TextStyle(color: Colors.white54)),
+              Text('설문(웹) · ${_baseUrl}', style: const TextStyle(color: Colors.white54, fontSize: 16)),
               const Spacer(),
+              IconButton(
+                tooltip: '관리자',
+                onPressed: () {
+                  final base = _baseUrl ?? '';
+                  final url = Uri.parse('$base/?page=admin&hideTopbar=1').toString();
+                  _controller.loadUrl(url);
+                },
+                icon: const Icon(Icons.admin_panel_settings, color: Colors.white70, size: 30),
+              ),
               IconButton(
                 tooltip: '새로고침',
                 onPressed: () => _controller.reload(),
-                icon: const Icon(Icons.refresh, color: Colors.white70, size: 18),
+                icon: const Icon(Icons.refresh, color: Colors.white70, size: 30),
+              ),
+              IconButton(
+                tooltip: '뒤로가기',
+                onPressed: () => _controller.goBack(),
+                icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 30),
+              ),
+              IconButton(
+                tooltip: '앞으로가기',
+                onPressed: () => _controller.goForward(),
+                icon: const Icon(Icons.arrow_forward, color: Colors.white70, size: 30),
               ),
             ],
           ),
@@ -69,6 +88,7 @@ class _TendencyWebViewState extends State<TendencyWebView> {
     );
   }
 }
+
 
 
 
