@@ -72,11 +72,14 @@ alter table public.survey_choices enable row level security;
 alter table public.survey_responses enable row level security;
 alter table public.survey_answers enable row level security;
 
-create policy if not exists "Public can read public surveys"
+-- Policies: drop then create (for Postgres compatibility)
+drop policy if exists "Public can read public surveys" on public.surveys;
+create policy "Public can read public surveys"
 on public.surveys for select
 using (is_public = true and is_active = true);
 
-create policy if not exists "Public can read questions of public surveys"
+drop policy if exists "Public can read questions of public surveys" on public.survey_questions;
+create policy "Public can read questions of public surveys"
 on public.survey_questions for select
 using (
   exists (
@@ -84,7 +87,8 @@ using (
   )
 );
 
-create policy if not exists "Public can read choices of public surveys"
+drop policy if exists "Public can read choices of public surveys" on public.survey_choices;
+create policy "Public can read choices of public surveys"
 on public.survey_choices for select
 using (
   exists (
@@ -94,11 +98,13 @@ using (
   )
 );
 
-create policy if not exists "Anyone can submit response"
+drop policy if exists "Anyone can submit response" on public.survey_responses;
+create policy "Anyone can submit response"
 on public.survey_responses for insert
 with check (true);
 
-create policy if not exists "Anyone can submit answers"
+drop policy if exists "Anyone can submit answers" on public.survey_answers;
+create policy "Anyone can submit answers"
 on public.survey_answers for insert
 with check (
   exists (select 1 from public.survey_responses r where r.id = response_id)

@@ -1,21 +1,25 @@
 -- Owner-only authoring policies and owner read-access to results
 
 -- Surveys: only authenticated users can create; only owner can update/delete
-create policy if not exists "Auth can create surveys"
+drop policy if exists "Auth can create surveys" on public.surveys;
+create policy "Auth can create surveys"
 on public.surveys for insert
 with check (auth.role() = 'authenticated' and created_by = auth.uid());
 
-create policy if not exists "Owner can update surveys"
+drop policy if exists "Owner can update surveys" on public.surveys;
+create policy "Owner can update surveys"
 on public.surveys for update
 using (created_by = auth.uid())
 with check (created_by = auth.uid());
 
-create policy if not exists "Owner can delete surveys"
+drop policy if exists "Owner can delete surveys" on public.surveys;
+create policy "Owner can delete surveys"
 on public.surveys for delete
 using (created_by = auth.uid());
 
 -- Questions: only owner of parent survey can insert/update/delete
-create policy if not exists "Owner can insert questions"
+drop policy if exists "Owner can insert questions" on public.survey_questions;
+create policy "Owner can insert questions"
 on public.survey_questions for insert
 with check (
   exists (
@@ -24,7 +28,8 @@ with check (
   )
 );
 
-create policy if not exists "Owner can update questions"
+drop policy if exists "Owner can update questions" on public.survey_questions;
+create policy "Owner can update questions"
 on public.survey_questions for update
 using (
   exists (
@@ -39,7 +44,8 @@ with check (
   )
 );
 
-create policy if not exists "Owner can delete questions"
+drop policy if exists "Owner can delete questions" on public.survey_questions;
+create policy "Owner can delete questions"
 on public.survey_questions for delete
 using (
   exists (
@@ -49,7 +55,8 @@ using (
 );
 
 -- Choices: only owner of parent survey can insert/update/delete
-create policy if not exists "Owner can insert choices"
+drop policy if exists "Owner can insert choices" on public.survey_choices;
+create policy "Owner can insert choices"
 on public.survey_choices for insert
 with check (
   exists (
@@ -59,7 +66,8 @@ with check (
   )
 );
 
-create policy if not exists "Owner can update choices"
+drop policy if exists "Owner can update choices" on public.survey_choices;
+create policy "Owner can update choices"
 on public.survey_choices for update
 using (
   exists (
@@ -76,7 +84,8 @@ with check (
   )
 );
 
-create policy if not exists "Owner can delete choices"
+drop policy if exists "Owner can delete choices" on public.survey_choices;
+create policy "Owner can delete choices"
 on public.survey_choices for delete
 using (
   exists (
@@ -87,7 +96,8 @@ using (
 );
 
 -- Results visibility: only owner can read responses/answers
-create policy if not exists "Owner can read responses"
+drop policy if exists "Owner can read responses" on public.survey_responses;
+create policy "Owner can read responses"
 on public.survey_responses for select
 using (
   exists (
@@ -96,7 +106,8 @@ using (
   )
 );
 
-create policy if not exists "Owner can read answers"
+drop policy if exists "Owner can read answers" on public.survey_answers;
+create policy "Owner can read answers"
 on public.survey_answers for select
 using (
   exists (
