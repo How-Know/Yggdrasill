@@ -1,17 +1,21 @@
-# mneme_flutter
+# Yggdrasill Monorepo (apps/)
 
-A new Flutter project.
+- apps/yggdrasill: Flutter 앱
+- apps/survey-web: 설문 웹(React + Vite + TS)
 
-## Getting Started
+개발 가이드(요약)
+- Flutter: `cd apps/yggdrasill` → `flutter pub get` → `flutter run`
+- Web(설문): `cd apps/survey-web` → Node 설치 후 `npm i` → `npm run dev`
 
-This project is a starting point for a Flutter application.
+노트
+- 두 프로젝트는 별도 의존성. 디자인 토큰/스키마 공유는 추후 `packages/` 추가 권장.
 
-A few resources to get you started if this is your first Flutter project:
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-# Yggdrasill
+
+
+
+
+
+
+
