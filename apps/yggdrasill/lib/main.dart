@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/timetable/timetable_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/data_manager.dart';
 import 'services/sync_service.dart';
 import 'models/memo.dart';
@@ -163,6 +164,12 @@ Future<void> _saveExamMetaPrefs() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Supabase init (desktop에서도 동작). URL/KEY는 dart-define으로 주입
+  final supabaseUrl = const String.fromEnvironment('SUPABASE_URL', defaultValue: '');
+  final supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
+  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
+    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+  }
   await windowManager.ensureInitialized();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();

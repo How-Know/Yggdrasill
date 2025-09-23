@@ -25,6 +25,22 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Supabase OAuth redirect (desktop 미사용, 추후 Android 배포 대비) -->
+        <activity android:name="com.google.android.gms.auth.api.signin.internal.SignInHubActivity" android:exported="false" />
+        <activity android:name="com.google.android.gms.auth.api.signin.internal.SignInActivity" android:exported="false" />
+        <activity android:name="com.google.android.gms.common.api.GoogleApiActivity" android:exported="false" />
+        <activity android:name="io.flutter.plugins.urllauncher.WebViewActivity" android:exported="false" />
+        <activity android:name="androidx.browser.customtabs.trusted.LauncherActivity" android:exported="false" />
+        <activity android:name="androidx.browser.customtabs.trusted.DelegationService" android:exported="false" />
+        <activity android:name="androidx.browser.customtabs.TrustedWebActivityService" android:exported="false" />
+        <activity android:name="com.supabase.flutter.oauth.OAuthActivity" android:exported="true">
+            <intent-filter android:label="oauth">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="yggdrasill" android:host="callback" />
+            </intent-filter>
+        </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
