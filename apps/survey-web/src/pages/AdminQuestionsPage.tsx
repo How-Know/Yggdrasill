@@ -27,6 +27,7 @@ type QuestionDraft = {
   image?: string;
   pairId?: string;
   active?: boolean;
+  version?: number;
 };
 
 function ToolbarButton({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
@@ -211,7 +212,7 @@ export default function AdminQuestionsPage() {
     text: '',
     type: 'scale',
     min: 1,
-    max: 5,
+    max: 10,
     reverse: 'N',
     area: undefined,
     group: undefined,
@@ -226,7 +227,19 @@ export default function AdminQuestionsPage() {
   const [typeEditId, setTypeEditId] = useState<string | null>(null);
   const [scaleEditId, setScaleEditId] = useState<string | null>(null);
   const [scaleDraftMin, setScaleDraftMin] = useState<number>(1);
-  const [scaleDraftMax, setScaleDraftMax] = useState<number>(5);
+  const [scaleDraftMax, setScaleDraftMax] = useState<number>(10);
+  const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({});
+  const [draftWeightText, setDraftWeightText] = useState<string>('');
+  const [lastScaleRange, setLastScaleRange] = useState<{min:number; max:number}>(() => {
+    try {
+      const s = localStorage.getItem('last_scale_range');
+      if (s) {
+        const o = JSON.parse(s);
+        if (typeof o?.min === 'number' && typeof o?.max === 'number') return { min: o.min, max: o.max };
+      }
+    } catch {}
+    return { min: 1, max: 10 };
+  });
   
   function generateNextPairId(existing: string[]): string {
     const prefix = 'PAIR-';
@@ -256,19 +269,25 @@ export default function AdminQuestionsPage() {
     if (patch.image !== undefined) out.image_url = patch.image ?? null;
     if (patch.pairId !== undefined) out.pair_id = patch.pairId ?? null;
     if (patch.active !== undefined) out.is_active = !!patch.active;
+    if (patch.version !== undefined) out.version = patch.version ?? null;
     return out;
   }
 
   async function saveField(questionId: string, patch: Partial<QuestionDraft>) {
+    const prev = items;
     setItems((arr)=>arr.map(it=>it.id===questionId?{...it, ...patch}:it));
     try {
       const isUuid = /[0-9a-fA-F-]{36}/.test(questionId);
       if (!isUuid) return;
       const dbPatch = toDbPatch(patch);
       if (Object.keys(dbPatch).length === 0) return;
-      await supabase.from(QUESTIONS_TABLE).update(dbPatch).eq('id', questionId);
-    } catch (e) {
+      const { error } = await supabase.from(QUESTIONS_TABLE).update(dbPatch).eq('id', questionId);
+      if (error) throw error;
+    } catch (e:any) {
       console.error(e);
+      alert('저장 실패: ' + (e?.message || '알 수 없는 오류'));
+      // 되돌리기
+      setItems(prev);
     }
   }
 
@@ -303,6 +322,7 @@ export default function AdminQuestionsPage() {
           memo: row.memo || undefined,
           image: row.image_url || undefined,
           pairId: row.pair_id || undefined,
+          version: typeof row.version === 'number' ? row.version : undefined,
           active: !!row.is_active,
         })));
       }
@@ -319,7 +339,8 @@ export default function AdminQuestionsPage() {
   const isScale = draft.type === 'scale';
 
   function resetDraft() {
-    setDraft({ id: Math.random().toString(36).slice(2), trait: 'D', text: '', type: 'scale', min: 1, max: 5, reverse: 'N', image: '', active: true });
+    setDraft({ id: Math.random().toString(36).slice(2), trait: 'D', text: '', type: 'scale', min: lastScaleRange.min, max: lastScaleRange.max, reverse: 'N', image: '', active: true });
+    setDraftWeightText('');
   }
 
   const traitOptions = useMemo<OptionItem[]>(() => ['D','I','A','C','N','L','S','P'].map(v=>({label:v, value:v})), []);
@@ -327,6 +348,32 @@ export default function AdminQuestionsPage() {
   const [activeAreas, setActiveAreas] = useState<string[]>([]);
   const [activeGroups, setActiveGroups] = useState<string[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
+  async function logChange(questionId: string, action: string, fromValue: any, toValue: any) {
+    try {
+      await supabase.from('question_change_logs').insert({ question_id: questionId, action, from_value: JSON.stringify(fromValue), to_value: JSON.stringify(toValue) });
+    } catch (e) {
+      console.warn('[change_log] failed', e);
+    }
+  }
+  const summary = useMemo(() => {
+    const traitKeys = ['D','I','A','C','N','L','S','P'] as const;
+    const perTrait: Record<typeof traitKeys[number], number> = { D:0,I:0,A:0,C:0,N:0,L:0,S:0,P:0 };
+    const perTraitMax: Record<typeof traitKeys[number], number> = { D:0,I:0,A:0,C:0,N:0,L:0,S:0,P:0 };
+    let total = 0;
+    let totalMax = 0;
+    for (const q of items) {
+      total += 1;
+      if ((perTrait as any)[q.trait] !== undefined) perTrait[q.trait as keyof typeof perTrait] += 1;
+      if (q.type === 'scale') {
+        const w = q.weight ?? 1;
+        const mx = q.max ?? 0;
+        const add = w * mx;
+        totalMax += add;
+        if ((perTraitMax as any)[q.trait] !== undefined) perTraitMax[q.trait as keyof typeof perTraitMax] += add;
+      }
+    }
+    return { total, perTrait, totalMax, perTraitMax };
+  }, [items]);
 
   return (
     <div style={{ color: tokens.text }}>
@@ -336,6 +383,33 @@ export default function AdminQuestionsPage() {
         <ToolbarButton onClick={() => setFilterOpen((s)=>!s)}>필터</ToolbarButton>
         <div style={{ flex: 1 }} />
         <ToolbarButton onClick={() => { resetDraft(); setAddQOpen(true); }}>추가</ToolbarButton>
+      </div>
+
+      {/* 요약 위젯 */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+        <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, padding:12, background: tokens.panel }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:6 }}>
+            <div style={{ color: tokens.textDim, fontSize:13 }}>총 문항수</div>
+            <div style={{ fontWeight:900, fontSize:20 }}>{summary.total}</div>
+          </div>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+            <div style={{ color: tokens.textDim, fontSize:13 }}>총점(최대)</div>
+            <div style={{ fontWeight:900, fontSize:18 }}>{summary.totalMax.toLocaleString()}</div>
+          </div>
+        </div>
+        <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, padding:12, background: tokens.panel }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap:8 }}>
+            {(['D','I','A','C','N','L','S','P'] as const).map(k => (
+              <div key={k} style={{ border:`1px solid ${tokens.border}`, borderRadius:10, padding:'8px 10px' }}>
+                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+                  <div style={{ color: tokens.textDim, fontSize:12 }}>{k}</div>
+                  <div style={{ fontWeight:800 }}>{summary.perTrait[k]}</div>
+                </div>
+                <div style={{ color: tokens.textDim, fontSize:12, marginTop:6 }}>총점(최대) {summary.perTraitMax[k].toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {filterOpen && (
@@ -364,8 +438,8 @@ export default function AdminQuestionsPage() {
       )}
 
       <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, overflowX: 'hidden', width: '100%', margin: '0 auto' }}>
-        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
-          <div>영역</div><div>그룹</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div>활성화</div>
+        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
+          <div>영역</div><div>그룹</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center' }}>활성화</div>
         </div>
         {items.length === 0 ? (
           <div style={{ padding: 16, color: tokens.textDim }}>아직 문항이 없습니다. 우측 상단의 ‘추가’를 눌러 문항을 만들어 보세요.</div>
@@ -374,7 +448,7 @@ export default function AdminQuestionsPage() {
             .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
             .filter((q)=> (activeGroups.length ? activeGroups.includes(q.group || '') : true))
             .map((q) => (
-            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px', gap: 16, boxSizing: 'border-box' }}>
+            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
               <div>
                 <SelectPopup compact value={q.area || ''} options={areas.map(a=>({label:a.name, value:a.id}))}
                   onChange={(v)=>saveField(q.id, { area: v })} />
@@ -399,7 +473,7 @@ export default function AdminQuestionsPage() {
                     onChange={(v)=>{
                       if (v === 'scale') {
                         setScaleDraftMin(q.min ?? 1);
-                        setScaleDraftMax(q.max ?? 5);
+                        setScaleDraftMax(q.max ?? 10);
                         setScaleEditId(q.id);
                         setTypeEditId(null);
                       } else {
@@ -410,18 +484,21 @@ export default function AdminQuestionsPage() {
                   />
                 ) : (
                   <button onClick={()=>setTypeEditId(q.id)} style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 10px', textAlign:'left', cursor:'pointer' }}>
-                    {q.type === 'scale' ? `${q.min ?? 1} ~ ${q.max ?? 5}` : 'text'}
+                    {q.type === 'scale' ? `${q.min ?? 1} ~ ${q.max ?? 10}` : 'text'}
                   </button>
                 )}
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
-                <input inputMode="numeric" pattern="[0-9]*" value={q.weight ?? ''}
+                <input inputMode="decimal" value={weightDrafts[q.id] ?? (q.weight?.toString() ?? '')}
                   onChange={(e)=>{
-                    const raw = e.target.value.replace(/[^0-9]/g,'');
-                    const num = raw === '' ? undefined : Math.max(1, Number(raw));
+                    const text = e.target.value;
+                    // 허용: 숫자, 하나의 점, 최대 두 자리 소수(실시간 입력 고려해 저장은 텍스트로)
+                    if (!/^\d*(?:\.\d{0,2})?$/.test(text)) return;
+                    setWeightDrafts(prev => ({ ...prev, [q.id]: text }));
+                    const num = text === '' ? undefined : Number(text);
                     saveField(q.id, { weight: num });
                   }}
-                  placeholder="예:1" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 6px' }} />
+                  placeholder="예: 1.00" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 6px' }} />
               </div>
               <div>
                 <SelectPopup compact value={q.reverse} options={[{label:'N', value:'N'},{label:'Y', value:'Y'}]}
@@ -434,7 +511,7 @@ export default function AdminQuestionsPage() {
                 </button>
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
-                <input value={q.tags ?? ''} onChange={(e)=>saveField(q.id, { tags: e.target.value })}
+                <input value={q.tags ?? ''} onChange={(e)=>saveField(q.id, { tags: e.target.value })} onBlur={(e)=>{ if (/[0-9a-fA-F-]{36}/.test(q.id)) saveField(q.id, { tags: e.target.value }); }}
                   placeholder="태그,쉼표" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 10px' }} />
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
@@ -445,20 +522,102 @@ export default function AdminQuestionsPage() {
                     e.preventDefault();
                     const file = e.dataTransfer.files?.[0];
                     if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      const url = String(reader.result);
-                      saveField(q.id, { image: url });
-                    };
-                    reader.readAsDataURL(file);
+                    (async ()=>{
+                      try {
+                        // 1) Supabase Storage 업로드
+                        const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+                        const path = `questions/${q.id}.${Date.now()}.${ext}`;
+                        const { data: up, error: upErr } = await supabase.storage.from('survey').upload(path, file, { upsert: true, cacheControl: '3600', contentType: (file as any).type || 'application/octet-stream' });
+                        if (upErr) throw upErr;
+                        // 2) 퍼블릭 URL 가져오기
+                        const { data: pub } = supabase.storage.from('survey').getPublicUrl(path);
+                        const publicUrl = (pub as any)?.publicUrl as string;
+                        // 3) DB 반영
+                        saveField(q.id, { image: publicUrl });
+                      } catch (e) {
+                        alert('업로드 실패: ' + ((e as any)?.message || '알 수 없는 오류'));
+                      }
+                    })();
                   }}
                    onDragOver={(e)=>e.preventDefault()}
-                   style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color:tokens.text, display:'flex', alignItems:'center', justifyContent:'center', cursor:'copy', fontSize:18, padding:'0 6px', boxSizing:'border-box' }}>
-                +
+                   onClick={()=>{ if (q.image) { saveField(q.id, { image: '' }); } }}
+                   title={q.image ? '클릭하여 이미지 삭제' : '이미지 드롭하여 등록'}
+                   style={{ position:'relative', width:'100%', height:36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color:tokens.text, display:'flex', alignItems:'center', justifyContent:'center', cursor: q.image ? 'pointer' : 'copy', fontSize:18, padding:'0 6px', boxSizing:'border-box' }}
+                   onMouseEnter={(e)=>{
+                     const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
+                     if (!q.image) return;
+                     const rect = t.getBoundingClientRect();
+                     const tip = document.createElement('div');
+                     tip.className = 'img-preview-tip';
+                     tip.style.position = 'fixed';
+                     const maxW = 240; const maxH = 180; const margin = 8;
+                     const left = Math.min(window.innerWidth - (maxW + margin), rect.left);
+                     const top = Math.max(margin, rect.top - (maxH + 12));
+                     tip.style.left = `${left}px`;
+                     tip.style.top = `${top}px`;
+                     tip.style.background = '#18181A';
+                     tip.style.border = `1px solid ${tokens.border}`;
+                     tip.style.borderRadius = '10px';
+                     tip.style.padding = '6px';
+                     tip.style.zIndex = '2000';
+                     tip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+                     const img = document.createElement('img');
+                     img.src = q.image!;
+                     img.style.maxWidth = `${maxW}px`;
+                     img.style.maxHeight = `${maxH}px`;
+                     img.style.borderRadius = '8px';
+                     img.style.display = 'block';
+                     tip.appendChild(img);
+                     document.body.appendChild(tip);
+                     t.__tipEl = tip;
+                   }}
+                   onMouseLeave={(e)=>{
+                     const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
+                     if (t.__tipEl && t.__tipEl.parentElement) t.__tipEl.parentElement.removeChild(t.__tipEl);
+                     t.__tipEl = undefined;
+                   }}
+              >
+                {q.image ? '✔' : '+'}
+              </div>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <button
+                  onClick={()=>{
+                    const current = (q.version ?? 1);
+                    const next = current + 1;
+                    saveField(q.id, { version: next });
+                    logChange(q.id, 'version_bump', current, next);
+                  }}
+                  title="버전 올리기"
+                  style={{ width:56, height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, cursor:'pointer', fontWeight:800 }}
+                >{q.version ?? 1}</button>
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
                 <button
-                  onClick={()=>saveField(q.id, { active: !q.active })}
+                  onClick={()=>{
+                    if (q.active) {
+                      // o -> x
+                      saveField(q.id, { active: false });
+                      logChange(q.id, 'deactivate', q.version ?? 1, q.version ?? 1);
+                    } else {
+                      // x 상태에서 한 번 더 누르면 삭제 확인
+                      const ok = window.confirm('삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.');
+                      if (ok) {
+                        (async ()=>{
+                          try {
+                            await supabase.from(QUESTIONS_TABLE).delete().eq('id', q.id);
+                            setItems(arr => arr.filter(it => it.id !== q.id));
+                            logChange(q.id, 'delete', q.version ?? 1, null);
+                          } catch (e) {
+                            alert('삭제 실패: ' + ((e as any)?.message || '알 수 없는 오류'));
+                          }
+                        })();
+                      } else {
+                        // 취소 시 다시 활성화로 복귀
+                        saveField(q.id, { active: true });
+                        logChange(q.id, 'activate', q.version ?? 1, q.version ?? 1);
+                      }
+                    }
+                  }}
                   aria-pressed={!!q.active}
                   style={{ width:56, height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:q.active ? tokens.text : '#ff6b6b', textAlign:'center', cursor:'pointer', fontSize:17 }}
                 >
@@ -490,7 +649,7 @@ export default function AdminQuestionsPage() {
               payload.type = draft.type;
               if (draft.type === 'scale') {
                 payload.min_score = draft.min ?? 1;
-                payload.max_score = draft.max ?? 5;
+                payload.max_score = draft.max ?? 10;
               } else {
                 payload.min_score = null;
                 payload.max_score = null;
@@ -524,8 +683,9 @@ export default function AdminQuestionsPage() {
               setAddQOpen(false);
             } catch (e) {
               console.error(e);
-              setItems((arr) => [...arr, draft]);
-              setAddQOpen(false);
+              const msg = (e as any)?.message || '알 수 없는 오류';
+              alert(`저장 실패: ${msg}`);
+              // 다이얼로그를 닫지 않아 사용자가 수정 후 재시도할 수 있게 함
             }
           }} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>추가</button>
         </>}>
@@ -570,7 +730,7 @@ export default function AdminQuestionsPage() {
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <label style={{ color: tokens.textDim, fontSize: 13 }}>최대 점수</label>
-                    <input inputMode="numeric" pattern="[0-9]*" value={draft.max ?? 5} onChange={(e)=>setDraft({ ...draft, max: Number(e.target.value.replace(/[^0-9-]/g,'')) })} style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box', appearance: 'textfield' as any }} />
+                    <input inputMode="numeric" pattern="[0-9]*" value={draft.max ?? 10} onChange={(e)=>setDraft({ ...draft, max: Number(e.target.value.replace(/[^0-9-]/g,'')) })} style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box', appearance: 'textfield' as any }} />
                   </div>
                 </>
               )}
@@ -580,11 +740,13 @@ export default function AdminQuestionsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 12, minWidth: 0 }}>
               <div style={{ minWidth: 0 }}>
                 <label style={{ color: tokens.textDim, fontSize: 13 }}>가중치</label>
-                <input inputMode="numeric" pattern="[0-9]*" value={draft.weight ?? '' as any} onChange={(e)=>{
-                  const raw = e.target.value.replace(/[^0-9]/g,'');
-                  const num = raw === '' ? undefined : Math.max(1, Number(raw));
+                <input inputMode="decimal" value={draftWeightText !== '' ? draftWeightText : (draft.weight?.toString() ?? '')} onChange={(e)=>{
+                  const text = e.target.value;
+                  if (!/^\d*(?:\.\d{0,2})?$/.test(text)) return;
+                  setDraftWeightText(text);
+                  const num = text === '' ? undefined : Number(text);
                   setDraft({ ...draft, weight: num });
-                }} placeholder="예: 1" style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box', appearance: 'textfield' as any }} />
+                }} placeholder="예: 1.00" style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box', appearance: 'textfield' as any }} />
               </div>
               <div style={{ minWidth: 0 }}>
                 <label style={{ color: tokens.textDim, fontSize: 13 }}>태그</label>
@@ -610,6 +772,10 @@ export default function AdminQuestionsPage() {
               setItems((arr)=>arr.map(it=>it.id===scaleEditId?{...it, type:'scale', min:scaleDraftMin, max:scaleDraftMax}:it));
               // persist to DB if row exists
               saveField(scaleEditId, { type: 'scale', min: scaleDraftMin, max: scaleDraftMax });
+              try {
+                setLastScaleRange({ min: scaleDraftMin, max: scaleDraftMax });
+                localStorage.setItem('last_scale_range', JSON.stringify({ min: scaleDraftMin, max: scaleDraftMax }));
+              } catch {}
             }
             setScaleEditId(null);
           }} style={{ padding:'8px 12px', borderRadius:10, border:'none', background:tokens.accent, color:'#fff', cursor:'pointer' }}>저장</button>
@@ -642,26 +808,36 @@ export default function AdminQuestionsPage() {
             <div style={{ maxHeight: 420, overflowY:'auto' }}>
               {items.map(it => (
                 <div key={it.id}
-                      onClick={()=>{
+                      onClick={async ()=>{
                         const targetId = pairPickForId;
                         if (!targetId) return;
                         const selectedId = it.id;
                         if (selectedId === targetId) { setPairPickForId(null); return; }
                         const existingIds = items.map(q=>q.pairId).filter(Boolean) as string[];
                         const newPair = generateNextPairId(existingIds);
-                        setItems(arr => {
-                          const target = arr.find(q=>q.id===targetId);
-                          const selected = arr.find(q=>q.id===selectedId);
-                          const nextPairId = target?.pairId || selected?.pairId || newPair;
-                          const nextArr = arr.map(q =>
-                            q.id===targetId ? { ...q, pairId: nextPairId } :
-                            q.id===selectedId ? { ...q, pairId: nextPairId } : q
-                          );
-                          const isUuid = (s:string)=>/[0-9a-fA-F-]{36}/.test(s);
-                          if (isUuid(targetId)) supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', targetId);
-                          if (isUuid(selectedId)) supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', selectedId);
-                          return nextArr;
-                        });
+                        const isUuid = (s:string)=>/[0-9a-fA-F-]{36}/.test(s);
+                        const prev = items;
+                        const target = prev.find(q=>q.id===targetId);
+                        const selected = prev.find(q=>q.id===selectedId);
+                        const nextPairId = target?.pairId || selected?.pairId || newPair;
+                        // optimistic update
+                        setItems(arr => arr.map(q =>
+                          q.id===targetId ? { ...q, pairId: nextPairId } :
+                          q.id===selectedId ? { ...q, pairId: nextPairId } : q
+                        ));
+                        try {
+                          const tasks: Promise<any>[] = [];
+                          if (isUuid(targetId)) tasks.push(supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', targetId));
+                          if (isUuid(selectedId)) tasks.push(supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', selectedId));
+                          const results = await Promise.all(tasks);
+                          for (const r of results) {
+                            if ((r as any)?.error) throw (r as any).error;
+                          }
+                        } catch (e:any) {
+                          alert('페어 ID 저장 실패: ' + (e?.message || '알 수 없는 오류'));
+                          // revert
+                          setItems(prev);
+                        }
                         setPairPickForId(null);
                       }}
                       style={{ display:'grid', gridTemplateColumns:'minmax(0,0.8fr) minmax(0,5fr)', gap:16, padding:'10px 12px', borderBottom:`1px solid ${tokens.border}`, cursor:'pointer' }}>

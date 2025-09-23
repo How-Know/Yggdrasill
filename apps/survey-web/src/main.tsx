@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import SurveyPage from './pages/SurveyPage';
+import { supabase } from './lib/supabaseClient';
 import AdminPage from './pages/AdminPage';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';
@@ -98,6 +99,16 @@ function useQuery() {
   return useMemo(() => new URLSearchParams(window.location.search), []);
 }
 
+function getClientId(): string {
+  const key = 'survey_client_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = (window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 function Landing({ onPickNew }: { onPickNew: () => void }) {
   const card: React.CSSProperties = {
     flex: 1,
@@ -183,7 +194,7 @@ function NewStudentForm() {
     return null;
   }
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setOk(null);
     const err = validate();
@@ -198,9 +209,37 @@ function NewStudentForm() {
       studentPhone: studentPhone.trim() || undefined,
       parentPhone: parentPhone.trim() || undefined,
     };
-    // MVP: 서버 저장 전까지 콘솔 출력만
-    console.log('[SURVEY][NEW_STUDENT_SUBMIT]', payload);
-    setOk('제출 완료 (임시 저장 없음)');
+    try {
+      // participants 테이블에 저장
+      const surveySlug = new URLSearchParams(window.location.search).get('slug') || 'welcome';
+      const { data: s } = await supabase
+        .from('surveys')
+        .select('id')
+        .eq('slug', surveySlug)
+        .single();
+      const clientId = getClientId();
+      const { error } = await supabase
+        .from('survey_participants')
+        .insert({
+          survey_id: (s as any)?.id,
+          client_id: clientId,
+          name: payload.name,
+          email: payload.email,
+          level: payload.level,
+          grade: payload.grade,
+          school: payload.school,
+          student_phone: payload.studentPhone,
+          parent_phone: payload.parentPhone,
+        });
+      if (error) throw error;
+      // 저장 후 설문 1번으로 이동
+      const next = new URL(window.location.href);
+      next.searchParams.set('page', 'survey');
+      next.searchParams.set('slug', surveySlug);
+      window.location.href = next.toString();
+    } catch (e:any) {
+      setError(e.message || '저장 중 오류가 발생했습니다.');
+    }
   }
 
   const inputStyle: React.CSSProperties = {
