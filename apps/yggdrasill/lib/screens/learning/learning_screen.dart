@@ -6,7 +6,7 @@ import '../../widgets/student_grouped_list_panel.dart';
 import '../../services/data_manager.dart';
 import '../../models/student.dart';
 import '../../services/tag_store.dart';
-import 'tag_preset_screen.dart';
+import 'tag_preset_dialog.dart';
 import '../../services/homework_store.dart';
 
 class LearningScreen extends StatefulWidget {
@@ -62,7 +62,7 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
   bool _showAttendance = true;
   bool _showTags = true;
   bool _isLoadingMore = false;
-  int _daysLoaded = 7; // 초기 1주일 로드
+  int _daysLoaded = 31; // 초기 1개월 로드
   final ScrollController _scrollController = ScrollController();
 
   @override
@@ -175,7 +175,7 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
                   if (picked != null) {
                     setState(() {
                       _anchorDate = DateTime(picked.year, picked.month, picked.day);
-                      _daysLoaded = 7;
+                      _daysLoaded = 31; // 선택 변경 시에도 1개월 로드
                     });
                   }
                 },
@@ -186,10 +186,9 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
               const SizedBox(width: 4),
               IconButton(
                 tooltip: '태그 관리',
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const TagPresetScreen()),
-                  );
+                onPressed: () async {
+                  await showDialog(context: context, builder: (_) => const TagPresetDialog());
+                  if (mounted) setState(() {});
                 },
                 icon: const Icon(Icons.style, color: Colors.white70, size: 22),
                 padding: EdgeInsets.zero,
@@ -329,7 +328,7 @@ class _LearningRecordsViewState extends State<_LearningRecordsView> {
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 80) {
       setState(() {
         _isLoadingMore = true;
-        _daysLoaded += 7; // 1주일 추가 로드
+        _daysLoaded += 31; // 1개월 추가 로드
         _isLoadingMore = false;
       });
     }

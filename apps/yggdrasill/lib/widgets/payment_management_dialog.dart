@@ -485,12 +485,11 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
       paidDate: now, // 현재 시간을 납부일로 설정
     );
 
-    if (existingRecord?.id != null) {
-      // 기존 레코드 업데이트
-      await DataManager.instance.updatePaymentRecord(paymentRecord);
-    } else {
-      // 새 레코드 추가
-      await DataManager.instance.addPaymentRecord(paymentRecord);
-    }
+    // 서버-우선 모드에서는 RPC를 사용하여 결제 처리
+    await DataManager.instance.recordPayment(
+      widget.studentWithInfo.student.id,
+      widget.cycle,
+      now,
+    );
   }
 }

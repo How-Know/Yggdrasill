@@ -9,12 +9,23 @@ class TagPresetDialog extends StatefulWidget {
 }
 
 class _TagPresetDialogState extends State<TagPresetDialog> {
-  late Future<List<TagPreset>> _future;
+  late Future<void> _initFuture;
+  List<TagPreset> _presets = const [];
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _future = TagPresetService.instance.loadPresets();
+    _initFuture = _loadInitial();
+  }
+
+  Future<void> _loadInitial() async {
+    final list = await TagPresetService.instance.loadPresets();
+    if (!mounted) return;
+    setState(() {
+      _presets = list;
+      _loading = false;
+    });
   }
 
   Future<void> _addPreset() async {
@@ -119,14 +130,16 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
       ),
     );
     if (preset != null) {
-      final list = await TagPresetService.instance.loadPresets();
-      final updated = <TagPreset>[...list, preset]
+      final updated = <TagPreset>[..._presets, preset]
           .asMap()
           .entries
           .map((e) => TagPreset(id: e.value.id, name: e.value.name, color: e.value.color, icon: e.value.icon, orderIndex: e.key))
           .toList();
       await TagPresetService.instance.saveAll(updated);
-      setState(() => _future = TagPresetService.instance.loadPresets());
+      if (!mounted) return;
+      setState(() {
+        _presets = updated;
+      });
     }
   }
 
@@ -144,18 +157,13 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
       content: SizedBox(
         width: 560,
         height: 480,
-        child: FutureBuilder<List<TagPreset>>(
-          future: _future,
-          builder: (context, snap) {
-            if (!snap.hasData) {
-              return const Center(child: CircularProgressIndicator(color: Colors.white70));
-            }
-            final presets = snap.data!;
-            return ReorderableListView.builder(
-              itemCount: presets.length,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: Colors.white70))
+            : ReorderableListView.builder(
+              itemCount: _presets.length,
               buildDefaultDragHandles: false,
               onReorder: (o, n) async {
-                final list = [...presets];
+                final list = [..._presets];
                 final item = list.removeAt(o);
                 list.insert(n > o ? n - 1 : n, item);
                 final normalized = <TagPreset>[];
@@ -163,7 +171,9 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
                   normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
                 }
                 await TagPresetService.instance.saveAll(normalized);
-                setState(() => _future = TagPresetService.instance.loadPresets());
+                setState(() {
+                  _presets = normalized;
+                });
               },
               proxyDecorator: (child, index, animation) {
                 return Material(
@@ -174,7 +184,7 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
                 );
               },
               itemBuilder: (context, i) {
-                final p = presets[i];
+                final p = _presets[i];
                 return ListTile(
                   key: ValueKey(p.id),
                   leading: CircleAvatar(backgroundColor: p.color, child: Icon(p.icon, color: Colors.white)),
@@ -188,7 +198,9 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
                           final edited = await _editPreset(context, p);
                           if (edited != null) {
                             await TagPresetService.instance.upsert(edited);
-                            setState(() => _future = TagPresetService.instance.loadPresets());
+                            setState(() {
+                              _presets = _presets.map((e) => e.id == edited.id ? edited : e).toList();
+                            });
                           }
                         },
                         icon: const Icon(Icons.edit, color: Colors.white60),
@@ -197,7 +209,15 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
                       IconButton(
                         onPressed: () async {
                           await TagPresetService.instance.delete(p.id);
-                          setState(() => _future = TagPresetService.instance.loadPresets());
+                          final list = [..._presets]..removeWhere((e) => e.id == p.id);
+                          final normalized = <TagPreset>[];
+                          for (int i = 0; i < list.length; i++) {
+                            normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
+                          }
+                          await TagPresetService.instance.saveAll(normalized);
+                          setState(() {
+                            _presets = normalized;
+                          });
                         },
                         icon: const Icon(Icons.delete, color: Colors.white54),
                       ),
@@ -210,9 +230,7 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
                   ),
                 );
               },
-            );
-          },
-        ),
+            ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),

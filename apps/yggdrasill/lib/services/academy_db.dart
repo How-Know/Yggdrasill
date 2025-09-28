@@ -26,11 +26,17 @@ class AcademyDbService {
   }
 
   Future<Database> _initDb() async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
-    final path = join(documentsDirectory.path, 'academy.db');
+    // 요청: 문서(OneDrive) 경로 우선 사용 + 멱등/플랫폼 안전 처리
+    final path = await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-        version: 35,
+      version: 35,
+      onConfigure: (db) async {
+        // 잠금 최소화를 위한 설정은 유지
+        await db.execute('PRAGMA journal_mode=WAL');
+        await db.execute('PRAGMA synchronous=NORMAL');
+        await db.execute('PRAGMA busy_timeout=3000');
+      },
       onCreate: (Database db, int version) async {
         await db.execute('''
           CREATE TABLE academy_settings (
@@ -1041,6 +1047,40 @@ class AcademyDbService {
       },
     );
   }
+
+  Future<String> _resolveLocalDbPath() async {
+    // 우선순위 1) 빌드 타임 주입 경로(override)
+    const definedPath = String.fromEnvironment('LOCAL_DB_PATH', defaultValue: '');
+    if (definedPath.isNotEmpty) {
+      return definedPath;
+    }
+
+    // 우선순위 2) Windows OneDrive(문서/Documents) 탐색
+    try {
+      if (Platform.isWindows) {
+        final oneDrive = Platform.environment['OneDrive'] ?? Platform.environment['OneDriveConsumer'] ?? '';
+        final userProfile = Platform.environment['USERPROFILE'] ?? '';
+
+        final candidates = <String>[
+          if (oneDrive.isNotEmpty) join(oneDrive, '문서', 'academy.db'),
+          if (oneDrive.isNotEmpty) join(oneDrive, 'Documents', 'academy.db'),
+          if (userProfile.isNotEmpty) join(userProfile, 'OneDrive', '문서', 'academy.db'),
+          if (userProfile.isNotEmpty) join(userProfile, 'OneDrive', 'Documents', 'academy.db'),
+        ];
+
+        for (final p in candidates) {
+          final parent = Directory(dirname(p));
+          if (await parent.exists()) {
+            return p;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 우선순위 3) 일반 문서 디렉터리(앱 전용)
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    return join(documentsDirectory.path, 'academy.db');
+  }
   // ======== EXAM SCHEDULE/RANGE PERSISTENCE ========
   Future<void> ensureExamTables() async {
     final dbClient = await db;
@@ -1179,7 +1219,7 @@ class AcademyDbService {
     });
   }
 
-  Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade}) async {
+  Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade, OnDatabaseConfigureFn? onConfigure}) async {
     print('[DB][경로] 실제 사용 DB 파일 경로: $path');
     
     // 파일 존재 여부 확인
@@ -1192,7 +1232,7 @@ class AcademyDbService {
       print('[DB][파일] DB 파일 크기: ${stat.size} bytes, 수정일: ${stat.modified}');
     }
     
-    return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade);
+    return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade, onConfigure: onConfigure);
   }
 
   Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {
@@ -1669,7 +1709,9 @@ class AcademyDbService {
     try {
       final dbClient = await db;
       print('[DB] addStudent: ' + student.toDb().toString());
-      await dbClient.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+      await dbClient.transaction((txn) async {
+        await txn.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+      });
     } catch (e, st) {
       print('[DB][ERROR] addStudent: $e\n$st');
       rethrow;
@@ -1704,7 +1746,9 @@ class AcademyDbService {
 
   Future<void> insertStudentBasicInfo(Map<String, dynamic> info) async {
     final dbClient = await db;
-    await dbClient.insert('student_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.transaction((txn) async {
+      await txn.insert('student_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   Future<Map<String, dynamic>?> getStudentBasicInfo(String studentId) async {

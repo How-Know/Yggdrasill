@@ -5,6 +5,7 @@ import 'dart:io' show Platform, HttpServer, File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
 import '../services/data_manager.dart';
 import '../models/teacher.dart';
@@ -151,7 +152,6 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                                   builder: (ctx) => const _LoginDialog(),
                                 );
                               } else {
-                                // 로그인 되어 있으면 간단한 프로필/로그아웃 선택
                                 await showDialog(
                                   context: context,
                                   barrierDismissible: true,
@@ -159,10 +159,39 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                                 );
                               }
                             },
-                            child: CircleAvatar(
-                              radius: 16,
-                              backgroundColor: Colors.grey.shade700,
-                              child: const Icon(Icons.person, color: Colors.white70, size: 20),
+                            child: FutureBuilder<Map<String, dynamic>>(
+                              future: _ProfileStore.load(),
+                              builder: (ctx, snap) {
+                                final map = snap.data ?? const {'profiles':{}, 'activeEmail': null};
+                                final user = _safeClient()?.auth.currentUser;
+                                final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
+                                final info = (map['profiles'] as Map)[activeEmail] as Map? ?? {};
+                                final avatarPath = (info['avatar'] as String?) ?? '';
+                                final presetColor = (info['presetColor'] as String?) ?? '#2A2A2A';
+                                final presetInitial = (info['presetInitial'] as String?) ?? '';
+                                final displayName = (() {
+                                  final list = DataManager.instance.teachersNotifier.value;
+                                  try { return list.firstWhere((t) => t.email == activeEmail).name; } catch (_) { return (activeEmail ?? '').split('@').first; }
+                                })();
+                                final googleUrl = (activeEmail == user?.email)
+                                  ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
+                                  : null;
+                                ImageProvider? img;
+                                if (avatarPath.isNotEmpty) {
+                                  if (avatarPath.startsWith('http')) { img = NetworkImage(avatarPath); }
+                                  else if (File(avatarPath).existsSync()) { img = FileImage(File(avatarPath)); }
+                                } else if (googleUrl != null && googleUrl.isNotEmpty) {
+                                  img = NetworkImage(googleUrl);
+                                }
+                                final bg = _parseColor(presetColor);
+                                final label = (presetInitial.isNotEmpty) ? presetInitial : _initials(displayName);
+                                return CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor: img == null ? bg : null,
+                                  backgroundImage: img,
+                                  child: img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null,
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -209,7 +238,7 @@ class _LoginDialogState extends State<_LoginDialog> {
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 416),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -388,46 +417,199 @@ class _LoginDialogState extends State<_LoginDialog> {
   }
 }
 
-class _AccountDialog extends StatelessWidget {
+class _AccountDialog extends StatefulWidget {
   const _AccountDialog();
+  @override
+  State<_AccountDialog> createState() => _AccountDialogState();
+}
+
+class _AccountDialogState extends State<_AccountDialog> {
+  Map<String, dynamic> _profileMap = const {};
+  String? _activeEmail;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+    DataManager.instance.teachersNotifier.addListener(_reload);
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.teachersNotifier.removeListener(_reload);
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final map = await _ProfileStore.load();
+    if (!mounted) return;
+    setState(() {
+      _profileMap = map['profiles'] as Map<String, dynamic>? ?? {};
+      _activeEmail = map['activeEmail'] as String?;
+    });
+  }
+
+  Teacher? _activeTeacher() {
+    final email = _activeEmail ?? _safeClient()?.auth.currentUser?.email;
+    if (email == null) return null;
+    final list = DataManager.instance.teachersNotifier.value;
+    try {
+      return list.firstWhere((t) => t.email == email);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _openAvatarPicker() async {
+    final email = _activeEmail ?? _safeClient()?.auth.currentUser?.email;
+    if (email == null) return;
+    await showDialog(context: context, builder: (ctx) => _AvatarPickerDialog(email: email, initialMap: _profileMap));
+    await _reload();
+  }
+
+  Future<void> _openSwitchProfile() async {
+    await showDialog(context: context, builder: (ctx) => _SwitchProfileDialog(profileMap: _profileMap));
+    await _reload();
+  }
+
   @override
   Widget build(BuildContext context) {
     final client = _safeClient();
     final user = client?.auth.currentUser;
+    final teacher = _activeTeacher();
+    final email = _activeEmail ?? user?.email ?? '';
+    final info = (_profileMap[email] as Map?) ?? {};
+    final avatarPath = (info['avatar'] as String?) ?? '';
+    final presetColor = (info['presetColor'] as String?) ?? '';
+    final presetInitial = (info['presetInitial'] as String?) ?? '';
+    final presetIcon = (info['presetIcon'] as String?) ?? '';
+    final useIcon = (info['useIcon'] as bool?) ?? false;
+    final isOwner = user?.email == email;
+    final displayName = teacher?.name ?? (email.split('@').first);
+
+    Widget avatarWidget() {
+      final double size = 56;
+      if (avatarPath.isNotEmpty && (avatarPath.startsWith('http') || File(avatarPath).existsSync())) {
+        return GestureDetector(
+          onTap: _openAvatarPicker,
+          child: CircleAvatar(
+            radius: size/2,
+            backgroundImage: avatarPath.startsWith('http') ? NetworkImage(avatarPath) as ImageProvider : FileImage(File(avatarPath)),
+          ),
+        );
+      }
+      final googleUrl = (email == user?.email)
+          ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
+          : null;
+      if (googleUrl != null && googleUrl.isNotEmpty) {
+        return GestureDetector(
+          onTap: _openAvatarPicker,
+          child: CircleAvatar(radius: size/2, backgroundImage: NetworkImage(googleUrl)),
+        );
+      }
+      final color = presetColor.isNotEmpty ? _parseColor(presetColor) : const Color(0xFF2A2A2A);
+      final child = useIcon
+          ? Icon(_iconFromKey(presetIcon), color: Colors.white)
+          : Center(child: Text(presetInitial.isNotEmpty ? presetInitial : _initials(displayName), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)));
+      return GestureDetector(
+        onTap: _openAvatarPicker,
+        child: CircleAvatar(radius: size/2, backgroundColor: color, child: child),
+      );
+    }
+
     return Dialog(
       backgroundColor: const Color(0xFF18181A),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
-      child: DefaultTabController(
-        length: 2,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(children:[
-                  const Expanded(child: Text('계정', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800))),
-                  IconButton(onPressed: ()=>Navigator.of(context).pop(), icon: const Icon(Icons.close, color: Colors.white70))
-                ]),
-                const SizedBox(height:8),
-                const TabBar(indicatorColor: Color(0xFF1976D2), labelColor: Colors.white, unselectedLabelColor: Colors.white54, tabs:[Tab(text:'내 계정'), Tab(text:'프로필')]),
-                SizedBox(
-                  height: 420,
-                  child: TabBarView(children:[
-                    _AccountTab(userEmail: user?.email ?? ''),
-                    const _ProfilesTab(),
-                  ]),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children:[
+                const Expanded(child: Text('계정', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800))),
+                IconButton(onPressed: ()=>Navigator.of(context).pop(), icon: const Icon(Icons.close, color: Colors.white70))
+              ]),
+              const SizedBox(height: 18),
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children:[
+                avatarWidget(),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: InkWell(
+                    onTap: _openSwitchProfile,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children:[
+                      Row(children:[
+                        Flexible(child: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+                        const SizedBox(width: 8),
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999)), child: Text(isOwner? '원장':'선생님', style: const TextStyle(color: Colors.white70, fontSize: 12)))
+                      ]),
+                      const SizedBox(height: 4),
+                      Text(email, style: const TextStyle(color: Colors.white70))
+                    ]),
+                  ),
                 )
-              ],
-            ),
+              ]),
+              const SizedBox(height: 18),
+              // 추가 정보: 학원명, 연락처, PIN 설정
+              Builder(builder: (ctx){
+                final t = _activeTeacher();
+                return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
+                  if (t!=null) Padding(padding: const EdgeInsets.only(bottom:18), child: Text('학원명: ${DataManager.instance.academySettings.name}', style: const TextStyle(color: Colors.white, fontSize: 16))),
+                  if (t!=null && t.contact.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom:18), child: Text('연락처: ${t.contact}', style: const TextStyle(color: Colors.white, fontSize: 16))),
+                  SizedBox(
+                    height: 44,
+                    child: OutlinedButton(
+                      onPressed: () async { await showDialog(context: context, builder: (ctx)=> _PinSetupDialog(email: email, initialMap: _profileMap)); await _reload(); },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF2A2A2A)),
+                        backgroundColor: const Color(0xFF1F1F1F),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        minimumSize: const Size.fromHeight(44),
+                      ),
+                      child: const Text('PIN 설정', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ]);
+              }),
+              const SizedBox(height: 8),
+              // 하단 전체폭 로그아웃 버튼
+              Row(children:[
+                Expanded(child: ElevatedButton(
+                  onPressed: () async {
+                    try { await client?.auth.signOut(); if (mounted) Navigator.of(context).pop(); } catch (e) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('로그아웃 실패: $e'))); }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    minimumSize: const Size.fromHeight(44),
+                  ),
+                  child: const Text('로그아웃', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                ))
+              ])
+            ],
           ),
         ),
       ),
     );
   }
+}
+
+Color _parseColor(String hex) {
+  var v = hex.replaceAll('#','');
+  if (v.length == 6) v = 'FF$v';
+  return Color(int.parse(v, radix: 16));
+}
+
+String _initials(String name) {
+  final s = name.trim();
+  if (s.isEmpty) return '?';
+  final parts = s.split(RegExp(r'\s+'));
+  if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+  return (parts[0].characters.first + parts[1].characters.first).toUpperCase();
 }
 
 class _AccountTab extends StatelessWidget {
@@ -610,10 +792,13 @@ class _PinDialogState extends State<_PinDialog>{
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       title: Text(saved==null? 'PIN 설정 필요':'PIN 입력', style: const TextStyle(color: Colors.white)),
-      content: TextField(controller:c, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'6자리', hintStyle: TextStyle(color: Colors.white54))),
+      content: Column(mainAxisSize: MainAxisSize.min, children:[
+        TextField(controller:c, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'6자리', hintStyle: TextStyle(color: Colors.white54))),
+        if(err!=null) Padding(padding: const EdgeInsets.only(top:6), child: Text(err!, style: const TextStyle(color: Colors.redAccent)))
+      ]),
       actions:[
-        TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text('취소')),
-        TextButton(onPressed: () async{
+        TextButton(onPressed: ()=>Navigator.pop(context,false), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
+        FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
           final v = c.text.trim(); if(v.length!=6){ setState(()=>err='6자리'); return; }
           if(saved==null){
             final map = await _ProfileStore.load();
@@ -642,15 +827,15 @@ class _PinSetupDialogState extends State<_PinSetupDialog>{
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       title: const Text('PIN 설정/변경', style: TextStyle(color: Colors.white)),
-      content: Column(mainAxisSize: MainAxisSize.min, children:[
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children:[
         TextField(controller:a, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'새 PIN(6자리)', hintStyle: TextStyle(color: Colors.white54))),
         const SizedBox(height:8),
         TextField(controller:b, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'확인', hintStyle: TextStyle(color: Colors.white54))),
         if(err!=null) Padding(padding: const EdgeInsets.only(top:6), child: Text(err!, style: const TextStyle(color: Colors.redAccent)))
       ]),
       actions:[
-        TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('취소')),
-        TextButton(onPressed: () async{
+        TextButton(onPressed: ()=>Navigator.pop(context), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
+        FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
           if(a.text!=b.text || a.text.length!=6){ setState(()=>err='6자리 동일하게 입력'); return; }
           final map = await _ProfileStore.load();
           final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
@@ -669,7 +854,7 @@ class _EditProfileDialog extends StatefulWidget{
   @override State<_EditProfileDialog> createState()=>_EditProfileDialogState();
 }
 class _EditProfileDialogState extends State<_EditProfileDialog>{
-  late TextEditingController nameC; late TextEditingController contactC; late TextEditingController emailC; late TextEditingController descC; TeacherRole role=TeacherRole.all;
+  late TextEditingController nameC; late TextEditingController contactC; late TextEditingController emailC; late TextEditingController descC; TeacherRole role=TeacherRole.all; String? avatarPath;
   @override void initState(){
     super.initState();
     final t=widget.existing;
@@ -681,7 +866,15 @@ class _EditProfileDialogState extends State<_EditProfileDialog>{
       backgroundColor: const Color(0xFF1F1F1F),
       title: Text(widget.existing==null?'프로필 추가':'프로필 편집', style: const TextStyle(color: Colors.white)),
       content: SizedBox(width: 520, child: Column(mainAxisSize: MainAxisSize.min, children:[
-        Row(children:[
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children:[
+          GestureDetector(
+            onTap: () async {
+              // 간단한 샘플(프리셋) 또는 파일 업로드는 _AvatarPickerDialog로 위임
+              await showDialog(context: context, builder: (ctx)=> _AvatarPickerDialog(email: emailC.text.trim(), initialMap: const {}));
+            },
+            child: CircleAvatar(radius: 24, backgroundColor: const Color(0xFF2A2A2A), child: const Icon(Icons.person, color: Colors.white70)),
+          ),
+          const SizedBox(width: 12),
           Expanded(child: TextField(controller:nameC, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText:'이름', hintStyle: TextStyle(color: Colors.white54)))),
           const SizedBox(width:12),
           Expanded(child: DropdownButtonFormField<TeacherRole>(value: role, items: TeacherRole.values.map((r)=>DropdownMenuItem(value:r, child: Text(getTeacherRoleLabel(r)))).toList(), onChanged:(v){ if(v!=null) setState(()=>role=v);}, dropdownColor: const Color(0xFF23232A), style: const TextStyle(color: Colors.white)))
@@ -708,6 +901,129 @@ class _EditProfileDialogState extends State<_EditProfileDialog>{
           if(context.mounted) Navigator.pop(context);
         }, child: const Text('저장'))
       ],
+    );
+  }
+}
+
+class _AvatarPickerDialog extends StatefulWidget{
+  final String email; final Map initialMap; const _AvatarPickerDialog({required this.email, required this.initialMap});
+  @override State<_AvatarPickerDialog> createState()=>_AvatarPickerDialogState();
+}
+class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
+  String _color = '#1976D2';
+  String? _filePath;
+  String? _presetInitial; // 구글 스타일 레터 아바타
+  final List<String> _initials = const ['A','B','C','D','E','F','G','H']; // 8개 레터 아바타(구글 스타일)
+  final List<String> _iconKeys = const ['man','woman','boy','girl','person2','person3','person4','person5'];
+  @override Widget build(BuildContext context){
+    return AlertDialog(
+      backgroundColor: const Color(0xFF18181A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
+      title: const Text('프로필 이미지', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      content: SizedBox(
+        width: 416,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children:[
+          const Text('배경 색상', style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for(final c in ['#1976D2','#6A1B9A','#2A2A2A','#0F467D','#009688','#8E44AD','#E67E22','#D32F2F','#388E3C','#455A64'])
+              GestureDetector(onTap: ()=>setState(()=>_color=c), child: Container(width: 28, height: 28, decoration: BoxDecoration(color: _parseColor(c), border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(6)), child: _color==c? const Icon(Icons.check, size: 18, color: Colors.white): null)),
+          ]),
+          const SizedBox(height: 16),
+          const Text('샘플 이미지', style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          GridView.count(
+            crossAxisCount: 4,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            childAspectRatio: 1,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              for(int i=0;i<_iconKeys.length;i++)
+                GestureDetector(
+                  onTap: ()=> setState(()=> {_presetInitial = '', _filePath = null, }),
+                  child: Container(
+                    decoration: BoxDecoration(color: _parseColor(_color), borderRadius: BorderRadius.circular(12), border: Border.all(color: _iconKeys[i]==( (widget.initialMap['profiles'] as Map?)?[widget.email]?['presetIcon'] ?? '' ) ? const Color(0xFF1976D2) : const Color(0xFF2A2A2A), width: 2), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]),
+                    child: Center(child: Icon(_iconFromKey(_iconKeys[i]), color: Colors.white, size: 28)),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(onPressed: () async {
+            final pick = await FilePicker.platform.pickFiles(type: FileType.image, withData: false);
+            if(pick!=null && pick.files.isNotEmpty){ setState(()=> _filePath = pick.files.single.path); }
+          }, icon: const Icon(Icons.upload, color: Colors.white70, size: 18), label: const Text('이미지 업로드', style: TextStyle(color: Colors.white))),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: () async {
+            final user = _safeClient()?.auth.currentUser;
+            final googleUrl = (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?;
+            if (googleUrl != null && googleUrl.isNotEmpty) {
+              setState(()=> {_filePath = googleUrl, _presetInitial = null});
+            } else {
+              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('구글 프로필 이미지를 찾을 수 없습니다.')));
+            }
+          }, icon: const Icon(Icons.account_circle, color: Colors.white70, size: 18), label: const Text('구글 프로필 사용하기', style: TextStyle(color: Colors.white)))
+        ]),
+      ),
+      actions: [
+        TextButton(
+          onPressed: ()=>Navigator.pop(context),
+          style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
+          onPressed: () async{
+          final map = await _ProfileStore.load();
+          final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
+          final cur = Map<String,dynamic>.from((p[widget.email] as Map<String,dynamic>? ?? {}));
+            cur['presetColor'] = _color; cur['useIcon'] = true; cur['presetIcon'] = (_presetInitial==null || _presetInitial!.isNotEmpty) ? (cur['presetIcon'] ?? 'person2') : (cur['presetIcon'] ?? 'person2');
+            if(_filePath!=null){ cur['avatar'] = _filePath; cur['useIcon'] = false; }
+            if(_presetInitial!=null){ cur['presetInitial'] = _presetInitial; }
+          p[widget.email]=cur; await _ProfileStore.save({'profiles':p, 'activeEmail': map['activeEmail']});
+          if(context.mounted) Navigator.pop(context);
+        }, child: const Text('저장'))
+      ],
+    );
+  }
+}
+
+IconData _iconFromKey(String k){
+  switch(k){
+    case 'man': return Icons.man;
+    case 'woman': return Icons.woman;
+    case 'boy': return Icons.face_6;
+    case 'girl': return Icons.face_3;
+    case 'person2': return Icons.person_2;
+    case 'person3': return Icons.person_3;
+    case 'person4': return Icons.person_4;
+    case 'person5': return Icons.person;
+    default: return Icons.person;
+  }
+}
+
+class _SwitchProfileDialog extends StatelessWidget{
+  final Map profileMap; const _SwitchProfileDialog({required this.profileMap});
+  @override Widget build(BuildContext context){
+    final teachers = DataManager.instance.teachersNotifier.value;
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      title: const Text('프로필 전환', style: TextStyle(color: Colors.white)),
+      content: SizedBox(width: 520, height: 360, child: ListView.builder(itemCount: teachers.length, itemBuilder: (ctx,i){
+        final t=teachers[i]; final info = (profileMap[t.email] as Map?) ?? {}; final avatar = (info['avatar'] as String?) ?? '';
+        return ListTile(
+          leading: CircleAvatar(backgroundColor: const Color(0xFF2A2A2A), backgroundImage: avatar!=null && avatar.isNotEmpty && File(avatar).existsSync()? FileImage(File(avatar)) : null, child: avatar.isEmpty? const Icon(Icons.person, color: Colors.white70): null),
+          title: Text(t.name, style: const TextStyle(color: Colors.white)),
+          subtitle: Text(t.email, style: const TextStyle(color: Colors.white70)),
+          onTap: () async {
+            final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+            if(ok==true && context.mounted){ await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email}); Navigator.pop(context); }
+          },
+        );
+      })),
+      actions:[TextButton(onPressed: ()=>Navigator.pop(context), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('닫기'))],
     );
   }
 }

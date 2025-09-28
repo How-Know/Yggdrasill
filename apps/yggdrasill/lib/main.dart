@@ -1,3 +1,4 @@
+import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
@@ -8,6 +9,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+// import 'package:flutter/rendering.dart' as rendering; // removed (diagnostics only)
 import 'package:flutter/gestures.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/timetable/timetable_screen.dart';
@@ -24,6 +26,9 @@ import 'services/exam_mode.dart';
 import 'services/academy_db.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'services/tag_preset_service.dart';
+import 'services/tag_store.dart';
+import 'tools/backfill_runner.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -39,6 +44,9 @@ final Map<String, Map<String, Set<int>>> _examAssignmentByName = <String, Map<St
 // 선호출(프리로드) 결과를 위저드와 공유하기 위한 임시 저장소
 final Map<String, Map<DateTime, List<String>>> _preloadedSavedBySg = <String, Map<DateTime, List<String>>>{};
 final Map<String, Map<DateTime, String>> _preloadedRangesBySg = <String, Map<DateTime, String>>{};
+
+// 반복되는 시맨틱스 어설션 스팸을 1회로 제한하기 위한 플래그
+bool _printedFirstSemanticsDirty = false;
 
 String _sgSchool(String sg) {
   final idx = sg.lastIndexOf(' ');
@@ -93,7 +101,6 @@ Future<void> _preloadExamDialogData() async {
   // 학년 필터 불러와 대상 SG 라벨 산출 후 프리로드
   final prefs = await SharedPreferences.getInstance();
   final List<String> filter = prefs.getStringList('exam_dialog_grade_filter') ?? const <String>[];
-  if (filter.isEmpty) return;
   String _prefix(EducationLevel l) => l == EducationLevel.middle ? 'M' : (l == EducationLevel.high ? 'H' : '');
   // 유니크한 (school, level, grade) → 라벨
   final Set<String> seen = <String>{};
@@ -107,12 +114,20 @@ Future<void> _preloadExamDialogData() async {
     if (seen.contains(key)) continue;
     seen.add(key);
     final fkey = '${_prefix(level)}$grade';
-    if (filter.contains(fkey)) {
+    // 필터가 비어있으면 전체 프리로드, 아니면 필터된 대상만 프리로드
+    if (filter.isEmpty || filter.contains(fkey)) {
       items.add({'school': school, 'level': level, 'grade': grade});
     }
   }
-  final List<String> middle = items.where((m) => m['level'] == EducationLevel.middle).map((m) => '${m['school']} ${m['grade']}학년').toList();
-  final List<String> high = items.where((m) => m['level'] == EducationLevel.high).map((m) => '${m['school']} ${m['grade']}학년').toList();
+  final List<String> middleAll = items.where((m) => m['level'] == EducationLevel.middle).map((m) => '${m['school']} ${m['grade']}학년').toList();
+  final List<String> highAll = items.where((m) => m['level'] == EducationLevel.high).map((m) => '${m['school']} ${m['grade']}학년').toList();
+  // 이미 프리로드된 항목은 재요청 생략
+  bool _hasPreloaded(String label) {
+    return _preloadedSavedBySg.containsKey(label) || _preloadedRangesBySg.containsKey(label);
+  }
+  final List<String> middle = middleAll.where((l) => !_hasPreloaded(l)).toList();
+  final List<String> high = highAll.where((l) => !_hasPreloaded(l)).toList();
+  if (middle.isEmpty && high.isEmpty) return;
   await Future.wait([
     _preloadExamDataFor(middle, EducationLevel.middle),
     _preloadExamDataFor(high, EducationLevel.high),
@@ -164,12 +179,44 @@ Future<void> _saveExamMetaPrefs() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 에러 로그 스팸 억제: 시맨틱스 parentDataDirty 반복은 최초 1회만 저장
+  FlutterError.onError = (FlutterErrorDetails details) {
+    final String message = details.exceptionAsString();
+    if (!_printedFirstSemanticsDirty && message.contains("!semantics.parentDataDirty")) {
+      _printedFirstSemanticsDirty = true;
+      // ignore: avoid_print
+      print('[SEMANTICS] First occurrence captured. See details below.');
+      FlutterError.dumpErrorToConsole(details, forceReport: true);
+    } else if (!message.contains("!semantics.parentDataDirty")) {
+      FlutterError.dumpErrorToConsole(details, forceReport: true);
+    }
+  };
   // Supabase init (desktop에서도 동작). URL/KEY는 dart-define으로 주입
   final supabaseUrl = const String.fromEnvironment('SUPABASE_URL', defaultValue: '');
   final supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
+  // 데이터 경로 제어 플래그(dart-define로 런타임 제어)
+  try {
+    final dual = const String.fromEnvironment('DUAL_WRITE', defaultValue: 'true');
+    final prefer = const String.fromEnvironment('PREFER_SUPABASE', defaultValue: 'true');
+    // 태그 프리셋 서비스에만 우선 적용. 이후 점진 확장.
+    TagPresetService.configure(
+      dualWriteOn: dual.toLowerCase() == 'true',
+      preferSupabase: prefer.toLowerCase() == 'true',
+    );
+    // Tag events(TagStore)에도 동일 적용
+    TagStore.configure(
+      dualWriteOn: dual.toLowerCase() == 'true',
+      preferSupabase: prefer.toLowerCase() == 'true',
+    );
+    // 디버깅 로그
+    // ignore: avoid_print
+    print('[Boot] TagPresetService flags -> dualWrite=' + TagPresetService.dualWrite.toString() + ', preferSupabaseRead=' + TagPresetService.preferSupabaseRead.toString());
+    // ignore: avoid_print
+    print('[Boot] TagStore flags -> dualWrite=' + TagStore.dualWrite.toString() + ', preferSupabaseRead=' + TagStore.preferSupabaseRead.toString());
+  } catch (_) {}
   await windowManager.ensureInitialized();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
@@ -205,6 +252,28 @@ void main() async {
     }
     await windowManager.focus();
   });
+  // 백필 실행 플래그
+  const runBackfill = String.fromEnvironment('RUN_BACKFILL', defaultValue: 'false');
+  if (runBackfill.toLowerCase() == 'true') {
+    // 서버 쓰기만 허용, 읽기는 로컬 우선 권장
+    // ignore: unawaited_futures
+    (() async {
+      try {
+        final dual = const String.fromEnvironment('DUAL_WRITE', defaultValue: 'false');
+        final prefer = const String.fromEnvironment('PREFER_SUPABASE', defaultValue: 'false');
+        TagPresetService.configure(
+          dualWriteOn: dual.toLowerCase() == 'true',
+          preferSupabase: prefer.toLowerCase() == 'true',
+        );
+        TagStore.configure(
+          dualWriteOn: dual.toLowerCase() == 'true',
+          preferSupabase: prefer.toLowerCase() == 'true',
+        );
+      } catch (_) {}
+      // 도메인 데이터 백필(파괴적 삭제 없음)
+      await BackfillRunner.runAll();
+    })();
+  }
   // 과목/배정 메타 로드 (앱 시작 시 1회)
   await _loadExamMetaPrefs();
   runApp(MyApp(maximizeOnStart: fullscreen || maximizeFlag));
@@ -438,7 +507,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
             if (text == null || text.trim().isEmpty) return;
             final now = DateTime.now();
             final memo = Memo(
-              id: UniqueKey().toString(),
+              id: const Uuid().v4(),
               original: text.trim(),
               summary: '요약 중...',
               scheduledAt: await AiSummaryService.extractDateTime(text.trim()),
@@ -927,6 +996,9 @@ class _ExamFabCluster extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _ExamActionButton(icon: Icons.event_note, label: '일정', onPressed: () async {
+              // 다이얼로그 표시 전에 데이터 프리로드하여 초기 깜빡임 제거
+              try { await _preloadExamDialogData(); } catch (_) {}
+              // Route 애니메이션 비용 최소화를 위해 useRootNavigator + barrierDismissible true 유지
               await showDialog(
                 context: rootNavigatorKey.currentContext!,
                 builder: (ctx) => const _ExamScheduleDialog(),
@@ -1424,6 +1496,8 @@ class _ExamScheduleDialog extends StatefulWidget {
 }
 
 class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
+  // 다이얼로그 성능: reassemble 방지를 위해 Key 유지, RepaintBoundary 적용
+  final Key _contentKey = const ValueKey('exam-dialog-content');
   // 과정별 학년 필터: 'M1','M2','M3','H1','H2','H3'
   final Set<String> _gradeFilter = <String>{};
   final GlobalKey<_ExamScheduleWizardState> _middleKey = GlobalKey<_ExamScheduleWizardState>();
@@ -1572,7 +1646,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       title: Row(
         children: [
-          const Text('시험 일정 등록', style: TextStyle(color: Colors.white)),
+          const Text('시험 일정', style: TextStyle(color: Colors.white)),
           const Spacer(),
           TextButton.icon(
             onPressed: () => _openGradeFilterDialog(context),
@@ -1597,7 +1671,9 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
           ),
         ],
       ),
-      content: SizedBox(
+      content: RepaintBoundary(
+        key: _contentKey,
+        child: SizedBox(
         height: MediaQuery.of(context).size.height * 0.60,
         width: 1360,
         child: Stack(
@@ -1647,25 +1723,68 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
             ),
           ],
         ),
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () async {
-            Future<void> saveFromWizard(_ExamScheduleWizardState? st, EducationLevel level) async {
-              if (st == null) return;
+            // 1) 상태 스냅샷(복사) → 2) 즉시 닫기 → 3) 백그라운드 저장
+            Map<String, Map<DateTime, List<String>>> snapshotSaved(_ExamScheduleWizardState? st) {
+              if (st == null) return const {};
+              return {
+                for (final e in st._savedBySchoolGrade.entries)
+                  e.key: {
+                    for (final e2 in e.value.entries)
+                      DateTime(e2.key.year, e2.key.month, e2.key.day): List<String>.from(e2.value)
+                  }
+              };
+            }
+            Map<String, Map<DateTime, String>> snapshotRanges(_ExamScheduleWizardState? st) {
+              if (st == null) return const {};
+              return {
+                for (final e in st._rangesBySchoolGrade.entries)
+                  e.key: {
+                    for (final e2 in e.value.entries)
+                      DateTime(e2.key.year, e2.key.month, e2.key.day): e2.value
+                  }
+              };
+            }
+            Map<String, Set<DateTime>> snapshotDays(_ExamScheduleWizardState? st) {
+              if (st == null) return const {};
+              return {
+                for (final e in st._selectedDaysBySchoolGrade.entries)
+                  e.key: e.value.map((d) => DateTime(d.year, d.month, d.day)).toSet()
+              };
+            }
+
+            final midSaved = snapshotSaved(_middleKey.currentState);
+            final midRanges = snapshotRanges(_middleKey.currentState);
+            final midDays = snapshotDays(_middleKey.currentState);
+            final hiSaved = snapshotSaved(_highKey.currentState);
+            final hiRanges = snapshotRanges(_highKey.currentState);
+            final hiDays = snapshotDays(_highKey.currentState);
+
+            if (mounted) Navigator.of(context).pop();
+
+            Future<void> saveFromSnapshot({
+              required Map<String, Map<DateTime, List<String>>> saved,
+              required Map<String, Map<DateTime, String>> ranges,
+              required Map<String, Set<DateTime>> days,
+              required EducationLevel level,
+            }) async {
               DateTime? lastDate;
-              for (final sg in st._savedBySchoolGrade.keys) {
+              for (final sg in saved.keys) {
                 final idx = sg.lastIndexOf(' ');
                 final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
                 final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
                 final gradeNum = int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
-                final titles = st._savedBySchoolGrade[sg] ?? const <DateTime, List<String>>{};
-                final ranges = st._rangesBySchoolGrade[sg] ?? const <DateTime, String>{};
-                await DataManager.instance.saveExamFor(schoolName, level, gradeNum, titles, ranges);
-                final days = st._selectedDaysBySchoolGrade[sg] ?? <DateTime>{};
-                if (days.isNotEmpty) {
-                  await DataManager.instance.saveExamDays(schoolName, level, gradeNum, days);
-                  final maxDay = days.reduce((a,b)=> a.isAfter(b)? a:b);
+                final titles = saved[sg] ?? const <DateTime, List<String>>{};
+                final rng = ranges[sg] ?? const <DateTime, String>{};
+                await DataManager.instance.saveExamFor(schoolName, level, gradeNum, titles, rng);
+                final dset = days[sg] ?? <DateTime>{};
+                if (dset.isNotEmpty) {
+                  await DataManager.instance.saveExamDays(schoolName, level, gradeNum, dset);
+                  final maxDay = dset.reduce((a, b) => a.isAfter(b) ? a : b);
                   if (lastDate == null || maxDay.isAfter(lastDate)) lastDate = maxDay;
                 }
               }
@@ -1675,9 +1794,12 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                 await ExamModeService.instance.setOn(true);
               }
             }
-            await saveFromWizard(_middleKey.currentState, EducationLevel.middle);
-            await saveFromWizard(_highKey.currentState, EducationLevel.high);
-            if (mounted) Navigator.of(context).pop();
+
+            // 백그라운드 저장(에러는 콘솔에만 로그)
+            unawaited(Future(() async {
+              try { await saveFromSnapshot(saved: midSaved, ranges: midRanges, days: midDays, level: EducationLevel.middle); } catch (_) {}
+              try { await saveFromSnapshot(saved: hiSaved, ranges: hiRanges, days: hiDays, level: EducationLevel.high); } catch (_) {}
+            }));
           },
           child: const Text('닫기', style: TextStyle(color: Colors.white70)),
         )
@@ -2066,9 +2188,11 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   Widget build(BuildContext context) {
     return SizedBox(
       width: 620,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        child: _buildStep(),
+      child: RepaintBoundary(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: _buildStep(),
+        ),
       ),
     );
   }
@@ -2082,48 +2206,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
         children: [
           const Text('학교/학년 선택', style: TextStyle(color: Colors.white70)),
           const SizedBox(height: 8),
-          // DB에서 기존 저장분 로드(최초 1회)
-          FutureBuilder<void>(
-            future: () async {
-              if (_savedBySchoolGrade.isNotEmpty) return; // 이미 로드됨
-              // schoolGrade 각각에 대해 DB에서 로드
-              for (final sg in widget.schoolGrade) {
-                final idx = sg.lastIndexOf(' ');
-                final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
-                final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
-                final gradeNum = int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
-                final level = widget.level ?? EducationLevel.middle;
-                final res = await DataManager.instance.loadExamFor(schoolName, level, gradeNum);
-                // schedules 로드
-                final schedules = (res['schedules'] as List).cast<Map<String, dynamic>>();
-                for (final row in schedules) {
-                  final dateIso = (row['date'] as String?) ?? '';
-                  if (dateIso.isEmpty) continue;
-                  final date = DateTime.parse(dateIso);
-                  final key = DateTime(date.year, date.month, date.day);
-                  final namesJson = (row['names_json'] as String?) ?? '[]';
-                  List<dynamic> list;
-                  try { list = jsonDecode(namesJson); } catch (_) { list = []; }
-                  final names = list.map((e) => e.toString()).toList();
-                  final map = _savedBySchoolGrade.putIfAbsent(sg, () => <DateTime, List<String>>{});
-                  map[key] = names;
-                }
-                // ranges 로드
-                final ranges = (res['ranges'] as List).cast<Map<String, dynamic>>();
-                for (final row in ranges) {
-                  final dateIso = (row['date'] as String?) ?? '';
-                  if (dateIso.isEmpty) continue;
-                  final date = DateTime.parse(dateIso);
-                  final key = DateTime(date.year, date.month, date.day);
-                  final text = (row['range_text'] as String?) ?? '';
-                  final map = _rangesBySchoolGrade.putIfAbsent(sg, () => <DateTime, String>{});
-                  map[key] = text;
-                }
-              }
-              if (mounted) setState(() {});
-            }(),
-            builder: (context, snapshot) => const SizedBox.shrink(),
-          ),
+          // 기존 FutureBuilder 제거: 프리로드/메모리 캐시 주입을 우선 사용
+          // (필요 시 외부에서 _preloadExamDialogData 실행 후, 다이얼로그 build 시 주입됨)
           Expanded(
             child: Container(
               decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
@@ -2225,9 +2309,12 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   final gnum = int.tryParse(gtext.replaceAll('학년', '')) ?? 0;
                                   final level = widget.level ?? EducationLevel.middle;
                                   await DataManager.instance.deleteExamData(sch, level, gnum);
+                                  // 로컬 위저드 상태 및 프리로드 데이터 비우기
                                   setState(() {
                                     _savedBySchoolGrade.remove(item);
                                     _rangesBySchoolGrade.remove(item);
+                                    _preloadedSavedBySg.remove(item);
+                                    _preloadedRangesBySg.remove(item);
                                     _selectedDaysBySchoolGrade.remove(item);
                                   });
                                 }
@@ -2266,6 +2353,19 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                               spacing: 6,
                               runSpacing: 6,
                               children: [
+                                // 스켈레톤: 프리로드 결과가 아직 주입되지 않은 초기 1프레임 대비
+                                if ((_savedBySchoolGrade.isEmpty && _rangesBySchoolGrade.isEmpty)) ...[
+                                  for (int k = 0; k < 3; k++)
+                                    Container(
+                                      width: 80 + (k * 18),
+                                      height: 22,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2A2A2A),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: Colors.white12),
+                                      ),
+                                    ),
+                                ],
                                 // 저장된 일정 기반 배지: 시험명 → 날짜 → 범위
                                 // 한 시험의 (시험명, 날짜, 범위)를 세트로 묶어서 한 줄로 유지
                                 ...named.map((e) {

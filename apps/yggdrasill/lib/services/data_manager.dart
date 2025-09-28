@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:sqflite/sqflite.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
@@ -21,6 +22,10 @@ import 'sync_service.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import '../models/memo.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/material.dart';
+import 'tenant_service.dart';
+import 'tag_preset_service.dart';
 
 class StudentWithInfo {
   final Student student;
@@ -169,18 +174,100 @@ class DataManager {
   final ValueNotifier<List<Memo>> memosNotifier = ValueNotifier<List<Memo>>([]);
 
   Future<void> loadMemos() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final rows = await supa.from('memos')
+            .select('id,original,summary,scheduled_at,dismissed,created_at,updated_at,recurrence_type,weekdays,recurrence_end,recurrence_count')
+            .eq('academy_id', academyId)
+            .order('scheduled_at', ascending: true);
+        final List<dynamic> list = rows as List<dynamic>;
+        _memos = list.map<Memo>((m) {
+          final String? schedStr = m['scheduled_at'] as String?;
+          final String? createdStr = m['created_at'] as String?;
+          final String? updatedStr = m['updated_at'] as String?;
+          final String? weekdaysStr = m['weekdays'] as String?;
+          final String? recurEndStr = m['recurrence_end'] as String?;
+          return Memo(
+            id: m['id'] as String,
+            original: (m['original'] as String?) ?? '',
+            summary: (m['summary'] as String?) ?? '',
+            scheduledAt: (schedStr != null && schedStr.isNotEmpty) ? DateTime.parse(schedStr) : null,
+            dismissed: (m['dismissed'] as bool?) ?? false,
+            createdAt: (createdStr != null && createdStr.isNotEmpty) ? DateTime.parse(createdStr) : DateTime.now(),
+            updatedAt: (updatedStr != null && updatedStr.isNotEmpty) ? DateTime.parse(updatedStr) : DateTime.now(),
+            recurrenceType: m['recurrence_type'] as String?,
+            weekdays: (weekdaysStr == null || weekdaysStr.isEmpty)
+                ? null
+                : weekdaysStr.split(',').where((e) => e.isNotEmpty).map(int.parse).toList(),
+            recurrenceEnd: (recurEndStr != null && recurEndStr.isNotEmpty) ? DateTime.parse(recurEndStr) : null,
+            recurrenceCount: m['recurrence_count'] as int?,
+          );
+        }).toList();
+        memosNotifier.value = List.unmodifiable(_memos);
+        return;
+      } catch (e, st) {
+        print('[SUPA][memos load] $e\n$st');
+      }
+    }
     final rows = await AcademyDbService.instance.getMemos();
     _memos = rows.map((m) => Memo.fromMap(m)).toList();
     memosNotifier.value = List.unmodifiable(_memos);
   }
 
   Future<void> addMemo(Memo memo) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final row = {
+          'id': memo.id,
+          'academy_id': academyId,
+          'original': memo.original,
+          'summary': memo.summary,
+          'scheduled_at': memo.scheduledAt?.toIso8601String(),
+          'dismissed': memo.dismissed,
+          'recurrence_type': memo.recurrenceType,
+          'weekdays': memo.weekdays?.join(','),
+          'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0,10),
+          'recurrence_count': memo.recurrenceCount,
+        }..removeWhere((k,v)=>v==null);
+        await supa.from('memos').upsert(row, onConflict: 'id');
+        _memos.insert(0, memo);
+        memosNotifier.value = List.unmodifiable(_memos);
+        return;
+      } catch (e, st) { print('[SUPA][memos add] $e\n$st'); }
+    }
     _memos.insert(0, memo);
     memosNotifier.value = List.unmodifiable(_memos);
     await AcademyDbService.instance.addMemo(memo.toMap());
   }
 
   Future<void> updateMemo(Memo memo) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final row = {
+          'id': memo.id,
+          'academy_id': academyId,
+          'original': memo.original,
+          'summary': memo.summary,
+          'scheduled_at': memo.scheduledAt?.toIso8601String(),
+          'dismissed': memo.dismissed,
+          'recurrence_type': memo.recurrenceType,
+          'weekdays': memo.weekdays?.join(','),
+          'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0,10),
+          'recurrence_count': memo.recurrenceCount,
+        }..removeWhere((k,v)=>v==null);
+        await supa.from('memos').upsert(row, onConflict: 'id');
+        final idx = _memos.indexWhere((m) => m.id == memo.id);
+        if (idx != -1) _memos[idx] = memo;
+        memosNotifier.value = List.unmodifiable(_memos);
+        return;
+      } catch (e, st) { print('[SUPA][memos update] $e\n$st'); }
+    }
     final idx = _memos.indexWhere((m) => m.id == memo.id);
     if (idx != -1) {
       _memos[idx] = memo;
@@ -190,6 +277,14 @@ class DataManager {
   }
 
   Future<void> deleteMemo(String id) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('memos').delete().eq('id', id);
+        _memos.removeWhere((m) => m.id == id);
+        memosNotifier.value = List.unmodifiable(_memos);
+        return;
+      } catch (e, st) { print('[SUPA][memos delete] $e\n$st'); }
+    }
     _memos.removeWhere((m) => m.id == id);
     memosNotifier.value = List.unmodifiable(_memos);
     await AcademyDbService.instance.deleteMemo(id);
@@ -212,8 +307,60 @@ class DataManager {
 
   Future<void> loadGroups() async {
     try {
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final data = await Supabase.instance.client
+              .from('groups')
+              .select('id,name,description,capacity,duration,color')
+              .eq('academy_id', academyId)
+              .order('name');
+          _groups = (data as List).map((m) => GroupInfo(
+            id: (m['id'] as String),
+            name: (m['name'] as String? ?? ''),
+            description: (m['description'] as String? ?? ''),
+            capacity: (m['capacity'] as int?) ?? 0,
+            duration: (m['duration'] as int?) ?? 0,
+            color: Color((((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
+          )).toList();
+          // Fallback/backfill은 dualWrite가 켜진 경우에만 수행
+          if (_groups.isEmpty && TagPresetService.dualWrite) {
+            final local = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
+            if (local.isNotEmpty) {
+              _groups = local;
+              if (TagPresetService.dualWrite) {
+                try {
+                  final rows = _groups.map((g) => {
+                    'id': g.id,
+                    'academy_id': academyId,
+                    'name': g.name,
+                    'description': g.description,
+                    'capacity': g.capacity,
+                    'duration': g.duration,
+                    'color': g.color.value.toSigned(32),
+                  }).toList();
+                  if (rows.isNotEmpty) {
+                    await Supabase.instance.client.from('groups').insert(rows);
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+          _groupsById = {for (var g in _groups) g.id: g};
+          _notifyListeners();
+          return;
+        } catch (_) {
+          // fallback to local below
+        }
+      }
+      // 서버 전용 모드에서는 로컬 폴백을 하지 않는다
+      if (!TagPresetService.preferSupabaseRead) {
       _groups = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
       _groupsById = {for (var g in _groups) g.id: g};
+      } else {
+        _groups = [];
+        _groupsById = {};
+      }
     } catch (e) {
       print('Error loading groups: $e');
       _groups = [];
@@ -224,6 +371,83 @@ class DataManager {
 
   Future<void> loadStudents() async {
     print('[DEBUG][loadStudents] 진입');
+    // 서버우선: Supabase에서 먼저 시도 후 성공 시 즉시 반영
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final rows = await supa
+            .from('students')
+            .select('id,name,school,education_level,grade')
+            .eq('academy_id', academyId);
+        final supaStudents = (rows as List).map((r) => Student(
+          id: r['id'] as String,
+          name: (r['name'] as String?) ?? '',
+          school: (r['school'] as String?) ?? '',
+          grade: (r['grade'] as int?) ?? 0,
+          educationLevel: EducationLevel.values[(r['education_level'] as int?) ?? 0],
+        )).toList();
+        final sbiRows = await supa
+            .from('student_basic_info')
+            .select('student_id,phone_number,parent_phone_number,group_id,memo')
+            .eq('academy_id', academyId);
+        final Map<String, Map<String, dynamic>> byId = {
+          for (final m in (sbiRows as List)) (m['student_id'] as String): Map<String, dynamic>.from(m)
+        };
+        final List<StudentBasicInfo> basicInfos = [];
+        for (final s in supaStudents) {
+          final info = byId[s.id];
+          final paymentInfo = _studentPaymentInfos.firstWhere(
+            (p) => p.studentId == s.id,
+            orElse: () => StudentPaymentInfo(
+              id: '', studentId: s.id, registrationDate: DateTime.now(), paymentMethod: 'monthly', weeklyClassCount: 1,
+              tuitionFee: 0, latenessThreshold: 10, scheduleNotification: false, attendanceNotification: false,
+              departureNotification: false, latenessNotification: false, createdAt: DateTime.now(), updatedAt: DateTime.now(),
+            ),
+          );
+          final reg = paymentInfo.registrationDate;
+          if (info != null) {
+            basicInfos.add(StudentBasicInfo(
+              studentId: s.id,
+              phoneNumber: info['phone_number'] as String?,
+              parentPhoneNumber: info['parent_phone_number'] as String?,
+              groupId: info['group_id'] as String?,
+              registrationDate: reg,
+              memo: info['memo'] as String?,
+            ));
+          } else {
+            basicInfos.add(StudentBasicInfo(studentId: s.id, registrationDate: reg));
+          }
+        }
+        // 서버에 데이터가 전혀 없으면 로컬로 폴백하여 표시(초기 백필 전 단계 방지)
+        if (supaStudents.isEmpty) {
+          throw Exception('Empty on server; fallback to local');
+        }
+
+        final students = [
+          for (int i = 0; i < supaStudents.length; i++)
+            Student(
+              id: supaStudents[i].id,
+              name: supaStudents[i].name,
+              school: supaStudents[i].school,
+              grade: supaStudents[i].grade,
+              educationLevel: supaStudents[i].educationLevel,
+              phoneNumber: basicInfos[i].phoneNumber,
+              parentPhoneNumber: basicInfos[i].parentPhoneNumber,
+              groupId: basicInfos[i].groupId,
+              groupInfo: basicInfos[i].groupId != null ? _groupsById[basicInfos[i].groupId] : null,
+            )
+        ];
+        _studentsWithInfo = [
+          for (int i = 0; i < students.length; i++) StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
+        ];
+        studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+        print('[DEBUG][loadStudents] (Supabase) ${_studentsWithInfo.length}명');
+        return;
+      } catch (_) {
+        // fallback below
+      }
+    }
     // 1. students 테이블에서 기본 정보 불러오기
     final studentsRaw = await AcademyDbService.instance.getStudents();
     // 2. student_basic_info 테이블에서 부가 정보 불러오기
@@ -299,6 +523,26 @@ class DataManager {
 
   Future<void> saveGroups() async {
     try {
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+          await supa.from('groups').delete().eq('academy_id', academyId);
+          if (_groups.isNotEmpty) {
+            final rows = _groups.map((g) => {
+              'id': g.id,
+              'academy_id': academyId,
+              'name': g.name,
+              'description': g.description,
+              'capacity': g.capacity,
+              'duration': g.duration,
+              'color': g.color.value.toSigned(32),
+            }).toList();
+            await supa.from('groups').insert(rows);
+          }
+          return;
+        } catch (e, st) { print('[SUPA][groups save] $e\n$st'); }
+      }
       await AcademyDbService.instance.saveGroups(_groups);
     } catch (e) {
       print('Error saving groups: $e');
@@ -308,19 +552,51 @@ class DataManager {
 
   Future<void> loadAcademySettings() async {
     try {
-      final dbData = await AcademyDbService.instance.getAcademySettings();
+      Map<String, dynamic>? dbData;
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final data = await Supabase.instance.client
+              .from('academy_settings')
+              .select('name,slogan,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
+              .eq('academy_id', academyId)
+              .maybeSingle();
+          if (data != null) {
+            dbData = Map<String, dynamic>.from(data);
+          }
+        } catch (e, st) { print('[SUPA][student_payment_info select] $e\n$st'); }
+      }
+      dbData ??= await AcademyDbService.instance.getAcademySettings();
       if (dbData != null) {
-        print('[DataManager] loadAcademySettings: logo type=\x1B[33m${dbData['logo']?.runtimeType}\x1B[0m, length=\x1B[33m${(dbData['logo'] as Uint8List?)?.length}\x1B[0m, isNull=\x1B[33m${dbData['logo'] == null}\x1B[0m');
+        Uint8List? logoBytes;
+        // Prefer storage download if bucket/path provided
+        if (TagPresetService.preferSupabaseRead) {
+          final bucket = dbData['logo_bucket'] as String?;
+          final path = dbData['logo_path'] as String?;
+          if (bucket != null && bucket.isNotEmpty && path != null && path.isNotEmpty) {
+            try {
+              logoBytes = await Supabase.instance.client.storage.from(bucket).download(path);
+            } catch (e, st) {
+              print('[SUPA][academy logo download] $e\n$st');
+            }
+          }
+        }
+        // Fallback to legacy bytea column if present
+        if (logoBytes == null) {
+          final dynamic legacy = dbData['logo'];
+          if (legacy is Uint8List) {
+            logoBytes = legacy;
+          } else if (legacy is List<int>) {
+            logoBytes = Uint8List.fromList(List<int>.from(legacy));
+          }
+        }
+        print('[DataManager] loadAcademySettings: storage bucket=${dbData['logo_bucket']}, path=${dbData['logo_path']}, resolvedBytes=${logoBytes?.length ?? 0}');
         _academySettings = AcademySettings(
           name: dbData['name'] as String? ?? '',
           slogan: dbData['slogan'] as String? ?? '',
           defaultCapacity: dbData['default_capacity'] as int? ?? 30,
           lessonDuration: dbData['lesson_duration'] as int? ?? 50,
-          logo: dbData['logo'] is Uint8List
-              ? dbData['logo'] as Uint8List
-              : dbData['logo'] is List<int>
-                  ? Uint8List.fromList(List<int>.from(dbData['logo']))
-                  : null,
+          logo: logoBytes,
           sessionCycle: dbData['session_cycle'] as int? ?? 1, // [추가]
         );
         // [추가] payment_type을 enum으로 변환하여 _paymentType에 할당
@@ -347,6 +623,49 @@ class DataManager {
       print('[DataManager] saveAcademySettings: _paymentType = $_paymentType');
       _academySettings = settings;
       await AcademyDbService.instance.saveAcademySettings(settings, _paymentType == PaymentType.monthly ? 'monthly' : 'session');
+      if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+
+          String? logoBucket;
+          String? logoPath;
+
+          final bytes = settings.logo;
+          if (bytes != null && bytes.isNotEmpty) {
+            logoBucket = 'academy-logos';
+            final objectPath = '$academyId/${const Uuid().v4()}.png';
+            await supa.storage.from(logoBucket).uploadBinary(
+              objectPath,
+              bytes,
+              fileOptions: const FileOptions(
+                upsert: true,
+                contentType: 'image/png',
+                cacheControl: '3600',
+              ),
+            );
+            logoPath = objectPath;
+          }
+
+          final row = <String, dynamic>{
+            'academy_id': academyId,
+            'name': settings.name,
+            'slogan': settings.slogan,
+            'default_capacity': settings.defaultCapacity,
+            'lesson_duration': settings.lessonDuration,
+            'payment_type': _paymentType == PaymentType.monthly ? 'monthly' : 'session',
+            'session_cycle': settings.sessionCycle,
+          };
+
+          if (logoBucket != null && logoPath != null) {
+            row['logo_bucket'] = logoBucket;
+            row['logo_path'] = logoPath;
+            row['logo_url'] = null;
+          }
+
+          await supa.from('academy_settings').upsert(row, onConflict: 'academy_id');
+        } catch (e, st) { print('[SUPA][academy_settings upsert (server)] $e\n$st'); }
+      }
     } catch (e) {
       print('Error saving settings: $e');
       throw Exception('Failed to save academy settings');
@@ -551,10 +870,83 @@ class DataManager {
     }
     print('[DEBUG][addStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
     print('[DEBUG][addStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('students').upsert({
+          'id': student.id,
+          'academy_id': academyId,
+          'name': student.name,
+          'school': student.school,
+          'education_level': student.educationLevel.index,
+          'grade': student.grade,
+        }, onConflict: 'id');
+        await supa.from('student_basic_info').upsert({
+          'student_id': student.id,
+          'academy_id': academyId,
+          'phone_number': basicInfo.phoneNumber,
+          'parent_phone_number': basicInfo.parentPhoneNumber,
+          'group_id': basicInfo.groupId,
+          'memo': basicInfo.memo,
+        }, onConflict: 'student_id');
+        // registration_date 저장 및 첫 due 생성
+        final now = DateTime.now();
+        final paymentInfo = StudentPaymentInfo(
+          id: const Uuid().v4(),
+          studentId: student.id,
+          registrationDate: basicInfo.registrationDate ?? now,
+          paymentMethod: 'monthly',
+          weeklyClassCount: 1,
+          tuitionFee: 0,
+          createdAt: now,
+          updatedAt: now,
+        );
+        await Supabase.instance.client.from('student_payment_info').upsert({
+          'id': paymentInfo.id,
+          'academy_id': academyId,
+          'student_id': paymentInfo.studentId,
+          'registration_date': paymentInfo.registrationDate.toIso8601String(),
+          'payment_method': paymentInfo.paymentMethod,
+          'weekly_class_count': paymentInfo.weeklyClassCount,
+          'tuition_fee': paymentInfo.tuitionFee,
+        }, onConflict: 'student_id');
+        await Supabase.instance.client.rpc('init_first_due', params: {
+          'p_student_id': paymentInfo.studentId,
+          'p_first_due': paymentInfo.registrationDate.toIso8601String().substring(0, 10),
+          'p_academy_id': academyId,
+        });
+      } catch (e, st) { print('[SUPA][addStudent server-only] $e\n$st'); }
+      await loadStudents();
+      return;
+    }
+
     await AcademyDbService.instance.addStudent(student);
     await AcademyDbService.instance.insertStudentBasicInfo(basicInfo.toDb());
     print('[DEBUG][addStudent] DB 저장 완료');
     await loadStudents();
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('students').upsert({
+          'id': student.id,
+          'academy_id': academyId,
+          'name': student.name,
+          'school': student.school,
+          'education_level': student.educationLevel.index,
+          'grade': student.grade,
+        }, onConflict: 'id');
+        await supa.from('student_basic_info').upsert({
+          'student_id': student.id,
+          'academy_id': academyId,
+          'phone_number': basicInfo.phoneNumber,
+          'parent_phone_number': basicInfo.parentPhoneNumber,
+          'group_id': basicInfo.groupId,
+          'memo': basicInfo.memo,
+        }, onConflict: 'student_id');
+      } catch (e, st) { print('[SUPA][teachers insert] $e\n$st'); }
+    }
   }
 
   Future<void> updateStudent(Student student, StudentBasicInfo basicInfo) async {
@@ -572,14 +964,73 @@ class DataManager {
     }
     print('[DEBUG][updateStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
     print('[DEBUG][updateStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('students').upsert({
+          'id': student.id,
+          'academy_id': academyId,
+          'name': student.name,
+          'school': student.school,
+          'education_level': student.educationLevel.index,
+          'grade': student.grade,
+        }, onConflict: 'id');
+        await supa.from('student_basic_info').upsert({
+          'student_id': student.id,
+          'academy_id': academyId,
+          'phone_number': basicInfo.phoneNumber,
+          'parent_phone_number': basicInfo.parentPhoneNumber,
+          'group_id': basicInfo.groupId,
+          'memo': basicInfo.memo,
+        }, onConflict: 'student_id');
+      } catch (e, st) { print('[SUPA][updateStudent server-only] $e\n$st'); }
+      await loadStudents();
+      return;
+    }
+
     await AcademyDbService.instance.updateStudent(student);
     await AcademyDbService.instance.updateStudentBasicInfo(student.id, basicInfo.toDb());
     print('[DEBUG][updateStudent] DB 저장 완료');
     await loadStudents();
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('students').upsert({
+          'id': student.id,
+          'academy_id': academyId,
+          'name': student.name,
+          'school': student.school,
+          'education_level': student.educationLevel.index,
+          'grade': student.grade,
+        }, onConflict: 'id');
+        await supa.from('student_basic_info').upsert({
+          'student_id': student.id,
+          'academy_id': academyId,
+          'phone_number': basicInfo.phoneNumber,
+          'parent_phone_number': basicInfo.parentPhoneNumber,
+          'group_id': basicInfo.groupId,
+          'memo': basicInfo.memo,
+        }, onConflict: 'student_id');
+      } catch (e, st) { print('[SUPA][classes upsert(add)] $e\n$st'); }
+    }
   }
 
   Future<void> deleteStudent(String id) async {
     print('[DEBUG][deleteStudent] 진입: id=$id');
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final supa = Supabase.instance.client;
+        await supa.from('student_basic_info').delete().eq('student_id', id);
+        await supa.from('student_payment_info').delete().eq('student_id', id);
+        await supa.from('students').delete().eq('id', id);
+      } catch (e, st) { print('[SUPA][deleteStudent server-only] $e\n$st'); }
+      await loadStudents();
+      await loadStudentTimeBlocks();
+      return;
+    }
+
     // 학생의 모든 수업시간 블록도 함께 삭제
     await AcademyDbService.instance.deleteStudentTimeBlocksByStudentId(id);
     print('[DEBUG][deleteStudent] StudentTimeBlock 삭제 완료: id=$id');
@@ -595,6 +1046,14 @@ class DataManager {
     print('[DEBUG][deleteStudent] loadStudents() 호출 완료');
     await loadStudentTimeBlocks();
     print('[DEBUG][deleteStudent] loadStudentTimeBlocks() 호출 완료');
+    if (TagPresetService.dualWrite) {
+      try {
+        final supa = Supabase.instance.client;
+        await supa.from('student_basic_info').delete().eq('student_id', id);
+        await supa.from('student_payment_info').delete().eq('student_id', id);
+        await supa.from('students').delete().eq('id', id);
+      } catch (e, st) { print('[SUPA][classes upsert(update)] $e\n$st'); }
+    }
   }
 
   // StudentBasicInfo만 업데이트하는 메소드
@@ -603,13 +1062,42 @@ class DataManager {
     print('[DEBUG][updateStudentBasicInfo] basicInfo: ${basicInfo.toString()}');
     
     try {
-      // DB에 basicInfo 저장
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          await Supabase.instance.client.from('student_basic_info').upsert({
+            'student_id': studentId,
+            'academy_id': academyId,
+            'phone_number': basicInfo.phoneNumber,
+            'parent_phone_number': basicInfo.parentPhoneNumber,
+            'group_id': basicInfo.groupId,
+            'memo': basicInfo.memo,
+          }, onConflict: 'student_id');
+        } catch (e, st) { print('[SUPA][updateStudentBasicInfo server-only] $e\n$st'); }
+        await loadStudents();
+        return;
+      }
+
+      // 로컬 경로
       await AcademyDbService.instance.updateStudentBasicInfo(studentId, basicInfo.toDb());
       print('[DEBUG][updateStudentBasicInfo] DB 저장 완료');
       
       // 메모리 상태 최신화
       await loadStudents();
       print('[DEBUG][updateStudentBasicInfo] 메모리 상태 최신화 완료');
+      if (TagPresetService.dualWrite) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          await Supabase.instance.client.from('student_basic_info').upsert({
+            'student_id': studentId,
+            'academy_id': academyId,
+            'phone_number': basicInfo.phoneNumber,
+            'parent_phone_number': basicInfo.parentPhoneNumber,
+            'group_id': basicInfo.groupId,
+            'memo': basicInfo.memo,
+          }, onConflict: 'student_id');
+        } catch (e, st) { print('[SUPA][student_payment_info upsert(update)] $e\n$st'); }
+      }
     } catch (e) {
       print('[ERROR][updateStudentBasicInfo] 오류 발생: $e');
       rethrow;
@@ -629,6 +1117,30 @@ class DataManager {
     try {
       _operatingHours = hours;
       await AcademyDbService.instance.saveOperatingHours(hours);
+      if (TagPresetService.dualWrite) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+          await supa.from('operating_hours').delete().eq('academy_id', academyId);
+          if (hours.isNotEmpty) {
+            final rows = hours.map((h) => {
+              'academy_id': academyId,
+              'day_of_week': h.dayOfWeek,
+              'start_time': '${h.startHour.toString().padLeft(2,'0')}:${h.startMinute.toString().padLeft(2,'0')}',
+              'end_time': '${h.endHour.toString().padLeft(2,'0')}:${h.endMinute.toString().padLeft(2,'0')}',
+              'break_times': (h.breakTimes.isEmpty)
+                  ? null
+                  : jsonEncode(h.breakTimes.map((b)=>{
+                      'startHour': b.startHour,
+                      'startMinute': b.startMinute,
+                      'endHour': b.endHour,
+                      'endMinute': b.endMinute,
+                    }).toList()),
+            }).toList();
+            await supa.from('operating_hours').insert(rows);
+          }
+        } catch (e, st) { print('[SUPA][student_payment_info delete] $e\n$st'); }
+      }
     } catch (e) {
       print('Error saving operating hours: $e');
       throw Exception('Failed to save operating hours');
@@ -641,7 +1153,42 @@ class DataManager {
     }
 
     try {
-      final raw = await AcademyDbService.instance.getOperatingHours();
+      List<OperatingHours> raw;
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final data = await Supabase.instance.client
+              .from('operating_hours')
+              .select('day_of_week,start_time,end_time,break_times')
+              .eq('academy_id', academyId)
+              .order('day_of_week');
+          raw = (data as List).map((m){
+            String? parseTime(String? t){ return t; }
+            int hh(String? t){ if(t==null||t.length<2) return 0; return int.tryParse(t.split(':').first)??0; }
+            int mm(String? t){ if(t==null||!t.contains(':')) return 0; return int.tryParse(t.split(':').last)??0; }
+            List<BreakTime> breaks = [];
+            try{
+              final bt = m['break_times'];
+              if (bt != null) {
+                final arr = (bt is String) ? jsonDecode(bt) : bt;
+                breaks = (arr as List).map((e)=>BreakTime.fromJson(Map<String,dynamic>.from(e))).toList();
+              }
+            } catch(_){}
+            return OperatingHours(
+              dayOfWeek: (m['day_of_week'] as int?) ?? 0,
+              startHour: hh(m['start_time'] as String?),
+              startMinute: mm(m['start_time'] as String?),
+              endHour: hh(m['end_time'] as String?),
+              endMinute: mm(m['end_time'] as String?),
+              breakTimes: breaks,
+            );
+          }).toList();
+        } catch (_) {
+          raw = await AcademyDbService.instance.getOperatingHours();
+        }
+      } else {
+        raw = await AcademyDbService.instance.getOperatingHours();
+      }
       // 0=월, 1=화, ..., 6=일로 정렬/매핑
       List<OperatingHours?> weekHours = List.filled(7, null);
       for (final h in raw) {
@@ -671,11 +1218,41 @@ class DataManager {
   }
 
   Future<void> loadStudentTimeBlocks() async {
-    final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
-    for (final block in rawBlocks) {
-      // print('[DEBUG][loadStudentTimeBlocks] block: $block');
-      // print('[DEBUG][loadStudentTimeBlocks] setId: ${block.setId}, number: ${block.number}');
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final data = await Supabase.instance.client
+            .from('student_time_blocks')
+            .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,set_id,number,session_type_id,weekly_order')
+            .eq('academy_id', academyId)
+            .order('day_index')
+            .order('start_hour')
+            .order('start_minute');
+        _studentTimeBlocks = (data as List).map((m) {
+          final Map<String, dynamic> mm = Map<String, dynamic>.from(m);
+          return StudentTimeBlock(
+            id: (mm['id'] as String),
+            studentId: (mm['student_id'] as String),
+            dayIndex: (mm['day_index'] as int?) ?? 0,
+            startHour: (mm['start_hour'] as int?) ?? 0,
+            startMinute: (mm['start_minute'] as int?) ?? 0,
+            duration: Duration(minutes: (mm['duration'] as int?) ?? 0),
+            createdAt: DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ?? DateTime.now(),
+            setId: mm['set_id'] as String?,
+            number: mm['number'] as int?,
+            sessionTypeId: mm['session_type_id'] as String?,
+            weeklyOrder: mm['weekly_order'] as int?,
+          );
+        }).toList();
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        print('[DEBUG] student_time_blocks 로드 완료(Supabase): ${_studentTimeBlocks.length}개');
+        return;
+      } catch (e) {
+        print('[DEBUG] student_time_blocks Supabase 로드 실패, 로컬로 폴백: $e');
+      }
     }
+
+    final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
     _studentTimeBlocks = rawBlocks;
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
   }
@@ -695,20 +1272,59 @@ class DataManager {
     if (exists) {
       throw Exception('이미 등록된 시간입니다.');
     }
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final row = <String, dynamic>{
+          'id': block.id,
+          'academy_id': academyId,
+          'student_id': block.studentId,
+          'day_index': block.dayIndex,
+          'start_hour': block.startHour,
+          'start_minute': block.startMinute,
+          'duration': block.duration.inMinutes,
+          'block_created_at': block.createdAt.toIso8601String(),
+          'set_id': block.setId,
+          'number': block.number,
+          'session_type_id': block.sessionTypeId,
+          'weekly_order': block.weeklyOrder,
+        }..removeWhere((k, v) => v == null);
+        await Supabase.instance.client.from('student_time_blocks').upsert(row, onConflict: 'id');
+        _studentTimeBlocks.add(block);
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        if (block.setId != null) {
+          await _recalculateWeeklyOrderForStudent(block.studentId);
+        }
+        return;
+      } catch (e, st) {
+        print('[SUPA][stb add] $e\n$st');
+        rethrow;
+      }
+    }
     _studentTimeBlocks.add(block);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.addStudentTimeBlock(block);
-    // 새 set_id 생성 시 주간 순번 재계산
     if (block.setId != null) {
       await _recalculateWeeklyOrderForStudent(block.studentId);
     }
   }
 
   Future<void> removeStudentTimeBlock(String id) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('student_time_blocks').delete().eq('id', id);
+        _studentTimeBlocks.removeWhere((b) => b.id == id);
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        return;
+      } catch (e, st) {
+        print('[SUPA][stb delete] $e\n$st');
+        rethrow;
+      }
+    }
     _studentTimeBlocks.removeWhere((b) => b.id == id);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.deleteStudentTimeBlock(id);
-    await loadStudentTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
+    await loadStudentTimeBlocks();
   }
 
   Timer? _uiUpdateTimer;
@@ -728,9 +1344,33 @@ class DataManager {
       }
     }
     
-    // 백엔드 처리는 즉시 실행
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final rows = blocks.map((b) => <String, dynamic>{
+          'id': b.id,
+          'academy_id': academyId,
+          'student_id': b.studentId,
+          'day_index': b.dayIndex,
+          'start_hour': b.startHour,
+          'start_minute': b.startMinute,
+          'duration': b.duration.inMinutes,
+          'block_created_at': b.createdAt.toIso8601String(),
+          'set_id': b.setId,
+          'number': b.number,
+          'session_type_id': b.sessionTypeId,
+          'weekly_order': b.weeklyOrder,
+        }..removeWhere((k, v) => v == null)).toList();
+        await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
+        _studentTimeBlocks.addAll(blocks);
+      } catch (e, st) {
+        print('[SUPA][stb bulk add] $e\n$st');
+        rethrow;
+      }
+    } else {
     _studentTimeBlocks.addAll(blocks);
     await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
+    }
     
     if (immediate || blocks.length == 1) {
       // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
@@ -750,8 +1390,21 @@ class DataManager {
   }
 
   Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .delete()
+            .filter('id', 'in', '(${blockIds.map((e) => '"$e"').join(',')})');
+        _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
+      } catch (e, st) {
+        print('[SUPA][stb bulk delete] $e\n$st');
+        rethrow;
+      }
+    } else {
     _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
     await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(blockIds);
+    }
     
     if (immediate || blockIds.length == 1) {
       // 단일 삭제나 즉시 반영 요청 시 바로 업데이트
@@ -763,7 +1416,9 @@ class DataManager {
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
       });
     }
+    if (!TagPresetService.preferSupabaseRead) {
     await loadStudentTimeBlocks();
+    }
   }
 
   // 특정 학생의 set_id 목록에 해당하는 모든 수업 블록 삭제
@@ -775,12 +1430,42 @@ class DataManager {
   }
 
   Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final row = <String, dynamic>{
+          'id': newBlock.id,
+          'academy_id': academyId,
+          'student_id': newBlock.studentId,
+          'day_index': newBlock.dayIndex,
+          'start_hour': newBlock.startHour,
+          'start_minute': newBlock.startMinute,
+          'duration': newBlock.duration.inMinutes,
+          'block_created_at': newBlock.createdAt.toIso8601String(),
+          'set_id': newBlock.setId,
+          'number': newBlock.number,
+          'session_type_id': newBlock.sessionTypeId,
+          'weekly_order': newBlock.weeklyOrder,
+        }..removeWhere((k, v) => v == null);
+        await Supabase.instance.client.from('student_time_blocks').upsert(row, onConflict: 'id');
+        final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
+        if (index != -1) _studentTimeBlocks[index] = newBlock; else _studentTimeBlocks.add(newBlock);
+        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        if (newBlock.setId != null) {
+          await _recalculateWeeklyOrderForStudent(newBlock.studentId);
+        }
+        return;
+      } catch (e, st) {
+        print('[SUPA][stb update] $e\n$st');
+        rethrow;
+      }
+    }
     final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
     if (index != -1) {
       _studentTimeBlocks[index] = newBlock;
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
       await AcademyDbService.instance.updateStudentTimeBlock(id, newBlock);
-      await loadStudentTimeBlocks(); // DB 업데이트 후 메모리/상태 최신화
+      await loadStudentTimeBlocks();
       if (newBlock.setId != null) {
         await _recalculateWeeklyOrderForStudent(newBlock.studentId);
       }
@@ -818,6 +1503,23 @@ class DataManager {
       setToOrder[setRepresentatives[i].key] = i + 1;
     }
     // 적용 및 DB 업데이트
+    if (TagPresetService.preferSupabaseRead) {
+      for (int i = 0; i < _studentTimeBlocks.length; i++) {
+        final b = _studentTimeBlocks[i];
+        if (b.studentId != studentId || b.setId == null) continue;
+        final order = setToOrder[b.setId!];
+        if (order == null) continue;
+        if (b.weeklyOrder == order) continue;
+        final updated = b.copyWith(weeklyOrder: order);
+        _studentTimeBlocks[i] = updated;
+        try {
+          await Supabase.instance.client
+              .from('student_time_blocks')
+              .update({'weekly_order': order})
+              .eq('id', updated.id);
+        } catch (e, st) { print('[SUPA][stb weekly_order update] $e\n$st'); }
+      }
+    } else {
     List<Future> futures = [];
     for (int i = 0; i < _studentTimeBlocks.length; i++) {
       final b = _studentTimeBlocks[i];
@@ -830,6 +1532,7 @@ class DataManager {
       futures.add(AcademyDbService.instance.updateStudentTimeBlock(updated.id, updated));
     }
     await Future.wait(futures);
+    }
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
   }
 
@@ -892,6 +1595,25 @@ class DataManager {
   }
 
   Future<void> loadTeachers() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final data = await Supabase.instance.client
+            .from('teachers')
+            .select('name,role,contact,email,description')
+            .eq('academy_id', academyId)
+            .order('name');
+        _teachers = (data as List).map((t) => Teacher(
+          name: t['name'] as String? ?? '',
+          role: TeacherRole.values[(t['role'] as int?) ?? 0],
+          contact: t['contact'] as String? ?? '',
+          email: t['email'] as String? ?? '',
+          description: t['description'] as String? ?? '',
+        )).toList();
+        _notifyListeners();
+        return;
+      } catch (e, st) { print('[SUPA][classes delete] $e\n$st'); }
+    }
     final teacherMaps = await AcademyDbService.instance.getTeachers();
     _teachers = teacherMaps.map((t) => Teacher(
       name: t['name'],
@@ -905,9 +1627,9 @@ class DataManager {
 
   Future<void> saveTeachers() async {
     try {
-      print('[DEBUG] saveTeachers 시작: \\${_teachers.length}명');
+      print('[DEBUG] saveTeachers 시작: \${_teachers.length}명');
       final dbClient = await AcademyDbService.instance.db;
-      print('[DEBUG] saveTeachers: \\${_teachers.length}명');
+      print('[DEBUG] saveTeachers: \${_teachers.length}명');
       await dbClient.delete('teachers');
       for (final t in _teachers) {
         print('[DB] insert teacher: $t');
@@ -919,9 +1641,27 @@ class DataManager {
           'description': t.description,
         });
       }
+      if (TagPresetService.dualWrite) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+          await supa.from('teachers').delete().eq('academy_id', academyId);
+          if (_teachers.isNotEmpty) {
+            final rows = _teachers.map((t) => {
+              'academy_id': academyId,
+              'name': t.name,
+              'role': t.role.index,
+              'contact': t.contact,
+              'email': t.email,
+              'description': t.description,
+            }).toList();
+            await supa.from('teachers').insert(rows);
+          }
+        } catch (_) {}
+      }
       print('[DEBUG] saveTeachers 완료');
     } catch (e, st) {
-      print('[DB][ERROR] saveTeachers: $e\\n$st');
+      print('[DB][ERROR] saveTeachers: $e\n$st');
       rethrow;
     }
   }
@@ -1039,27 +1779,138 @@ class DataManager {
   List<ClassInfo> get classes => List.unmodifiable(_classes);
 
   Future<void> loadClasses() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final data = await Supabase.instance.client
+            .from('classes')
+            .select('id,name,capacity,description,color')
+            .eq('academy_id', academyId)
+            .order('name');
+        _classes = (data as List).map((m) => ClassInfo(
+          id: (m['id'] as String),
+          name: (m['name'] as String? ?? ''),
+          capacity: (m['capacity'] as int?),
+          description: (m['description'] as String? ?? ''),
+          color: (m['color'] == null) ? null : Color(m['color'] as int),
+        )).toList();
+        // Fallback/backfill: dualWrite가 켜진 경우에만 로컬을 참고
+        if (_classes.isEmpty && TagPresetService.dualWrite) {
+          final local = await AcademyDbService.instance.getClasses();
+          if (local.isNotEmpty) {
+            _classes = local;
+            if (TagPresetService.dualWrite) {
+              try {
+                final rows = _classes.map((c) => {
+                  'id': c.id,
+                  'academy_id': academyId,
+                  'name': c.name,
+                  'capacity': c.capacity,
+                  'description': c.description,
+                  'color': c.color?.value.toSigned(32),
+                }).toList();
+                if (rows.isNotEmpty) {
+                  await Supabase.instance.client.from('classes').insert(rows);
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        classesNotifier.value = List.unmodifiable(_classes);
+        return;
+      } catch (e, st) { print('[SUPA][classes reorder insert] $e\n$st'); }
+    }
     _classes = await AcademyDbService.instance.getClasses();
     classesNotifier.value = List.unmodifiable(_classes);
   }
   Future<void> saveClasses() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final rows = _classes.map((c) => {
+          'id': c.id,
+          'academy_id': academyId,
+          'name': c.name,
+          'capacity': c.capacity,
+          'description': c.description,
+          'color': c.color?.value.toSigned(32),
+        }).toList();
+        if (rows.isNotEmpty) {
+          await Supabase.instance.client.from('classes').upsert(rows, onConflict: 'id');
+        }
+      } catch (e, st) { print('[SUPA][classes save] $e\n$st'); }
+      classesNotifier.value = List.unmodifiable(_classes);
+      return;
+    }
     for (final c in _classes) {
       await AcademyDbService.instance.addClass(c);
     }
     classesNotifier.value = List.unmodifiable(_classes);
   }
   Future<void> addClass(ClassInfo c) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final row = {
+          'id': c.id,
+          'academy_id': academyId,
+          'name': c.name,
+          'capacity': c.capacity,
+          'description': c.description,
+          'color': c.color?.value.toSigned(32),
+        };
+        await Supabase.instance.client.from('classes').upsert(row, onConflict: 'id');
+        // 서버 반영 후 메모리 반영 및 UI 업데이트
+        _classes.add(c);
+        classesNotifier.value = List.unmodifiable(_classes);
+        return;
+      } catch (e, st) {
+        print('[SUPA][classes upsert(add)] $e\n$st');
+        return; // server-only: 실패 시 로컬 저장하지 않음
+      }
+    }
     _classes.add(c);
     await AcademyDbService.instance.addClass(c);
     classesNotifier.value = List.unmodifiable(_classes);
   }
   Future<void> updateClass(ClassInfo c) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        await Supabase.instance.client.from('classes').upsert({
+          'id': c.id,
+          'academy_id': academyId,
+          'name': c.name,
+          'capacity': c.capacity,
+          'description': c.description,
+          'color': c.color?.value.toSigned(32),
+        }, onConflict: 'id');
     final idx = _classes.indexWhere((e) => e.id == c.id);
-    if (idx != -1) _classes[idx] = c;
+        if (idx != -1) _classes[idx] = c; else _classes.add(c);
+        classesNotifier.value = List.unmodifiable(_classes);
+        return;
+      } catch (e, st) {
+        print('[SUPA][classes upsert(update)] $e\n$st');
+        return; // server-only: 실패 시 로컬 저장하지 않음
+      }
+    }
+    final idx = _classes.indexWhere((e) => e.id == c.id);
+    if (idx != -1) _classes[idx] = c; else _classes.add(c);
     await AcademyDbService.instance.updateClass(c);
     classesNotifier.value = List.unmodifiable(_classes);
   }
   Future<void> deleteClass(String id) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('classes').delete().eq('id', id);
+        _classes.removeWhere((c) => c.id == id);
+        classesNotifier.value = List.unmodifiable(_classes);
+        return;
+      } catch (e, st) {
+        print('[SUPA][classes delete] $e\n$st');
+        return; // server-only: 실패 시 로컬 삭제하지 않음
+      }
+    }
     _classes.removeWhere((c) => c.id == id);
     await AcademyDbService.instance.deleteClass(id);
     classesNotifier.value = List.unmodifiable(_classes);
@@ -1070,13 +1921,31 @@ class DataManager {
     _classes = List<ClassInfo>.from(newOrder);
     print('[DEBUG][DataManager.saveClassesOrder] _classes 업데이트: ${_classes.map((c) => c.name).toList()}');
     
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('classes').delete().eq('academy_id', academyId);
+        if (_classes.isNotEmpty) {
+          final rows = _classes.map((c) => {
+            'id': c.id,
+            'academy_id': academyId,
+            'name': c.name,
+            'capacity': c.capacity,
+            'description': c.description,
+            'color': c.color?.value.toSigned(32),
+          }).toList();
+          await supa.from('classes').insert(rows);
+        }
+      } catch (e, st) { print('[SUPA][classes reorder] $e\n$st'); }
+    } else {
     await AcademyDbService.instance.deleteAllClasses();
     print('[DEBUG][DataManager.saveClassesOrder] deleteAllClasses 완료');
-    
     for (final c in _classes) {
       await AcademyDbService.instance.addClass(c);
     }
     print('[DEBUG][DataManager.saveClassesOrder] 모든 클래스 재저장 완료');
+    }
     
     classesNotifier.value = List.unmodifiable(_classes);
     print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
@@ -1084,25 +1953,90 @@ class DataManager {
 
   // Payment Records 관련 메소드들
   Future<void> loadPaymentRecords() async {
-    _paymentRecords = await AcademyDbService.instance.getPaymentRecords();
+    // 서버 우선 읽기: Supabase에서 결제 레코드를 불러온다.
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final data = await Supabase.instance.client
+            .from('payment_records')
+            .select('id,student_id,cycle,due_date,paid_date,postpone_reason')
+            .eq('academy_id', academyId)
+            .order('student_id')
+            .order('cycle');
+        _paymentRecords = (data as List).map((m) {
+          final String sid = m['student_id'] as String;
+          final int cycle = (m['cycle'] as int);
+          final String? dueStr = m['due_date'] as String?; // DATE → 'YYYY-MM-DD'
+          final String? paidStr = m['paid_date'] as String?; // nullable
+          final DateTime due = (dueStr != null && dueStr.isNotEmpty)
+              ? DateTime.parse(dueStr)
+              : DateTime.now();
+          final DateTime? paid = (paidStr != null && paidStr.isNotEmpty)
+              ? DateTime.parse(paidStr)
+              : null;
+          return PaymentRecord(
+            id: null, // local autoincrement와 다르게 서버는 별도 UUID. 필요 시 확장
+            studentId: sid,
+            cycle: cycle,
+            dueDate: due,
+            paidDate: paid,
+            postponeReason: m['postpone_reason'] as String?,
+          );
+        }).toList();
+        paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+        print('[DEBUG] payment_records 로드 완료(Supabase): ${_paymentRecords.length}개');
+        return;
+      } catch (e, st) {
+        print('[ERROR] payment_records Supabase 로드 실패: $e\n$st');
+        // 서버 전용 모드: 폴백 없음
+        _paymentRecords = [];
+        paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
+        return;
+      }
+    }
+    // 로컬 사용 안함 (서버-only 모드)
+    _paymentRecords = [];
     paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
   }
 
   Future<void> addPaymentRecord(PaymentRecord record) async {
-    final newRecord = await AcademyDbService.instance.addPaymentRecord(record);
-    _paymentRecords.add(newRecord);
-    paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-    // 다음 사이클 자동 생성은 초기에는 비활성화 (DB 잠금/호환성 이슈 방지)
+    // 서버 전용 처리: 결제 발생 시 RPC 사용
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        await Supabase.instance.client.rpc('record_payment', params: {
+          'p_student_id': record.studentId,
+          'p_cycle': record.cycle,
+          'p_paid': (record.paidDate ?? DateTime.now()).toIso8601String().substring(0, 10),
+          'p_academy_id': academyId,
+        });
+        await loadPaymentRecords();
+        return;
+      } catch (e, st) {
+        print('[ERROR] record_payment RPC 실패: $e\n$st');
+      }
+    }
+    // 서버-only 모드: 실패 시 로컬 저장하지 않음
   }
 
   Future<void> updatePaymentRecord(PaymentRecord record) async {
-    final index = _paymentRecords.indexWhere((r) => r.id == record.id);
-    if (index != -1) {
-      _paymentRecords[index] = record;
-      await AcademyDbService.instance.updatePaymentRecord(record);
-      paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-      // 다음 사이클 자동 생성은 초기에는 비활성화 (DB 잠금/호환성 이슈 방지)
+    // 서버 전용: 납부 처리만 허용하며, 납부된 항목은 수정 불가. 납부 처리 역시 RPC 사용.
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        await Supabase.instance.client.rpc('record_payment', params: {
+          'p_student_id': record.studentId,
+          'p_cycle': record.cycle,
+          'p_paid': (record.paidDate ?? DateTime.now()).toIso8601String().substring(0, 10),
+          'p_academy_id': academyId,
+        });
+        await loadPaymentRecords();
+        return;
+      } catch (e, st) {
+        print('[ERROR] record_payment RPC 실패(update): $e\n$st');
+      }
     }
+    // 서버-only 모드: 실패 시 로컬 업데이트하지 않음
   }
 
   Future<void> deletePaymentRecord(int id) async {
@@ -1122,6 +2056,55 @@ class DataManager {
       );
     } catch (e) {
       return null;
+    }
+  }
+
+  // ===== 결제 RPC 래퍼 =====
+  Future<void> initFirstDue(String studentId, DateTime firstDue) async {
+    if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('init_first_due', params: {
+        'p_student_id': studentId,
+        'p_first_due': firstDue.toIso8601String().substring(0, 10),
+        'p_academy_id': academyId,
+      });
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] init_first_due RPC 실패: $e\n$st');
+    }
+  }
+
+  Future<void> recordPayment(String studentId, int cycle, DateTime paidDate) async {
+    if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('record_payment', params: {
+        'p_student_id': studentId,
+        'p_cycle': cycle,
+        'p_paid': paidDate.toIso8601String().substring(0, 10),
+        'p_academy_id': academyId,
+      });
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] record_payment RPC 실패(wrapper): $e\n$st');
+    }
+  }
+
+  Future<void> postponeDueDate(String studentId, int cycle, DateTime newDue, String reason) async {
+    if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('postpone_due_date', params: {
+        'p_student_id': studentId,
+        'p_cycle': cycle,
+        'p_new_due': newDue.toIso8601String().substring(0, 10),
+        'p_reason': reason,
+        'p_academy_id': academyId,
+      });
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] postpone_due_date RPC 실패: $e\n$st');
     }
   }
 
@@ -1466,13 +2449,40 @@ class DataManager {
   // 학생 결제 정보 로드
   Future<void> loadStudentPaymentInfos() async {
     try {
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final rows = await Supabase.instance.client
+              .from('student_payment_info')
+              .select('id,student_id,registration_date,payment_method,weekly_class_count,tuition_fee,lateness_threshold,'
+                      'schedule_notification,attendance_notification,departure_notification,lateness_notification,'
+                      'created_at,updated_at')
+              .eq('academy_id', academyId);
+          _studentPaymentInfos = (rows as List).map((m) => StudentPaymentInfo(
+            id: (m['id'] as String?),
+            studentId: (m['student_id'] as String),
+            registrationDate: DateTime.tryParse((m['registration_date'] as String?) ?? '') ?? DateTime.now(),
+            paymentMethod: (m['payment_method'] as String?) ?? 'monthly',
+            weeklyClassCount: (m['weekly_class_count'] as int?) ?? 1,
+            tuitionFee: (m['tuition_fee'] as int?) ?? 0,
+            latenessThreshold: (m['lateness_threshold'] as int?) ?? 10,
+            scheduleNotification: (m['schedule_notification'] as bool?) ?? false,
+            attendanceNotification: (m['attendance_notification'] as bool?) ?? false,
+            departureNotification: (m['departure_notification'] as bool?) ?? false,
+            latenessNotification: (m['lateness_notification'] as bool?) ?? false,
+            createdAt: DateTime.tryParse((m['created_at'] as String?) ?? '') ?? DateTime.now(),
+            updatedAt: DateTime.tryParse((m['updated_at'] as String?) ?? '') ?? DateTime.now(),
+          )).toList();
+          studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+          print('[DEBUG] 학생 결제 정보 로드 완료(Supabase): ${_studentPaymentInfos.length}개');
+          return;
+        } catch (_) {}
+      }
       await AcademyDbService.instance.ensureStudentPaymentInfoTable();
       final paymentInfoMaps = await AcademyDbService.instance.getAllStudentPaymentInfo();
-      
       _studentPaymentInfos = paymentInfoMaps.map((map) => StudentPaymentInfo.fromJson(map)).toList();
       studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
-      
-      print('[DEBUG] 학생 결제 정보 로드 완료: ${_studentPaymentInfos.length}개');
+      print('[DEBUG] 학생 결제 정보 로드 완료(Local): ${_studentPaymentInfos.length}개');
     } catch (e) {
       print('[ERROR] 학생 결제 정보 로드 실패: $e');
       _studentPaymentInfos = [];
@@ -1505,6 +2515,50 @@ class DataManager {
       
       studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
       print('[DEBUG] 학생 결제 정보 추가/업데이트 완료: ${paymentInfo.studentId}');
+      // 서버 우선 모드: 결제 정보 upsert + 최초 due 생성 RPC 호출
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          await Supabase.instance.client.from('student_payment_info').upsert({
+            'id': paymentInfo.id,
+            'academy_id': academyId,
+            'student_id': paymentInfo.studentId,
+            'registration_date': paymentInfo.registrationDate.toIso8601String(),
+            'payment_method': paymentInfo.paymentMethod,
+            'weekly_class_count': paymentInfo.weeklyClassCount,
+            'tuition_fee': paymentInfo.tuitionFee,
+            'lateness_threshold': paymentInfo.latenessThreshold,
+            'schedule_notification': paymentInfo.scheduleNotification,
+            'attendance_notification': paymentInfo.attendanceNotification,
+            'departure_notification': paymentInfo.departureNotification,
+            'lateness_notification': paymentInfo.latenessNotification,
+          }, onConflict: 'student_id');
+          await Supabase.instance.client.rpc('init_first_due', params: {
+            'p_student_id': paymentInfo.studentId,
+            'p_first_due': paymentInfo.registrationDate.toIso8601String().substring(0, 10),
+            'p_academy_id': academyId,
+          });
+        } catch (e, st) { print('[SUPA][student_payment_info upsert/init_first_due] $e\n$st'); }
+      } else if (TagPresetService.dualWrite) {
+        // 레거시 듀얼라이트 지원
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          await Supabase.instance.client.from('student_payment_info').upsert({
+            'id': paymentInfo.id,
+            'academy_id': academyId,
+            'student_id': paymentInfo.studentId,
+            'registration_date': paymentInfo.registrationDate.toIso8601String(),
+            'payment_method': paymentInfo.paymentMethod,
+            'weekly_class_count': paymentInfo.weeklyClassCount,
+            'tuition_fee': paymentInfo.tuitionFee,
+            'lateness_threshold': paymentInfo.latenessThreshold,
+            'schedule_notification': paymentInfo.scheduleNotification,
+            'attendance_notification': paymentInfo.attendanceNotification,
+            'departure_notification': paymentInfo.departureNotification,
+            'lateness_notification': paymentInfo.latenessNotification,
+          }, onConflict: 'student_id');
+        } catch (_) {}
+      }
     } catch (e) {
       print('[ERROR] 학생 결제 정보 추가 실패: $e');
       rethrow;
@@ -1526,6 +2580,25 @@ class DataManager {
       }
       
       print('[DEBUG] 학생 결제 정보 업데이트 완료: ${paymentInfo.studentId}');
+      if (TagPresetService.dualWrite) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          await Supabase.instance.client.from('student_payment_info').upsert({
+            'id': updatedPaymentInfo.id,
+            'academy_id': academyId,
+            'student_id': updatedPaymentInfo.studentId,
+            'registration_date': updatedPaymentInfo.registrationDate.toIso8601String(),
+            'payment_method': updatedPaymentInfo.paymentMethod,
+            'weekly_class_count': updatedPaymentInfo.weeklyClassCount,
+            'tuition_fee': updatedPaymentInfo.tuitionFee,
+            'lateness_threshold': updatedPaymentInfo.latenessThreshold,
+            'schedule_notification': updatedPaymentInfo.scheduleNotification,
+            'attendance_notification': updatedPaymentInfo.attendanceNotification,
+            'departure_notification': updatedPaymentInfo.departureNotification,
+            'lateness_notification': updatedPaymentInfo.latenessNotification,
+          }, onConflict: 'student_id');
+        } catch (_) {}
+      }
     } catch (e) {
       print('[ERROR] 학생 결제 정보 업데이트 실패: $e');
       rethrow;
@@ -1567,6 +2640,11 @@ class DataManager {
       studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
       
       print('[DEBUG] 학생 결제 정보 삭제 완료: $studentId');
+      if (TagPresetService.dualWrite) {
+        try {
+          await Supabase.instance.client.from('student_payment_info').delete().eq('student_id', studentId);
+        } catch (_) {}
+      }
     } catch (e) {
       print('[ERROR] 학생 결제 정보 삭제 실패: $e');
       rethrow;
@@ -1576,51 +2654,162 @@ class DataManager {
   // ======== RESOURCES (FOLDERS/FILES) ========
   Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
     await AcademyDbService.instance.saveResourceFolders(rows);
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('resource_folders').delete().eq('academy_id', academyId);
+        if (rows.isNotEmpty) {
+          final up = rows.map((r) => {
+            'id': r['id'],
+            'academy_id': academyId,
+            'name': r['name'],
+            'parent_id': r['parent_id'],
+            'order_index': r['order_index'],
+            'category': r['category'],
+          }).toList();
+          await supa.from('resource_folders').insert(up);
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) async {
     await AcademyDbService.instance.saveResourceFoldersForCategory(category, rows);
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('resource_folders').delete().match({'academy_id': academyId, 'category': category});
+        if (rows.isNotEmpty) {
+          final up = rows.map((raw) {
+            final r = Map<String, dynamic>.from(raw);
+            return {
+              'id': r['id'],
+              'academy_id': academyId,
+              'name': r['name'],
+              'parent_id': r['parent_id'],
+              'order_index': r['order_index'],
+              'category': category,
+            };
+          }).toList();
+          await supa.from('resource_folders').insert(up);
+        }
+      } catch (_) {}
+    }
   }
 
   Future<List<Map<String, dynamic>>> loadResourceFolders() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa.from('resource_folders').select('id,name,parent_id,order_index,category').eq('academy_id', academyId).order('order_index');
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
     return await AcademyDbService.instance.loadResourceFolders();
   }
 
   Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa.from('resource_folders').select('id,name,parent_id,order_index,category').match({'academy_id': academyId, 'category': category}).order('order_index');
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
     return await AcademyDbService.instance.loadResourceFoldersForCategory(category);
   }
 
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
     await AcademyDbService.instance.saveResourceFile(row);
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final up = {
+          'id': row['id'],
+          'academy_id': academyId,
+          'folder_id': row['parent_id'],
+          'name': row['name'],
+          'url': row['url'],
+          'category': row['category'],
+          'order_index': row['order_index'],
+        };
+        await supa.from('resource_files').upsert(up, onConflict: 'id');
+      } catch (_) {}
+    }
   }
 
   Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) async {
-    await AcademyDbService.instance.saveResourceFileWithCategory(row, category);
+    final copy = Map<String, dynamic>.from(row);
+    copy['category'] = category;
+    await saveResourceFile(copy);
   }
 
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa.from('resource_files').select('id,folder_id as parent_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
     return await AcademyDbService.instance.loadResourceFiles();
   }
 
   Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa.from('resource_files').select('id,folder_id as parent_id,name,url,category,order_index').match({'academy_id': academyId, 'category': category}).order('order_index');
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
     return await AcademyDbService.instance.loadResourceFilesForCategory(category);
   }
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
     await AcademyDbService.instance.saveResourceFileLinks(fileId, links);
+    // 링크 테이블은 Supabase에 아직 스키마가 없으므로 로컬 유지(필요 시 확장)
   }
 
   Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
+    // 링크 테이블은 현 단계 로컬 우선
     return await AcademyDbService.instance.loadResourceFileLinks(fileId);
   }
 
   Future<void> deleteResourceFile(String fileId) async {
     await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
     await AcademyDbService.instance.deleteResourceFile(fileId);
+    if (TagPresetService.dualWrite) {
+      try {
+        final supa = Supabase.instance.client;
+        await supa.from('resource_files').delete().eq('id', fileId);
+      } catch (_) {}
+    }
   }
 
   // ======== RESOURCE FAVORITES ========
   Future<Set<String>> loadResourceFavorites() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final userId = Supabase.instance.client.auth.currentUser?.id;
+        if (userId != null) {
+          final data = await Supabase.instance.client
+              .from('resource_favorites')
+              .select('file_id')
+              .match({'academy_id': academyId, 'user_id': userId});
+          final set = (data as List).map((r) => (r['file_id'] as String)).toSet();
+          return set;
+        }
+      } catch (_) {}
+    }
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
     final rows = await dbClient.query('resource_favorites');
@@ -1631,12 +2820,38 @@ class DataManager {
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
     await dbClient.insert('resource_favorites', {'file_id': fileId}, conflictAlgorithm: ConflictAlgorithm.replace);
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final userId = Supabase.instance.client.auth.currentUser?.id;
+        if (userId != null) {
+          await Supabase.instance.client.from('resource_favorites').upsert({
+            'academy_id': academyId,
+            'file_id': fileId,
+            'user_id': userId,
+          });
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> removeResourceFavorite(String fileId) async {
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
     await dbClient.delete('resource_favorites', where: 'file_id = ?', whereArgs: [fileId]);
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final userId = Supabase.instance.client.auth.currentUser?.id;
+        if (userId != null) {
+          await Supabase.instance.client.from('resource_favorites').delete().match({
+            'academy_id': academyId,
+            'file_id': fileId,
+            'user_id': userId,
+          });
+        }
+      } catch (_) {}
+    }
   }
 
   // ======== RESOURCE FILE BOOKMARKS ========
@@ -1684,72 +2899,120 @@ class DataManager {
 
   // ===== EXAM (persisted) =====
   Future<void> saveExamFor(String school, EducationLevel level, int grade, Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
-    final Map<String, List<String>> titlesByIso = {
-      for (final e in titles.entries)
-        DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
-    };
-    final Map<String, String> rangesByIso = {
-      for (final e in ranges.entries)
-        DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
-    };
     await AcademyDbService.instance.saveExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
-      titlesByDateIso: titlesByIso,
-      rangesByDateIso: rangesByIso,
+      titlesByDateIso: {
+        for (final e in titles.entries)
+          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+      },
+      rangesByDateIso: {
+        for (final e in ranges.entries)
+          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+      },
     );
-    // update cache
     final key = _sgKey(school, level, grade);
     _examTitlesBySg[key] = {
-      for (final e in titles.entries) DateTime(e.key.year, e.key.month, e.key.day): List<String>.from(e.value)
+      for (final e in titles.entries)
+        DateTime(e.key.year, e.key.month, e.key.day): e.value,
     };
     _examRangesBySg[key] = {
-      for (final e in ranges.entries) DateTime(e.key.year, e.key.month, e.key.day): e.value
+      for (final e in ranges.entries)
+        DateTime(e.key.year, e.key.month, e.key.day): e.value,
     };
+
+    // Supabase dual-write: exam_schedules + exam_ranges
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        // schedules
+        await supa.from('exam_schedules').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        if (titles.isNotEmpty) {
+          final rows = titles.entries.map((e) => {
+            'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade,
+            'date': DateTime(e.key.year, e.key.month, e.key.day).toIso8601String().substring(0,10),
+            'names_json': jsonEncode(e.value),
+          }).toList();
+          await supa.from('exam_schedules').insert(rows);
+        }
+        // ranges
+        await supa.from('exam_ranges').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        if (ranges.isNotEmpty) {
+          final rows2 = ranges.entries.map((e) => {
+            'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade,
+            'date': DateTime(e.key.year, e.key.month, e.key.day).toIso8601String().substring(0,10),
+            'range_text': e.value,
+          }).toList();
+          await supa.from('exam_ranges').insert(rows2);
+        }
+      } catch (_) {}
+    }
   }
 
   Future<Map<String, dynamic>> loadExamFor(String school, EducationLevel level, int grade) async {
-    final key = _sgKey(school, level, grade);
-    if (_examTitlesBySg.containsKey(key) || _examRangesBySg.containsKey(key) || _examDaysBySg.containsKey(key)) {
-      // compose DB-like rows from cache
-      final List<Map<String, dynamic>> schedules = [];
-      (_examTitlesBySg[key] ?? const <DateTime, List<String>>{}).forEach((d, names) {
-        schedules.add({
-          'school': school,
-          'level': level.index,
-          'grade': grade,
-          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
-          'names_json': names.isEmpty ? '[]' : jsonEncode(names),
-        });
-      });
-      final List<Map<String, dynamic>> ranges = [];
-      (_examRangesBySg[key] ?? const <DateTime, String>{}).forEach((d, text) {
-        ranges.add({
-          'school': school,
-          'level': level.index,
-          'grade': grade,
-          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
-          'range_text': text,
-        });
-      });
-      final List<Map<String, dynamic>> days = [];
-      for (final d in (_examDaysBySg[key] ?? const <DateTime>{})) {
-        days.add({
-          'school': school,
-          'level': level.index,
-          'grade': grade,
-          'date': DateTime(d.year, d.month, d.day).toIso8601String(),
-        });
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final schedules = await supa.from('exam_schedules').select('date,names_json').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
+        final ranges = await supa.from('exam_ranges').select('date,range_text').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
+        final days = await supa.from('exam_days').select('date').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
+        final res = {
+          'schedules': (schedules as List).map((r) => {
+            'date': (r['date'] as String?) ?? '',
+            'names_json': (r['names_json'] as String?) ?? '[]',
+          }).toList(),
+          'ranges': (ranges as List).map((r) => {
+            'date': (r['date'] as String?) ?? '',
+            'range_text': (r['range_text'] as String?) ?? '',
+          }).toList(),
+          'days': (days as List).map((r) => {
+            'date': (r['date'] as String?) ?? '',
+          }).toList(),
+        };
+        // 캐시에 반영
+        final titles = <DateTime, List<String>>{};
+        for (final row in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
+          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+          final d = DateTime.parse(iso);
+          List<dynamic> list; try { list = jsonDecode((row['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
+          titles[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+        }
+        final rangesMap = <DateTime, String>{};
+        for (final row in (res['ranges'] as List).cast<Map<String, dynamic>>()) {
+          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+          final d = DateTime.parse(iso);
+          rangesMap[DateTime(d.year, d.month, d.day)] = (row['range_text'] as String?) ?? '';
+        }
+        final daysSet = <DateTime>{};
+        for (final row in (res['days'] as List).cast<Map<String, dynamic>>()) {
+          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+          final d = DateTime.parse(iso);
+          daysSet.add(DateTime(d.year, d.month, d.day));
+        }
+        final key2 = _sgKey(school, level, grade);
+        _examTitlesBySg[key2] = titles;
+        _examRangesBySg[key2] = rangesMap;
+        _examDaysBySg[key2] = daysSet;
+        return res;
+      } catch (_) {
+        // fallback below
       }
-      return {'schedules': schedules, 'ranges': ranges, 'days': days};
     }
-    // fallback DB and warm cache
     final res = await AcademyDbService.instance.loadExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
     );
+    // 기존 캐시 반영 로직 유지
     final titles = <DateTime, List<String>>{};
     for (final row in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
       final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
@@ -1777,11 +3040,35 @@ class DataManager {
   }
 
   Future<void> deleteExamData(String school, EducationLevel level, int grade) async {
+    // 서버 우선: Supabase에서 삭제, 실패 시 로컬로 폴백
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('exam_schedules').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        await supa.from('exam_ranges').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        await supa.from('exam_days').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+      } catch (e, st) {
+        print('[SUPA][exam delete] $e\n$st');
+        // 폴백: 로컬 삭제
     await AcademyDbService.instance.deleteExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
     );
+      }
+    } else {
+      await AcademyDbService.instance.deleteExamDataForSchoolGrade(
+        school: school,
+        level: level.index,
+        grade: grade,
+      );
+    }
+    // 캐시 정리
+    final key = _sgKey(school, level, grade);
+    _examTitlesBySg.remove(key);
+    _examRangesBySg.remove(key);
+    _examDaysBySg.remove(key);
   }
 
   Future<void> saveExamDays(String school, EducationLevel level, int grade, Set<DateTime> days) async {
@@ -1794,6 +3081,26 @@ class DataManager {
     );
     final key = _sgKey(school, level, grade);
     _examDaysBySg[key] = days.map((d)=>DateTime(d.year, d.month, d.day)).toSet();
+
+    // Supabase dual-write
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        // delete all then insert to keep exact match
+        await supa.from('exam_days').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        if (list.isNotEmpty) {
+          final rows = list.map((iso) => {
+            'academy_id': academyId,
+            'school': school,
+            'level': level.index,
+            'grade': grade,
+            'date': iso.substring(0, 10),
+          }).toList();
+          await supa.from('exam_days').insert(rows);
+        }
+      } catch (_) {}
+    }
   }
 
   // exam_days(DB) 기반으로 저장된 날짜 집합 조회용 공개 getter

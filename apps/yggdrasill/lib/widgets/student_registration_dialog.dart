@@ -10,7 +10,7 @@ import 'package:mneme_flutter/models/session_override.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
-  final Function(Student, StudentBasicInfo) onSave;
+  final Future<void> Function(Student, StudentBasicInfo) onSave;
   final List<GroupInfo> groups;
 
   const StudentRegistrationDialog({
@@ -228,8 +228,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       updatedAt: DateTime.now(),
     );
     
-    // 저장
-    widget.onSave(student, basicInfo);
+    // 저장(학생/기본정보를 먼저 확실하게 저장한 뒤, 결제정보 저장)
+    await widget.onSave(student, basicInfo);
     
     // StudentPaymentInfo도 저장
     try {

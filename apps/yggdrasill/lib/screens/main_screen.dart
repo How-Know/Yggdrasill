@@ -12,6 +12,7 @@ import 'resources/resources_screen.dart';
 import 'learning/learning_screen.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
+import '../services/tag_preset_service.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
@@ -217,7 +218,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
   void _showTooltip(Offset position, String text) {
-    print('[DEBUG] _showTooltip called: position= [38;5;246m$position [0m, text=$text');
+    // print('[DEBUG] _showTooltip called: position= [38;5;246m$position [0m, text=$text');
     _removeTooltip();
     final overlay = Overlay.of(context);
     _tooltipOverlay = OverlayEntry(
@@ -250,10 +251,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       ),
     );
     overlay.insert(_tooltipOverlay!);
-    print('[DEBUG] _showTooltip OverlayEntry inserted');
+    // print('[DEBUG] _showTooltip OverlayEntry inserted');
   }
   void _removeTooltip() {
-    print('[DEBUG] _removeTooltip called');
+    // print('[DEBUG] _removeTooltip called');
     _tooltipOverlay?.remove();
     _tooltipOverlay = null;
   }
@@ -467,7 +468,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG] MainScreen build');
+    // print('[DEBUG] MainScreen build');
     return Scaffold(
       body: Row(
         children: [
@@ -1164,8 +1165,11 @@ extension on _MainScreenState {
   Future<void> _openClassTagDialog(_AttendanceTarget target) async {
     final List<_ClassTagEvent> initialApplied = List<_ClassTagEvent>.from(_classTagEventsBySetId[target.setId] ?? const []);
     List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(initialApplied);
-
-    List<_ClassTag> workingAvailable = List<_ClassTag>.from(_availableClassTags);
+    // 프리셋에서 즉시 로드하여 사용 가능한 태그 구성
+    final presets = await TagPresetService.instance.loadPresets();
+    List<_ClassTag> workingAvailable = presets
+        .map((p) => _ClassTag(name: p.name, color: p.color, icon: p.icon))
+        .toList();
 
     _ClassTag? newTag;
 
@@ -1277,10 +1281,17 @@ extension on _MainScreenState {
                           IconButton(
                             tooltip: '태그 관리',
                             onPressed: () async {
-                              await showDialog(
+                          await showDialog(
                                 context: context,
                                 builder: (_) => const TagPresetDialog(),
                               );
+                          // 태그 프리셋 변경 즉시 반영: 프리셋 재로드 후 갱신
+                          final refreshed = await TagPresetService.instance.loadPresets();
+                          setLocal(() {
+                            workingAvailable = refreshed
+                                .map((p) => _ClassTag(name: p.name, color: p.color, icon: p.icon))
+                                .toList();
+                          });
                             },
                             icon: const Icon(Icons.style, color: Colors.white70),
                             padding: EdgeInsets.zero,

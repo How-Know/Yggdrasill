@@ -506,10 +506,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                         .where((b) => b.studentId == ov.studentId && b.dayIndex == dayIdx)
                                         .map((b) => b.setId ?? '')
                                         .toSet();
-                                    if (todaysSetIds.isNotEmpty) {
-                                      // ignore: avoid_print
-                                      print('[BLIND][check] YMD=${_cellDate.toString().substring(0,10)} ov.student=${ov.studentId} ov.setId=$setId todays.setIds=$todaysSetIds');
-                                    }
+                                    // if (todaysSetIds.isNotEmpty) {
+                                    //   print('[BLIND][check] YMD=${_cellDate.toString().substring(0,10)} ov.student=${ov.studentId} ov.setId=$setId todays.setIds=$todaysSetIds');
+                                    // }
                                   } catch (_) {}
                                   if (setId != null && setId.isNotEmpty) {
                                     _hiddenStudentSetPairs.add('${ov.studentId}|$setId');

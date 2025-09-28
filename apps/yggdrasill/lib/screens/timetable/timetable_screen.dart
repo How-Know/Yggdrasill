@@ -142,15 +142,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
   void _scrollToCurrentTime() {
     final timeBlocks = _generateTimeBlocks();
     // 타임블록 개수 및 각 블록 정보 로그 출력
-    print('[DEBUG][_scrollToCurrentTime] timeBlocks.length: ' + timeBlocks.length.toString());
+    // print('[DEBUG][_scrollToCurrentTime] timeBlocks.length: ' + timeBlocks.length.toString());
     for (int i = 0; i < timeBlocks.length; i++) {
       final block = timeBlocks[i];
-      print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + TimeOfDay(hour: block.startTime.hour, minute: block.startTime.minute).format(context) + ' ~ ' + block.endTime.toString());
+      // print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + TimeOfDay(hour: block.startTime.hour, minute: block.startTime.minute).format(context) + ' ~ ' + block.endTime.toString());
     }
-    // 대한민국 표준시(KST)로 현재 시간 계산
-    final nowKst = DateTime.now().toUtc().add(const Duration(hours: 9));
-    final now = TimeOfDay(hour: nowKst.hour, minute: nowKst.minute);
-    print('[DEBUG][_scrollToCurrentTime] nowKst: ' + nowKst.toString() + ', now: ' + now.format(context));
+    // 현재 시간
+    final now = TimeOfDay.now();
     int currentIdx = 0;
     for (int i = 0; i < timeBlocks.length; i++) {
       final block = timeBlocks[i];
@@ -174,19 +172,19 @@ class _TimetableScreenState extends State<TimetableScreen> {
       }
     }
     final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
-    print('[DEBUG][_scrollToCurrentTime] scrollIdx: ' + scrollIdx.toString() + ', targetOffset: ' + targetOffset.toString());
+    print('[DEBUG][Timetable] scrollToCurrentTime: blocks=${timeBlocks.length}, currentIdx=$currentIdx, targetOffset=$targetOffset');
     if (_timetableScrollController.hasClients) {
       final maxOffset = _timetableScrollController.position.maxScrollExtent;
       final minOffset = _timetableScrollController.position.minScrollExtent;
       final scrollTo = targetOffset.clamp(minOffset, maxOffset);
-      print('[DEBUG][_scrollToCurrentTime] scrollTo: ' + scrollTo.toString() + ', minOffset: ' + minOffset.toString() + ', maxOffset: ' + maxOffset.toString());
+      // print('[DEBUG][_scrollToCurrentTime] scrollTo: ' + scrollTo.toString() + ', minOffset: ' + minOffset.toString() + ', maxOffset: ' + maxOffset.toString());
       _timetableScrollController.animateTo(
         scrollTo,
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeInOut,
       );
     } else {
-      print('[DEBUG][_scrollToCurrentTime] _timetableScrollController.hasClients == false');
+      print('[DEBUG][Timetable] scroll controller has no clients yet');
     }
   }
 
@@ -221,6 +219,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
     return blocks;
   }
 
+  String? _initialPlaceholderText() {
+    // 운영시간 외면 안내 문구 교체, 운영시간이면 null(기본 문구) 유지
+    final now = DateTime.now();
+    final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
+    if (_operatingHours.length > dayIdx) {
+      final op = _operatingHours[dayIdx];
+      final start = DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
+      final end = DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
+      final within = now.isAfter(start) && now.isBefore(end);
+      if (!within) return '운영시간이 아닙니다.';
+    }
+    return null;
+  }
+
   Future<void> _loadData() async {
     await DataManager.instance.loadGroups();
     setState(() {
@@ -233,10 +245,52 @@ class _TimetableScreenState extends State<TimetableScreen> {
     setState(() {
       _operatingHours = hours;
     });
-    // 운영시간 로드 후에만 스크롤 이동 시도
+    // 운영시간 로드 후 스크롤 및 자동 선택 로그
     if (!_hasScrolledToCurrentTime) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
       _hasScrolledToCurrentTime = true;
+    }
+    // 운영시간 내라면 현재 시간 셀 자동 선택 (그리드 타임블록에 스냅)
+    if (_selectedCellDayIndex == null || _selectedStartTimeHour == null || _selectedStartTimeMinute == null) {
+      final now = DateTime.now();
+      final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
+      if (_operatingHours.length > dayIdx) {
+        final op = _operatingHours[dayIdx];
+        final start = DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
+        final end = DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
+        final within = now.isAfter(start) && now.isBefore(end);
+        print('[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
+        if (within) {
+          // 1) 해당 날짜의 타임블록 생성
+          final blocks = _generateTimeBlocks();
+          if (blocks.isNotEmpty) {
+            // 2) now 이하 중 가장 가까운 블록 인덱스 선택(없으면 0, 크면 마지막)
+            final nowTod = TimeOfDay(hour: now.hour, minute: now.minute);
+            int currentIdx = 0;
+            for (int i = 0; i < blocks.length; i++) {
+              final b = blocks[i];
+              final h = b.startTime.hour;
+              final m = b.startTime.minute;
+              if (h < nowTod.hour || (h == nowTod.hour && m <= nowTod.minute)) {
+                currentIdx = i;
+              }
+            }
+            // 경계 보정
+            final first = blocks.first.startTime;
+            final last = blocks.last.startTime;
+            if (now.isBefore(first)) currentIdx = 0;
+            if (now.isAfter(last)) currentIdx = blocks.length - 1;
+
+            final chosen = blocks[currentIdx].startTime;
+            setState(() {
+              _selectedCellDayIndex = dayIdx;
+              _selectedStartTimeHour = chosen.hour;
+              _selectedStartTimeMinute = chosen.minute;
+            });
+            print('[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
+          }
+        }
+      }
     }
     // 운영시간 외 학생 시간 삭제 및 안내
     final allHours = hours;
@@ -730,6 +784,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               backgroundColor: const Color(0xFF1F1F1F),
               appBar: const AppBarTitle(title: '시간'),
               body: Container(
+                constraints: const BoxConstraints.expand(),
                 color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
                 child: Column(
                   children: [
@@ -1261,6 +1316,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           },
           selectedCellDayIndex: _selectedCellDayIndex,
           selectedCellStartTime: _selectedStartTimeHour != null && _selectedStartTimeMinute != null ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!) : null,
+          placeholderText: _initialPlaceholderText(),
           onCellStudentsChanged: (dayIdx, startTime, students) {
             setState(() {
               _selectedCellDayIndex = dayIdx;

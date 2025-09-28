@@ -424,7 +424,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                                 groupInfo: groupInfo,
                                                                 currentMemberCount: studentsInGroup.length,
                                                                 onSave: (updatedGroup) {
-                                                                  Navigator.of(context).pop(updatedGroup);
+                                                                  // 다이얼로그 내부에서 닫힘 처리(Navigator.pop) 수행됨
+                                                                  // 여기서는 결과 전달을 위해 별도 팝을 하지 않는다
                                                                 },
                                                               ),
                                                             );

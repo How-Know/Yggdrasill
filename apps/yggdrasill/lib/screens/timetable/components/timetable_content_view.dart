@@ -9,6 +9,7 @@ import '../../../models/student_time_block.dart';
 import '../../../models/self_study_time_block.dart';
 import '../../../widgets/app_snackbar.dart';
 import '../../../models/class_info.dart';
+import 'package:uuid/uuid.dart';
 import '../views/makeup_view.dart';
 import '../../../models/session_override.dart';
 
@@ -30,6 +31,7 @@ class TimetableContentView extends StatefulWidget {
   final VoidCallback? onExitSelectMode; // 추가: 다중모드 종료 콜백
   final String? registrationModeType;
   final Set<String>? filteredStudentIds; // 추가: 필터링된 학생 ID 목록
+  final String? placeholderText; // 빈 셀 안내 문구 대체용
 
   const TimetableContentView({
     Key? key,
@@ -50,6 +52,7 @@ class TimetableContentView extends StatefulWidget {
     this.onExitSelectMode,
     this.registrationModeType,
     this.filteredStudentIds, // 추가
+    this.placeholderText,
   }) : super(key: key);
 
   @override
@@ -393,14 +396,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
         const SizedBox(width: 24),
         Expanded(
           flex: 3,
-          child: Container(
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0), // vertical 32 -> 16으로 조정
-            decoration: BoxDecoration(
-              color: const Color(0xFF18181A),
-              borderRadius: BorderRadius.circular(16),
+          child: SizedBox(
+            height: maxHeight,
+            child: Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0), // vertical 32 -> 16으로 조정
+              decoration: BoxDecoration(
+                color: const Color(0xFF18181A),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: widget.timetableChild,
             ),
-            child: widget.timetableChild,
           ),
         ),
         const SizedBox(width: 32),
@@ -795,20 +801,19 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       );
                       }),
                       // 학생카드 리스트 위에 요일+시간 출력
-                      if (_searchQuery.isNotEmpty && _searchResults.isNotEmpty)
-                        Expanded(
-                          child: SingleChildScrollView(
-                            child: _buildGroupedStudentCardsByDayTime(_searchResults),
-                          ),
-                        )
-                      else if (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
-                        Expanded(
-                          child: ValueListenableBuilder<List<StudentTimeBlock>>(
-                            valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-                            builder: (context, studentTimeBlocks, _) {
-                              return ValueListenableBuilder<List<SelfStudyTimeBlock>>(
-                                valueListenable: DataManager.instance.selfStudyTimeBlocksNotifier,
-                                builder: (context, selfStudyTimeBlocksRaw, __) {
+                      Expanded(
+                        child: _searchQuery.isNotEmpty && _searchResults.isNotEmpty
+                          ? SingleChildScrollView(
+                              child: _buildGroupedStudentCardsByDayTime(_searchResults),
+                            )
+                          : (
+                              (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
+                                ? ValueListenableBuilder<List<StudentTimeBlock>>(
+                                    valueListenable: DataManager.instance.studentTimeBlocksNotifier,
+                                    builder: (context, studentTimeBlocks, _) {
+                                      return ValueListenableBuilder<List<SelfStudyTimeBlock>>(
+                                        valueListenable: DataManager.instance.selfStudyTimeBlocksNotifier,
+                                        builder: (context, selfStudyTimeBlocksRaw, __) {
                                   final selfStudyTimeBlocks = selfStudyTimeBlocksRaw.cast<SelfStudyTimeBlock>();
                                   final blocks = studentTimeBlocks.where((b) =>
                                     b.dayIndex == widget.selectedCellDayIndex &&
@@ -942,64 +947,60 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
                                   // print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
                                   
-                                  // 컨테이너는 항상 렌더링(내용은 조건부), 영역 높이에 비례하도록 확장
-                                  return Expanded(
-                                    child: LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
-                                        return Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Container(
-                                              margin: const EdgeInsets.only(top: 24), // 등록 버튼과 간격 24
-                                              height: containerHeight,
-                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF18181A),
-                                                borderRadius: BorderRadius.circular(18),
-                                              ),
-                                              alignment: Alignment.topLeft,
-                                              child: SingleChildScrollView(
-                                                child: (cellStudents.isNotEmpty)
-                                                  ? _buildStudentCardList(
-                                                      cellStudents,
-                                                      dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
-                                                    )
-                                                  : const Padding(
-                                                      padding: EdgeInsets.all(4.0),
-                                                      child: Text('셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                                                    ),
-                                              ),
+                                  // 컨테이너는 항상 렌더링(내용은 조건부)
+                                  return LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                                      return Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Container(
+                                            margin: const EdgeInsets.only(top: 24), // 등록 버튼과 간격 24
+                                            height: containerHeight,
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF18181A),
+                                              borderRadius: BorderRadius.circular(18),
                                             ),
-                                          ],
-                                        );
-                                      },
-                                    ),
+                                            alignment: Alignment.topLeft,
+                                            child: SingleChildScrollView(
+                                              child: (cellStudents.isNotEmpty)
+                                                ? _buildStudentCardList(
+                                                    cellStudents,
+                                                    dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                                  )
+                                                : Padding(
+                                                    padding: EdgeInsets.all(4.0),
+                                                    child: Text(widget.placeholderText ?? '셀을 선택하세요.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
                                   );
-                                },
+                              },
                               );
-                            },
-                          ),
-                        )
-                      else
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
-                              return Container(
-                                margin: const EdgeInsets.only(top: 24),
-                                height: containerHeight,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF18181A),
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                                alignment: Alignment.center,
-                                child: const Text('셀을 선택하세요.', style: TextStyle(color: Colors.white38, fontSize: 17)),
-                              );
-                            },
-                          ),
-                        ),
+                                    },
+                                  )
+                                : LayoutBuilder(
+                                    builder: (context, constraints) {
+                            final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                            return Container(
+                              margin: const EdgeInsets.only(top: 24),
+                              height: containerHeight,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF18181A),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(widget.placeholderText ?? '셀을 선택하세요.', style: const TextStyle(color: Colors.white38, fontSize: 17)),
+                            );
+                                    },
+                                  )
+                            ),
+                      ),
                   // 삭제 드롭존
                   if (_showDeleteZone)
                     Padding(
@@ -1295,37 +1296,31 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'startTime': startTime,
             'isSelfStudy': isSelfStudy,
           };
-          print('[DEBUG][TT] Draggable dragData 준비: type=${dragData['type']}, setId=${dragData['setId']}, oldDayIndex=${dragData['oldDayIndex']}, oldStartTime=${dragData['oldStartTime']}, studentsCount=${(dragData['students'] as List).length}');
+          // print('[DEBUG][TT] Draggable dragData 준비: type=${dragData['type']}, setId=${dragData['setId']}, oldDayIndex=${dragData['oldDayIndex']}, oldStartTime=${dragData['oldStartTime']}, studentsCount=${(dragData['students'] as List).length});
           return GestureDetector(
-            onLongPressStart: (_) => print('[DEBUG][TT] onLongPressStart: ${info.student.name}'),
-            onLongPressEnd: (_) => print('[DEBUG][TT] onLongPressEnd: ${info.student.name}'),
+            onLongPressStart: (_) { /* debug off */ },
+            onLongPressEnd: (_) { /* debug off */ },
             behavior: HitTestBehavior.translucent,
             child: Listener(
-              onPointerDown: (_) => print('[DEBUG][TT] PointerDown on student card: ${info.student.name}'),
-              onPointerUp: (_) => print('[DEBUG][TT] PointerUp on student card: ${info.student.name}'),
-              onPointerCancel: (_) => print('[DEBUG][TT] PointerCancel on student card: ${info.student.name}'),
+              onPointerDown: (_) {},
+              onPointerUp: (_) {},
+              onPointerCancel: (_) {},
               child: LongPressDraggable<Map<String, dynamic>>(
                 data: dragData,
                 onDragStarted: () {
-                  print('[DEBUG][TT] onDragStarted: student=${info.student.name}, isSelfStudy=$isSelfStudy');
                   setState(() {
                     _showDeleteZone = true;
                   });
-                  print('[DEBUG][TT] _showDeleteZone => true');
                 },
                 onDragEnd: (details) {
-                  print('[DEBUG][TT] onDragEnd: wasAccepted=${details.wasAccepted}, selectedCount=$selectedCount');
                   setState(() {
                     _showDeleteZone = false;
                   });
-                  print('[DEBUG][TT] _showDeleteZone => false');
                   if (!details.wasAccepted) {
-                    print('[DEBUG][TT] 드래그 취소 - 선택 모드 종료');
                     if (widget.onExitSelectMode != null) {
                       widget.onExitSelectMode!();
                     }
                   } else {
-                    print('[DEBUG][TT] 드래그 성공 - 선택 모드 종료');
                     if (widget.onExitSelectMode != null) {
                       widget.onExitSelectMode!();
                     }
@@ -2061,7 +2056,7 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
       return;
     }
     Navigator.of(context).pop(ClassInfo(
-      id: widget.editTarget?.id ?? UniqueKey().toString(),
+      id: widget.editTarget?.id ?? const Uuid().v4(),
       name: name,
       capacity: capacity,
       description: desc,
