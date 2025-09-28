@@ -19,6 +19,7 @@ class SessionOverride {
   final String? replacementAttendanceId; // 보강 출석 레코드 ID
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int version; // OCC
 
   SessionOverride({
     String? id,
@@ -35,6 +36,7 @@ class SessionOverride {
     this.replacementAttendanceId,
     DateTime? createdAt,
     DateTime? updatedAt,
+    this.version = 1,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -54,6 +56,7 @@ class SessionOverride {
     String? replacementAttendanceId,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? version,
   }) {
     return SessionOverride(
       id: id ?? this.id,
@@ -70,6 +73,7 @@ class SessionOverride {
       replacementAttendanceId: replacementAttendanceId ?? this.replacementAttendanceId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
+      version: version ?? this.version,
     );
   }
 
@@ -85,6 +89,14 @@ class SessionOverride {
         return OverrideType.add;
     }
   }
+
+  // Public helpers for external use
+  static OverrideType parseType(String s) => _typeFromString(s);
+  static String typeToString(OverrideType t) => _typeToString(t);
+  static OverrideStatus parseStatus(String s) => _statusFromString(s);
+  static String statusToString(OverrideStatus s) => _statusToString(s);
+  static OverrideReason? parseReason(String? s) => _reasonFromString(s);
+  static String? reasonToString(OverrideReason? r) => _reasonToString(r);
 
   static String _typeToString(OverrideType t) {
     switch (t) {
@@ -171,6 +183,7 @@ class SessionOverride {
       replacementAttendanceId: map['replacement_attendance_id'] as String?,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      version: (map['version'] is num) ? (map['version'] as num).toInt() : 1,
     );
   }
 
@@ -190,6 +203,7 @@ class SessionOverride {
       'replacement_attendance_id': replacementAttendanceId,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'version': version,
     };
   }
 }

@@ -26,6 +26,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 import 'tenant_service.dart';
 import 'tag_preset_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
 
 class StudentWithInfo {
   final Student student;
@@ -55,6 +57,7 @@ class DataManager {
   List<PaymentRecord> _paymentRecords = [];
   List<AttendanceRecord> _attendanceRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
+  RealtimeChannel? _attendanceRealtimeChannel;
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
@@ -65,6 +68,7 @@ class DataManager {
   // Session Overrides (보강/예외)
   List<SessionOverride> _sessionOverrides = [];
   final ValueNotifier<List<SessionOverride>> sessionOverridesNotifier = ValueNotifier<List<SessionOverride>>([]);
+  RealtimeChannel? _sessionOverridesRealtimeChannel;
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
@@ -154,12 +158,14 @@ class DataManager {
       await _loadOperatingHours();
       await loadStudentTimeBlocks();
       await loadSessionOverrides();
+      await _subscribeSessionOverridesRealtime();
       await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
       await loadTeachers();
       await loadClasses(); // 수업 정보 로딩 추가
       await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
       await loadAttendanceRecords(); // 출석 기록 로딩 추가
+      await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
       await loadMemos();
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       _isInitialized = true;
@@ -167,6 +173,91 @@ class DataManager {
       print('Error initializing data: $e');
       _initializeDefaults();
     }
+  }
+
+  Future<void> _subscribeSessionOverridesRealtime() async {
+    try {
+      _sessionOverridesRealtimeChannel?.unsubscribe();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:session_overrides:$academyId');
+      _sessionOverridesRealtimeChannel = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'session_overrides',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.newRecord;
+            if (m == null) return;
+            DateTime? parseTsOpt(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+            try {
+              final ov = SessionOverride(
+                id: m['id'] as String,
+                studentId: m['student_id'] as String,
+                sessionTypeId: m['session_type_id'] as String?,
+                setId: m['set_id'] as String?,
+                overrideType: SessionOverride.parseType(m['override_type'] as String),
+                originalClassDateTime: parseTsOpt(m['original_class_datetime']),
+                replacementClassDateTime: parseTsOpt(m['replacement_class_datetime']),
+                durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
+                reason: SessionOverride.parseReason(m['reason'] as String?),
+                status: SessionOverride.parseStatus(m['status'] as String),
+                originalAttendanceId: m['original_attendance_id'] as String?,
+                replacementAttendanceId: m['replacement_attendance_id'] as String?,
+                createdAt: DateTime.parse(m['created_at'] as String).toLocal(),
+                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
+                version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+              );
+              if (_sessionOverrides.any((o) => o.id == ov.id)) return;
+              _sessionOverrides.insert(0, ov);
+              sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'session_overrides',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.newRecord;
+            if (m == null) return;
+            final idx = _sessionOverrides.indexWhere((o) => o.id == m['id']);
+            if (idx == -1) return;
+            DateTime? parseTsOpt(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+            try {
+              _sessionOverrides[idx] = _sessionOverrides[idx].copyWith(
+                sessionTypeId: m['session_type_id'] as String?,
+                setId: m['set_id'] as String?,
+                overrideType: SessionOverride.parseType(m['override_type'] as String),
+                originalClassDateTime: parseTsOpt(m['original_class_datetime']),
+                replacementClassDateTime: parseTsOpt(m['replacement_class_datetime']),
+                durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
+                reason: SessionOverride.parseReason(m['reason'] as String?),
+                status: SessionOverride.parseStatus(m['status'] as String),
+                originalAttendanceId: m['original_attendance_id'] as String?,
+                replacementAttendanceId: m['replacement_attendance_id'] as String?,
+                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
+                version: (m['version'] is num) ? (m['version'] as num).toInt() : _sessionOverrides[idx].version,
+              );
+              sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'session_overrides',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.oldRecord;
+            if (m == null) return;
+            _sessionOverrides.removeWhere((o) => o.id == m['id']);
+            sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+          },
+        )
+        ..subscribe();
+    } catch (_) {}
   }
 
   // ======== MEMOS ========
@@ -691,10 +782,42 @@ class DataManager {
 
   Future<void> loadSessionOverrides() async {
     try {
-      final maps = await AcademyDbService.instance.getSessionOverridesAll();
-      _sessionOverrides = maps.map((m) => SessionOverride.fromMap(m)).toList();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('session_overrides')
+          .select('id,student_id,session_type_id,set_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
+          .eq('academy_id', academyId)
+          .order('updated_at', ascending: false);
+      final list = rows as List<dynamic>;
+      _sessionOverrides = list.map<SessionOverride>((m) {
+        DateTime? parseTsOpt(String k) {
+          final v = m[k] as String?;
+          if (v == null || v.isEmpty) return null;
+          return DateTime.parse(v).toLocal();
+        }
+        return SessionOverride(
+          id: m['id'] as String,
+          studentId: m['student_id'] as String,
+          sessionTypeId: m['session_type_id'] as String?,
+          setId: m['set_id'] as String?,
+          overrideType: SessionOverride.parseType(m['override_type'] as String),
+          originalClassDateTime: parseTsOpt('original_class_datetime'),
+          replacementClassDateTime: parseTsOpt('replacement_class_datetime'),
+          durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
+          reason: SessionOverride.parseReason(m['reason'] as String?),
+          status: SessionOverride.parseStatus(m['status'] as String),
+          originalAttendanceId: m['original_attendance_id'] as String?,
+          replacementAttendanceId: m['replacement_attendance_id'] as String?,
+          createdAt: DateTime.parse(m['created_at'] as String).toLocal(),
+          updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
+          // ignore: cast_from_null_always_fails
+          version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+        );
+      }).toList();
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_overrides 로드 완료: ${_sessionOverrides.length}개');
+      print('[DEBUG] session_overrides 로드 완료(Supabase): ${_sessionOverrides.length}개');
+      // TODO: Realtime subscribe (다음 단계)
     } catch (e) {
       print('[ERROR] loadSessionOverrides 실패: $e');
       _sessionOverrides = [];
@@ -704,11 +827,33 @@ class DataManager {
 
   Future<void> addSessionOverride(SessionOverride overrideData) async {
     try {
-      await AcademyDbService.instance.addSessionOverride(overrideData.toMap());
-      _sessionOverrides.removeWhere((o) => o.id == overrideData.id);
-      _sessionOverrides.add(overrideData);
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final row = {
+        'id': overrideData.id,
+        'academy_id': academyId,
+        'student_id': overrideData.studentId,
+        'session_type_id': overrideData.sessionTypeId,
+        'set_id': overrideData.setId,
+        'override_type': SessionOverride.typeToString(overrideData.overrideType),
+        'original_class_datetime': overrideData.originalClassDateTime?.toUtc().toIso8601String(),
+        'replacement_class_datetime': overrideData.replacementClassDateTime?.toUtc().toIso8601String(),
+        'duration_minutes': overrideData.durationMinutes,
+        'reason': SessionOverride.reasonToString(overrideData.reason),
+        'status': SessionOverride.statusToString(overrideData.status),
+        'original_attendance_id': overrideData.originalAttendanceId,
+        'replacement_attendance_id': overrideData.replacementAttendanceId,
+        'created_at': overrideData.createdAt.toUtc().toIso8601String(),
+        'updated_at': overrideData.updatedAt.toUtc().toIso8601String(),
+        'version': overrideData.version,
+      };
+      final ins = await supa.from('session_overrides').insert(row).select('version').maybeSingle();
+      final ver = (ins?['version'] as num?)?.toInt() ?? 1;
+      final merged = overrideData.copyWith(version: ver);
+      _sessionOverrides.removeWhere((o) => o.id == merged.id);
+      _sessionOverrides.add(merged);
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 추가: id=${overrideData.id}, type=${overrideData.overrideType}, status=${overrideData.status}');
+      print('[DEBUG] session_override 추가(Supabase): id=${merged.id}, status=${merged.status}');
     } catch (e) {
       print('[ERROR] addSessionOverride 실패: $e');
       rethrow;
@@ -717,17 +862,42 @@ class DataManager {
 
   Future<void> updateSessionOverride(SessionOverride newData) async {
     try {
-      // 저장 전 검증: 운영시간 및 충돌 방지
       _validateOverride(newData);
-      await AcademyDbService.instance.updateSessionOverride(newData.id, newData.toMap());
+      final supa = Supabase.instance.client;
+      final base = {
+        'student_id': newData.studentId,
+        'session_type_id': newData.sessionTypeId,
+        'set_id': newData.setId,
+        'override_type': SessionOverride.typeToString(newData.overrideType),
+        'original_class_datetime': newData.originalClassDateTime?.toUtc().toIso8601String(),
+        'replacement_class_datetime': newData.replacementClassDateTime?.toUtc().toIso8601String(),
+        'duration_minutes': newData.durationMinutes,
+        'reason': SessionOverride.reasonToString(newData.reason),
+        'status': SessionOverride.statusToString(newData.status),
+        'original_attendance_id': newData.originalAttendanceId,
+        'replacement_attendance_id': newData.replacementAttendanceId,
+        'updated_at': newData.updatedAt.toUtc().toIso8601String(),
+      };
+      final res = await supa
+          .from('session_overrides')
+          .update(base)
+          .eq('id', newData.id)
+          .eq('version', newData.version)
+          .select('version')
+          .maybeSingle();
+      if (res == null) {
+        throw StateError('CONFLICT_SESSION_OVERRIDE_VERSION');
+      }
+      final newVer = (res['version'] as num?)?.toInt() ?? (newData.version + 1);
       final idx = _sessionOverrides.indexWhere((o) => o.id == newData.id);
+      final merged = newData.copyWith(version: newVer);
       if (idx != -1) {
-        _sessionOverrides[idx] = newData;
+        _sessionOverrides[idx] = merged;
       } else {
-        _sessionOverrides.add(newData);
+        _sessionOverrides.add(merged);
       }
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 업데이트: id=${newData.id}, status=${newData.status}');
+      print('[DEBUG] session_override 업데이트(Supabase): id=${newData.id}, status=${newData.status}');
     } catch (e) {
       print('[ERROR] updateSessionOverride 실패: $e');
       rethrow;
@@ -792,11 +962,9 @@ class DataManager {
     try {
       final idx = _sessionOverrides.indexWhere((o) => o.id == id);
       if (idx == -1) return;
-      final canceled = _sessionOverrides[idx].copyWith(status: OverrideStatus.canceled);
-      await AcademyDbService.instance.updateSessionOverride(id, canceled.toMap());
-      _sessionOverrides[idx] = canceled;
-      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 취소: id=$id');
+      final canceled = _sessionOverrides[idx].copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
+      await updateSessionOverride(canceled);
+      print('[DEBUG] session_override 취소(Supabase): id=$id');
     } catch (e) {
       print('[ERROR] cancelSessionOverride 실패: $e');
       rethrow;
@@ -805,10 +973,11 @@ class DataManager {
 
   Future<void> deleteSessionOverride(String id) async {
     try {
-      await AcademyDbService.instance.deleteSessionOverride(id);
+      final supa = Supabase.instance.client;
+      await supa.from('session_overrides').delete().eq('id', id);
       _sessionOverrides.removeWhere((o) => o.id == id);
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 삭제: id=$id');
+      print('[DEBUG] session_override 삭제(Supabase): id=$id');
     } catch (e) {
       print('[ERROR] deleteSessionOverride 실패: $e');
       rethrow;
@@ -2063,7 +2232,7 @@ class DataManager {
   Future<void> initFirstDue(String studentId, DateTime firstDue) async {
     if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
       await Supabase.instance.client.rpc('init_first_due', params: {
         'p_student_id': studentId,
         'p_first_due': firstDue.toIso8601String().substring(0, 10),
@@ -2125,58 +2294,233 @@ class DataManager {
   
   Future<void> loadAttendanceRecords() async {
     try {
-      await AcademyDbService.instance.ensureAttendanceRecordsTable();
-      final recordMaps = await AcademyDbService.instance.getAttendanceRecords();
-      _attendanceRecords = recordMaps.map((map) => AttendanceRecord.fromMap(map)).toList();
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('attendance_records')
+          .select('id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,created_at,updated_at,version')
+          .eq('academy_id', academyId)
+          .order('class_date_time', ascending: false);
+      final list = rows as List<dynamic>;
+      _attendanceRecords = list.map<AttendanceRecord>((m) {
+        DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+        DateTime? parseTsOpt(String k) {
+          final v = m[k] as String?;
+          if (v == null || v.isEmpty) return null;
+          return DateTime.parse(v).toLocal();
+        }
+        final dynamic isPresentDyn = m['is_present'];
+        final bool isPresent = (isPresentDyn is bool)
+            ? isPresentDyn
+            : ((isPresentDyn is num) ? isPresentDyn == 1 : false);
+        return AttendanceRecord(
+          id: m['id'] as String?,
+          studentId: m['student_id'] as String,
+          classDateTime: parseTs('class_date_time'),
+          classEndTime: parseTs('class_end_time'),
+          className: (m['class_name'] as String?) ?? '',
+          isPresent: isPresent,
+          arrivalTime: parseTsOpt('arrival_time'),
+          departureTime: parseTsOpt('departure_time'),
+          notes: m['notes'] as String?,
+          createdAt: parseTs('created_at'),
+          updatedAt: parseTs('updated_at'),
+          version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+        );
+      }).toList();
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[DEBUG] 출석 기록 로드 완료: ${_attendanceRecords.length}개');
-      
-      // 디버깅: 오늘 날짜 출석 기록 확인
-      final today = DateTime.now();
-      final todayRecords = _attendanceRecords.where((r) => 
-        r.classDateTime.year == today.year &&
-        r.classDateTime.month == today.month &&
-        r.classDateTime.day == today.day
-      ).toList();
-      
-      print('[DEBUG] 오늘(${today.year}-${today.month}-${today.day}) 출석 기록: ${todayRecords.length}개');
-      for (final record in todayRecords) {
-        print('[DEBUG] - 학생ID: ${record.studentId}, 수업시간: ${record.classDateTime}, 등원: ${record.arrivalTime}, 하원: ${record.departureTime}, isPresent: ${record.isPresent}');
-      }
-    } catch (e) {
-      print('[ERROR] 출석 기록 로드 실패: $e');
+      print('[SUPA] 출석 기록 로드: ${_attendanceRecords.length}개');
+    } catch (e, st) {
+      print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
       _attendanceRecords = [];
       attendanceRecordsNotifier.value = [];
     }
   }
 
+  Future<void> _subscribeAttendanceRealtime() async {
+    try {
+      _attendanceRealtimeChannel?.unsubscribe();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:attendance_records:$academyId');
+      _attendanceRealtimeChannel = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'attendance_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.newRecord;
+            if (m == null) return;
+            try {
+              final rec = AttendanceRecord(
+                id: m['id'] as String?,
+                studentId: m['student_id'] as String,
+                classDateTime: DateTime.parse(m['class_date_time'] as String).toLocal(),
+                classEndTime: DateTime.parse(m['class_end_time'] as String).toLocal(),
+                className: (m['class_name'] as String?) ?? '',
+                isPresent: (m['is_present'] is bool) ? m['is_present'] as bool : ((m['is_present'] is num) ? (m['is_present'] as num) == 1 : false),
+                arrivalTime: (m['arrival_time'] != null) ? DateTime.parse(m['arrival_time'] as String).toLocal() : null,
+                departureTime: (m['departure_time'] != null) ? DateTime.parse(m['departure_time'] as String).toLocal() : null,
+                notes: m['notes'] as String?,
+                createdAt: DateTime.parse(m['created_at'] as String).toLocal(),
+                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
+                version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+              );
+              // 중복 체크 후 추가
+              final exists = _attendanceRecords.any((r) => r.id == rec.id);
+              if (!exists) {
+                _attendanceRecords.add(rec);
+                attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+              }
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'attendance_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.newRecord;
+            if (m == null) return;
+            try {
+              final id = m['id'] as String?;
+              if (id == null) return;
+              final idx = _attendanceRecords.indexWhere((r) => r.id == id);
+              if (idx == -1) return;
+              final updated = _attendanceRecords[idx].copyWith(
+                classDateTime: DateTime.parse(m['class_date_time'] as String).toLocal(),
+                classEndTime: DateTime.parse(m['class_end_time'] as String).toLocal(),
+                className: (m['class_name'] as String?) ?? _attendanceRecords[idx].className,
+                isPresent: (m['is_present'] is bool) ? m['is_present'] as bool : ((m['is_present'] is num) ? (m['is_present'] as num) == 1 : _attendanceRecords[idx].isPresent),
+                arrivalTime: (m['arrival_time'] != null) ? DateTime.parse(m['arrival_time'] as String).toLocal() : null,
+                departureTime: (m['departure_time'] != null) ? DateTime.parse(m['departure_time'] as String).toLocal() : null,
+                notes: m['notes'] as String?,
+                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
+                version: (m['version'] is num) ? (m['version'] as num).toInt() : _attendanceRecords[idx].version,
+              );
+              _attendanceRecords[idx] = updated;
+              attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'attendance_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.oldRecord;
+            if (m == null) return;
+            try {
+              final id = m['id'] as String?;
+              if (id == null) return;
+              _attendanceRecords.removeWhere((r) => r.id == id);
+              attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+            } catch (_) {}
+          },
+        )
+        ..subscribe();
+    } catch (e) {
+      // ignore
+    }
+  }
+
   Future<void> addAttendanceRecord(AttendanceRecord record) async {
-    final recordData = record.toMap();
-    await AcademyDbService.instance.addAttendanceRecord(recordData);
-    _attendanceRecords.add(record);
+    final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    final row = {
+      'id': record.id,
+      'academy_id': academyId,
+      'student_id': record.studentId,
+      'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+      'class_end_time': record.classEndTime.toUtc().toIso8601String(),
+      'class_name': record.className,
+      'is_present': record.isPresent,
+      'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
+      'departure_time': record.departureTime?.toUtc().toIso8601String(),
+      'notes': record.notes,
+      'created_at': record.createdAt.toUtc().toIso8601String(),
+      'updated_at': record.updatedAt.toUtc().toIso8601String(),
+      'version': record.version,
+    };
+    final inserted = await supa.from('attendance_records').insert(row).select('id,version').maybeSingle();
+    if (inserted != null) {
+      final withId = record.copyWith(id: (inserted['id'] as String?), version: (inserted['version'] as num?)?.toInt() ?? 1);
+      _attendanceRecords.add(withId);
+    } else {
+      _attendanceRecords.add(record);
+    }
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-    // 백엔드 증분 동기화 큐에 등록 (비동기, 실패시 큐가 재시도)
-    unawaited(SyncService.instance.enqueueAttendanceRecord(record));
   }
 
   Future<void> updateAttendanceRecord(AttendanceRecord record) async {
-    if (record.id == null) return;
-    
-    final recordData = record.toMap();
-    await AcademyDbService.instance.updateAttendanceRecord(record.id!, recordData);
-    
-    final index = _attendanceRecords.indexWhere((r) => r.id == record.id);
-    if (index != -1) {
-      _attendanceRecords[index] = record;
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    final supa = Supabase.instance.client;
+    if (record.id != null) {
+      final row = {
+        'student_id': record.studentId,
+        'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+        'class_end_time': record.classEndTime.toUtc().toIso8601String(),
+        'class_name': record.className,
+        'is_present': record.isPresent,
+        'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
+        'departure_time': record.departureTime?.toUtc().toIso8601String(),
+        'notes': record.notes,
+        'updated_at': record.updatedAt.toUtc().toIso8601String(),
+        // version은 트리거에서 +1 증가
+      };
+      final updated = await supa
+          .from('attendance_records')
+          .update(row)
+          .eq('id', record.id!)
+          .eq('version', record.version)
+          .select('id,version')
+          .maybeSingle();
+      if (updated == null) {
+        throw StateError('CONFLICT_ATTENDANCE_VERSION');
+      }
+      final index = _attendanceRecords.indexWhere((r) => r.id == record.id);
+      if (index != -1) {
+        final newVersion = (updated['version'] as num?)?.toInt() ?? (record.version + 1);
+        _attendanceRecords[index] = record.copyWith(version: newVersion);
+        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      }
+      return;
     }
-    // 백엔드 증분 동기화 큐에 등록
-    unawaited(SyncService.instance.enqueueAttendanceRecord(record));
+
+    // id가 없으면 동일 키(학생, 시간)로 업데이트 시도 후 없으면 추가
+    final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+    final keyFilter = supa
+        .from('attendance_records')
+        .select('id')
+        .eq('academy_id', academyId)
+        .eq('student_id', record.studentId)
+        .eq('class_date_time', record.classDateTime.toUtc().toIso8601String())
+        .limit(1);
+    final found = await keyFilter;
+    if (found is List && found.isNotEmpty && found.first['id'] is String) {
+      final id = found.first['id'] as String;
+      // 원격에서 최신 버전 조회 후 버전 싱크
+      final current = await supa
+          .from('attendance_records')
+          .select('version')
+          .eq('id', id)
+          .limit(1)
+          .maybeSingle();
+      final curVersion = (current?['version'] as num?)?.toInt() ?? 1;
+      final updated = record.copyWith(id: id, version: curVersion);
+      await updateAttendanceRecord(updated);
+    } else {
+      await addAttendanceRecord(record);
+    }
   }
 
   Future<void> deleteAttendanceRecord(String id) async {
+    try {
+      final supa = Supabase.instance.client;
+      await supa.from('attendance_records').delete().eq('id', id);
+    } catch (_) {}
     _attendanceRecords.removeWhere((r) => r.id == id);
-    await AcademyDbService.instance.deleteAttendanceRecord(id);
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
   }
 
@@ -2209,29 +2553,40 @@ class DataManager {
     DateTime? departureTime,
     String? notes,
   }) async {
-    print('[DEBUG] saveOrUpdateAttendance 시작 - 학생ID: $studentId, 등원: $arrivalTime, 하원: $departureTime');
-    
-    // 기존 출석 기록 확인
+    print('[SUPA] saveOrUpdateAttendance 시작 - 학생ID: $studentId');
+    final now = DateTime.now();
     final existing = getAttendanceRecord(studentId, classDateTime);
-    
     if (existing != null) {
-      print('[DEBUG] 기존 출석 기록 업데이트 - ID: ${existing.id}');
-      // copyWith는 null로 덮어쓰지 못하므로 명시적으로 새 레코드를 구성한다
-      final updated = AttendanceRecord(
-        id: existing.id,
-        studentId: existing.studentId,
-        classDateTime: existing.classDateTime,
+      final updated = existing.copyWith(
         classEndTime: classEndTime,
         className: className,
         isPresent: isPresent,
-        arrivalTime: arrivalTime, // null 허용(명시적 클리어)
-        departureTime: departureTime, // null 허용(명시적 클리어)
+        arrivalTime: arrivalTime,
+        departureTime: departureTime,
         notes: notes,
-        createdAt: existing.createdAt,
-        updatedAt: DateTime.now(),
+        updatedAt: now,
       );
-      await updateAttendanceRecord(updated);
-      // 보강 planned → completed 자동 연결 시도 (replace/add 대상)
+      try {
+        await updateAttendanceRecord(updated);
+      } on StateError catch (e) {
+        if (e.message == 'CONFLICT_ATTENDANCE_VERSION') {
+          // 최신 데이터 재로딩 후 충돌 알림
+          await loadAttendanceRecords();
+          throw Exception('다른 기기에서 먼저 수정했습니다. 내용을 확인 후 다시 시도하세요.');
+        } else {
+          rethrow;
+        }
+      }
+      final idx = _attendanceRecords.indexWhere((r) => r.studentId == studentId &&
+          r.classDateTime.year == classDateTime.year &&
+          r.classDateTime.month == classDateTime.month &&
+          r.classDateTime.day == classDateTime.day &&
+          r.classDateTime.hour == classDateTime.hour &&
+          r.classDateTime.minute == classDateTime.minute);
+      if (idx != -1) {
+        _attendanceRecords[idx] = updated;
+        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      }
       try {
         if (updated.id != null) {
           await _completePlannedOverrideFor(
@@ -2243,10 +2598,7 @@ class DataManager {
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(업데이트): $e');
       }
-      print('[DEBUG] 출석 기록 업데이트 완료');
     } else {
-      print('[DEBUG] 새 출석 기록 추가');
-      // 새로 생성
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
         classDateTime: classDateTime,
@@ -2258,7 +2610,6 @@ class DataManager {
         notes: notes,
       );
       await addAttendanceRecord(newRecord);
-      // 보강 planned → completed 자동 연결 시도
       try {
         if (newRecord.id != null) {
           await _completePlannedOverrideFor(
@@ -2270,24 +2621,7 @@ class DataManager {
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(추가): $e');
       }
-      print('[DEBUG] 출석 기록 추가 완료 - ID: ${newRecord.id}');
     }
-    
-    // DB에 실제로 저장되었는지 확인
-    await loadAttendanceRecords(); // 메모리 새로고침
-    final saved = getAttendanceRecord(studentId, classDateTime);
-    if (saved != null) {
-      print('[DEBUG] DB 저장 확인 성공 - 등원: ${saved.arrivalTime}, 하원: ${saved.departureTime}');
-    } else {
-      print('[ERROR] DB 저장 확인 실패!');
-    }
-    // 큐로 전송 (최종 저장 확인 후)
-    try {
-      final toSend = saved ?? getAttendanceRecord(studentId, classDateTime);
-      if (toSend != null) {
-        unawaited(SyncService.instance.enqueueAttendanceRecord(toSend));
-      }
-    } catch (_) {}
   }
 
   // replacementClassDateTime와 동일한 planned override(add/replace)를 completed로 전환
@@ -2322,7 +2656,9 @@ class DataManager {
       replacementAttendanceId: replacementAttendanceId,
       updatedAt: DateTime.now(),
     );
-    await AcademyDbService.instance.updateSessionOverride(updated.id, updated.toMap());
+    try {
+      await updateSessionOverride(updated);
+    } catch (_) {}
 
     final idx = _sessionOverrides.indexWhere((o) => o.id == updated.id);
     if (idx != -1) {

@@ -12,6 +12,7 @@ class AttendanceRecord {
   final String? notes; // 비고 (지각, 조퇴 등)
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int version; // 낙관적 잠금을 위한 버전
 
   AttendanceRecord({
     this.id,
@@ -25,6 +26,7 @@ class AttendanceRecord {
     this.notes,
     required this.createdAt,
     required this.updatedAt,
+    this.version = 1,
   });
 
   factory AttendanceRecord.create({
@@ -50,10 +52,18 @@ class AttendanceRecord {
       notes: notes,
       createdAt: now,
       updatedAt: now,
+      version: 1,
     );
   }
 
   factory AttendanceRecord.fromMap(Map<String, dynamic> map) {
+    int _asInt(dynamic v) {
+      if (v == null) return 0;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v) ?? 0;
+      return 0;
+    }
     return AttendanceRecord(
       id: map['id'] as String?,
       studentId: map['student_id'] as String,
@@ -70,6 +80,7 @@ class AttendanceRecord {
       notes: map['notes'] as String?,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      version: _asInt(map['version']),
     );
   }
 
@@ -86,6 +97,7 @@ class AttendanceRecord {
       'notes': notes,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'version': version,
     };
   }
 
@@ -101,6 +113,7 @@ class AttendanceRecord {
     String? notes,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? version,
   }) {
     return AttendanceRecord(
       id: id ?? this.id,
@@ -114,6 +127,7 @@ class AttendanceRecord {
       notes: notes ?? this.notes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
+      version: version ?? this.version,
     );
   }
 
@@ -137,6 +151,6 @@ class AttendanceRecord {
 
   @override
   String toString() {
-    return 'AttendanceRecord(id: $id, studentId: $studentId, classDateTime: $classDateTime, className: $className, isPresent: $isPresent)';
+    return 'AttendanceRecord(id: $id, studentId: $studentId, classDateTime: $classDateTime, className: $className, isPresent: $isPresent, version: $version)';
   }
 }

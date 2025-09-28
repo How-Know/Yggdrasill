@@ -895,7 +895,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
                 if (existing != null) {
                   final updated = existing.copyWith(departureTime: now);
-                  await DataManager.instance.updateAttendanceRecord(updated);
+                  try {
+                    await DataManager.instance.updateAttendanceRecord(updated);
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.')));
+                  }
                 }
                 // 하원 시 미완료 과제들을 숙제로 표시
                 HomeworkStore.instance.markIncompleteAsHomework(t.student.id);
@@ -986,7 +990,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
               if (existing != null) {
                 final updated = existing.copyWith(departureTime: now);
-                await DataManager.instance.updateAttendanceRecord(updated);
+                try {
+                  await DataManager.instance.updateAttendanceRecord(updated);
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.')));
+                }
               }
             }
           } catch (e) {

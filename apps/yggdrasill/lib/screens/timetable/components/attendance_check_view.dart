@@ -3031,10 +3031,13 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       );
     } catch (e) {
       print('[ERROR] 출석 정보 저장 실패: $e');
+      final String msg = e.toString().contains('다른 기기에서 먼저 수정')
+          ? '다른 기기에서 먼저 수정되었습니다. 화면을 새로고침 후 다시 시도하세요.'
+          : '출석 정보 저장에 실패했습니다.';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('출석 정보 저장에 실패했습니다.'),
-          backgroundColor: Color(0xFFE53E3E),
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: const Color(0xFFE53E3E),
         ),
       );
     }

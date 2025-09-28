@@ -1857,6 +1857,7 @@ class StudentScreenState extends State<StudentScreen> {
           notes: null,
           createdAt: dateStart,
           updatedAt: dateStart,
+          version: 1,
         ),
       );
       if (rec.id == null) continue; // 기록 없음 → 예정

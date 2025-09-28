@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
-import 'dart:math';
-import 'academy_db.dart';
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
+import 'package:uuid/uuid.dart';
+import 'tenant_service.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -14,6 +17,7 @@ class HomeworkItem {
   DateTime? runStart; // 진행 중이면 시작 시각
   DateTime? completedAt;
   DateTime? firstStartedAt; // 처음 시작한 시간
+  int version; // OCC 버전
   HomeworkItem({
     required this.id,
     required this.title,
@@ -24,6 +28,7 @@ class HomeworkItem {
     this.runStart,
     this.completedAt,
     this.firstStartedAt,
+    this.version = 1,
   });
 }
 
@@ -44,68 +49,111 @@ class HomeworkStore {
   Future<void> loadAll() async {
     if (_loaded) return;
     try {
-      final db = await AcademyDbService.instance.db;
-      final rows = await db.query('homework_items');
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final data = await supa
+          .from('homework_items')
+          .select('id,student_id,title,body,color,status,accumulated_ms,run_start,completed_at,first_started_at,created_at,updated_at,version')
+          .eq('academy_id', academyId)
+          .order('updated_at', ascending: false);
       _byStudentId.clear();
-      for (final r in rows) {
-        final item = HomeworkItem(
-          id: r['id'] as String,
-          title: (r['title'] as String?) ?? '',
-          body: (r['body'] as String?) ?? '',
-          color: Color((r['color'] as int?) ?? 0xFF1976D2),
-          status: HomeworkStatus.values[(r['status'] as int?) ?? 0],
-          accumulatedMs: (r['accumulated_ms'] as int?) ?? 0,
-          runStart: (r['run_start'] as String?) != null ? DateTime.tryParse(r['run_start'] as String) : null,
-          completedAt: (r['completed_at'] as String?) != null ? DateTime.tryParse(r['completed_at'] as String) : null,
-          firstStartedAt: (r['first_started_at'] as String?) != null ? DateTime.tryParse(r['first_started_at'] as String) : null,
-        );
+      for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
         final sid = (r['student_id'] as String?) ?? '';
         if (sid.isEmpty) continue;
+        DateTime? parseTsOpt(dynamic v) {
+          if (v == null) return null;
+          final s = v as String?;
+          if (s == null || s.isEmpty) return null;
+          return DateTime.parse(s).toLocal();
+        }
+        int? parseInt(dynamic v) {
+          if (v == null) return null;
+          if (v is int) return v;
+          if (v is num) return v.toInt();
+          if (v is String) return int.tryParse(v);
+          return null;
+        }
+        final item = HomeworkItem(
+          id: (r['id'] as String?) ?? const Uuid().v4(),
+          title: (r['title'] as String?) ?? '',
+          body: (r['body'] as String?) ?? '',
+          color: Color(parseInt(r['color']) ?? 0xFF1976D2),
+          status: HomeworkStatus.values[((r['status'] as int?) ?? 0).clamp(0, HomeworkStatus.values.length - 1)],
+          accumulatedMs: (r['accumulated_ms'] as int?) ?? (r['accumulated_ms'] is num ? (r['accumulated_ms'] as num).toInt() : 0),
+          runStart: parseTsOpt(r['run_start']),
+          completedAt: parseTsOpt(r['completed_at']),
+          firstStartedAt: parseTsOpt(r['first_started_at']),
+          version: parseInt(r['version']) ?? 1,
+        );
         _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]).add(item);
       }
       _loaded = true;
       _bump();
-    } catch (e) {
-      // ignore
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[HW][loadAll][ERROR] $e\n$st');
     }
   }
 
-  Future<void> _persist(String studentId) async {
+  Future<void> _upsertItem(String studentId, HomeworkItem it) async {
     try {
-      final db = await AcademyDbService.instance.db;
-      final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
-      // 간단히 해당 학생의 항목을 전체 리플레이스
-      await db.transaction((txn) async {
-        await txn.delete('homework_items', where: 'student_id = ?', whereArgs: [studentId]);
-        for (final it in list) {
-          await txn.insert('homework_items', {
-            'id': it.id,
-            'student_id': studentId,
-            'title': it.title,
-            'body': it.body,
-            'color': it.color.value,
-            'status': it.status.index,
-            'accumulated_ms': it.accumulatedMs,
-            'run_start': it.runStart?.toIso8601String(),
-            'completed_at': it.completedAt?.toIso8601String(),
-            'first_started_at': it.firstStartedAt?.toIso8601String(),
-            'created_at': DateTime.now().toIso8601String(),
-            'updated_at': DateTime.now().toIso8601String(),
-          });
-        }
-      });
-    } catch (e) {
-      // ignore
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final base = {
+        'student_id': studentId,
+        'title': it.title,
+        'body': it.body,
+        'color': it.color.value,
+        'status': it.status.index,
+        'accumulated_ms': it.accumulatedMs,
+        'run_start': it.runStart?.toUtc().toIso8601String(),
+        'completed_at': it.completedAt?.toUtc().toIso8601String(),
+        'first_started_at': it.firstStartedAt?.toUtc().toIso8601String(),
+      };
+      // OCC update
+      final updated = await supa
+          .from('homework_items')
+          .update(base)
+          .eq('id', it.id)
+          .eq('version', it.version)
+          .select('version')
+          .maybeSingle();
+      if (updated != null) {
+        it.version = (updated['version'] as num?)?.toInt() ?? (it.version + 1);
+        return;
+      }
+      // Insert if not exists
+      final insertRow = {
+        'id': it.id,
+        'academy_id': academyId,
+        ...base,
+        'version': it.version,
+      };
+      final ins = await supa
+          .from('homework_items')
+          .insert(insertRow)
+          .select('version')
+          .maybeSingle();
+      if (ins != null) {
+        it.version = (ins['version'] as num?)?.toInt() ?? 1;
+        return;
+      }
+      // Conflict fallback
+      await _reloadStudent(studentId);
+      throw StateError('CONFLICT_HOMEWORK_VERSION');
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[HW][upsert][ERROR] ' + e.toString() + '\n' + st.toString());
     }
   }
 
   HomeworkItem add(String studentId, {required String title, required String body, Color color = const Color(0xFF1976D2)}) {
-    final id = '${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1 << 32)}';
-    final item = HomeworkItem(id: id, title: title, body: body, color: color);
+    final id = const Uuid().v4();
+    final item = HomeworkItem(id: id, title: title, body: body, color: color, version: 1);
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
     list.insert(0, item);
     _bump();
-    _persist(studentId);
+    unawaited(_upsertItem(studentId, item));
     return item;
   }
 
@@ -116,7 +164,7 @@ class HomeworkStore {
     if (idx != -1) {
       list[idx] = updated;
       _bump();
-      _persist(studentId);
+      unawaited(_upsertItem(studentId, updated));
     }
   }
 
@@ -125,7 +173,12 @@ class HomeworkStore {
     if (list == null) return;
     list.removeWhere((e) => e.id == id);
     _bump();
-    _persist(studentId);
+    unawaited(() async {
+      try {
+        final supa = Supabase.instance.client;
+        await supa.from('homework_items').delete().eq('id', id);
+      } catch (e) {}
+    }());
   }
 
   HomeworkItem? getById(String studentId, String id) {
@@ -164,7 +217,7 @@ class HomeworkStore {
         item.completedAt = null;
       }
       _bump();
-      _persist(studentId);
+      unawaited(_upsertItem(studentId, item));
     }
   }
 
@@ -177,7 +230,7 @@ class HomeworkStore {
       list[idx].accumulatedMs += now.difference(list[idx].runStart!).inMilliseconds;
       list[idx].runStart = null;
       _bump();
-      _persist(studentId);
+      unawaited(_upsertItem(studentId, list[idx]));
     }
   }
 
@@ -195,7 +248,7 @@ class HomeworkStore {
       item.status = HomeworkStatus.completed;
       item.completedAt = DateTime.now();
       _bump();
-      _persist(studentId);
+      unawaited(_upsertItem(studentId, item));
     }
   }
 
@@ -206,7 +259,7 @@ class HomeworkStore {
     if (idx == -1) return add(studentId, title: '과제', body: body);
     final src = list[idx];
     final created = add(studentId, title: src.title, body: body, color: src.color);
-    _persist(studentId);
+    // add()가 서버 upsert를 처리함
     return created;
   }
 
@@ -231,9 +284,43 @@ class HomeworkStore {
     }
     if (changed) {
       _bump();
-      _persist(studentId);
+      for (final e in list.where((e) => e.status == HomeworkStatus.homework)) {
+        unawaited(_upsertItem(studentId, e));
+      }
     }
   }
 
   void _bump() { revision.value++; }
+
+  Future<void> _reloadStudent(String studentId) async {
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final data = await supa
+          .from('homework_items')
+          .select('id,student_id,title,body,color,status,accumulated_ms,run_start,completed_at,first_started_at,created_at,updated_at,version')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .order('updated_at', ascending: false);
+      final List<HomeworkItem> list = [];
+      for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
+        int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+        DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+        list.add(HomeworkItem(
+          id: (r['id'] as String?) ?? const Uuid().v4(),
+          title: (r['title'] as String?) ?? '',
+          body: (r['body'] as String?) ?? '',
+          color: Color(_asInt(r['color'])),
+          status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+          accumulatedMs: _asInt(r['accumulated_ms']),
+          runStart: _parse(r['run_start']),
+          completedAt: _parse(r['completed_at']),
+          firstStartedAt: _parse(r['first_started_at']),
+          version: _asInt(r['version']),
+        ));
+      }
+      _byStudentId[studentId] = list;
+      _bump();
+    } catch (_) {}
+  }
 }

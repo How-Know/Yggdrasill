@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'academy_db.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
 import 'tenant_service.dart';
 import 'package:uuid/uuid.dart';
 
@@ -28,6 +29,7 @@ class TagStore {
   final Map<String, List<TagEvent>> _eventsBySetId = {};
   final ValueNotifier<bool> isSaving = ValueNotifier<bool>(false);
   final ValueNotifier<bool> reachedEnd = ValueNotifier<bool>(false);
+  RealtimeChannel? _rt;
 
   List<TagEvent> getEventsForSet(String setId) {
     return List<TagEvent>.from(_eventsBySetId[setId] ?? const []);
@@ -133,6 +135,7 @@ class TagStore {
         }
         // ignore: avoid_print
         print('[TagEvents] loaded from Supabase sets=' + _eventsBySetId.length.toString());
+        _subscribeRealtime(academyId);
         return;
       } catch (_) {
         // fallback below
@@ -153,6 +156,50 @@ class TagStore {
     }
     // ignore: avoid_print
     print('[TagEvents] loaded from SQLite sets=' + _eventsBySetId.length.toString());
+  }
+
+  void _subscribeRealtime(String academyId) {
+    try {
+      if (_rt != null) return;
+      _rt = Supabase.instance.client.channel('public:tag_events:$academyId')
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'tag_events',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            final m = payload.newRecord;
+            if (m == null) return;
+            final setId = (m['set_id'] as String?) ?? '';
+            if (setId.isEmpty) return;
+            final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
+            list.add(TagEvent(
+              tagName: (m['tag_name'] as String?) ?? '',
+              colorValue: (m['color_value'] as int?) ?? 0xFF1976D2,
+              iconCodePoint: (m['icon_code'] as int?) ?? 0,
+              timestamp: DateTime.tryParse((m['occurred_at'] as String?) ?? '') ?? DateTime.now(),
+              note: m['note'] as String?,
+            ));
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'tag_events',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (payload) {
+            // 태그 이벤트는 보통 삭제를 거의 안하지만, 대응
+            final m = payload.oldRecord;
+            if (m == null) return;
+            final setId = (m['set_id'] as String?) ?? '';
+            if (setId.isEmpty) return;
+            final list = _eventsBySetId[setId];
+            if (list == null) return;
+            list.removeWhere((e) => e.tagName == m['tag_name'] && e.timestamp.toIso8601String() == (m['occurred_at'] as String?));
+          },
+        )
+        ..subscribe();
+    } catch (_) {}
   }
 }
 

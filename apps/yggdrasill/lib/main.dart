@@ -191,9 +191,19 @@ void main() async {
       FlutterError.dumpErrorToConsole(details, forceReport: true);
     }
   };
-  // Supabase init (desktop에서도 동작). URL/KEY는 dart-define으로 주입
-  final supabaseUrl = const String.fromEnvironment('SUPABASE_URL', defaultValue: '');
-  final supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
+  // Supabase init (desktop에서도 동작). URL/KEY는 dart-define 우선, 없으면 env.local.json 폴백
+  String supabaseUrl = const String.fromEnvironment('SUPABASE_URL', defaultValue: '');
+  String supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
+  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+    try {
+      final file = File('env.local.json');
+      if (await file.exists()) {
+        final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        supabaseUrl = (map['SUPABASE_URL'] as String?) ?? '';
+        supabaseAnonKey = (map['SUPABASE_ANON_KEY'] as String?) ?? '';
+      }
+    } catch (_) {}
+  }
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
