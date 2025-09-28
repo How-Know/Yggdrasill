@@ -390,23 +390,26 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   @override
   Widget build(BuildContext context) {
-    final maxHeight = MediaQuery.of(context).size.height * 0.8 + 24;
     return Row(
       children: [
         const SizedBox(width: 24),
         Expanded(
           flex: 3,
-          child: SizedBox(
-            height: maxHeight,
-            child: Container(
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0), // vertical 32 -> 16으로 조정
-              decoration: BoxDecoration(
-                color: const Color(0xFF18181A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: widget.timetableChild,
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SizedBox(
+                height: constraints.maxHeight,
+                child: Container(
+                  margin: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0), // vertical 32 -> 16으로 조정
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF18181A),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: widget.timetableChild,
+                ),
+              );
+            },
           ),
         ),
         const SizedBox(width: 32),

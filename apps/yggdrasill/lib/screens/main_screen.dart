@@ -137,7 +137,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     final Map<String, _AttendanceTarget> byKey = {}; // key -> target
     for (final entry in setMap.entries) {
-      final block = entry.value.first;
+      final blocks = entry.value;
+      // number==1을 우선 대표 블록으로 사용, 없으면 시작시각 오름차순의 첫 블록으로 대체
+      StudentTimeBlock block;
+      try {
+        block = blocks.firstWhere((b) => b.number == 1);
+      } catch (_) {
+        blocks.sort((a, b) => (a.startHour * 60 + a.startMinute) - (b.startHour * 60 + b.startMinute));
+        block = blocks.first;
+      }
       final studentList = DataManager.instance.students
           .where((s) => s.student.id == block.studentId)
           .toList();
