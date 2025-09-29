@@ -30,7 +30,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  supabase_flutter: ^2.5.10
   file_selector: ^1.0.1
   flutter_localizations:
     sdk: flutter
@@ -43,14 +42,13 @@ dependencies:
   provider: ^6.1.1
   path_provider: ^2.1.1
   path: ^1.8.3
-  crypto: ^3.0.3
   material_symbols_icons: ^4.2719.1
   freezed_annotation: ^2.4.1
   json_annotation: ^4.8.1
   dartz: ^0.10.1
   equatable: ^2.0.5
   sqflite: ^2.3.0
-  file_picker: ^8.0.3
+  file_picker: ^6.1.1
   sqflite_common_ffi: ^2.3.0
   animations: ^2.0.11
   window_manager: ^0.3.7
@@ -68,6 +66,7 @@ dependencies:
   cupertino_icons: ^1.0.2
   flutter_svg: ^2.0.9
   dotted_border: ^3.0.1
+  supabase_flutter: ^2.6.0
   window_size:
     git:
       url: https://github.com/google/flutter-desktop-embedding.git
@@ -87,6 +86,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^2.0.0
+  msix: ^3.16.12
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -130,3 +130,13 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+msix_config:
+  display_name: Yggdrasill
+  publisher_display_name: How-Know
+  identity_name: com.yggdrasill.mneme
+  publisher: CN=How-Know
+  msix_version: 1.0.0.0
+  logo_path: windows/runner/resources/app_icon.ico
+  certificate_subject: CN=How-Know
+  certificate_path: C:\\Users\\harry\\Desktop\\howknow_codesign_new.pfx
+  certificate_password: "HowKnow2025!"

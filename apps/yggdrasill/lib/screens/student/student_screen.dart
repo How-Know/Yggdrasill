@@ -433,7 +433,6 @@ class StudentScreenState extends State<StudentScreen> {
       context: context,
       builder: (context) => StudentRegistrationDialog(
         onSave: (student, basicInfo) async {
-          // 트랜잭션 경합 방지를 위해 순차 저장
           await DataManager.instance.addStudent(student, basicInfo);
           showAppSnackBar(context, '학생이 등록되었습니다.');
         },
@@ -1857,7 +1856,6 @@ class StudentScreenState extends State<StudentScreen> {
           notes: null,
           createdAt: dateStart,
           updatedAt: dateStart,
-          version: 1,
         ),
       );
       if (rec.id == null) continue; // 기록 없음 → 예정
@@ -2596,13 +2594,11 @@ class StudentScreenState extends State<StudentScreen> {
       postponeReason: normalizedReason,
     );
 
-    // 서버-only: 납부 예정일 연기는 전용 RPC 호출로 처리
-    await DataManager.instance.postponeDueDate(
-      _selectedStudent!.student.id,
-      earliestUnpaidCycle,
-      picked,
-      normalizedReason ?? '',
-    );
+    if (currentRecord?.id != null) {
+      await DataManager.instance.updatePaymentRecord(updatedRecord);
+    } else {
+      await DataManager.instance.addPaymentRecord(updatedRecord);
+    }
 
     if (mounted) setState(() {});
   }
