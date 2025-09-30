@@ -8,6 +8,7 @@ import '../models/student.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'runtime_flags.dart';
 import '../models/student_time_block.dart';
 import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
@@ -20,6 +21,9 @@ class AcademyDbService {
   static Database? _db;
 
   Future<Database> get db async {
+    if (RuntimeFlags.serverOnly) {
+      throw StateError('Local database disabled in server-only mode');
+    }
     if (_db != null) return _db!;
     _db = await _initDb();
     return _db!;
@@ -1049,6 +1053,11 @@ class AcademyDbService {
   }
 
   Future<String> _resolveLocalDbPath() async {
+    if (RuntimeFlags.serverOnly) {
+      // 서버 전용 모드에서는 로컬 DB 경로를 사용하지 않습니다.
+      // 호출자가 접근하지 않도록 상위에서 차단되지만, 안전을 위해 빈 경로 반환
+      return '';
+    }
     // 우선순위 1) 빌드 타임 주입 경로(override)
     const definedPath = String.fromEnvironment('LOCAL_DB_PATH', defaultValue: '');
     if (definedPath.isNotEmpty) {

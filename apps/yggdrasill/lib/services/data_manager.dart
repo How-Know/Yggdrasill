@@ -18,6 +18,7 @@ import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
+import 'runtime_flags.dart';
 import 'sync_service.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
@@ -302,6 +303,11 @@ class DataManager {
         print('[SUPA][memos load] $e\n$st');
       }
     }
+    if (RuntimeFlags.serverOnly) {
+      _memos = [];
+      memosNotifier.value = List.unmodifiable(_memos);
+      return;
+    }
     final rows = await AcademyDbService.instance.getMemos();
     _memos = rows.map((m) => Memo.fromMap(m)).toList();
     memosNotifier.value = List.unmodifiable(_memos);
@@ -332,7 +338,9 @@ class DataManager {
     }
     _memos.insert(0, memo);
     memosNotifier.value = List.unmodifiable(_memos);
-    await AcademyDbService.instance.addMemo(memo.toMap());
+    if (!RuntimeFlags.serverOnly) {
+      await AcademyDbService.instance.addMemo(memo.toMap());
+    }
   }
 
   Future<void> updateMemo(Memo memo) async {
@@ -363,7 +371,9 @@ class DataManager {
     if (idx != -1) {
       _memos[idx] = memo;
       memosNotifier.value = List.unmodifiable(_memos);
-      await AcademyDbService.instance.updateMemo(memo.id, memo.toMap());
+      if (!RuntimeFlags.serverOnly) {
+        await AcademyDbService.instance.updateMemo(memo.id, memo.toMap());
+      }
     }
   }
 
@@ -378,7 +388,9 @@ class DataManager {
     }
     _memos.removeWhere((m) => m.id == id);
     memosNotifier.value = List.unmodifiable(_memos);
-    await AcademyDbService.instance.deleteMemo(id);
+    if (!RuntimeFlags.serverOnly) {
+      await AcademyDbService.instance.deleteMemo(id);
+    }
   }
 
   void _initializeDefaults() {
@@ -540,6 +552,11 @@ class DataManager {
       }
     }
     // 1. students 테이블에서 기본 정보 불러오기
+    if (RuntimeFlags.serverOnly) {
+      _studentsWithInfo = [];
+      studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+      return;
+    }
     final studentsRaw = await AcademyDbService.instance.getStudents();
     // 2. student_basic_info 테이블에서 부가 정보 불러오기
     List<StudentBasicInfo> basicInfos = [];
@@ -609,7 +626,9 @@ class DataManager {
   }
 
   Future<void> saveStudents() async {
-    await AcademyDbService.instance.saveStudents(_studentsWithInfo.map((si) => si.student).toList());
+    if (!RuntimeFlags.serverOnly) {
+      await AcademyDbService.instance.saveStudents(_studentsWithInfo.map((si) => si.student).toList());
+    }
   }
 
   Future<void> saveGroups() async {
@@ -634,7 +653,9 @@ class DataManager {
           return;
         } catch (e, st) { print('[SUPA][groups save] $e\n$st'); }
       }
-      await AcademyDbService.instance.saveGroups(_groups);
+      if (!RuntimeFlags.serverOnly) {
+        await AcademyDbService.instance.saveGroups(_groups);
+      }
     } catch (e) {
       print('Error saving groups: $e');
       throw Exception('Failed to save groups data');
@@ -657,7 +678,9 @@ class DataManager {
           }
         } catch (e, st) { print('[SUPA][student_payment_info select] $e\n$st'); }
       }
-      dbData ??= await AcademyDbService.instance.getAcademySettings();
+      if (!RuntimeFlags.serverOnly) {
+        dbData ??= await AcademyDbService.instance.getAcademySettings();
+      }
       if (dbData != null) {
         Uint8List? logoBytes;
         // Prefer storage download if bucket/path provided

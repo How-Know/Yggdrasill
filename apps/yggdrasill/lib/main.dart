@@ -30,6 +30,7 @@ import 'services/tag_preset_service.dart';
 import 'services/tag_store.dart';
 import 'tools/backfill_runner.dart';
 import 'package:path_provider/path_provider.dart';
+import 'services/runtime_flags.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -277,6 +278,13 @@ void main() async {
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
+  // 서버 전용 모드 플래그(dart-define 또는 OS 환경변수)
+  try {
+    final define = const String.fromEnvironment('SERVER_ONLY', defaultValue: 'false');
+    final env = Platform.environment['SERVER_ONLY'] ?? '';
+    final v = (define.isNotEmpty ? define : env).toLowerCase();
+    RuntimeFlags.serverOnly = (v == '1' || v == 'true' || v == 'yes');
+  } catch (_) {}
   // 데이터 경로 제어 플래그(dart-define로 런타임 제어)
   try {
     final dual = const String.fromEnvironment('DUAL_WRITE', defaultValue: 'true');

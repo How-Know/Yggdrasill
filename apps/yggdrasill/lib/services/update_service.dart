@@ -38,11 +38,17 @@ class UpdateService {
 
     final arch = _detectWindowsArch();
     if (arch == _WinArch.x64) {
-      await _triggerAppInstallerUpdate(context);
+      // App Installer가 비활성화된 환경 대비: canLaunchUrl로 선확인 후, 실패 시 ZIP 경로 안내
+      final appInstallerOk = await _tryTriggerAppInstaller(context);
+      if (!appInstallerOk) {
+        _showSnack(context, 'Windows App Installer가 비활성화되어 있습니다. 포터블 ZIP으로 업데이트합니다.');
+        await _updateUsingZipForArm64(context); // x64에서도 동일 ZIP 플로우 사용 가능
+      }
       return;
     }
 
     if (arch == _WinArch.arm64) {
+      // ARM64: AppInstaller 사용을 시도하지 않고 바로 ZIP 경로로 유도
       await _updateUsingZipForArm64(context);
       return;
     }
@@ -50,23 +56,31 @@ class UpdateService {
     _showSnack(context, '지원하지 않는 아키텍처입니다.');
   }
 
-  static Future<void> _triggerAppInstallerUpdate(BuildContext context) async {
+  static Future<bool> _tryTriggerAppInstaller(BuildContext context) async {
     _showSnack(context, '업데이트를 확인하고 있습니다...');
     try {
       final uri = Uri.parse(_appInstallerLatestUrl);
       final can = await canLaunchUrl(uri);
       if (can) {
-        await launchUrl(uri);
-      } else {
-        // Fallback: explorer로 호출
-        await Process.start('explorer.exe', [uri.toString()]);
+        final ok = await launchUrl(uri);
+        if (ok) {
+          await Future.delayed(const Duration(seconds: 2));
+          exit(0);
+        }
+        return false;
       }
-      // 잠시 대기 후 종료하여 업데이트가 진행될 수 있도록 함
-      await Future.delayed(const Duration(seconds: 2));
-      exit(0);
-    } catch (e) {
-      _showSnack(context, '업데이트 실행에 실패했습니다: $e');
+      // Fallback: explorer로 호출 (일부 환경에서 차단될 수 있음)
+      try {
+        await Process.start('explorer.exe', [uri.toString()]);
+        await Future.delayed(const Duration(seconds: 2));
+        exit(0);
+      } catch (_) {
+        return false;
+      }
+    } catch (_) {
+      return false;
     }
+    return true;
   }
 
   static Future<void> _updateUsingZipForArm64(BuildContext context) async {
@@ -106,7 +120,12 @@ class UpdateService {
         }
       }
       if (found == null || streamResp == null) {
-        _showSnack(context, 'ARM64용 업데이트 패키지를 찾을 수 없습니다.');
+        // 최종 폴백: 릴리스 페이지 열기
+        _showSnack(context, '업데이트 패키지를 찾을 수 없습니다. 릴리스 페이지를 엽니다.');
+        final rel = Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest');
+        if (await canLaunchUrl(rel)) {
+          await launchUrl(rel);
+        }
         return;
       }
 

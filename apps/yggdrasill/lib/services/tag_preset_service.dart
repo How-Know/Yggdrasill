@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'academy_db.dart';
+import 'runtime_flags.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'tenant_service.dart';
@@ -70,9 +71,12 @@ class TagPresetService {
       }
     }
 
-    // 2) SQLite 기본 동작
+    // 2) SQLite 기본 동작 (serverOnly면 빈 목록)
     // ignore: avoid_print
     print('[TagPreset] loadPresets: source=SQLite (fallback or preferSupabaseRead=false)');
+    if (RuntimeFlags.serverOnly) {
+      return <TagPreset>[];
+    }
     final db = await AcademyDbService.instance.db;
     final rows = await db.query('tag_presets', orderBy: 'order_index ASC');
     if (rows.isEmpty) {

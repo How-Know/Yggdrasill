@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'academy_db.dart';
+import 'runtime_flags.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
 import 'tenant_service.dart';
@@ -62,14 +63,16 @@ class TagStore {
   void setEventsForSet(String setId, List<TagEvent> events) {
     _eventsBySetId[setId] = List<TagEvent>.from(events);
     // DB 반영
-    AcademyDbService.instance.setTagEventsForSet(setId, events.map((e) => {
+    if (!RuntimeFlags.serverOnly) {
+      AcademyDbService.instance.setTagEventsForSet(setId, events.map((e) => {
       'id': '${setId}_${e.timestamp.millisecondsSinceEpoch}_${e.tagName}',
       'tag_name': e.tagName,
       'color_value': e.colorValue,
       'icon_code': e.iconCodePoint,
       'timestamp': e.timestamp.toIso8601String(),
       'note': e.note,
-    }).toList());
+      }).toList());
+    }
     if (dualWrite) {
       _syncSetToSupabase(setId, events);
     }
@@ -96,15 +99,17 @@ class TagStore {
   void appendEvent(String setId, TagEvent event) {
     final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
     list.add(event);
-    AcademyDbService.instance.appendTagEvent({
-      'id': '${setId}_${event.timestamp.millisecondsSinceEpoch}_${event.tagName}',
-      'set_id': setId,
-      'tag_name': event.tagName,
-      'color_value': event.colorValue,
-      'icon_code': event.iconCodePoint,
-      'timestamp': event.timestamp.toIso8601String(),
-      'note': event.note,
-    });
+    if (!RuntimeFlags.serverOnly) {
+      AcademyDbService.instance.appendTagEvent({
+        'id': '${setId}_${event.timestamp.millisecondsSinceEpoch}_${event.tagName}',
+        'set_id': setId,
+        'tag_name': event.tagName,
+        'color_value': event.colorValue,
+        'icon_code': event.iconCodePoint,
+        'timestamp': event.timestamp.toIso8601String(),
+        'note': event.note,
+      });
+    }
     if (dualWrite) {
       _appendToSupabase(setId, event);
     }
@@ -140,6 +145,9 @@ class TagStore {
       } catch (_) {
         // fallback below
       }
+    }
+    if (RuntimeFlags.serverOnly) {
+      return;
     }
     final rows = await AcademyDbService.instance.getAllTagEvents();
     for (final r in rows) {
