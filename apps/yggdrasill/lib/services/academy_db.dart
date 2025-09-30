@@ -89,7 +89,8 @@ class AcademyDbService {
             description TEXT,
             capacity INTEGER,
             duration INTEGER,
-            color INTEGER
+            color INTEGER,
+            display_order INTEGER
           )
         ''');
         await db.execute('''
@@ -555,6 +556,25 @@ class AcademyDbService {
             ''');
           } catch (e) {
             print('[DB][마이그레이션] v31: tag_presets 생성 실패: $e');
+          }
+        }
+        // v36: groups.display_order 추가 및 백필
+        if (oldVersion < 36) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(groups)");
+            final hasDisplayOrder = cols.any((c) => c['name'] == 'display_order');
+            if (!hasDisplayOrder) {
+              await db.execute('ALTER TABLE groups ADD COLUMN display_order INTEGER');
+              await db.execute('''
+                UPDATE groups
+                   SET display_order = (
+                     SELECT COUNT(*) - 1 FROM groups g2 WHERE g2.name <= groups.name
+                   )
+                 WHERE display_order IS NULL
+              ''');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v36 groups.display_order 추가/백필 실패: $e');
           }
         }
         if (oldVersion < 2) {
@@ -1608,22 +1628,28 @@ class AcademyDbService {
 
   Future<void> saveGroups(List<GroupInfo> groups) async {
     final dbClient = await db;
-    await dbClient.delete('groups');
-    for (final g in groups) {
-      await dbClient.insert('groups', {
-        'id': g.id,
-        'name': g.name,
-        'description': g.description,
-        'capacity': g.capacity,
-        'duration': g.duration,
-        'color': g.color.value,
-      });
+    // upsert로 순서/내용 반영
+    for (int i = 0; i < groups.length; i++) {
+      final g = groups[i];
+      await dbClient.insert(
+        'groups',
+        {
+          'id': g.id,
+          'name': g.name,
+          'description': g.description,
+          'capacity': g.capacity,
+          'duration': g.duration,
+          'color': g.color.value,
+          'display_order': g.displayOrder ?? i,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
   }
 
   Future<List<GroupInfo>> getGroups() async {
     final dbClient = await db;
-    final result = await dbClient.query('groups');
+    final result = await dbClient.query('groups', orderBy: 'display_order ASC, name ASC');
     return result.map((row) => GroupInfo(
       id: row['id'] as String,
       name: row['name'] as String,
@@ -1631,6 +1657,7 @@ class AcademyDbService {
       capacity: row['capacity'] as int,
       duration: row['duration'] as int,
       color: Color(row['color'] as int),
+      displayOrder: row['display_order'] as int?,
     )).toList();
   }
 
@@ -1643,6 +1670,7 @@ class AcademyDbService {
       'capacity': group.capacity,
       'duration': group.duration,
       'color': group.color.value,
+      'display_order': group.displayOrder,
     });
   }
 
@@ -1654,6 +1682,7 @@ class AcademyDbService {
       'capacity': group.capacity,
       'duration': group.duration,
       'color': group.color.value,
+      'display_order': group.displayOrder,
     }, where: 'id = ?', whereArgs: [group.id]);
   }
 

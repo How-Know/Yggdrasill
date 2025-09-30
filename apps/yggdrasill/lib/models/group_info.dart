@@ -8,6 +8,8 @@ class GroupInfo {
   final int capacity;
   final int duration; // 그룹의 기본 수업 시간(분)
   final Color color;
+  // 표시 순서(영구 저장)
+  final int? displayOrder;
 
   GroupInfo({
     required this.id,
@@ -16,6 +18,7 @@ class GroupInfo {
     required this.capacity,
     required this.duration,
     required this.color,
+    this.displayOrder,
   });
 
   factory GroupInfo.fromJson(Map<String, dynamic> json) {
@@ -26,6 +29,7 @@ class GroupInfo {
       capacity: json['capacity'] as int,
       duration: json['duration'] as int,
       color: Color(json['color'] as int),
+      displayOrder: json['display_order'] as int?,
     );
   }
 
@@ -37,6 +41,7 @@ class GroupInfo {
       'capacity': capacity,
       'duration': duration,
       'color': color.value,
+      'display_order': displayOrder,
     };
   }
 
@@ -47,6 +52,7 @@ class GroupInfo {
     int? capacity,
     int? duration,
     Color? color,
+    int? displayOrder,
   }) {
     return GroupInfo(
       id: id ?? this.id,
@@ -55,6 +61,7 @@ class GroupInfo {
       capacity: capacity ?? this.capacity,
       duration: duration ?? this.duration,
       color: color ?? this.color,
+      displayOrder: displayOrder ?? this.displayOrder,
     );
   }
 

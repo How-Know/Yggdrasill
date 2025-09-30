@@ -4,6 +4,7 @@ import '../../../models/education_level.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
+import '../student_profile_page.dart';
 import '../../../widgets/group_student_card.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
@@ -764,6 +765,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           onShowDetails: widget.onShowDetails, // 연결 복구
                           onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
+                          onOpenStudentPage: (s) {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => StudentProfilePage(studentWithInfo: s),
+                              ),
+                            );
+                          },
                           enableLongPressDrag: false,
                         ),
                       ),
@@ -776,6 +784,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onShowDetails: widget.onShowDetails, // 연결 복구
                         onDelete: widget.onDeleteStudent,
                         onUpdate: widget.onStudentUpdated,
+                        onOpenStudentPage: (s) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => StudentProfilePage(studentWithInfo: s),
+                            ),
+                          );
+                        },
                         enableLongPressDrag: false,
                       ),
                     ),
@@ -785,6 +800,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent,
                       onUpdate: widget.onStudentUpdated,
+                      onOpenStudentPage: (s) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => StudentProfilePage(studentWithInfo: s),
+                          ),
+                        );
+                      },
                       enableLongPressDrag: false,
                     ),
                   )
@@ -886,6 +908,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       onShowDetails: widget.onShowDetails, // 연결 복구
                       onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                       onUpdate: widget.onStudentUpdated,
+                      onOpenStudentPage: (s) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => StudentProfilePage(studentWithInfo: s),
+                          ),
+                        );
+                      },
                     )).toList(),
                   ),
                 ),

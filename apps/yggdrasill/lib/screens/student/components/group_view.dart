@@ -593,8 +593,17 @@ class _GroupViewState extends State<GroupView> {
               },
               onReorder: (oldIndex, newIndex) {
                 if (newIndex > oldIndex) newIndex--;
-                final item = widget.groups.removeAt(oldIndex);
-                widget.groups.insert(newIndex, item);
+                final reordered = List<GroupInfo>.from(widget.groups);
+                final item = reordered.removeAt(oldIndex);
+                reordered.insert(newIndex, item);
+                // UI 목록도 갱신
+                setState(() {
+                  widget.groups
+                    ..clear()
+                    ..addAll(reordered);
+                });
+                // 영속 저장 호출 (display_order 갱신 포함)
+                DataManager.instance.setGroupsOrder(reordered);
               },
             ),
           ],

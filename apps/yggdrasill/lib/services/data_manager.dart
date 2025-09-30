@@ -415,8 +415,9 @@ class DataManager {
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
           final data = await Supabase.instance.client
               .from('groups')
-              .select('id,name,description,capacity,duration,color')
+              .select('id,name,description,capacity,duration,color,display_order')
               .eq('academy_id', academyId)
+              .order('display_order', ascending: true)
               .order('name');
           _groups = (data as List).map((m) => GroupInfo(
             id: (m['id'] as String),
@@ -425,6 +426,7 @@ class DataManager {
             capacity: (m['capacity'] as int?) ?? 0,
             duration: (m['duration'] as int?) ?? 0,
             color: Color((((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
+            displayOrder: (m['display_order'] as int?),
           )).toList();
           // Fallback/backfill은 dualWrite가 켜진 경우에만 수행
           if (_groups.isEmpty && TagPresetService.dualWrite) {
@@ -433,7 +435,10 @@ class DataManager {
               _groups = local;
               if (TagPresetService.dualWrite) {
                 try {
-                  final rows = _groups.map((g) => {
+                  final rows = _groups.asMap().entries.map((e) {
+                    final g = e.value;
+                    final idx = e.key;
+                    return {
                     'id': g.id,
                     'academy_id': academyId,
                     'name': g.name,
@@ -441,6 +446,8 @@ class DataManager {
                     'capacity': g.capacity,
                     'duration': g.duration,
                     'color': g.color.value.toSigned(32),
+                    'display_order': g.displayOrder ?? idx,
+                  };
                   }).toList();
                   if (rows.isNotEmpty) {
                     await Supabase.instance.client.from('groups').insert(rows);
@@ -459,6 +466,15 @@ class DataManager {
       // 서버 전용 모드에서는 로컬 폴백을 하지 않는다
       if (!TagPresetService.preferSupabaseRead) {
       _groups = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
+      // 로컬에서도 display_order 기준으로 정렬 보장
+      _groups.sort((a, b) {
+        final ao = a.displayOrder;
+        final bo = b.displayOrder;
+        if (ao == null && bo == null) return a.name.compareTo(b.name);
+        if (ao == null) return 1;
+        if (bo == null) return -1;
+        return ao.compareTo(bo);
+      });
       _groupsById = {for (var g in _groups) g.id: g};
       } else {
         _groups = [];
@@ -637,18 +653,22 @@ class DataManager {
         try {
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
           final supa = Supabase.instance.client;
-          await supa.from('groups').delete().eq('academy_id', academyId);
+          // upsert로 순서까지 반영 (충돌키 id)
           if (_groups.isNotEmpty) {
-            final rows = _groups.map((g) => {
-              'id': g.id,
-              'academy_id': academyId,
-              'name': g.name,
-              'description': g.description,
-              'capacity': g.capacity,
-              'duration': g.duration,
-              'color': g.color.value.toSigned(32),
+            final rows = _groups.asMap().entries.map((e) {
+              final g = e.value; final idx = e.key;
+              return {
+                'id': g.id,
+                'academy_id': academyId,
+                'name': g.name,
+                'description': g.description,
+                'capacity': g.capacity,
+                'duration': g.duration,
+                'color': g.color.value.toSigned(32),
+                'display_order': g.displayOrder ?? idx,
+              };
             }).toList();
-            await supa.from('groups').insert(rows);
+            await supa.from('groups').upsert(rows, onConflict: 'id');
           }
           return;
         } catch (e, st) { print('[SUPA][groups save] $e\n$st'); }
@@ -1884,7 +1904,10 @@ class DataManager {
   }
 
   void setGroupsOrder(List<GroupInfo> newOrder) {
-    _groups = newOrder.where((g) => g != null).toList();
+    // 인덱스를 displayOrder로 부여
+    _groups = newOrder.where((g) => g != null).toList().asMap().entries
+      .map((e) => e.value.copyWith(displayOrder: e.key))
+      .toList();
     _groupsById = {for (var g in _groups) g.id: g};
     _notifyListeners();
     saveGroups();
