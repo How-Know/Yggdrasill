@@ -74,6 +74,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   int? _selectedDayIndex = null;
   int? _selectedStartTimeHour;
   int? _selectedStartTimeMinute;
+  DateTime? _selectedDayDate; // 요일 클릭 시 해당 날짜 (주 기준)
   bool _isStudentRegistrationMode = false;
   bool _isClassRegistrationMode = false;
   String _registrationButtonText = '등록';
@@ -433,7 +434,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   // TimetableHeader 요일 클릭 콜백
   void _onDayHeaderSelected(int dayIndex) {
-    // 요일 선택 기능 완전 비활성화: 아무 동작도 하지 않음
+    // 선택한 주의 월요일 기준 실제 날짜 계산 후 상태 반영
+    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
+    final dayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: dayIndex));
+    // 검색창 리셋
+    _contentViewKey.currentState?.clearSearch();
+    setState(() {
+      _selectedDayIndex = dayIndex;
+      _selectedCellDayIndex = dayIndex; // 내용 패널이 요일 기준으로 보이도록
+      _selectedStartTimeHour = null; // 시간 선택 해제하여 요일 모드로 전환
+      _selectedStartTimeMinute = null;
+      _selectedDayDate = dayDate;
+    });
   }
 
   void _showFilterDialog() async {
@@ -964,6 +976,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
+          selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           timetableChild: Container(
             width: double.infinity,
             // margin: EdgeInsets.zero, // margin 제거

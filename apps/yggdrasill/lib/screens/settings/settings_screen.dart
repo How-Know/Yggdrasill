@@ -18,6 +18,7 @@ import 'package:animations/animations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import '../../services/sync_service.dart';
+import '../../services/update_service.dart';
 
 enum SettingType {
   academy,
@@ -229,6 +230,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 업데이트 섹션
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: Text(
+                    '업데이트',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '최신 버전 확인 및 설치를 진행합니다.',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () async {
+                        await UpdateService.oneClickUpdate(context);
+                      },
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('업데이트 확인'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 // OpenAI API 키 섹션
                 const Padding(
                   padding: EdgeInsets.only(top: 24),

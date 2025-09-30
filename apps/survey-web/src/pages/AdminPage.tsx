@@ -17,7 +17,7 @@ export default function AdminPage() {
   if (route === 'results') {
     return (
       <AdminGate>
-        <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24 }}>
+        <div style={{ color: tokens.text, background: tokens.bg, height: '100vh', padding: 24, boxSizing: 'border-box', overflowY: 'auto' }}>
           <div style={{ maxWidth: 1800, margin: '0 auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
               <div style={{ fontSize: 24, fontWeight: 900 }}>결과 관리</div>
@@ -32,7 +32,7 @@ export default function AdminPage() {
   if (route === 'questions') {
     return (
       <AdminGate>
-        <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24 }}>
+        <div style={{ color: tokens.text, background: tokens.bg, height: '100vh', padding: 24, boxSizing: 'border-box', overflowY: 'auto' }}>
           <div style={{ maxWidth: 1800, margin: '0 auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
               <div style={{ fontSize: 24, fontWeight: 900 }}>문항 관리</div>
@@ -46,7 +46,7 @@ export default function AdminPage() {
   }
   return (
     <AdminGate>
-      <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24 }}>
+      <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, boxSizing: 'border-box' }}>
         <div style={{ maxWidth: 1800, margin: '0 auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <div style={{ fontSize: 24, fontWeight: 900 }}>관리자</div>

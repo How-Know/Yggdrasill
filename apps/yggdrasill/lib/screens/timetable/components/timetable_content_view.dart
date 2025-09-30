@@ -22,6 +22,7 @@ class TimetableContentView extends StatefulWidget {
   final ValueChanged<String> onDropdownSelected;
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
+  final DateTime? selectedDayDate; // 요일 클릭 시 선택된 날짜(주 기준)
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellStudentsChanged;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo>)? onCellSelfStudyStudentsChanged;
   final VoidCallback? clearSearch; // 추가: 외부에서 검색 리셋 요청
@@ -43,6 +44,7 @@ class TimetableContentView extends StatefulWidget {
     required this.onDropdownSelected,
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
+    this.selectedDayDate,
     this.onCellStudentsChanged,
     this.onCellSelfStudyStudentsChanged,
     this.clearSearch, // 추가
@@ -88,6 +90,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchExpanded = false;
   bool isClassRegisterMode = false;
+
+  String _weekdayLabel(int dayIdx) {
+    const labels = ['월', '화', '수', '목', '금', '토', '일'];
+    return labels[dayIdx.clamp(0, 6)];
+  }
 
   @override
   void initState() {
@@ -810,6 +817,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               child: _buildGroupedStudentCardsByDayTime(_searchResults),
                             )
                           : (
+                              // 1) 셀 선택 시: 해당 시간 학생카드
                               (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
                                 ? ValueListenableBuilder<List<StudentTimeBlock>>(
                                     valueListenable: DataManager.instance.studentTimeBlocksNotifier,
@@ -986,7 +994,116 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               );
                                     },
                                   )
-                                : LayoutBuilder(
+                                // 2) 요일만 선택 시: 해당 요일 등원 시간 그룹 순서대로
+                                : (widget.selectedCellDayIndex != null && widget.selectedDayDate != null)
+                                  ? ValueListenableBuilder<List<StudentTimeBlock>>(
+                                      valueListenable: DataManager.instance.studentTimeBlocksNotifier,
+                                      builder: (context, studentTimeBlocks, _) {
+                                        final int dayIdx = widget.selectedCellDayIndex!; // 0=월
+                                        final DateTime dayDate = widget.selectedDayDate!;
+                                        // 해당 요일의 수업 블록에 속한 학생들 모으기 (number==1 우선)
+                                        final blocksOfDay = studentTimeBlocks.where((b) => b.dayIndex == dayIdx && (b.number == null || b.number == 1)).toList();
+                                        // 셀렉터: 필터가 있으면 필터 학생만
+                                        final allStudents = widget.filteredStudentIds == null 
+                                          ? DataManager.instance.students
+                                          : DataManager.instance.students.where((s) => widget.filteredStudentIds!.contains(s.student.id)).toList();
+                                        final Set<String> allowedIds = allStudents.map((s) => s.student.id).toSet();
+                                        // 그룹핑: key = 시간표상 수업 시작시간(HH:mm)
+                                        final Map<String, List<StudentWithInfo>> groups = {};
+                                        for (final b in blocksOfDay) {
+                                          if (!allowedIds.contains(b.studentId)) continue;
+                                          final student = allStudents.firstWhere((s) => s.student.id == b.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary), basicInfo: StudentBasicInfo(studentId: '')));
+                                          if (student.student.id.isEmpty) continue;
+                                          final key = '${b.startHour.toString().padLeft(2, '0')}:${b.startMinute.toString().padLeft(2, '0')}';
+                                          groups.putIfAbsent(key, () => []);
+                                          if (!groups[key]!.any((s) => s.student.id == student.student.id)) {
+                                            groups[key]!.add(student);
+                                          }
+                                        }
+                                        // 키 정렬: HH:mm 오름차순
+                                        int toMinutes(String hhmm) {
+                                          final parts = hhmm.split(':');
+                                          final h = int.tryParse(parts[0]) ?? 0;
+                                          final m = int.tryParse(parts[1]) ?? 0;
+                                          return h * 60 + m;
+                                        }
+                                        final sortedKeys = groups.keys.toList()
+                                          ..sort((a, b) => toMinutes(a).compareTo(toMinutes(b)));
+                                        return LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                                            return Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Container(
+                                                  margin: const EdgeInsets.only(top: 24),
+                                                  height: containerHeight,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFF18181A),
+                                                    borderRadius: BorderRadius.circular(18),
+                                                  ),
+                                                  alignment: Alignment.topLeft,
+                                                  child: SingleChildScrollView(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        // 상단 라벨: 요일명 + 날짜 (사이즈 업)
+                                                        Padding(
+                                                          padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
+                                                          child: Text(
+                                                            '${_weekdayLabel(dayIdx)} ${dayDate.month}/${dayDate.day}',
+                                                            style: const TextStyle(color: Colors.white70, fontSize: 22, fontWeight: FontWeight.w600),
+                                                          ),
+                                                        ),
+                                                        ...sortedKeys.map((k) {
+                                                          final list = groups[k]!;
+                                                          list.sort((a, b) => a.student.name.compareTo(b.student.name));
+                                                          // 파싱하여 시작시간 전달
+                                                          final parts = k.split(':');
+                                                          final int hour = int.tryParse(parts[0]) ?? 0;
+                                                          final int minute = int.tryParse(parts[1]) ?? 0;
+                                                          return Padding(
+                                                            padding: const EdgeInsets.only(bottom: 16.0),
+                                                            child: Column(
+                                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                                              children: [
+                                                                Padding(
+                                                                  padding: const EdgeInsets.only(left: 8.0, bottom: 6.0),
+                                                                  child: Text(
+                                                                    k, // 시간표상 시작 시간만 표시 (사이즈 업)
+                                                                    style: const TextStyle(color: Colors.white70, fontSize: 16.5, fontWeight: FontWeight.w700),
+                                                                  ),
+                                                                ),
+                                                                Wrap(
+                                                                  spacing: 6.4,
+                                                                  runSpacing: 6.4,
+                                                                  children: list.map((info) => _buildDraggableStudentCard(
+                                                                    info,
+                                                                    dayIndex: dayIdx,
+                                                                    startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
+                                                                  )).toList(),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          );
+                                                        }),
+                                                        if (sortedKeys.isEmpty)
+                                                          Padding(
+                                                            padding: const EdgeInsets.all(4.0),
+                                                            child: Text(widget.placeholderText ?? '해당 요일에 등록된 학생이 없습니다.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
+                                                          ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          },
+                                        );
+                                      },
+                                    )
+                                  : LayoutBuilder(
                                     builder: (context, constraints) {
                             final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
                             return Container(

@@ -1,0 +1,224 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+class UpdateService {
+  UpdateService._();
+
+  static const String _appInstallerLatestUrl =
+      'ms-appinstaller:?source=https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill.appinstaller';
+
+  static const List<String> _arm64ZipCandidates = [
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-Windows-ARM64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-windows-arm64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/mneme_flutter_windows_arm64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/yggdrasill_arm64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/mneme_flutter_arm64.zip',
+  ];
+
+  // ARM64 기기에서 x64 에뮬레이션 실행을 허용하는 폴백 ZIP 후보들
+  static const List<String> _x64ZipFallbackCandidates = [
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill_portable_x64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/mneme_flutter_windows_x64_portable.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-windows-x64.zip',
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/yggdrasill_x64.zip',
+  ];
+
+  static Future<void> oneClickUpdate(BuildContext context) async {
+    if (!Platform.isWindows) {
+      _showSnack(context, 'Windows에서만 지원됩니다.');
+      return;
+    }
+
+    final arch = _detectWindowsArch();
+    if (arch == _WinArch.x64) {
+      await _triggerAppInstallerUpdate(context);
+      return;
+    }
+
+    if (arch == _WinArch.arm64) {
+      await _updateUsingZipForArm64(context);
+      return;
+    }
+
+    _showSnack(context, '지원하지 않는 아키텍처입니다.');
+  }
+
+  static Future<void> _triggerAppInstallerUpdate(BuildContext context) async {
+    _showSnack(context, '업데이트를 확인하고 있습니다...');
+    try {
+      final uri = Uri.parse(_appInstallerLatestUrl);
+      final can = await canLaunchUrl(uri);
+      if (can) {
+        await launchUrl(uri);
+      } else {
+        // Fallback: explorer로 호출
+        await Process.start('explorer.exe', [uri.toString()]);
+      }
+      // 잠시 대기 후 종료하여 업데이트가 진행될 수 있도록 함
+      await Future.delayed(const Duration(seconds: 2));
+      exit(0);
+    } catch (e) {
+      _showSnack(context, '업데이트 실행에 실패했습니다: $e');
+    }
+  }
+
+  static Future<void> _updateUsingZipForArm64(BuildContext context) async {
+    _showSnack(context, '업데이트 파일을 확인 중입니다...');
+    final client = http.Client();
+    try {
+      Uri? found;
+      http.StreamedResponse? streamResp;
+      // 1) ARM64 전용 ZIP 우선 시도
+      for (final url in _arm64ZipCandidates) {
+        try {
+          final req = http.Request('GET', Uri.parse(url));
+          final resp = await client.send(req);
+          if (resp.statusCode == 200) {
+            found = Uri.parse(url);
+            streamResp = resp;
+            break;
+          } else {
+            await resp.stream.drain();
+          }
+        } catch (_) {}
+      }
+      // 2) 실패 시 x64 포터블 ZIP 폴백 시도 (Windows on ARM의 x64 에뮬레이션)
+      if (found == null) {
+        for (final url in _x64ZipFallbackCandidates) {
+          try {
+            final req = http.Request('GET', Uri.parse(url));
+            final resp = await client.send(req);
+            if (resp.statusCode == 200) {
+              found = Uri.parse(url);
+              streamResp = resp;
+              break;
+            } else {
+              await resp.stream.drain();
+            }
+          } catch (_) {}
+        }
+      }
+      if (found == null || streamResp == null) {
+        _showSnack(context, 'ARM64용 업데이트 패키지를 찾을 수 없습니다.');
+        return;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final zipPath = p.join(tempDir.path, 'ygg_update_arm64.zip');
+      final zipFile = File(zipPath);
+      final sink = zipFile.openWrite();
+      await streamResp.stream.pipe(sink);
+      await sink.close();
+
+      if (!await zipFile.exists() || (await zipFile.length()) < 1024 * 1024) {
+        _showSnack(context, '다운로드에 실패했습니다.');
+        return;
+      }
+
+      final exePath = Platform.resolvedExecutable;
+      final exeDir = p.dirname(exePath);
+      final exeName = p.basename(exePath);
+
+      // PowerShell 스크립트 작성
+      final ps1 = p.join(tempDir.path, 'ygg_do_update.ps1');
+      await File(ps1).writeAsString(_psScriptContent);
+
+      // 스크립트 실행 (현재 프로세스 종료 후 교체 및 재실행)
+      await Process.start('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        ps1,
+        '-ZipPath',
+        zipPath,
+        '-InstallDir',
+        exeDir,
+        '-ExeName',
+        exeName,
+      ], mode: ProcessStartMode.detached);
+
+      _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
+      await Future.delayed(const Duration(milliseconds: 800));
+      exit(0);
+    } catch (e) {
+      _showSnack(context, '업데이트 중 오류: $e');
+    } finally {
+      client.close();
+    }
+  }
+
+  static void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        backgroundColor: const Color(0xFF1976D2),
+      ),
+    );
+  }
+
+  static _WinArch _detectWindowsArch() {
+    final env = Platform.environment;
+    final arch = (env['PROCESSOR_ARCHITEW6432'] ?? env['PROCESSOR_ARCHITECTURE'] ?? '').toUpperCase();
+    if (arch.contains('ARM64')) return _WinArch.arm64;
+    if (arch.contains('AMD64') || arch.contains('X64')) return _WinArch.x64;
+    return _WinArch.unknown;
+  }
+
+  static const String _psScriptContent = r'''
+param(
+  [Parameter(Mandatory=$true)][string]$ZipPath,
+  [Parameter(Mandatory=$true)][string]$InstallDir,
+  [Parameter(Mandatory=$true)][string]$ExeName
+)
+
+try {
+  $procName = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)
+  try { Wait-Process -Name $procName -Timeout 60 } catch {}
+
+  $timestamp = Get-Date -Format yyyyMMddHHmmss
+  $backupDir = Join-Path $InstallDir ("backup_$timestamp")
+  New-Item -ItemType Directory -Path $backupDir | Out-Null
+
+  # data 폴더 백업 (있으면)
+  $dataPath = Join-Path $InstallDir 'data'
+  if (Test-Path $dataPath) {
+    Move-Item -Force $dataPath $backupDir
+  }
+
+  $tmpExtract = Join-Path $env:TEMP ("ygg_update_" + [guid]::NewGuid().ToString())
+  New-Item -ItemType Directory -Path $tmpExtract | Out-Null
+  Expand-Archive -LiteralPath $ZipPath -DestinationPath $tmpExtract -Force
+
+  $entries = Get-ChildItem $tmpExtract
+  if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {
+    $srcDir = $entries[0].FullName
+  } else {
+    $srcDir = $tmpExtract
+  }
+
+  Copy-Item -Path (Join-Path $srcDir '*') -Destination $InstallDir -Recurse -Force
+
+  # data 복원
+  $bakData = Join-Path $backupDir 'data'
+  if (Test-Path $bakData) {
+    Move-Item -Force $bakData (Join-Path $InstallDir 'data')
+  }
+
+  Start-Process -FilePath (Join-Path $InstallDir $ExeName)
+} catch {
+  # 실패 시에도 조용히 종료
+}
+''';
+}
+
+enum _WinArch { x64, arm64, unknown }
+
+

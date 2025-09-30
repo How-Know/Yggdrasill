@@ -286,7 +286,10 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                   child: Tooltip(
                     message: _formatDate(date),
                     child: InkWell(
-                      onTap: null, // 요일 클릭 비활성화
+                      onTap: () {
+                        // 요일 클릭: 상위에서 전달된 콜백 호출 (0=월)
+                        widget.onDaySelected(index);
+                      },
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         decoration: const BoxDecoration(), // 하이라이트 없음

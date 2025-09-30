@@ -36,10 +36,10 @@ function ToolbarButton({ children, onClick }: { children: React.ReactNode; onCli
   );
 }
 
-function Modal({ title, onClose, children, actions }: { title: string; onClose: () => void; children: React.ReactNode; actions?: React.ReactNode }) {
+function Modal({ title, onClose, children, actions, width }: { title: string; onClose: () => void; children: React.ReactNode; actions?: React.ReactNode; width?: number | string }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div style={{ width: 'min(720px, 92vw)', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 20, overflow: 'visible' }}>
+      <div style={{ width: (width ?? 'min(720px, 92vw)'), background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 20, overflow: 'visible' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <div style={{ color: tokens.text, fontWeight: 900 }}>{title}</div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: tokens.textDim, cursor: 'pointer' }}>✕</button>
@@ -150,7 +150,7 @@ function ManageListDialog({ title, items, setItems, onClose }: { title: string; 
   );
 }
 type OptionItem = { label: string; value: string };
-function SelectPopup({ value, options, onChange, compact }: { value: string; options: OptionItem[]; onChange: (v: string) => void; compact?: boolean }) {
+function SelectPopup({ value, options, onChange, compact, dropUp }: { value: string; options: OptionItem[]; onChange: (v: string) => void; compact?: boolean; dropUp?: boolean }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -188,7 +188,7 @@ function SelectPopup({ value, options, onChange, compact }: { value: string; opt
       {open && rect && createPortal(
         <div ref={popupRef}
              onWheel={(e)=>{ if (!popupRef.current) return; popupRef.current.scrollTop += e.deltaY; e.preventDefault(); }}
-             style={{ position: 'fixed', left: rect.left, top: rect.bottom + 4, width: rect.width, maxHeight: 320, overflowY: 'auto', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 8, zIndex: 1000, overscrollBehavior: 'contain', touchAction: 'pan-y' }}>
+             style={{ position: 'fixed', left: rect.left, top: dropUp ? undefined : (rect.bottom + 4), bottom: dropUp ? (window.innerHeight - rect.top + 4) : undefined, width: rect.width, maxHeight: 320, overflowY: 'auto', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 8, zIndex: 1000, overscrollBehavior: 'contain', touchAction: 'pan-y' }}>
           {options.map((opt) => (
             <div key={opt.value}
                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onChange(opt.value); setOpen(false); }}
@@ -347,6 +347,7 @@ export default function AdminQuestionsPage() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [activeAreas, setActiveAreas] = useState<string[]>([]);
   const [activeGroups, setActiveGroups] = useState<string[]>([]);
+  const [activeTraits, setActiveTraits] = useState<string[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
   async function logChange(questionId: string, action: string, fromValue: any, toValue: any) {
     try {
@@ -434,12 +435,22 @@ export default function AdminQuestionsPage() {
               );
             })}
           </div>
+          <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 12, marginBottom: 8 }}>성향</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {(['D','I','A','C','N','L','S','P'] as const).map((t) => {
+              const on = activeTraits.includes(t);
+              return (
+                <button key={t} onClick={()=> setActiveTraits(on ? activeTraits.filter(x=>x!==t) : [...activeTraits, t])}
+                        style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${tokens.border}`, background: on ? tokens.accent : 'transparent', color: on ? '#fff' : tokens.text, cursor: 'pointer' }}>{t}</button>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, overflowX: 'hidden', width: '100%', margin: '0 auto' }}>
-        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
-          <div>영역</div><div>그룹</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center' }}>활성화</div>
+      <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, overflowX: 'hidden', width: '100%', margin: '0 auto 48px' }}>
+        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
+          <div style={{ textAlign:'right', paddingRight:4 }}>번호</div><div>영역</div><div>그룹</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center', paddingRight: 4 }}>활성화</div>
         </div>
         {items.length === 0 ? (
           <div style={{ padding: 16, color: tokens.textDim }}>아직 문항이 없습니다. 우측 상단의 ‘추가’를 눌러 문항을 만들어 보세요.</div>
@@ -447,18 +458,22 @@ export default function AdminQuestionsPage() {
           items
             .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
             .filter((q)=> (activeGroups.length ? activeGroups.includes(q.group || '') : true))
-            .map((q) => (
-            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
+            .filter((q)=> (activeTraits.length ? activeTraits.includes(q.trait) : true))
+            .map((q, idx, arr) => {
+              const isLast5 = (arr.length - idx) <= 5;
+              return (
+            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
+              <div style={{ color: tokens.textDim, textAlign:'right', paddingRight:4 }}>{idx + 1}</div>
               <div>
-                <SelectPopup compact value={q.area || ''} options={areas.map(a=>({label:a.name, value:a.id}))}
+                <SelectPopup compact dropUp={isLast5} value={q.area || ''} options={areas.map(a=>({label:a.name, value:a.id}))}
                   onChange={(v)=>saveField(q.id, { area: v })} />
               </div>
               <div>
-                <SelectPopup compact value={q.group || ''} options={groups.map(g=>({label:g.name, value:g.id}))}
+                <SelectPopup compact dropUp={isLast5} value={q.group || ''} options={groups.map(g=>({label:g.name, value:g.id}))}
                   onChange={(v)=>saveField(q.id, { group: v })} />
               </div>
               <div>
-                <SelectPopup compact value={q.trait} options={traitOptions}
+                <SelectPopup compact dropUp={isLast5} value={q.trait} options={traitOptions}
                   onChange={(v)=>saveField(q.id, { trait: v as any })} />
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
@@ -467,7 +482,7 @@ export default function AdminQuestionsPage() {
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
                 {typeEditId === q.id ? (
-                  <SelectPopup compact
+                  <SelectPopup compact dropUp={isLast5}
                     value={q.type}
                     options={[{label:'scale', value:'scale'},{label:'text', value:'text'}]}
                     onChange={(v)=>{
@@ -501,7 +516,7 @@ export default function AdminQuestionsPage() {
                   placeholder="예: 1.00" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 6px' }} />
               </div>
               <div>
-                <SelectPopup compact value={q.reverse} options={[{label:'N', value:'N'},{label:'Y', value:'Y'}]}
+                <SelectPopup compact dropUp={isLast5} value={q.reverse} options={[{label:'N', value:'N'},{label:'Y', value:'Y'}]}
                   onChange={(v)=>saveField(q.id, { reverse: v as any })} />
               </div>
               <div>
@@ -625,7 +640,8 @@ export default function AdminQuestionsPage() {
                 </button>
               </div>
             </div>
-          ))
+          );
+          })
         )}
       </div>
 
@@ -765,7 +781,7 @@ export default function AdminQuestionsPage() {
       )}
 
       {scaleEditId && (
-        <Modal title="척도 설정" onClose={()=>setScaleEditId(null)} actions={<>
+        <Modal title="척도 설정" width={420} onClose={()=>setScaleEditId(null)} actions={<>
           <button onClick={()=>setScaleEditId(null)} style={{ padding:'8px 12px', borderRadius:10, border:`1px solid ${tokens.border}`, background:tokens.panel, color:tokens.text, cursor:'pointer' }}>취소</button>
           <button onClick={()=>{
             if (scaleEditId) {
@@ -780,19 +796,15 @@ export default function AdminQuestionsPage() {
             setScaleEditId(null);
           }} style={{ padding:'8px 12px', borderRadius:10, border:'none', background:tokens.accent, color:'#fff', cursor:'pointer' }}>저장</button>
         </>}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-            <div>
-              <label style={{ color: tokens.textDim, fontSize: 13 }}>최소 점수</label>
-              <input inputMode="numeric" pattern="[0-9]*" value={scaleDraftMin}
-                     onChange={(e)=>setScaleDraftMin(Number(e.target.value.replace(/[^0-9-]/g,'')))}
-                     style={{ width:'100%', height:44, marginTop:6, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 12px' }} />
-            </div>
-            <div>
-              <label style={{ color: tokens.textDim, fontSize: 13 }}>최대 점수</label>
-              <input inputMode="numeric" pattern="[0-9]*" value={scaleDraftMax}
-                     onChange={(e)=>setScaleDraftMax(Number(e.target.value.replace(/[^0-9-]/g,'')))}
-                     style={{ width:'100%', height:44, marginTop:6, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 12px' }} />
-            </div>
+          <div style={{ display:'flex', alignItems:'center' }}>
+            <label style={{ color: tokens.textDim, fontSize: 13, marginRight: 12 }}>최소 점수</label>
+            <input inputMode="numeric" pattern="[0-9]*" value={scaleDraftMin}
+                   onChange={(e)=>setScaleDraftMin(Number(e.target.value.replace(/[^0-9-]/g,'')))}
+                   style={{ width:80, height:44, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 12px', marginRight: 40 }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginRight: 12 }}>최대 점수</label>
+            <input inputMode="numeric" pattern="[0-9]*" value={scaleDraftMax}
+                   onChange={(e)=>setScaleDraftMax(Number(e.target.value.replace(/[^0-9-]/g,'')))}
+                   style={{ width:80, height:44, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 12px' }} />
           </div>
         </Modal>
       )}
@@ -826,12 +838,17 @@ export default function AdminQuestionsPage() {
                           q.id===selectedId ? { ...q, pairId: nextPairId } : q
                         ));
                         try {
-                          const tasks: Promise<any>[] = [];
-                          if (isUuid(targetId)) tasks.push(supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', targetId));
-                          if (isUuid(selectedId)) tasks.push(supabase.from(QUESTIONS_TABLE).update({ pair_id: nextPairId }).eq('id', selectedId));
-                          const results = await Promise.all(tasks);
-                          for (const r of results) {
-                            if ((r as any)?.error) throw (r as any).error;
+                          if (isUuid(targetId)) {
+                            const { error } = await supabase.from(QUESTIONS_TABLE)
+                              .update({ pair_id: nextPairId })
+                              .eq('id', targetId);
+                            if (error) throw error;
+                          }
+                          if (isUuid(selectedId)) {
+                            const { error } = await supabase.from(QUESTIONS_TABLE)
+                              .update({ pair_id: nextPairId })
+                              .eq('id', selectedId);
+                            if (error) throw error;
                           }
                         } catch (e:any) {
                           alert('페어 ID 저장 실패: ' + (e?.message || '알 수 없는 오류'));

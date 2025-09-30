@@ -1,0 +1,31 @@
+{
+  // VS Code Flutter run configs with dart-define for Supabase
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter Windows (Yggdrasill)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/yggdrasill",
+      "toolArgs": [
+        "--dart-define=SUPABASE_URL=https://jkanrdxaidumlvpntudy.supabase.co",
+        "--dart-define=SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImprYW5yZHhhaWR1bWx2cG50dWR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgxODE4MjYsImV4cCI6MjA3Mzc1NzgyNn0.fTH_1bV8topfhaw2o-xLY8KvX_eRlomruqMyESJogPg"
+      ],
+      "program": "lib/main.dart",
+      "flutterMode": "debug"
+    }
+    // For other platforms, duplicate the above config and change the device/target as needed.
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+
+

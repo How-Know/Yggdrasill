@@ -29,6 +29,7 @@ import 'dart:ui' as ui;
 import 'services/tag_preset_service.dart';
 import 'services/tag_store.dart';
 import 'tools/backfill_runner.dart';
+import 'package:path_provider/path_provider.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -191,19 +192,88 @@ void main() async {
       FlutterError.dumpErrorToConsole(details, forceReport: true);
     }
   };
-  // Supabase init (desktop에서도 동작). URL/KEY는 dart-define 우선, 없으면 env.local.json 폴백
+  // Supabase init (desktop에서도 동작).
+  // 우선순위: dart-define -> OS 환경변수 -> 여러 경로의 env.local.json
   String supabaseUrl = const String.fromEnvironment('SUPABASE_URL', defaultValue: '');
   String supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
+
+  // 1) OS 환경변수 (런타임)
   if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
     try {
-      final file = File('env.local.json');
-      if (await file.exists()) {
-        final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-        supabaseUrl = (map['SUPABASE_URL'] as String?) ?? '';
-        supabaseAnonKey = (map['SUPABASE_ANON_KEY'] as String?) ?? '';
+      final env = Platform.environment;
+      if (supabaseUrl.isEmpty) {
+        supabaseUrl = env['SUPABASE_URL'] ?? '';
+      }
+      if (supabaseAnonKey.isEmpty) {
+        supabaseAnonKey = env['SUPABASE_ANON_KEY'] ?? '';
       }
     } catch (_) {}
   }
+
+  // 2) env.local.json 탐색 (여러 후보 경로)
+  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+    try {
+      final List<String> candidates = <String>[];
+
+      // CWD
+      candidates.add('env.local.json');
+
+      // 실행 파일 경로 옆 (포터블 zip 실행 시 유용)
+      try {
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        candidates.add('$exeDir/env.local.json');
+      } catch (_) {}
+
+      // 앱 지원 디렉터리 / 문서 디렉터리
+      try {
+        final supportDir = await getApplicationSupportDirectory();
+        candidates.add('${supportDir.path}/env.local.json');
+      } catch (_) {}
+      try {
+        final docsDir = await getApplicationDocumentsDirectory();
+        candidates.add('${docsDir.path}/env.local.json');
+      } catch (_) {}
+
+      // OS별 일반적인 위치
+      try {
+        if (Platform.isWindows) {
+          final base = Platform.environment['LOCALAPPDATA'];
+          if (base != null && base.isNotEmpty) {
+            candidates.add('$base/Yggdrasill/env.local.json');
+          }
+        } else if (Platform.isMacOS) {
+          final home = Platform.environment['HOME'] ?? '';
+          if (home.isNotEmpty) {
+            candidates.add('$home/Library/Application Support/Yggdrasill/env.local.json');
+          }
+        } else if (Platform.isLinux) {
+          final home = Platform.environment['HOME'] ?? '';
+          if (home.isNotEmpty) {
+            candidates.add('$home/.config/Yggdrasill/env.local.json');
+          }
+        }
+      } catch (_) {}
+
+      for (final path in candidates) {
+        try {
+          final file = File(path);
+          if (await file.exists()) {
+            final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+            if (supabaseUrl.isEmpty) {
+              supabaseUrl = (map['SUPABASE_URL'] as String?) ?? '';
+            }
+            if (supabaseAnonKey.isEmpty) {
+              supabaseAnonKey = (map['SUPABASE_ANON_KEY'] as String?) ?? '';
+            }
+            if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }

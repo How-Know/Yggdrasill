@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+  Uri="https://github.com/How-Know/Yggdrasill/releases/download/v1.0.0/Yggdrasill.appinstaller"
+  Version="1.0.0.0"
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018">
+  <MainPackage
+    Name="com.yggdrasill.mneme"
+    Publisher="CN=Yggdrasill Dev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64"
+    Uri="https://github.com/How-Know/Yggdrasill/releases/download/v1.0.0/mneme_flutter.msix" />
+</AppInstaller>
+
+

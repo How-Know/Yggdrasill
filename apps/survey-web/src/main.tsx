@@ -1,8 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import SurveyPage from './pages/SurveyPage';
-import { supabase } from './lib/supabaseClient';
-import AdminPage from './pages/AdminPage';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';
 
@@ -99,16 +96,6 @@ function useQuery() {
   return useMemo(() => new URLSearchParams(window.location.search), []);
 }
 
-function getClientId(): string {
-  const key = 'survey_client_id';
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = (window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
-    localStorage.setItem(key, id);
-  }
-  return id;
-}
-
 function Landing({ onPickNew }: { onPickNew: () => void }) {
   const card: React.CSSProperties = {
     flex: 1,
@@ -194,7 +181,7 @@ function NewStudentForm() {
     return null;
   }
 
-  async function onSubmit(e: React.FormEvent) {
+  function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setOk(null);
     const err = validate();
@@ -209,37 +196,9 @@ function NewStudentForm() {
       studentPhone: studentPhone.trim() || undefined,
       parentPhone: parentPhone.trim() || undefined,
     };
-    try {
-      // participants 테이블에 저장
-      const surveySlug = new URLSearchParams(window.location.search).get('slug') || 'welcome';
-      const { data: s } = await supabase
-        .from('surveys')
-        .select('id')
-        .eq('slug', surveySlug)
-        .single();
-      const clientId = getClientId();
-      const { error } = await supabase
-        .from('survey_participants')
-        .insert({
-          survey_id: (s as any)?.id,
-          client_id: clientId,
-          name: payload.name,
-          email: payload.email,
-          level: payload.level,
-          grade: payload.grade,
-          school: payload.school,
-          student_phone: payload.studentPhone,
-          parent_phone: payload.parentPhone,
-        });
-      if (error) throw error;
-      // 저장 후 설문 1번으로 이동
-      const next = new URL(window.location.href);
-      next.searchParams.set('page', 'survey');
-      next.searchParams.set('slug', surveySlug);
-      window.location.href = next.toString();
-    } catch (e:any) {
-      setError(e.message || '저장 중 오류가 발생했습니다.');
-    }
+    // MVP: 서버 저장 전까지 콘솔 출력만
+    console.log('[SURVEY][NEW_STUDENT_SUBMIT]', payload);
+    setOk('제출 완료 (임시 저장 없음)');
   }
 
   const inputStyle: React.CSSProperties = {
@@ -270,11 +229,11 @@ function NewStudentForm() {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-        <div style={{ fontSize: 22, fontWeight: 800, color: tokens.text }}>신규학생</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: tokens.text }}>신규학생 등록</div>
         <div style={{ marginLeft: 12, color: tokens.textFaint, fontSize: 14 }}>기본 정보를 입력해 주세요.</div>
       </div>
       {/* 필수 정보 */}
-      <div style={{ color: tokens.text, fontSize: 18, fontWeight: 800, margin: '4px 0 8px 4px' }}>기본 정보</div>
+      <div style={{ color: tokens.text, fontSize: 18, fontWeight: 800, margin: '4px 0 8px 4px' }}>필수 정보</div>
       {/* 1행: 이름 / 이메일 */}
       <div
         style={{
@@ -285,11 +244,11 @@ function NewStudentForm() {
         }}
       >
         <div style={{ maxWidth: 306 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>이름</label>
+          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>이름 (필수)</label>
           <input data-testid="form-name" style={{...inputStyle, height: 44}} value={name} onChange={(e)=>setName(e.target.value)} placeholder="예: 홍길동" />
         </div>
         <div style={{ maxWidth: 306 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>이메일</label>
+          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>이메일 (필수)</label>
           <input data-testid="form-email" style={{...inputStyle, height: 44}} value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com" />
         </div>
       </div>
@@ -303,7 +262,7 @@ function NewStudentForm() {
         }}
       >
         <div style={{ maxWidth: 306 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>학교</label>
+          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>학교 (선택)</label>
           <input data-testid="form-school" style={{...inputStyle, height: 44}} value={school} onChange={(e)=>setSchool(e.target.value)} placeholder="예: 서울초등학교" />
         </div>
       </div>
@@ -318,7 +277,7 @@ function NewStudentForm() {
         }}
       >
         <div style={{ maxWidth: 170 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>과정</label>
+          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>과정 (필수)</label>
           <SelectBox
             options={['elementary', 'middle', 'high'].map((k) => ({ key: k, label: k }))
               .map((o) => (o.key === 'elementary' ? '초등' : o.key === 'middle' ? '중등' : '고등'))}
@@ -333,7 +292,7 @@ function NewStudentForm() {
           />
         </div>
         <div style={{ maxWidth: 170 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>학년</label>
+          <label style={{ color: tokens.textDim, fontSize: 13, marginLeft: 2 }}>학년 (필수)</label>
           <SelectBox
             options={['선택', ...grades]}
             value={grade || ''}
@@ -344,7 +303,7 @@ function NewStudentForm() {
         </div>
       </div>
       {/* 4행: 선택 정보 */}
-      <div style={{ color: tokens.text, fontSize: 18, fontWeight: 800, margin: '18px 0 8px 4px' }}>추가 정보</div>
+      <div style={{ color: tokens.text, fontSize: 18, fontWeight: 800, margin: '18px 0 8px 4px' }}>선택 정보</div>
       {/* 3행: 학생 연락처 / 학부모 연락처 */}
       <div
         style={{
@@ -356,11 +315,11 @@ function NewStudentForm() {
         }}
       >
         <div style={{ maxWidth: 306 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13 }}>학생 연락처</label>
+          <label style={{ color: tokens.textDim, fontSize: 13 }}>학생 연락처 (선택)</label>
           <input data-testid="form-student-phone" style={{...inputStyle, height: 44}} value={studentPhone} onChange={(e)=>setStudentPhone(e.target.value)} placeholder="예: 01012345678" />
         </div>
         <div style={{ maxWidth: 306 }}>
-          <label style={{ color: tokens.textDim, fontSize: 13 }}>학부모 연락처</label>
+          <label style={{ color: tokens.textDim, fontSize: 13 }}>학부모 연락처 (선택)</label>
           <input data-testid="form-parent-phone" style={{...inputStyle, height: 44}} value={parentPhone} onChange={(e)=>setParentPhone(e.target.value)} placeholder="예: 01012345678" />
         </div>
       </div>
@@ -371,36 +330,16 @@ function NewStudentForm() {
       {error && <div style={{ color: tokens.danger, marginTop: 12, fontSize: 13 }}>{error}</div>}
       {ok && <div style={{ color: '#7ED957', marginTop: 12, fontSize: 13 }} data-testid="toast-success">{ok}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 32, justifyContent: 'flex-end' }}>
-        <button
-          data-testid="btn-submit"
-          type="submit"
-          style={{ background: tokens.accent, color: '#fff', border: 'none', padding: '10px 32px', borderRadius: 10, fontWeight: 700, cursor: 'pointer', fontSize: 18 }}
-        >제출</button>
+        <button data-testid="btn-submit" type="submit" style={{ background: tokens.accent, color: '#fff', border: 'none', padding: '12px 18px', borderRadius: 10, fontWeight: 800, cursor: 'pointer' }}>제출</button>
       </div>
     </form>
   );
 }
 
 function App() {
-  const qp = new URLSearchParams(window.location.search);
-  if (qp.get('page') === 'survey') {
-    const slug = qp.get('slug') || 'welcome';
-    return (
-      <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, overflowY: 'auto' }}>
-        <SurveyPage slug={slug} />
-      </div>
-    );
-  }
-  if (qp.get('page') === 'admin') {
-    return (
-      <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, overflowY: 'auto' }}>
-        <AdminPage />
-      </div>
-    );
-  }
   const [step, setStep] = useState<'landing'|'new'>('landing');
   return (
-    <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, overflowY: 'auto' }}>
+    <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, overflow: 'hidden' }}>
       {step === 'landing' ? (
         <Landing onPickNew={() => setStep('new')} />
       ) : (
