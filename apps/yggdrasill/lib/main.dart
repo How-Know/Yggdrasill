@@ -32,6 +32,7 @@ import 'tools/backfill_runner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'services/runtime_flags.dart';
 import 'services/app_config.dart';
+import 'services/update_service.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -342,6 +343,8 @@ void main() async {
     }
     await windowManager.focus();
   });
+  // 무인 자동 업데이트 체크(성공 시 프로세스 종료/재실행 처리)
+  try { await UpdateService.checkAndUpdateSilently(rootNavigatorKey.currentContext!); } catch (_) {}
   // 백필 실행 플래그
   const runBackfill = String.fromEnvironment('RUN_BACKFILL', defaultValue: 'false');
   if (runBackfill.toLowerCase() == 'true') {

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class UpdateService {
@@ -29,6 +30,38 @@ class UpdateService {
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-windows-x64.zip',
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/yggdrasill_x64.zip',
   ];
+
+  static const String _kLastInstalledTag = 'last_installed_tag';
+
+  // 앱 실행 시 무인 자동 업데이트: 최신 태그와 로컬 저장 태그가 다르면 ZIP 업데이트 수행
+  static Future<void> checkAndUpdateSilently(BuildContext context) async {
+    try {
+      final tag = await _fetchLatestTag();
+      if (tag == null || tag.isEmpty) return;
+      final prefs = await SharedPreferences.getInstance();
+      final last = prefs.getString(_kLastInstalledTag);
+      if (last == tag) return;
+      // 안내 스낵바만 띄우고 ZIP 업데이트 수행
+      _showSnack(context, '새 버전($tag)을 설치합니다...');
+      // 업데이트 성공 시 재시작되므로, 태그를 미리 저장해 루프 방지
+      await prefs.setString(_kLastInstalledTag, tag);
+      await _updateUsingZipForArm64(context);
+    } catch (_) {}
+  }
+
+  static Future<String?> _fetchLatestTag() async {
+    try {
+      final resp = await http.get(
+        Uri.parse('https://api.github.com/repos/How-Know/Yggdrasill/releases/latest'),
+        headers: {'User-Agent': 'Yggdrasill-Updater'},
+      );
+      if (resp.statusCode == 200) {
+        final map = jsonDecode(resp.body) as Map<String, dynamic>;
+        return (map['tag_name'] as String?)?.trim();
+      }
+    } catch (_) {}
+    return null;
+  }
 
   static Future<void> oneClickUpdate(BuildContext context) async {
     if (!Platform.isWindows) {
