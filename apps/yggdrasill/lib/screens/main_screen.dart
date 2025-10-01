@@ -548,7 +548,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               }
               final screenWidth = MediaQuery.of(context).size.width;
               // 최대창 기준 450px이던 시트 폭을 화면 너비 비율(대략 26%)로 환산
-              final baseRatio = 0.19; // 450 / 1728 ≈ 0.26
+              final baseRatio = 0.21; // 450 / 1728 ≈ 0.26
               final maxWidth = screenWidth * baseRatio;
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);

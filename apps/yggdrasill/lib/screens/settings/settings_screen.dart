@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import '../../services/sync_service.dart';
 import '../../services/update_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 enum SettingType {
   academy,
@@ -250,6 +251,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         '최신 버전 확인 및 설치를 진행합니다.',
                         style: TextStyle(color: Colors.white70),
                       ),
+                    ),
+                    FutureBuilder<PackageInfo>(
+                      future: PackageInfo.fromPlatform(),
+                      builder: (context, snapshot) {
+                        final ver = snapshot.data?.version ?? '';
+                        final build = snapshot.data?.buildNumber ?? '';
+                        final text = (ver.isEmpty && build.isEmpty)
+                            ? '버전 확인 중...'
+                            : '현재 버전: $ver+$build';
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 12.0),
+                          child: Text(text, style: const TextStyle(color: Colors.white60)),
+                        );
+                      },
                     ),
                     FilledButton.icon(
                       onPressed: () async {

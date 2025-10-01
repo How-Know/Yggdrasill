@@ -27,7 +27,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 import 'tenant_service.dart';
 import 'tag_preset_service.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase;
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
 
 class StudentWithInfo {
@@ -160,6 +160,7 @@ class DataManager {
       await loadStudentTimeBlocks();
       await loadSessionOverrides();
       await _subscribeSessionOverridesRealtime();
+      await _subscribeStudentTimeBlocksRealtime();
       await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
       await loadTeachers();
@@ -1537,6 +1538,36 @@ class DataManager {
   }
 
   Timer? _uiUpdateTimer;
+  RealtimeChannel? _rtStudentTimeBlocks;
+
+  Future<void> _subscribeStudentTimeBlocksRealtime() async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      _rtStudentTimeBlocks ??= Supabase.instance.client.channel('public:student_time_blocks:$academyId')
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'student_time_blocks',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async { await loadStudentTimeBlocks(); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'student_time_blocks',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async { await loadStudentTimeBlocks(); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'student_time_blocks',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async { await loadStudentTimeBlocks(); },
+        )
+        ..subscribe();
+    } catch (_) {}
+  }
   
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
     // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
@@ -3092,7 +3123,21 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final data = await supa.from('resource_folders').select('id,name,parent_id,order_index,category').match({'academy_id': academyId, 'category': category}).order('order_index');
+        List<dynamic> data;
+        if (category == 'textbook') {
+          data = await supa
+              .from('resource_folders')
+              .select('id,name,parent_id,order_index,category')
+              .eq('academy_id', academyId)
+              .or('category.is.null,category.eq.textbook')
+              .order('order_index');
+        } else {
+          data = await supa
+              .from('resource_folders')
+              .select('id,name,parent_id,order_index,category')
+              .match({'academy_id': academyId, 'category': category})
+              .order('order_index');
+        }
         return (data as List).cast<Map<String, dynamic>>();
       } catch (_) {}
     }
@@ -3142,7 +3187,21 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final data = await supa.from('resource_files').select('id,folder_id as parent_id,name,url,category,order_index').match({'academy_id': academyId, 'category': category}).order('order_index');
+        List<dynamic> data;
+        if (category == 'textbook') {
+          data = await supa
+              .from('resource_files')
+              .select('id,folder_id as parent_id,name,url,category,order_index')
+              .eq('academy_id', academyId)
+              .or('category.is.null,category.eq.textbook')
+              .order('order_index');
+        } else {
+          data = await supa
+              .from('resource_files')
+              .select('id,folder_id as parent_id,name,url,category,order_index')
+              .match({'academy_id': academyId, 'category': category})
+              .order('order_index');
+        }
         return (data as List).cast<Map<String, dynamic>>();
       } catch (_) {}
     }
@@ -3151,11 +3210,47 @@ class DataManager {
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
     await AcademyDbService.instance.saveResourceFileLinks(fileId, links);
-    // 링크 테이블은 Supabase에 아직 스키마가 없으므로 로컬 유지(필요 시 확장)
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('resource_file_links').delete().match({'academy_id': academyId, 'file_id': fileId});
+        if (links.isNotEmpty) {
+          final rows = links.entries
+              .where((e) => e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
+              .map((e) => {
+                    'academy_id': academyId,
+                    'file_id': fileId,
+                    'grade': e.key.trim(),
+                    'url': e.value.trim(),
+                  })
+              .toList();
+          if (rows.isNotEmpty) {
+            await supa.from('resource_file_links').insert(rows);
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
-    // 링크 테이블은 현 단계 로컬 우선
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa
+            .from('resource_file_links')
+            .select('grade,url')
+            .match({'academy_id': academyId, 'file_id': fileId});
+        final Map<String, String> result = {};
+        for (final r in (data as List).cast<Map<String, dynamic>>()) {
+          final grade = (r['grade'] as String?)?.trim() ?? '';
+          final url = (r['url'] as String?)?.trim() ?? '';
+          if (grade.isNotEmpty && url.isNotEmpty) result[grade] = url;
+        }
+        return result;
+      } catch (_) {}
+    }
     return await AcademyDbService.instance.loadResourceFileLinks(fileId);
   }
 
@@ -3232,6 +3327,18 @@ class DataManager {
 
   // ======== RESOURCE FILE BOOKMARKS ========
   Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa
+            .from('resource_file_bookmarks')
+            .select('name,description,path,order_index')
+            .match({'academy_id': academyId, 'file_id': fileId})
+            .order('order_index');
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
     return await dbClient.query('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId], orderBy: 'order_index ASC');
@@ -3249,6 +3356,30 @@ class DataManager {
         await txn.insert('resource_file_bookmarks', it);
       }
     });
+    if (TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        await supa.from('resource_file_bookmarks').delete().match({'academy_id': academyId, 'file_id': fileId});
+        if (items.isNotEmpty) {
+          final rows = <Map<String, dynamic>>[];
+          for (int i = 0; i < items.length; i++) {
+            final it = Map<String, dynamic>.from(items[i]);
+            rows.add({
+              'academy_id': academyId,
+              'file_id': fileId,
+              'name': it['name'],
+              'description': it['description'],
+              'path': it['path'],
+              'order_index': i,
+            });
+          }
+          if (rows.isNotEmpty) {
+            await supa.from('resource_file_bookmarks').insert(rows);
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   // ======== RESOURCE GRADES (학년 목록/순서) ========

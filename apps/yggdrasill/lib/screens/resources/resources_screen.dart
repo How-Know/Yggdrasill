@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'package:uuid/uuid.dart';
 import 'package:flutter/gestures.dart';
 import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
@@ -894,9 +895,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   Future<void> _initFavoritesAndDefaultSelection() async {
     _favoriteFileIds = await DataManager.instance.loadResourceFavorites();
-    // 교재탭 첫 진입 시 즐겨찾기 선택
+    // 교재탭 첫 진입: 즐겨찾기가 있으면 즐겨찾기, 없으면 루트(전체)
     setState(() {
-      _selectedFolderIdForTree = '__FAVORITES__';
+      _selectedFolderIdForTree = _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
     });
   }
 
@@ -1035,7 +1036,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                     _customTabIndex = i;
                     // 탭 변경 시 데이터 재로딩 및 트리 초기화
                     _expandedFolderIds.clear();
-                    _selectedFolderIdForTree = '__FAVORITES__';
+                    _selectedFolderIdForTree = _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
                     // 이전 탭 데이터가 잠깐 보이는 플리커 방지: 즉시 클리어
                     _folders.clear();
                     _files.clear();
@@ -3775,7 +3776,7 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
     }
     Navigator.of(context).pop({
       'meta': _ResourceFile(
-        id: UniqueKey().toString(),
+        id: const Uuid().v4(),
         name: name,
         color: _selectedColor,
         icon: _selectedIcon,
@@ -3951,7 +3952,7 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
     }
     Navigator.of(context).pop(
       _ResourceFolder(
-        id: UniqueKey().toString(),
+        id: const Uuid().v4(),
         name: name,
         color: _selectedColor,
         description: desc,

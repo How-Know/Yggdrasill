@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'runtime_flags.dart';
+import 'package:sqflite/sqflite.dart' show inMemoryDatabasePath;
 import '../models/student_time_block.dart';
 import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
@@ -21,17 +22,15 @@ class AcademyDbService {
   static Database? _db;
 
   Future<Database> get db async {
-    if (RuntimeFlags.serverOnly) {
-      throw StateError('Local database disabled in server-only mode');
-    }
     if (_db != null) return _db!;
     _db = await _initDb();
     return _db!;
   }
 
   Future<Database> _initDb() async {
-    // 요청: 문서(OneDrive) 경로 우선 사용 + 멱등/플랫폼 안전 처리
-    final path = await _resolveLocalDbPath();
+    // server-only 모드에서는 메모리 DB를 사용해 파일 I/O를 전혀 하지 않음
+    final bool mem = RuntimeFlags.serverOnly;
+    final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
       version: 35,
@@ -1073,11 +1072,6 @@ class AcademyDbService {
   }
 
   Future<String> _resolveLocalDbPath() async {
-    if (RuntimeFlags.serverOnly) {
-      // 서버 전용 모드에서는 로컬 DB 경로를 사용하지 않습니다.
-      // 호출자가 접근하지 않도록 상위에서 차단되지만, 안전을 위해 빈 경로 반환
-      return '';
-    }
     // 우선순위 1) 빌드 타임 주입 경로(override)
     const definedPath = String.fromEnvironment('LOCAL_DB_PATH', defaultValue: '');
     if (definedPath.isNotEmpty) {
@@ -1250,17 +1244,21 @@ class AcademyDbService {
 
   Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade, OnDatabaseConfigureFn? onConfigure}) async {
     print('[DB][경로] 실제 사용 DB 파일 경로: $path');
-    
-    // 파일 존재 여부 확인
-    final file = File(path);
-    final exists = await file.exists();
-    print('[DB][파일] DB 파일 존재 여부: $exists');
-    
-    if (exists) {
-      final stat = await file.stat();
-      print('[DB][파일] DB 파일 크기: ${stat.size} bytes, 수정일: ${stat.modified}');
+
+    // 메모리 DB는 파일 점검을 건너뜀
+    if (path != inMemoryDatabasePath) {
+      // 파일 존재 여부 확인
+      final file = File(path);
+      final exists = await file.exists();
+      print('[DB][파일] DB 파일 존재 여부: $exists');
+      if (exists) {
+        final stat = await file.stat();
+        print('[DB][파일] DB 파일 크기: ${stat.size} bytes, 수정일: ${stat.modified}');
+      }
+    } else {
+      print('[DB] server-only: in-memory database in use');
     }
-    
+
     return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade, onConfigure: onConfigure);
   }
 
