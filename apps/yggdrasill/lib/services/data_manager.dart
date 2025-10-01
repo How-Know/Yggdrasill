@@ -27,7 +27,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 import 'tenant_service.dart';
 import 'tag_preset_service.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase;
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase, AuthState, AuthChangeEvent;
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
 
 class StudentWithInfo {
@@ -160,6 +160,8 @@ class DataManager {
       await loadStudentTimeBlocks();
       await loadSessionOverrides();
       await _subscribeSessionOverridesRealtime();
+      await _subscribeStudentTimeBlocksRealtime();
+      _subscribeAuthChanges();
       await _subscribeStudentTimeBlocksRealtime();
       await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
       await loadGroupSchedules();
@@ -1539,7 +1541,7 @@ class DataManager {
 
   Timer? _uiUpdateTimer;
   RealtimeChannel? _rtStudentTimeBlocks;
-
+  StreamSubscription<AuthState>? _authSub;
   Future<void> _subscribeStudentTimeBlocksRealtime() async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
@@ -1567,6 +1569,25 @@ class DataManager {
         )
         ..subscribe();
     } catch (_) {}
+  }
+
+  void _subscribeAuthChanges() {
+    _authSub ??= Supabase.instance.client.auth.onAuthStateChange.listen((AuthState state) async {
+      try {
+        if (state.event == AuthChangeEvent.signedIn || state.event == AuthChangeEvent.tokenRefreshed) {
+          try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
+          // 세션 의존 데이터 재로딩
+          try { await loadStudents(); } catch (_) {}
+          try { await loadStudentTimeBlocks(); } catch (_) {}
+        } else if (state.event == AuthChangeEvent.signedOut) {
+          // 세션 종료 시 민감 데이터 비움
+          _studentsWithInfo = [];
+          _studentTimeBlocks = [];
+          studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+          studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        }
+      } catch (_) {}
+    });
   }
   
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
