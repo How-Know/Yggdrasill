@@ -3146,7 +3146,12 @@ class DataManager {
         final supa = Supabase.instance.client;
         final data = await supa.from('resource_folders').select('id,name,parent_id,order_index,category').eq('academy_id', academyId).order('order_index');
         return (data as List).cast<Map<String, dynamic>>();
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][folders] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
     }
     return await AcademyDbService.instance.loadResourceFolders();
   }
@@ -3172,7 +3177,12 @@ class DataManager {
               .order('order_index');
         }
         return (data as List).cast<Map<String, dynamic>>();
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][foldersByCat] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
     }
     return await AcademyDbService.instance.loadResourceFoldersForCategory(category);
   }
@@ -3193,7 +3203,7 @@ class DataManager {
           'order_index': row['order_index'],
         };
         await supa.from('resource_files').upsert(up, onConflict: 'id');
-      } catch (_) {}
+      } catch (e, st) { print('[RES][file save] supabase upsert failed: $e\n$st'); }
     }
   }
 
@@ -3208,9 +3218,14 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final data = await supa.from('resource_files').select('id,folder_id as parent_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
+        final data = await supa.from('resource_files').select('id,folder_id:parent_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
         return (data as List).cast<Map<String, dynamic>>();
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][files] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
     }
     return await AcademyDbService.instance.loadResourceFiles();
   }
@@ -3224,19 +3239,24 @@ class DataManager {
         if (category == 'textbook') {
           data = await supa
               .from('resource_files')
-              .select('id,folder_id as parent_id,name,url,category,order_index')
+              .select('id,folder_id:parent_id,name,url,category,order_index')
               .eq('academy_id', academyId)
               .or('category.is.null,category.eq.textbook')
               .order('order_index');
         } else {
           data = await supa
               .from('resource_files')
-              .select('id,folder_id as parent_id,name,url,category,order_index')
+              .select('id,folder_id:parent_id,name,url,category,order_index')
               .match({'academy_id': academyId, 'category': category})
               .order('order_index');
         }
         return (data as List).cast<Map<String, dynamic>>();
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][filesByCat] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
     }
     return await AcademyDbService.instance.loadResourceFilesForCategory(category);
   }
@@ -3262,7 +3282,7 @@ class DataManager {
             await supa.from('resource_file_links').insert(rows);
           }
         }
-      } catch (_) {}
+      } catch (e, st) { print('[RES][links save] supabase write failed: $e\n$st'); }
     }
   }
 
@@ -3282,7 +3302,12 @@ class DataManager {
           if (grade.isNotEmpty && url.isNotEmpty) result[grade] = url;
         }
         return result;
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][links load] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <String, String>{};
+        }
+      }
     }
     return await AcademyDbService.instance.loadResourceFileLinks(fileId);
   }
@@ -3312,7 +3337,12 @@ class DataManager {
           final set = (data as List).map((r) => (r['file_id'] as String)).toSet();
           return set;
         }
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][favorites load] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <String>{};
+        }
+      }
     }
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
@@ -3370,7 +3400,12 @@ class DataManager {
             .match({'academy_id': academyId, 'file_id': fileId})
             .order('order_index');
         return (data as List).cast<Map<String, dynamic>>();
-      } catch (_) {}
+      } catch (e, st) {
+        print('[RES][bookmarks load] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
     }
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
