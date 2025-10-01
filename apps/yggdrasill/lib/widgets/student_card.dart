@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
-import 'student_details_dialog.dart';
+// removed student_details_dialog
 import 'student_registration_dialog.dart';
 import '../services/data_manager.dart';
 import '../main.dart';
@@ -49,12 +49,7 @@ class StudentCard extends StatelessWidget {
     );
   }
 
-  void _showDetails(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
-    );
-  }
+  void _showDetails(BuildContext context) {}
 
   Future<void> _handleDelete(BuildContext context) async {
     print('[DEBUG][StudentCard] _handleDelete 진입: id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');

@@ -875,7 +875,52 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       );
     }
-    final Widget cardChild = nameWidget; // 이름만 버튼 내부에 표시; 칩은 외부에서 렌더링
+    final Widget attendedChild = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        nameWidget,
+        const SizedBox(width: 8),
+        // 버튼 내부로 이동한 태그 추가 아이콘
+        Tooltip(
+          message: '태그 추가',
+          child: IconButton(
+            onPressed: () => _openClassTagDialog(t),
+            icon: const Icon(Icons.circle_outlined, color: Colors.white70),
+            iconSize: 14,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+        ),
+        const SizedBox(width: 4),
+        // 버튼 내부로 이동한 과제 추가 아이콘
+        Tooltip(
+          message: '과제 추가',
+          child: IconButton(
+            onPressed: () async {
+              // 빠른 추가: 제목/색상 간단 입력 다이얼로그 호출 대신 학습 화면과 동일 다이얼로그 재사용
+              final item = await showDialog<dynamic>(
+                context: context,
+                builder: (ctx) => HomeworkQuickAddProxyDialog(studentId: t.student.id, initialTitle: '', initialColor: const Color(0xFF1976D2)),
+              );
+              if (item is Map<String, dynamic>) {
+                // 전달된 studentId, title, body, color 사용
+                if (item['studentId'] == t.student.id) {
+                  // LearningScreen의 스토어를 통해 추가 (전역 스토어 사용)
+                  HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
+                  // 출석 중에 추가된 과제는 오늘 내로 하원 시 숙제로 전환되도록 firstStartedAt가 설정될 수 있음
+                  setState(() {});
+                }
+              }
+            },
+            icon: const Icon(Icons.add_rounded, color: Colors.white70),
+            iconSize: 16,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+        ),
+      ],
+    );
+    final Widget cardChild = nameWidget; // 기본은 이름만 사용 (waiting/leaved)
     if (status == 'attended') {
       // 출석(파란 네모) 카드: 가로 공간 부족 시 줄바꿈 가능하도록 Wrap 사용
       return Wrap(
@@ -910,51 +955,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               margin: EdgeInsets.zero,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              padding: const EdgeInsets.fromLTRB(18, 10, 10, 10),
               decoration: BoxDecoration(
                 color: Colors.transparent,
                 border: Border.all(color: borderColor, width: 2),
                 borderRadius: BorderRadius.circular(25),
               ),
-              child: cardChild,
-            ),
-          ),
-          const SizedBox(width: 2),
-          Tooltip(
-            message: '태그 추가',
-            child: IconButton(
-              onPressed: () => _openClassTagDialog(t),
-              icon: const Icon(Icons.circle_outlined, color: Colors.white70),
-              iconSize: 16,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-            ),
-          ),
-          // 과제 추가(빠른 추가)
-          const SizedBox(width: 2),
-          Tooltip(
-            message: '과제 추가',
-            child: IconButton(
-              onPressed: () async {
-                // 빠른 추가: 제목/색상 간단 입력 다이얼로그 호출 대신 학습 화면과 동일 다이얼로그 재사용
-                final item = await showDialog<dynamic>(
-                  context: context,
-                  builder: (ctx) => HomeworkQuickAddProxyDialog(studentId: t.student.id, initialTitle: '', initialColor: const Color(0xFF1976D2)),
-                );
-                if (item is Map<String, dynamic>) {
-                  // 전달된 studentId, title, body, color 사용
-                  if (item['studentId'] == t.student.id) {
-                    // LearningScreen의 스토어를 통해 추가 (전역 스토어 사용)
-                    HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
-                    // 출석 중에 추가된 과제는 오늘 내로 하원 시 숙제로 전환되도록 firstStartedAt가 설정될 수 있음
-                    setState(() {});
-                  }
-                }
-              },
-              icon: const Icon(Icons.add_rounded, color: Colors.white70),
-              iconSize: 16,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+              child: attendedChild,
             ),
           ),
           // 이름 옆이 아니라 버튼들 오른쪽에 과제 요약 칩 렌더링

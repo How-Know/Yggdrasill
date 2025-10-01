@@ -18,7 +18,7 @@ import '../../widgets/custom_tab_bar.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
 import 'components/tendency_webview.dart';
-import '../../widgets/student_details_dialog.dart';
+// removed student_details_dialog
 import '../../models/payment_record.dart';
 import '../../models/student_time_block.dart';
 import '../../services/academy_db.dart';
@@ -211,24 +211,14 @@ class StudentScreenState extends State<StudentScreen> {
             } else if (_viewType == StudentViewType.bySchool) {
               return SchoolView(
                 students: filteredStudents,
-                onShowDetails: (studentWithInfo) {
-                  showDialog(
-                    context: context,
-                    builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
-                  );
-                },
+                onShowDetails: (studentWithInfo) {},
               );
             } else if (_viewType == StudentViewType.byDate) {
               return const DateView();
             } else {
               return AllStudentsView(
                 students: filteredStudents,
-                onShowDetails: (studentWithInfo) {
-                  showDialog(
-                    context: context,
-                    builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
-                  );
-                },
+                onShowDetails: (studentWithInfo) {},
                 groups: groups,
                 expandedGroups: _expandedGroups,
                 onGroupAdded: (groupInfo) {
@@ -698,12 +688,7 @@ class StudentScreenState extends State<StudentScreen> {
             final filteredStudents = filterStudents(students);
             return AllStudentsView(
               students: filteredStudents,
-              onShowDetails: (studentWithInfo) {
-                showDialog(
-                  context: context,
-                  builder: (context) => StudentDetailsDialog(studentWithInfo: studentWithInfo),
-                );
-              },
+              onShowDetails: (studentWithInfo) {},
               groups: groups,
               expandedGroups: _expandedGroups,
               onGroupAdded: (groupInfo) {

@@ -412,6 +412,7 @@ class DataManager {
     try {
       if (TagPresetService.preferSupabaseRead) {
         try {
+          print('[GROUPS][load] preferSupabaseRead=true → server select 시작');
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
           final data = await Supabase.instance.client
               .from('groups')
@@ -428,17 +429,16 @@ class DataManager {
             color: Color((((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
             displayOrder: (m['display_order'] as int?),
           )).toList();
+          print('[GROUPS][load] server loaded count=' + _groups.length.toString() + ', orders=' + _groups.map((g)=> (g.displayOrder?.toString() ?? 'null') + ':' + g.name).toList().toString());
           // Fallback/backfill은 dualWrite가 켜진 경우에만 수행
           if (_groups.isEmpty && TagPresetService.dualWrite) {
+            print('[GROUPS][load] server empty → dualWrite fallback to local');
             final local = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
             if (local.isNotEmpty) {
               _groups = local;
               if (TagPresetService.dualWrite) {
                 try {
-                  final rows = _groups.asMap().entries.map((e) {
-                    final g = e.value;
-                    final idx = e.key;
-                    return {
+                  final rows = _groups.map((g) => {
                     'id': g.id,
                     'academy_id': academyId,
                     'name': g.name,
@@ -446,8 +446,6 @@ class DataManager {
                     'capacity': g.capacity,
                     'duration': g.duration,
                     'color': g.color.value.toSigned(32),
-                    'display_order': g.displayOrder ?? idx,
-                  };
                   }).toList();
                   if (rows.isNotEmpty) {
                     await Supabase.instance.client.from('groups').insert(rows);
@@ -459,24 +457,19 @@ class DataManager {
           _groupsById = {for (var g in _groups) g.id: g};
           _notifyListeners();
           return;
-        } catch (_) {
+        } catch (e, st) {
+          print('[GROUPS][load] server select 실패, fallback 시도: ' + e.toString());
           // fallback to local below
         }
       }
       // 서버 전용 모드에서는 로컬 폴백을 하지 않는다
       if (!TagPresetService.preferSupabaseRead) {
+      print('[GROUPS][load] preferSupabaseRead=false → local DB 로드');
       _groups = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
-      // 로컬에서도 display_order 기준으로 정렬 보장
-      _groups.sort((a, b) {
-        final ao = a.displayOrder;
-        final bo = b.displayOrder;
-        if (ao == null && bo == null) return a.name.compareTo(b.name);
-        if (ao == null) return 1;
-        if (bo == null) return -1;
-        return ao.compareTo(bo);
-      });
+      print('[GROUPS][load] local loaded count=' + _groups.length.toString() + ', orders=' + _groups.map((g)=> (g.displayOrder?.toString() ?? 'null') + ':' + g.name).toList().toString());
       _groupsById = {for (var g in _groups) g.id: g};
       } else {
+        print('[GROUPS][load] preferSupabaseRead=true 이지만 server 경로 실패 → 빈 목록');
         _groups = [];
         _groupsById = {};
       }
@@ -651,9 +644,9 @@ class DataManager {
     try {
       if (TagPresetService.preferSupabaseRead) {
         try {
+          print('[GROUPS][save] preferSupabaseRead=true → server upsert 시작, count=' + _groups.length.toString());
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
           final supa = Supabase.instance.client;
-          // upsert로 순서까지 반영 (충돌키 id)
           if (_groups.isNotEmpty) {
             final rows = _groups.asMap().entries.map((e) {
               final g = e.value; final idx = e.key;
@@ -668,12 +661,16 @@ class DataManager {
                 'display_order': g.displayOrder ?? idx,
               };
             }).toList();
+            print('[GROUPS][save] server upsert rows orders=' + rows.map((r)=> (r['display_order']).toString() + ':' + (r['name'] as String)).toList().toString());
             await supa.from('groups').upsert(rows, onConflict: 'id');
+          } else {
+            print('[GROUPS][save] server upsert skip: empty');
           }
           return;
         } catch (e, st) { print('[SUPA][groups save] $e\n$st'); }
       }
       if (!RuntimeFlags.serverOnly) {
+        print('[GROUPS][save] local DB 저장 시작 (serverOnly=false), count=' + _groups.length.toString());
         await AcademyDbService.instance.saveGroups(_groups);
       }
     } catch (e) {
@@ -1904,10 +1901,7 @@ class DataManager {
   }
 
   void setGroupsOrder(List<GroupInfo> newOrder) {
-    // 인덱스를 displayOrder로 부여
-    _groups = newOrder.where((g) => g != null).toList().asMap().entries
-      .map((e) => e.value.copyWith(displayOrder: e.key))
-      .toList();
+    _groups = newOrder.where((g) => g != null).toList();
     _groupsById = {for (var g in _groups) g.id: g};
     _notifyListeners();
     saveGroups();

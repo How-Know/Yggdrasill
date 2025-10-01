@@ -1629,6 +1629,7 @@ class AcademyDbService {
   Future<void> saveGroups(List<GroupInfo> groups) async {
     final dbClient = await db;
     // upsert로 순서/내용 반영
+    print('[GROUPS][local][save] saving ' + groups.length.toString() + ' rows');
     for (int i = 0; i < groups.length; i++) {
       final g = groups[i];
       await dbClient.insert(
@@ -1650,6 +1651,7 @@ class AcademyDbService {
   Future<List<GroupInfo>> getGroups() async {
     final dbClient = await db;
     final result = await dbClient.query('groups', orderBy: 'display_order ASC, name ASC');
+    print('[GROUPS][local][load] loaded ' + result.length.toString() + ' rows');
     return result.map((row) => GroupInfo(
       id: row['id'] as String,
       name: row['name'] as String,

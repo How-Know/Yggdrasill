@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
+import 'package:intl/intl.dart';
+import '../../../models/attendance_record.dart';
+import '../../../models/payment_record.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
@@ -51,6 +54,16 @@ class AllStudentsView extends StatefulWidget {
 
 class _AllStudentsViewState extends State<AllStudentsView> {
   bool _showDeleteZone = false;
+  StudentWithInfo? _detailsStudent;
+
+  void _onShowDetails(StudentWithInfo s) {
+    setState(() {
+      _detailsStudent = s;
+    });
+  }
+  void _clearDetails() {
+    setState(() { _detailsStudent = null; });
+  }
 
   List<StudentWithInfo> _applyFilter(List<StudentWithInfo> students) {
     if (widget.activeFilter == null) {
@@ -294,17 +307,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     minWidth: 424,
                     maxWidth: 424,
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 1),
+                  padding: EdgeInsets.zero,
                   decoration: BoxDecoration(
-                    color: Color(0xFF18181A),
+                    color: Color(0xFF1F1F1F),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // 우측 패널 상단 타이틀/버튼 제거 (그룹 목록/그룹 등록)
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 0),
                       Expanded(
+                        flex: 2,
                         child: ReorderableListView.builder(
                           physics: const AlwaysScrollableScrollPhysics(),
                           buildDefaultDragHandles: false,
@@ -330,7 +344,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             final isExpanded = widget.expandedGroups.contains(groupInfo);
                             return Padding(
                               key: ValueKey(groupInfo.id),
-                              padding: const EdgeInsets.only(bottom: 16),
+                              padding: const EdgeInsets.only(bottom: 13.0),
                               child: DragTarget<StudentWithInfo>(
                                 onWillAccept: (student) => student != null,
                                 onAccept: (student) {
@@ -630,7 +644,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ),
                       if (_showDeleteZone)
                         Padding(
-                          padding: const EdgeInsets.only(top: 24.0),
+                          padding: const EdgeInsets.only(top: 0.0),
                           child: DragTarget<StudentWithInfo>(
                             onWillAccept: (student) => true,
                             onAccept: (student) async {
@@ -712,6 +726,21 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             },
                           ),
                         ),
+                      const SizedBox(height: 0),
+                      Expanded(
+                        flex: 1,
+                        child: _detailsStudent != null
+                          ? _EmbeddedStudentDetailsCard(studentWithInfo: _detailsStudent!)
+                          : Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF121212),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Center(
+                                child: Text('학생을 선택하면 상세 정보가 여기에 표시됩니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                              ),
+                            ),
+                      ),
                     ],
                   ),
                 );
@@ -762,7 +791,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         child: StudentCard(
                           key: ValueKey('studentCard_feedback_${student.student.id}'),
                           studentWithInfo: student,
-                          onShowDetails: widget.onShowDetails, // 연결 복구
+                          onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); }, // 연결 복구 + 내장 상세
                           onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
                           onOpenStudentPage: (s) {
@@ -781,7 +810,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       child: StudentCard(
                         key: ValueKey('studentCard_placeholder_${student.student.id}'),
                         studentWithInfo: student,
-                        onShowDetails: widget.onShowDetails, // 연결 복구
+                        onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); },
                         onDelete: widget.onDeleteStudent,
                         onUpdate: widget.onStudentUpdated,
                         onOpenStudentPage: (s) {
@@ -797,7 +826,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     child: StudentCard(
                       key: ValueKey('studentCard_${student.student.id}'),
                       studentWithInfo: student,
-                      onShowDetails: widget.onShowDetails, // 연결 복구
+                      onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); },
                       onDelete: widget.onDeleteStudent,
                       onUpdate: widget.onStudentUpdated,
                       onOpenStudentPage: (s) {
@@ -951,6 +980,173 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         const SizedBox(height: 16),
         ...schoolWidgets,
       ],
+    );
+  }
+} 
+
+class _EmbeddedStudentDetailsCard extends StatelessWidget {
+  final StudentWithInfo studentWithInfo;
+  const _EmbeddedStudentDetailsCard({required this.studentWithInfo});
+
+  @override
+  Widget build(BuildContext context) {
+    final student = studentWithInfo.student;
+    final basicInfo = studentWithInfo.basicInfo;
+    final String levelName = getEducationLevelName(student.educationLevel);
+    final grades = gradesByLevel[student.educationLevel] ?? [];
+    final Grade grade = grades.firstWhere(
+      (g) => g.value == student.grade,
+      orElse: () => grades.isNotEmpty ? grades.first : Grade(student.educationLevel, '${student.grade}', student.grade),
+    );
+    // 서버에서 로드된 주간 수업 횟수 사용
+    final int weeklyCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
+    // 최근 출석/납부 기록 계산
+    final List<AttendanceRecord> recentAttendance = List<AttendanceRecord>.from(
+      DataManager.instance.attendanceRecords.where((r) => r.studentId == student.id),
+    )..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+    final List<PaymentRecord> recentPayments = List<PaymentRecord>.from(
+      DataManager.instance.paymentRecords.where((p) => p.studentId == student.id),
+    )..sort((a, b) {
+      final DateTime aKey = a.paidDate ?? a.dueDate;
+      final DateTime bKey = b.paidDate ?? b.dueDate;
+      return bKey.compareTo(aKey);
+    });
+    // 최근 납부: 이번달 1건 + 과거 2건
+    final DateTime _now = DateTime.now();
+    final DateTime _thisMonthStart = DateTime(_now.year, _now.month, 1);
+    final DateTime _nextMonthStart = DateTime(_now.year, _now.month + 1, 1);
+    final List<PaymentRecord> _thisMonth = recentPayments.where((p) {
+      final d = p.paidDate ?? p.dueDate;
+      return !d.isBefore(_thisMonthStart) && d.isBefore(_nextMonthStart);
+    }).toList();
+    final List<PaymentRecord> _past = recentPayments.where((p) {
+      final d = p.paidDate ?? p.dueDate;
+      return d.isBefore(_thisMonthStart);
+    }).toList();
+    final List<PaymentRecord> displayPayments = [];
+    if (_thisMonth.isNotEmpty) {
+      displayPayments.add(_thisMonth.first);
+      displayPayments.addAll(_past.take(2));
+    } else {
+      displayPayments.addAll(_past.take(3));
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF121212),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(24),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final double colGap = 16;
+          final double nameSize = 23;
+          final double bodySize = 16;
+          final TextStyle titleStyle = const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w700);
+          final TextStyle bodyStyle = TextStyle(color: Colors.white, fontSize: bodySize, fontWeight: FontWeight.w500);
+
+          Widget infoColumn() => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(student.name, style: TextStyle(color: Colors.white, fontSize: nameSize, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text('$levelName ${grade.name}', style: const TextStyle(color: Colors.white70, fontSize: 16)),
+              const SizedBox(height: 4),
+              Text(student.school, style: const TextStyle(color: Colors.white60, fontSize: 15)),
+              if (student.groupInfo != null) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(Icons.group, color: student.groupInfo!.color, size: 16),
+                    const SizedBox(width: 6),
+                    Text(student.groupInfo!.name, style: TextStyle(color: student.groupInfo!.color, fontSize: 15, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ],
+            ],
+          );
+
+          Widget contactColumn() => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('연락처', style: titleStyle),
+              const SizedBox(height: 6),
+              Text(student.phoneNumber ?? basicInfo.phoneNumber ?? '정보 없음', style: bodyStyle, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 10),
+              Text('보호자', style: titleStyle),
+              const SizedBox(height: 6),
+              Text(basicInfo.parentPhoneNumber ?? '정보 없음', style: bodyStyle, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 10),
+              Text('등록일', style: titleStyle),
+              const SizedBox(height: 6),
+              Text(basicInfo.registrationDate != null ? DateFormat('yyyy.MM.dd').format(basicInfo.registrationDate!) : '정보 없음', style: bodyStyle),
+              const SizedBox(height: 10),
+              Text('주간 횟수', style: titleStyle),
+              const SizedBox(height: 6),
+              Text('$weeklyCount', style: bodyStyle),
+            ],
+          );
+
+          Widget recentColumn() => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('최근 출석', style: titleStyle),
+              const SizedBox(height: 6),
+              ...recentAttendance.take(3).map((r) {
+                final bool present = r.isPresent;
+                final String when = DateFormat('MM.dd HH:mm').format(r.classDateTime);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Icon(present ? Icons.check_circle : Icons.cancel, size: 16, color: present ? const Color(0xFF66BB6A) : const Color(0xFFE57373)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('${r.className.isNotEmpty ? r.className : '수업'} · $when', style: const TextStyle(color: Colors.white70, fontSize: 15), overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                );
+              }).toList(),
+              if (recentAttendance.isEmpty)
+                const Text('최근 출석 기록이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 14)),
+              const SizedBox(height: 10),
+              Text('최근 납부', style: titleStyle),
+              const SizedBox(height: 6),
+              ...displayPayments.map((p) {
+                final bool paid = p.paidDate != null;
+                final DateTime when = paid ? p.paidDate! : p.dueDate;
+                final String label = paid ? '납부' : '미납';
+                final Color color = paid ? const Color(0xFF64B5F6) : const Color(0xFFFFB74D);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Icon(paid ? Icons.payments : Icons.schedule, size: 16, color: color),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('$label · ${DateFormat('MM.dd').format(when)}', style: const TextStyle(color: Colors.white70, fontSize: 15), overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                );
+              }).toList(),
+              if (recentPayments.isEmpty)
+                const Text('최근 납부 기록이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 14)),
+            ],
+          );
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: infoColumn()),
+              SizedBox(width: colGap),
+              Expanded(child: contactColumn()),
+              SizedBox(width: colGap),
+              Expanded(child: recentColumn()),
+            ],
+          );
+        },
+      ),
     );
   }
 } 
