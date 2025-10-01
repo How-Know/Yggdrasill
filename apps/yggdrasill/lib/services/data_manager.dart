@@ -19,6 +19,7 @@ import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'runtime_flags.dart';
+import 'tag_store.dart';
 import 'sync_service.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
