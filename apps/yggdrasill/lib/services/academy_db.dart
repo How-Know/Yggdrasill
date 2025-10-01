@@ -111,13 +111,25 @@ class AcademyDbService {
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
+        // 운영시간: 정규화된 스키마 (정수 시각 + 별도 break_times 테이블)
         await db.execute('''
           CREATE TABLE operating_hours (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             day_of_week INTEGER,
-            start_time TEXT,
-            end_time TEXT,
-            break_times TEXT
+            start_hour INTEGER,
+            start_minute INTEGER,
+            end_hour INTEGER,
+            end_minute INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE break_times (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operating_hour_id INTEGER,
+            start_hour INTEGER,
+            start_minute INTEGER,
+            end_hour INTEGER,
+            end_minute INTEGER
           )
         ''');
         await db.execute('''

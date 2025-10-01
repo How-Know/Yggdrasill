@@ -1328,7 +1328,10 @@ class DataManager {
   Future<void> saveOperatingHours(List<OperatingHours> hours) async {
     try {
       _operatingHours = hours;
-      await AcademyDbService.instance.saveOperatingHours(hours);
+      // 서버 전용 모드에서는 로컬 저장을 생략 (메모리 DB 초기 스키마 의존성 제거)
+      if (!RuntimeFlags.serverOnly) {
+        await AcademyDbService.instance.saveOperatingHours(hours);
+      }
       if (TagPresetService.dualWrite) {
         try {
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
