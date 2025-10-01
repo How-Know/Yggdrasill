@@ -38,12 +38,8 @@ class UpdateService {
 
     final arch = _detectWindowsArch();
     if (arch == _WinArch.x64) {
-      // App Installer가 비활성화된 환경 대비: canLaunchUrl로 선확인 후, 실패 시 ZIP 경로 안내
-      final appInstallerOk = await _tryTriggerAppInstaller(context);
-      if (!appInstallerOk) {
-        _showSnack(context, 'Windows App Installer가 비활성화되어 있습니다. 포터블 ZIP으로 업데이트합니다.');
-        await _updateUsingZipForArm64(context); // x64에서도 동일 ZIP 플로우 사용 가능
-      }
+      // 일부 환경에서 ms-appinstaller가 비활성화되어 실패하므로 x64도 ZIP 플로우를 기본 사용
+      await _updateUsingZipForArm64(context);
       return;
     }
 
