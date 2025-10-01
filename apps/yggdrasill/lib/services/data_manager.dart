@@ -151,26 +151,14 @@ class DataManager {
     }
 
     try {
-      await loadGroups();
-      await loadStudentPaymentInfos(); // 학생 결제 정보를 먼저 로딩
-      await loadStudents(); // registration_date를 가져오기 위해 student_payment_info 후에 호출
-      await loadAcademySettings();
-      await loadPaymentType();
-      await _loadOperatingHours();
-      await loadStudentTimeBlocks();
-      await loadSessionOverrides();
+      // 로그인/테넌트 보장 후 일괄 로딩
+      try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
+      await reloadAllData();
       await _subscribeSessionOverridesRealtime();
       await _subscribeStudentTimeBlocksRealtime();
       _subscribeAuthChanges();
       await _subscribeStudentTimeBlocksRealtime();
-      await loadSelfStudyTimeBlocks(); // 자습 블록도 반드시 불러오기
-      await loadGroupSchedules();
-      await loadTeachers();
-      await loadClasses(); // 수업 정보 로딩 추가
-      await loadPaymentRecords(); // 수강료 납부 기록 로딩 추가
-      await loadAttendanceRecords(); // 출석 기록 로딩 추가
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
-      await loadMemos();
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       _isInitialized = true;
     } catch (e) {
@@ -1579,9 +1567,7 @@ class DataManager {
       try {
         if (state.event == AuthChangeEvent.signedIn || state.event == AuthChangeEvent.tokenRefreshed) {
           try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
-          // 세션 의존 데이터 재로딩
-          try { await loadStudents(); } catch (_) {}
-          try { await loadStudentTimeBlocks(); } catch (_) {}
+          await reloadAllData();
         } else if (state.event == AuthChangeEvent.signedOut) {
           // 세션 종료 시 민감 데이터 비움
           _studentsWithInfo = [];
@@ -1591,6 +1577,28 @@ class DataManager {
         }
       } catch (_) {}
     });
+  }
+
+  Future<void> reloadAllData() async {
+    try { await loadGroups(); } catch (_) {}
+    try { await loadStudentPaymentInfos(); } catch (_) {}
+    try { await loadStudents(); } catch (_) {}
+    try { await loadAcademySettings(); } catch (_) {}
+    try { await loadPaymentType(); } catch (_) {}
+    try { await _loadOperatingHours(); } catch (_) {}
+    try { await loadStudentTimeBlocks(); } catch (_) {}
+    try { await loadSessionOverrides(); } catch (_) {}
+    try { await loadSelfStudyTimeBlocks(); } catch (_) {}
+    try { await loadGroupSchedules(); } catch (_) {}
+    try { await loadTeachers(); } catch (_) {}
+    try { await loadClasses(); } catch (_) {}
+    try { await loadPaymentRecords(); } catch (_) {}
+    try { await loadAttendanceRecords(); } catch (_) {}
+    try { await loadMemos(); } catch (_) {}
+    try { await loadResourceFolders(); } catch (_) {}
+    try { await loadResourceFiles(); } catch (_) {}
+    try { await TagPresetService.instance.loadPresets(); } catch (_) {}
+    try { await TagStore.instance.loadAllFromDb(); } catch (_) {}
   }
   
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
