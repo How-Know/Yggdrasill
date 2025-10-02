@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
 import '../services/data_manager.dart';
+import '../services/tenant_service.dart';
 import '../models/teacher.dart';
 import './teacher_registration_dialog.dart';
 
@@ -565,7 +566,10 @@ class _AccountDialogState extends State<_AccountDialog> {
                   SizedBox(
                     height: 44,
                     child: OutlinedButton(
-                      onPressed: () async { await showDialog(context: context, builder: (ctx)=> _PinSetupDialog(email: email, initialMap: _profileMap)); await _reload(); },
+                      onPressed: () async {
+                        await showDialog(context: context, builder: (ctx)=> _PinSetupDialog(email: email, initialMap: _profileMap));
+                        await _reload();
+                      },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,
                         side: const BorderSide(color: Color(0xFF2A2A2A)),
@@ -791,7 +795,14 @@ class _PinDialog extends StatefulWidget {
 class _PinDialogState extends State<_PinDialog>{
   final c = TextEditingController(); String? err;
   @override Widget build(BuildContext context){
-    final saved = (widget.profileMap[widget.email] as Map?)?['pinHash'] as String?;
+    // 우선순위: 서버 pin_hash → 로컬 캐시
+    String? saved;
+    try{
+      final t = DataManager.instance.teachersNotifier.value.firstWhere((x)=>x.email==widget.email);
+      saved = t.pinHash;
+    }catch(_){
+      saved = (widget.profileMap[widget.email] as Map?)?['pinHash'] as String?;
+    }
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       title: Text(saved==null? 'PIN 설정 필요':'PIN 입력', style: const TextStyle(color: Colors.white)),
@@ -800,7 +811,7 @@ class _PinDialogState extends State<_PinDialog>{
         if(err!=null) Padding(padding: const EdgeInsets.only(top:6), child: Text(err!, style: const TextStyle(color: Colors.redAccent)))
       ]),
       actions:[
-        TextButton(onPressed: ()=>Navigator.pop(context,false), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
+        TextButton(onPressed: ()=>Navigator.pop(context,null), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
         FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
           final v = c.text.trim(); if(v.length!=6){ setState(()=>err='6자리'); return; }
           if(saved==null){
@@ -811,7 +822,7 @@ class _PinDialogState extends State<_PinDialog>{
             final hash = _ProfileStore.sha256of(v);
             cur['pinHash'] = hash;
             p[widget.email]=cur; await _ProfileStore.save({'profiles':p, 'activeEmail': map['activeEmail']});
-            // 서버 반영
+            // 서버 반영 + 즉시 메모리 갱신
             try{
               final i = DataManager.instance.teachersNotifier.value.indexWhere((t)=>t.email==widget.email);
               if(i>=0){
@@ -819,7 +830,10 @@ class _PinDialogState extends State<_PinDialog>{
                 DataManager.instance.updateTeacher(i, Teacher(id:t.id, name:t.name, role:t.role, contact:t.contact, email:t.email, description:t.description, displayOrder:t.displayOrder, pinHash:hash));
               }
             }catch(_){ }
-            if(context.mounted) Navigator.pop(context,true);
+            if(context.mounted){
+              Navigator.pop(context,true);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PIN이 저장되었습니다.' )));
+            }
           } else {
             final ok = saved == _ProfileStore.sha256of(v);
             if(context.mounted) Navigator.pop(context, ok);
@@ -853,8 +867,20 @@ class _PinSetupDialogState extends State<_PinSetupDialog>{
           final map = await _ProfileStore.load();
           final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
           final cur = Map<String,dynamic>.from((p[widget.email] as Map<String,dynamic>? ?? {}));
-          cur['pinHash'] = _ProfileStore.sha256of(a.text);
+          final hash = _ProfileStore.sha256of(a.text);
+          cur['pinHash'] = hash;
           p[widget.email]=cur; await _ProfileStore.save({'profiles':p, 'activeEmail': map['activeEmail']});
+          // 서버에도 즉시 반영
+          try{
+            final i = DataManager.instance.teachersNotifier.value.indexWhere((t)=>t.email==widget.email);
+            if(i>=0){
+              final t = DataManager.instance.teachersNotifier.value[i];
+              DataManager.instance.updateTeacher(i, Teacher(id:t.id, name:t.name, role:t.role, contact:t.contact, email:t.email, description:t.description, displayOrder:t.displayOrder, pinHash:hash));
+            }
+          }catch(_){}
+          if(context.mounted){
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PIN이 저장되었습니다.')));
+          }
           if(context.mounted) Navigator.pop(context);
         }, child: const Text('저장'))
       ],
@@ -1033,9 +1059,16 @@ class _SwitchProfileDialog extends StatelessWidget{
           title: Text(t.name, style: const TextStyle(color: Colors.white)),
           subtitle: Text(t.email, style: const TextStyle(color: Colors.white70)),
           onTap: () async {
-            final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
-            if(ok==true && context.mounted){ await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email}); Navigator.pop(context); }
-            if(ok==false && context.mounted){
+            // 최신 서버 값을 우선 반영: pin_hash 유무에 따라 다이얼로그 모드가 달라짐
+            try { await DataManager.instance.loadTeachers(); } catch (_) {}
+            final res = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+            if(res==true && context.mounted){
+              await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
+              // 즉시 헤더 아바타 리프레시를 위해 강제 재로딩
+              try { await DataManager.instance.reloadAllData(); } catch(_){ }
+              Navigator.pop(context);
+            }
+            if(res==false && context.mounted){
               showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('PIN 오류', style: TextStyle(color: Colors.white)), content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))]));
             }
           },

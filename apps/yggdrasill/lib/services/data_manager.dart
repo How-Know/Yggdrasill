@@ -1872,7 +1872,7 @@ class DataManager {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final data = await Supabase.instance.client
           .from('teachers')
-          .select('id,name,role,contact,email,description,display_order,pin_hash')
+          .select('id,name,role,contact,email,description,display_order,pin_hash,avatar_url,avatar_preset_color,avatar_preset_initial,avatar_use_icon')
           .eq('academy_id', academyId)
           .order('display_order', ascending: true, nullsFirst: false)
           .order('name');
@@ -1885,6 +1885,10 @@ class DataManager {
         description: t['description'] as String? ?? '',
         displayOrder: (t['display_order'] as int?),
         pinHash: t['pin_hash'] as String?,
+        avatarUrl: t['avatar_url'] as String?,
+        avatarPresetColor: t['avatar_preset_color'] as String?,
+        avatarPresetInitial: t['avatar_preset_initial'] as String?,
+        avatarUseIcon: t['avatar_use_icon'] as bool?,
       )).toList();
       _notifyListeners();
       return;
@@ -1912,6 +1916,10 @@ class DataManager {
           'description': e.value.description,
           'display_order': e.value.displayOrder ?? e.key,
           'pin_hash': e.value.pinHash,
+          'avatar_url': e.value.avatarUrl,
+          'avatar_preset_color': e.value.avatarPresetColor,
+          'avatar_preset_initial': e.value.avatarPresetInitial,
+          'avatar_use_icon': e.value.avatarUseIcon,
         }).toList();
         await supa.from('teachers').insert(rows);
       }

@@ -20,6 +20,10 @@ class Teacher {
   final String description;
   final int? displayOrder;
   final String? pinHash;
+  final String? avatarUrl;
+  final String? avatarPresetColor;
+  final String? avatarPresetInitial;
+  final bool? avatarUseIcon;
 
   Teacher({
     this.id,
@@ -30,5 +34,9 @@ class Teacher {
     required this.description,
     this.displayOrder,
     this.pinHash,
+    this.avatarUrl,
+    this.avatarPresetColor,
+    this.avatarPresetInitial,
+    this.avatarUseIcon,
   });
 }
