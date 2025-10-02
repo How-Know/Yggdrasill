@@ -39,13 +39,17 @@ class UpdateService {
       final tag = await _fetchLatestTag();
       if (tag == null || tag.isEmpty) return;
       final prefs = await SharedPreferences.getInstance();
-      final last = prefs.getString(_kLastInstalledTag);
+      final diskTag = await _readInstalledTagFromDisk();
+      final last = diskTag ?? prefs.getString(_kLastInstalledTag);
       if (last == tag) return;
-      // 안내 스낵바만 띄우고 ZIP 업데이트 수행
+      // 설치 타입 분기: MSIX → AppInstaller, 포터블 → ZIP
+      if (_isMsixInstall()) {
+        _showSnack(context, '새 버전($tag)을 App Installer로 설치합니다...');
+        final _ = await _tryTriggerAppInstaller(context);
+        return;
+      }
       _showSnack(context, '새 버전($tag)을 설치합니다...');
-      // 업데이트 성공 시 재시작되므로, 태그를 미리 저장해 루프 방지
-      await prefs.setString(_kLastInstalledTag, tag);
-      await _updateUsingZipForArm64(context);
+      await _updateUsingZipForArm64(context, tag: tag);
     } catch (_) {}
   }
 
@@ -66,6 +70,12 @@ class UpdateService {
   static Future<void> oneClickUpdate(BuildContext context) async {
     if (!Platform.isWindows) {
       _showSnack(context, 'Windows에서만 지원됩니다.');
+      return;
+    }
+
+    // 설치 형태 우선 분기: MSIX이면 App Installer 사용
+    if (_isMsixInstall()) {
+      final _ = await _tryTriggerAppInstaller(context);
       return;
     }
 
@@ -112,7 +122,7 @@ class UpdateService {
     return true;
   }
 
-  static Future<void> _updateUsingZipForArm64(BuildContext context) async {
+  static Future<void> _updateUsingZipForArm64(BuildContext context, {String? tag}) async {
     _showSnack(context, '업데이트 파일을 확인 중입니다...');
     final client = http.Client();
     try {
@@ -191,6 +201,8 @@ class UpdateService {
         exeDir,
         '-ExeName',
         exeName,
+        '-Tag',
+        (tag ?? ''),
       ], mode: ProcessStartMode.detached);
 
       _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
@@ -220,11 +232,33 @@ class UpdateService {
     return _WinArch.unknown;
   }
 
+  static bool _isMsixInstall() {
+    try {
+      final exe = Platform.resolvedExecutable.replaceAll('\\', '/').toLowerCase();
+      return exe.contains('/windowsapps/');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<String?> _readInstalledTagFromDisk() async {
+    try {
+      final exeDir = p.dirname(Platform.resolvedExecutable);
+      final f = File(p.join(exeDir, 'installed_tag.txt'));
+      if (await f.exists()) {
+        final s = (await f.readAsString()).trim();
+        if (s.isNotEmpty) return s;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static const String _psScriptContent = r'''
 param(
   [Parameter(Mandatory=$true)][string]$ZipPath,
   [Parameter(Mandatory=$true)][string]$InstallDir,
-  [Parameter(Mandatory=$true)][string]$ExeName
+  [Parameter(Mandatory=$true)][string]$ExeName,
+  [Parameter(Mandatory=$false)][string]$Tag = ''
 )
 
 try {
@@ -258,6 +292,11 @@ try {
   $bakData = Join-Path $backupDir 'data'
   if (Test-Path $bakData) {
     Move-Item -Force $bakData (Join-Path $InstallDir 'data')
+  }
+
+  # 설치된 태그 기록 (성공 시)
+  if ($Tag -ne '') {
+    Set-Content -Path (Join-Path $InstallDir 'installed_tag.txt') -Value $Tag -Encoding UTF8
   }
 
   Start-Process -FilePath (Join-Path $InstallDir $ExeName)

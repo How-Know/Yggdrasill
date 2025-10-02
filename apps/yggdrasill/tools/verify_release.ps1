@@ -29,6 +29,13 @@ if($ai -notmatch 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.
 $aiTag = [regex]::Match($ai, 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix').Groups[1].Value
 if("v$aiTag" -ne $Tag){ Fail "appinstaller Uri tag(v$aiTag) != 입력 Tag($Tag)" } else { Ok "appinstaller Uri tag=v$aiTag" }
 
+# UpdateSettings 강제 업데이트 설정 확인
+if($ai -notmatch '<UpdateSettings>'){ Fail 'appinstaller에 <UpdateSettings> 블록이 없습니다.' }
+if($ai -notmatch '<OnLaunch\s+HoursBetweenUpdateChecks="0"\s*/>'){ Fail 'OnLaunch HoursBetweenUpdateChecks=0 누락' } else { Ok 'OnLaunch=0 확인' }
+if($ai -notmatch '<ShowPrompt>\s*true\s*</ShowPrompt>'){ Fail 'ShowPrompt=true 누락' } else { Ok 'ShowPrompt=true 확인' }
+if($ai -notmatch '<UpdateBlocksActivation>\s*true\s*</UpdateBlocksActivation>'){ Fail 'UpdateBlocksActivation=true 누락' } else { Ok 'BlocksActivation=true 확인' }
+if($ai -notmatch '<ForceUpdateFromAnyVersion>\s*true\s*</ForceUpdateFromAnyVersion>'){ Fail 'ForceUpdateFromAnyVersion=true 누락' } else { Ok 'ForceUpdateFromAnyVersion=true 확인' }
+
 # 2) 릴리스 자산 확인
 Info "릴리스 자산 확인 중: $Repo $Tag"
 $json = gh release view $Tag -R $Repo --json assets 2>$null | ConvertFrom-Json

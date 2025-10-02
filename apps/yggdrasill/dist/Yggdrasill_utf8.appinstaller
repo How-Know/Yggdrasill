@@ -9,7 +9,12 @@
     Version="1.0.3.8"
     ProcessorArchitecture="x64"
     Uri="https://github.com/How-Know/Yggdrasill/releases/download/v1.0.3.8/mneme_flutter.msix" />
-  <UpdateSettings OnLaunch="true" HoursBetweenUpdateChecks="6" />
+  <UpdateSettings>
+    <OnLaunch HoursBetweenUpdateChecks="0"/>
+    <ShowPrompt>true</ShowPrompt>
+    <UpdateBlocksActivation>true</UpdateBlocksActivation>
+    <ForceUpdateFromAnyVersion>true</ForceUpdateFromAnyVersion>
+  </UpdateSettings>
 </AppInstaller>
 
 
