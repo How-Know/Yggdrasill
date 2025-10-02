@@ -35,12 +35,12 @@ if($m.Success){
   Info 'appinstaller MSIX Uri가 latest 경로입니다.'
 }
 
-# UpdateSettings 강제 업데이트 설정 확인
+# UpdateSettings 강제 업데이트 설정 확인 (플래그 요소 형태)
 if($ai -notmatch '<UpdateSettings>'){ Fail 'appinstaller에 <UpdateSettings> 블록이 없습니다.' }
 if($ai -notmatch '<OnLaunch\s+HoursBetweenUpdateChecks="0"\s*/>'){ Fail 'OnLaunch HoursBetweenUpdateChecks=0 누락' } else { Ok 'OnLaunch=0 확인' }
-if($ai -notmatch '<ShowPrompt>\s*true\s*</ShowPrompt>'){ Fail 'ShowPrompt=true 누락' } else { Ok 'ShowPrompt=true 확인' }
-if($ai -notmatch '<UpdateBlocksActivation>\s*true\s*</UpdateBlocksActivation>'){ Fail 'UpdateBlocksActivation=true 누락' } else { Ok 'BlocksActivation=true 확인' }
-if($ai -notmatch '<ForceUpdateFromAnyVersion>\s*true\s*</ForceUpdateFromAnyVersion>'){ Fail 'ForceUpdateFromAnyVersion=true 누락' } else { Ok 'ForceUpdateFromAnyVersion=true 확인' }
+if($ai -notmatch '<ShowPrompt\s*/>'){ Fail 'ShowPrompt flag 누락' } else { Ok 'ShowPrompt flag 확인' }
+if($ai -notmatch '<UpdateBlocksActivation\s*/>'){ Fail 'UpdateBlocksActivation flag 누락' } else { Ok 'BlocksActivation flag 확인' }
+if($ai -notmatch '<ForceUpdateFromAnyVersion\s*/>'){ Fail 'ForceUpdateFromAnyVersion flag 누락' } else { Ok 'ForceUpdateFromAnyVersion flag 확인' }
 
 # 2) 릴리스 자산 확인
 Info "릴리스 자산 확인 중: $Repo $Tag"
