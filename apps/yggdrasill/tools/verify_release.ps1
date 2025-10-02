@@ -25,9 +25,15 @@ if($ai -notmatch 'Version="([0-9]+(?:\.[0-9]+){2,3})"'){ Fail 'appinstaller Vers
 $aiVer = [regex]::Match($ai, 'Version="([0-9]+(?:\.[0-9]+){2,3})"').Groups[1].Value
 if($aiVer -ne $expectedMsix){ Fail "appinstaller Version($aiVer) != expected($expectedMsix)" } else { Ok "appinstaller Version=$aiVer" }
 
-if($ai -notmatch 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix'){ Fail 'appinstaller Uri MSIX 경로 인식 실패' }
-$aiTag = [regex]::Match($ai, 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix').Groups[1].Value
-if("v$aiTag" -ne $Tag){ Fail "appinstaller Uri tag(v$aiTag) != 입력 Tag($Tag)" } else { Ok "appinstaller Uri tag=v$aiTag" }
+# MSIX Uri는 태그 고정(/download/vX.Y.Z/)를 권장, 루트 AppInstaller Uri는 /latest/ 사용 허용
+if($ai -notmatch 'releases\/(download\/v([0-9]+(?:\.[0-9]+){2,3})|latest\/download)\/mneme_flutter.msix'){ Fail 'appinstaller Uri MSIX 경로 인식 실패' }
+$m = [regex]::Match($ai, 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix')
+if($m.Success){
+  $aiTag = $m.Groups[1].Value
+  if("v$aiTag" -ne $Tag){ Fail "appinstaller Uri tag(v$aiTag) != 입력 Tag($Tag)" } else { Ok "appinstaller Uri tag=v$aiTag" }
+} else {
+  Info 'appinstaller MSIX Uri가 latest 경로입니다.'
+}
 
 # UpdateSettings 강제 업데이트 설정 확인
 if($ai -notmatch '<UpdateSettings>'){ Fail 'appinstaller에 <UpdateSettings> 블록이 없습니다.' }
