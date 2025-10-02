@@ -1872,17 +1872,19 @@ class DataManager {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final data = await Supabase.instance.client
           .from('teachers')
-          .select('name,role,contact,email,description,display_order')
+          .select('id,name,role,contact,email,description,display_order,pin_hash')
           .eq('academy_id', academyId)
           .order('display_order', ascending: true, nullsFirst: false)
           .order('name');
       _teachers = (data as List).map((t) => Teacher(
+        id: (t['id'] as String?),
         name: t['name'] as String? ?? '',
         role: TeacherRole.values[(t['role'] as int?) ?? 0],
         contact: t['contact'] as String? ?? '',
         email: t['email'] as String? ?? '',
         description: t['description'] as String? ?? '',
         displayOrder: (t['display_order'] as int?),
+        pinHash: t['pin_hash'] as String?,
       )).toList();
       _notifyListeners();
       return;
@@ -1909,6 +1911,7 @@ class DataManager {
           'email': e.value.email,
           'description': e.value.description,
           'display_order': e.value.displayOrder ?? e.key,
+          'pin_hash': e.value.pinHash,
         }).toList();
         await supa.from('teachers').insert(rows);
       }
@@ -1938,7 +1941,17 @@ class DataManager {
 
   void updateTeacher(int idx, Teacher updated) {
     if (idx >= 0 && idx < _teachers.length) {
-      _teachers[idx] = updated;
+      final prev = _teachers[idx];
+      _teachers[idx] = Teacher(
+        id: prev.id,
+        name: updated.name,
+        role: updated.role,
+        contact: updated.contact,
+        email: updated.email,
+        description: updated.description,
+        displayOrder: updated.displayOrder,
+        pinHash: updated.pinHash ?? prev.pinHash,
+      );
       saveTeachers();
       teachersNotifier.value = List.unmodifiable(_teachers);
     }

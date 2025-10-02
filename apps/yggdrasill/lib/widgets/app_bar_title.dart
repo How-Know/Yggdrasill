@@ -450,14 +450,17 @@ class _AccountDialogState extends State<_AccountDialog> {
   }
 
   Teacher? _activeTeacher() {
+    final src = DataManager.instance.teachersNotifier.value;
+    if (src.isEmpty) return null;
+    final list = List<Teacher>.from(src);
+    list.sort((a,b){
+      final ao = a.displayOrder ?? (1<<30); final bo = b.displayOrder ?? (1<<30);
+      if (ao != bo) return ao.compareTo(bo);
+      return a.name.compareTo(b.name);
+    });
     final email = _activeEmail ?? _safeClient()?.auth.currentUser?.email;
-    if (email == null) return null;
-    final list = DataManager.instance.teachersNotifier.value;
-    try {
-      return list.firstWhere((t) => t.email == email);
-    } catch (_) {
-      return null;
-    }
+    if (email == null) return list.first;
+    try { return list.firstWhere((t) => t.email == email); } catch (_) { return list.first; }
   }
 
   Future<void> _openAvatarPicker() async {
@@ -801,11 +804,21 @@ class _PinDialogState extends State<_PinDialog>{
         FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
           final v = c.text.trim(); if(v.length!=6){ setState(()=>err='6자리'); return; }
           if(saved==null){
+            // 최초 설정: 로컬 저장 + 서버 업데이트
             final map = await _ProfileStore.load();
             final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
             final cur = Map<String,dynamic>.from((p[widget.email] as Map<String,dynamic>? ?? {}));
-            cur['pinHash'] = _ProfileStore.sha256of(v);
+            final hash = _ProfileStore.sha256of(v);
+            cur['pinHash'] = hash;
             p[widget.email]=cur; await _ProfileStore.save({'profiles':p, 'activeEmail': map['activeEmail']});
+            // 서버 반영
+            try{
+              final i = DataManager.instance.teachersNotifier.value.indexWhere((t)=>t.email==widget.email);
+              if(i>=0){
+                final t = DataManager.instance.teachersNotifier.value[i];
+                DataManager.instance.updateTeacher(i, Teacher(id:t.id, name:t.name, role:t.role, contact:t.contact, email:t.email, description:t.description, displayOrder:t.displayOrder, pinHash:hash));
+              }
+            }catch(_){ }
             if(context.mounted) Navigator.pop(context,true);
           } else {
             final ok = saved == _ProfileStore.sha256of(v);
@@ -1011,7 +1024,9 @@ class _SwitchProfileDialog extends StatelessWidget{
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       title: const Text('프로필 전환', style: TextStyle(color: Colors.white)),
-      content: SizedBox(width: 520, height: 360, child: ListView.builder(itemCount: teachers.length, itemBuilder: (ctx,i){
+      content: SizedBox(width: 520, height: 360, child: ListView.builder(
+        itemCount: teachers.length,
+        itemBuilder: (ctx,i){
         final t=teachers[i]; final info = (profileMap[t.email] as Map?) ?? {}; final avatar = (info['avatar'] as String?) ?? '';
         return ListTile(
           leading: CircleAvatar(backgroundColor: const Color(0xFF2A2A2A), backgroundImage: avatar!=null && avatar.isNotEmpty && File(avatar).existsSync()? FileImage(File(avatar)) : null, child: avatar.isEmpty? const Icon(Icons.person, color: Colors.white70): null),
@@ -1020,6 +1035,9 @@ class _SwitchProfileDialog extends StatelessWidget{
           onTap: () async {
             final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
             if(ok==true && context.mounted){ await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email}); Navigator.pop(context); }
+            if(ok==false && context.mounted){
+              showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('PIN 오류', style: TextStyle(color: Colors.white)), content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))]));
+            }
           },
         );
       })),

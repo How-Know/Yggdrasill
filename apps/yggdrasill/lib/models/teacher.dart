@@ -12,19 +12,23 @@ String getTeacherRoleLabel(TeacherRole role) {
 }
 
 class Teacher {
+  final String? id;
   final String name;
   final TeacherRole role;
   final String contact;
   final String email;
   final String description;
   final int? displayOrder;
+  final String? pinHash;
 
   Teacher({
+    this.id,
     required this.name,
     required this.role,
     required this.contact,
     required this.email,
     required this.description,
     this.displayOrder,
+    this.pinHash,
   });
 }
