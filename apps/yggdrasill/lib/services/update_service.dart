@@ -42,10 +42,14 @@ class UpdateService {
       final diskTag = await _readInstalledTagFromDisk();
       final last = diskTag ?? prefs.getString(_kLastInstalledTag);
       if (last == tag) return;
-      // 설치 타입 분기: MSIX → AppInstaller, 포터블 → ZIP
+      // 설치 타입 분기: MSIX → AppInstaller 시도, 실패 시 ZIP로 폴백(로컬 경로 설치)
       if (_isMsixInstall()) {
         _showSnack(context, '새 버전($tag)을 App Installer로 설치합니다...');
-        final _ = await _tryTriggerAppInstaller(context);
+        final ok = await _tryTriggerAppInstaller(context);
+        if (!ok) {
+          _showSnack(context, 'App Installer가 비활성화되어 ZIP 경로로 업데이트합니다.');
+          await _updateUsingZipForArm64(context, tag: tag);
+        }
         return;
       }
       _showSnack(context, '새 버전($tag)을 설치합니다...');
@@ -75,7 +79,10 @@ class UpdateService {
 
     // 설치 형태 우선 분기: MSIX이면 App Installer 사용
     if (_isMsixInstall()) {
-      final _ = await _tryTriggerAppInstaller(context);
+      final ok = await _tryTriggerAppInstaller(context);
+      if (!ok) {
+        await _updateUsingZipForArm64(context);
+      }
       return;
     }
 
@@ -181,7 +188,7 @@ class UpdateService {
       }
 
       final exePath = Platform.resolvedExecutable;
-      final exeDir = p.dirname(exePath);
+      final exeDir = _preferredInstallDir(exePath);
       final exeName = p.basename(exePath);
 
       // PowerShell 스크립트 작성
@@ -241,6 +248,20 @@ class UpdateService {
     }
   }
 
+  // MSIX 설치본이면 쓰기 가능한 경로로 설치 위치를 바꾼다
+  static String _preferredInstallDir(String exePath) {
+    try {
+      final normalized = exePath.replaceAll('\\', '/').toLowerCase();
+      if (normalized.contains('/windowsapps/')) {
+        final local = Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
+        return p.join(local, 'Yggdrasill', 'app');
+      }
+      return p.dirname(exePath);
+    } catch (_) {
+      return p.dirname(exePath);
+    }
+  }
+
   static Future<String?> _readInstalledTagFromDisk() async {
     try {
       final exeDir = p.dirname(Platform.resolvedExecutable);
@@ -286,6 +307,8 @@ try {
     $srcDir = $tmpExtract
   }
 
+  # 설치 경로 보장
+  New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
   Copy-Item -Path (Join-Path $srcDir '*') -Destination $InstallDir -Recurse -Force
 
   # data 복원
@@ -299,7 +322,14 @@ try {
     Set-Content -Path (Join-Path $InstallDir 'installed_tag.txt') -Value $Tag -Encoding UTF8
   }
 
-  Start-Process -FilePath (Join-Path $InstallDir $ExeName)
+  # 실행 파일 결정 (지정 exe가 없으면 후보 검색)
+  $targetExe = Join-Path $InstallDir $ExeName
+  if (-not (Test-Path $targetExe)) {
+    $cands = Get-ChildItem -Path $InstallDir -Filter *.exe -File | Sort-Object Length -Descending
+    foreach ($c in $cands) { if ($c.Name -match 'yggdrasill|mneme') { $targetExe = $c.FullName; break } }
+    if (-not (Test-Path $targetExe) -and $cands.Count -gt 0) { $targetExe = $cands[0].FullName }
+  }
+  Start-Process -FilePath $targetExe
 } catch {
   # 실패 시에도 조용히 종료
 }
