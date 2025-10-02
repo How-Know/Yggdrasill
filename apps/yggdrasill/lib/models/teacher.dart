@@ -17,6 +17,7 @@ class Teacher {
   final String contact;
   final String email;
   final String description;
+  final int? displayOrder;
 
   Teacher({
     required this.name,
@@ -24,5 +25,6 @@ class Teacher {
     required this.contact,
     required this.email,
     required this.description,
+    this.displayOrder,
   });
-} 
+}

@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 35,
+      version: 36,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -139,7 +139,8 @@ class AcademyDbService {
             role INTEGER,
             contact TEXT,
             email TEXT,
-            description TEXT
+            description TEXT,
+            display_order INTEGER
           )
         ''');
         await db.execute('''
@@ -478,6 +479,17 @@ class AcademyDbService {
             print('[DB][마이그레이션] v35 exam_days 생성 실패: $e');
           }
         }
+        if (oldVersion < 36) {
+          try {
+            final cols = await db.rawQuery('PRAGMA table_info(teachers)');
+            final has = cols.any((c) => (c['name'] as String?) == 'display_order');
+            if (!has) {
+              await db.execute('ALTER TABLE teachers ADD COLUMN display_order INTEGER');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v36 teachers.display_order 추가 실패: $e');
+          }
+        }
         if (oldVersion < 26) {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS kakao_reservations (
@@ -660,7 +672,8 @@ class AcademyDbService {
             role INTEGER,
             contact TEXT,
             email TEXT,
-            description TEXT
+            description TEXT,
+            display_order INTEGER
           )
         ''');
         await db.execute('''
@@ -1610,31 +1623,11 @@ class AcademyDbService {
     return null;
   }
 
-  Future<void> saveTeachers(List teachers) async {
-    try {
-      final dbClient = await db;
-      print('[DB] saveTeachers: ${teachers.length}명');
-      await dbClient.delete('teachers');
-      for (final t in teachers) {
-        print('[DB] insert teacher: $t');
-        await dbClient.insert('teachers', {
-          'name': t.name,
-          'role': t.role.index,
-          'contact': t.contact,
-          'email': t.email,
-          'description': t.description,
-        });
-      }
-    } catch (e, st) {
-      print('[DB][ERROR] saveTeachers: $e\n$st');
-      rethrow;
-    }
-  }
+  // 로컬 DB 사용 중단에 따라 미사용 보관 (호출 금지)
+  Future<void> saveTeachers(List teachers) async { return; }
 
-  Future<List<Map<String, dynamic>>> getTeachers() async {
-    final dbClient = await db;
-    return await dbClient.query('teachers');
-  }
+  // 로컬 DB 사용 중단에 따라 미사용 보관 (호출 금지)
+  Future<List<Map<String, dynamic>>> getTeachers() async { return []; }
 
   Future<void> saveGroups(List<GroupInfo> groups) async {
     final dbClient = await db;

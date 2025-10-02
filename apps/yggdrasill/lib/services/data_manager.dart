@@ -1868,73 +1868,53 @@ class DataManager {
   }
 
   Future<void> loadTeachers() async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final data = await Supabase.instance.client
-            .from('teachers')
-            .select('name,role,contact,email,description')
-            .eq('academy_id', academyId)
-            .order('name');
-        _teachers = (data as List).map((t) => Teacher(
-          name: t['name'] as String? ?? '',
-          role: TeacherRole.values[(t['role'] as int?) ?? 0],
-          contact: t['contact'] as String? ?? '',
-          email: t['email'] as String? ?? '',
-          description: t['description'] as String? ?? '',
-        )).toList();
-        _notifyListeners();
-        return;
-      } catch (e, st) { print('[SUPA][classes delete] $e\n$st'); }
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final data = await Supabase.instance.client
+          .from('teachers')
+          .select('name,role,contact,email,description,display_order')
+          .eq('academy_id', academyId)
+          .order('display_order', ascending: true, nullsFirst: false)
+          .order('name');
+      _teachers = (data as List).map((t) => Teacher(
+        name: t['name'] as String? ?? '',
+        role: TeacherRole.values[(t['role'] as int?) ?? 0],
+        contact: t['contact'] as String? ?? '',
+        email: t['email'] as String? ?? '',
+        description: t['description'] as String? ?? '',
+        displayOrder: (t['display_order'] as int?),
+      )).toList();
+      _notifyListeners();
+      return;
+    } catch (e, st) {
+      print('[SUPA][teachers load] $e\n$st');
+      // 서버만 사용 → 실패 시 비워둠
+      _teachers = [];
+      _notifyListeners();
     }
-    final teacherMaps = await AcademyDbService.instance.getTeachers();
-    _teachers = teacherMaps.map((t) => Teacher(
-      name: t['name'],
-      role: TeacherRole.values[t['role']],
-      contact: t['contact'],
-      email: t['email'],
-      description: t['description'],
-    )).toList();
-    _notifyListeners();
   }
 
   Future<void> saveTeachers() async {
     try {
-      print('[DEBUG] saveTeachers 시작: \${_teachers.length}명');
-      final dbClient = await AcademyDbService.instance.db;
-      print('[DEBUG] saveTeachers: \${_teachers.length}명');
-      await dbClient.delete('teachers');
-      for (final t in _teachers) {
-        print('[DB] insert teacher: $t');
-        await dbClient.insert('teachers', {
-          'name': t.name,
-          'role': t.role.index,
-          'contact': t.contact,
-          'email': t.email,
-          'description': t.description,
-        });
-      }
-      if (TagPresetService.dualWrite) {
-        try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-          final supa = Supabase.instance.client;
-          await supa.from('teachers').delete().eq('academy_id', academyId);
-          if (_teachers.isNotEmpty) {
-            final rows = _teachers.map((t) => {
-              'academy_id': academyId,
-              'name': t.name,
-              'role': t.role.index,
-              'contact': t.contact,
-              'email': t.email,
-              'description': t.description,
-            }).toList();
-            await supa.from('teachers').insert(rows);
-          }
-        } catch (_) {}
+      print('[DEBUG] saveTeachers(serverside) 시작: ' + _teachers.length.toString() + '명');
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa.from('teachers').delete().eq('academy_id', academyId);
+      if (_teachers.isNotEmpty) {
+        final rows = _teachers.asMap().entries.map((e) => {
+          'academy_id': academyId,
+          'name': e.value.name,
+          'role': e.value.role.index,
+          'contact': e.value.contact,
+          'email': e.value.email,
+          'description': e.value.description,
+          'display_order': e.value.displayOrder ?? e.key,
+        }).toList();
+        await supa.from('teachers').insert(rows);
       }
       print('[DEBUG] saveTeachers 완료');
     } catch (e, st) {
-      print('[DB][ERROR] saveTeachers: $e\n$st');
+      print('[SUPA][ERROR] saveTeachers: $e\n$st');
       rethrow;
     }
   }

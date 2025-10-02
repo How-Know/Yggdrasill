@@ -49,6 +49,7 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
       contact: _contactController.text.trim(),
       email: _emailController.text.trim(),
       description: _descriptionController.text.trim(),
+      displayOrder: null,
     );
     widget.onSave(teacher);
     Navigator.of(context).pop(teacher);
