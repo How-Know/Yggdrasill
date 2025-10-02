@@ -4,10 +4,7 @@
   Version="1.0.3.9"
   xmlns="http://schemas.microsoft.com/appx/appinstaller/2018">
   <UpdateSettings>
-    <OnLaunch HoursBetweenUpdateChecks="0"/>
-    <ShowPrompt />
-    <UpdateBlocksActivation />
-    <ForceUpdateFromAnyVersion />
+    <OnLaunch HoursBetweenUpdateChecks="0" ShowPrompt="true" UpdateBlocksActivation="true"/>
   </UpdateSettings>
   <MainPackage
     Name="com.yggdrasill.mneme"
