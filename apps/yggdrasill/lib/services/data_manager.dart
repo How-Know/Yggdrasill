@@ -1959,6 +1959,10 @@ class DataManager {
         description: updated.description,
         displayOrder: updated.displayOrder,
         pinHash: updated.pinHash ?? prev.pinHash,
+        avatarUrl: updated.avatarUrl ?? prev.avatarUrl,
+        avatarPresetColor: updated.avatarPresetColor ?? prev.avatarPresetColor,
+        avatarPresetInitial: updated.avatarPresetInitial ?? prev.avatarPresetInitial,
+        avatarUseIcon: updated.avatarUseIcon ?? prev.avatarUseIcon,
       );
       saveTeachers();
       teachersNotifier.value = List.unmodifiable(_teachers);

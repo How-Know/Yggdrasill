@@ -153,6 +153,8 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                                   builder: (ctx) => const _LoginDialog(),
                                 );
                               } else {
+                                // 프로필 상태를 미리 동기화하여 다이얼로그 최초 렌더링 시 깜빡임 방지
+                                try { await _ProfileStore.load(); } catch(_){ }
                                 await showDialog(
                                   context: context,
                                   barrierDismissible: true,
@@ -160,37 +162,39 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                                 );
                               }
                             },
-                            child: FutureBuilder<Map<String, dynamic>>(
-                              future: _ProfileStore.load(),
-                              builder: (ctx, snap) {
-                                final map = snap.data ?? const {'profiles':{}, 'activeEmail': null};
+                            child: ValueListenableBuilder<Map<String, dynamic>>(
+                              valueListenable: _ProfileStore.profilesNotifier,
+                              builder: (ctx, map, _) {
                                 final user = _safeClient()?.auth.currentUser;
                                 final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
-                                final info = (map['profiles'] as Map)[activeEmail] as Map? ?? {};
-                                final avatarPath = (info['avatar'] as String?) ?? '';
-                                final presetColor = (info['presetColor'] as String?) ?? '#2A2A2A';
-                                final presetInitial = (info['presetInitial'] as String?) ?? '';
-                                final displayName = (() {
-                                  final list = DataManager.instance.teachersNotifier.value;
-                                  try { return list.firstWhere((t) => t.email == activeEmail).name; } catch (_) { return (activeEmail ?? '').split('@').first; }
-                                })();
-                                final googleUrl = (activeEmail == user?.email)
-                                  ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
-                                  : null;
-                                ImageProvider? img;
-                                if (avatarPath.isNotEmpty) {
-                                  if (avatarPath.startsWith('http')) { img = NetworkImage(avatarPath); }
-                                  else if (File(avatarPath).existsSync()) { img = FileImage(File(avatarPath)); }
-                                } else if (googleUrl != null && googleUrl.isNotEmpty) {
-                                  img = NetworkImage(googleUrl);
-                                }
-                                final bg = _parseColor(presetColor);
-                                final label = (presetInitial.isNotEmpty) ? presetInitial : _initials(displayName);
-                                return CircleAvatar(
-                                  radius: 16,
-                                  backgroundColor: img == null ? bg : null,
-                                  backgroundImage: img,
-                                  child: img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null,
+                                return ValueListenableBuilder<List<Teacher>>(
+                                  valueListenable: DataManager.instance.teachersNotifier,
+                                  builder: (ctx, teachers, __) {
+                                    Teacher? t;
+                                    try { t = teachers.firstWhere((x)=>x.email==activeEmail); } catch(_){ t = null; }
+                                    final displayName = t?.name ?? ((activeEmail ?? '').split('@').first);
+                                    final googleUrl = (activeEmail == user?.email)
+                                        ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
+                                        : null;
+                                    ImageProvider? img;
+                                    if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
+                                      img = NetworkImage(t!.avatarUrl!);
+                                    } else if (googleUrl != null && googleUrl.isNotEmpty) {
+                                      img = NetworkImage(googleUrl);
+                                    }
+                                    final bg = _parseColor((t?.avatarPresetColor ?? '#2A2A2A'));
+                                    final label = (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
+                                        ? t!.avatarPresetInitial!
+                                        : _initials(displayName);
+                                    return CircleAvatar(
+                                      radius: 16,
+                                      backgroundColor: img == null ? bg : null,
+                                      backgroundImage: img,
+                                      child: (img == null && (t?.avatarUseIcon ?? false))
+                                          ? const Icon(Icons.person, color: Colors.white, size: 16)
+                                          : (img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null),
+                                    );
+                                  },
                                 );
                               },
                             ),
@@ -433,16 +437,18 @@ class _AccountDialogState extends State<_AccountDialog> {
     super.initState();
     _reload();
     DataManager.instance.teachersNotifier.addListener(_reload);
+    _ProfileStore.profilesNotifier.addListener(_reload);
   }
 
   @override
   void dispose() {
     DataManager.instance.teachersNotifier.removeListener(_reload);
+    _ProfileStore.profilesNotifier.removeListener(_reload);
     super.dispose();
   }
 
   Future<void> _reload() async {
-    final map = await _ProfileStore.load();
+    final map = _ProfileStore.profilesNotifier.value;
     if (!mounted) return;
     setState(() {
       _profileMap = map['profiles'] as Map<String, dynamic>? ?? {};
@@ -459,7 +465,7 @@ class _AccountDialogState extends State<_AccountDialog> {
       if (ao != bo) return ao.compareTo(bo);
       return a.name.compareTo(b.name);
     });
-    final email = _activeEmail ?? _safeClient()?.auth.currentUser?.email;
+    final email = _activeEmail;
     if (email == null) return list.first;
     try { return list.firstWhere((t) => t.email == email); } catch (_) { return list.first; }
   }
@@ -481,18 +487,25 @@ class _AccountDialogState extends State<_AccountDialog> {
     final client = _safeClient();
     final user = client?.auth.currentUser;
     final teacher = _activeTeacher();
-    final email = _activeEmail ?? user?.email ?? '';
+    final email = _activeEmail ?? teacher?.email ?? '';
     final info = (_profileMap[email] as Map?) ?? {};
     final avatarPath = (info['avatar'] as String?) ?? '';
-    final presetColor = (info['presetColor'] as String?) ?? '';
-    final presetInitial = (info['presetInitial'] as String?) ?? '';
-    final presetIcon = (info['presetIcon'] as String?) ?? '';
-    final useIcon = (info['useIcon'] as bool?) ?? false;
+    final teacherPresetColor = (teacher?.avatarPresetColor as String?) ?? '';
+    final teacherPresetInitial = (teacher?.avatarPresetInitial as String?) ?? '';
+    final teacherUseIcon = (teacher?.avatarUseIcon as bool?) ?? false;
     final isOwner = user?.email == email;
     final displayName = teacher?.name ?? (email.split('@').first);
 
     Widget avatarWidget() {
       final double size = 56;
+      // 1) 서버 URL 우선
+      if ((teacher?.avatarUrl ?? '').toString().isNotEmpty) {
+        return GestureDetector(
+          onTap: _openAvatarPicker,
+          child: CircleAvatar(radius: size/2, backgroundImage: NetworkImage(teacher!.avatarUrl!)),
+        );
+      }
+      // 2) 로컬 경로(과거 데이터) 또는 http
       if (avatarPath.isNotEmpty && (avatarPath.startsWith('http') || File(avatarPath).existsSync())) {
         return GestureDetector(
           onTap: _openAvatarPicker,
@@ -502,6 +515,7 @@ class _AccountDialogState extends State<_AccountDialog> {
           ),
         );
       }
+      // 3) 구글 기본 이미지(원장 기본값)
       final googleUrl = (email == user?.email)
           ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
           : null;
@@ -511,10 +525,12 @@ class _AccountDialogState extends State<_AccountDialog> {
           child: CircleAvatar(radius: size/2, backgroundImage: NetworkImage(googleUrl)),
         );
       }
-      final color = presetColor.isNotEmpty ? _parseColor(presetColor) : const Color(0xFF2A2A2A);
-      final child = useIcon
-          ? Icon(_iconFromKey(presetIcon), color: Colors.white)
-          : Center(child: Text(presetInitial.isNotEmpty ? presetInitial : _initials(displayName), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)));
+      // 4) 서버 프리셋(글자/아이콘)
+      final color = teacherPresetColor.isNotEmpty ? _parseColor(teacherPresetColor) : const Color(0xFF2A2A2A);
+      final label = teacherPresetInitial.isNotEmpty ? teacherPresetInitial : _initials(displayName);
+      final child = teacherUseIcon
+          ? const Icon(Icons.person, color: Colors.white)
+          : Center(child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)));
       return GestureDetector(
         onTap: _openAvatarPicker,
         child: CircleAvatar(radius: size/2, backgroundColor: color, child: child),
@@ -762,6 +778,7 @@ class _ProfilesTabState extends State<_ProfilesTab> {
 }
 
 class _ProfileStore {
+  static final ValueNotifier<Map<String, dynamic>> profilesNotifier = ValueNotifier(<String, dynamic>{'profiles':{}, 'activeEmail': null});
   static Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
     final f = File('${dir.path}/profiles.json');
@@ -772,16 +789,22 @@ class _ProfileStore {
     try {
       final f = await _file();
       final s = await f.readAsString();
-      return (jsonDecode(s) as Map<String, dynamic>);
+      final map = (jsonDecode(s) as Map<String, dynamic>);
+      // 노티파이
+      try { profilesNotifier.value = Map<String, dynamic>.from(map); } catch(_) {}
+      return map;
     } catch (_) { return {'profiles':{}, 'activeEmail': null}; }
   }
   static Future<void> save(Map<String, dynamic> map) async {
     final f = await _file();
     await f.writeAsString(jsonEncode(map));
+    try { profilesNotifier.value = Map<String, dynamic>.from(map); } catch(_) {}
   }
   static Future<void> setActive(String email, Map<String, dynamic> map) async {
     final m = Map<String, dynamic>.from(map);
     m['activeEmail'] = email;
+    // 선반영 후 저장
+    try { profilesNotifier.value = Map<String, dynamic>.from(m); } catch(_) {}
     await save(m);
   }
   static String sha256of(String s) => sha256.convert(utf8.encode(s)).toString();
@@ -950,10 +973,37 @@ class _AvatarPickerDialog extends StatefulWidget{
 }
 class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
   String _color = '#1976D2';
-  String? _filePath;
-  String? _presetInitial; // 구글 스타일 레터 아바타
-  final List<String> _initials = const ['A','B','C','D','E','F','G','H']; // 8개 레터 아바타(구글 스타일)
-  final List<String> _iconKeys = const ['man','woman','boy','girl','person2','person3','person4','person5'];
+  String? _filePath; // http URL 또는 로컬 경로
+  String? _presetInitial; // 레터 아바타
+  bool _useIcon = false; // 아이콘 사용 여부
+  late TextEditingController _initialC;
+
+  @override void initState(){
+    super.initState();
+    try{
+      final t = DataManager.instance.teachersNotifier.value.firstWhere((x)=>x.email==widget.email);
+      if((t.avatarPresetColor??'').isNotEmpty) _color = t.avatarPresetColor!;
+      _presetInitial = t.avatarPresetInitial;
+      _useIcon = t.avatarUseIcon ?? false;
+      if((t.avatarUrl??'').toString().isNotEmpty) _filePath = t.avatarUrl;
+    }catch(_){}
+    _initialC = TextEditingController(text: _presetInitial ?? '');
+  }
+
+  @override void dispose(){ _initialC.dispose(); super.dispose(); }
+
+  Future<String?> _uploadToSupabase(String path) async {
+    try{
+      final client = _safeClient(); if(client==null) return null;
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final safeEmail = widget.email.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+      final ext = (() { final i = path.lastIndexOf('.'); return (i>0 && i<path.length-1) ? path.substring(i+1).toLowerCase() : 'png'; })();
+      final object = 'teachers/$academyId/${safeEmail}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await client.storage.from('avatars').upload(object, File(path));
+      return client.storage.from('avatars').getPublicUrl(object);
+    }catch(_){ return null; }
+  }
+
   @override Widget build(BuildContext context){
     return AlertDialog(
       backgroundColor: const Color(0xFF18181A),
@@ -969,26 +1019,11 @@ class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
               GestureDetector(onTap: ()=>setState(()=>_color=c), child: Container(width: 28, height: 28, decoration: BoxDecoration(color: _parseColor(c), border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(6)), child: _color==c? const Icon(Icons.check, size: 18, color: Colors.white): null)),
           ]),
           const SizedBox(height: 16),
-          const Text('샘플 이미지', style: TextStyle(color: Colors.white70)),
+          const Text('표시 방식', style: TextStyle(color: Colors.white70)),
           const SizedBox(height: 8),
-          GridView.count(
-            crossAxisCount: 4,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-            childAspectRatio: 1,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              for(int i=0;i<_iconKeys.length;i++)
-                GestureDetector(
-                  onTap: ()=> setState(()=> {_presetInitial = '', _filePath = null, }),
-                  child: Container(
-                    decoration: BoxDecoration(color: _parseColor(_color), borderRadius: BorderRadius.circular(12), border: Border.all(color: _iconKeys[i]==( (widget.initialMap['profiles'] as Map?)?[widget.email]?['presetIcon'] ?? '' ) ? const Color(0xFF1976D2) : const Color(0xFF2A2A2A), width: 2), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]),
-                    child: Center(child: Icon(_iconFromKey(_iconKeys[i]), color: Colors.white, size: 28)),
-                  ),
-                ),
-            ],
-          ),
+          SwitchListTile(title: const Text('아이콘 사용', style: TextStyle(color: Colors.white70)), value: _useIcon, onChanged: (v)=> setState(()=> _useIcon=v), activeColor: const Color(0xFF1976D2), contentPadding: EdgeInsets.zero),
+          const SizedBox(height: 4),
+          TextField(controller: _initialC, maxLength: 2, decoration: const InputDecoration(counterText: '', hintText: '이니셜(최대 2자)', hintStyle: TextStyle(color: Colors.white54)), style: const TextStyle(color: Colors.white), onChanged: (v){ setState(()=> _presetInitial = v.trim()); }),
           const SizedBox(height: 12),
           OutlinedButton.icon(onPressed: () async {
             final pick = await FilePicker.platform.pickFiles(type: FileType.image, withData: false);
@@ -1015,13 +1050,42 @@ class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
           onPressed: () async{
+          // 1) 업로드 필요 시 Supabase Storage 업로드
+          String? finalUrl;
+          if(_filePath!=null && _filePath!.isNotEmpty){
+            if(_filePath!.startsWith('http')) finalUrl = _filePath; else finalUrl = await _uploadToSupabase(_filePath!);
+          }
+          // 2) 로컬 캐시 유지(과거 데이터 호환)
           final map = await _ProfileStore.load();
           final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
           final cur = Map<String,dynamic>.from((p[widget.email] as Map<String,dynamic>? ?? {}));
-            cur['presetColor'] = _color; cur['useIcon'] = true; cur['presetIcon'] = (_presetInitial==null || _presetInitial!.isNotEmpty) ? (cur['presetIcon'] ?? 'person2') : (cur['presetIcon'] ?? 'person2');
-            if(_filePath!=null){ cur['avatar'] = _filePath; cur['useIcon'] = false; }
-            if(_presetInitial!=null){ cur['presetInitial'] = _presetInitial; }
+          cur['presetColor'] = _color; cur['useIcon'] = _useIcon; cur['presetInitial'] = _initialC.text.trim();
+          if(_filePath!=null){ cur['avatar'] = _filePath; }
           p[widget.email]=cur; await _ProfileStore.save({'profiles':p, 'activeEmail': map['activeEmail']});
+          // 3) 서버 반영
+          try{
+            final list = DataManager.instance.teachersNotifier.value;
+            final i = list.indexWhere((t)=>t.email==widget.email);
+            if(i>=0){
+              final t = list[i];
+              final useNetwork = _filePath!=null && _filePath!.startsWith('http');
+              final updated = Teacher(
+                id: t.id,
+                name: t.name,
+                role: t.role,
+                contact: t.contact,
+                email: t.email,
+                description: t.description,
+                displayOrder: t.displayOrder,
+                pinHash: t.pinHash,
+                avatarUrl: finalUrl ?? (useNetwork ? _filePath : t.avatarUrl),
+                avatarPresetColor: _color,
+                avatarPresetInitial: _initialC.text.trim(),
+                avatarUseIcon: _useIcon,
+              );
+              DataManager.instance.updateTeacher(i, updated);
+            }
+          }catch(_){ }
           if(context.mounted) Navigator.pop(context);
         }, child: const Text('저장'))
       ],
@@ -1054,8 +1118,20 @@ class _SwitchProfileDialog extends StatelessWidget{
         itemCount: teachers.length,
         itemBuilder: (ctx,i){
         final t=teachers[i]; final info = (profileMap[t.email] as Map?) ?? {}; final avatar = (info['avatar'] as String?) ?? '';
+        String? googleUrl;
+        try{ final user = _safeClient()?.auth.currentUser; if(user?.email==t.email){ googleUrl = (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?; } }catch(_){ }
+        ImageProvider? img;
+        if ((t.avatarUrl ?? '').toString().isNotEmpty) { img = NetworkImage(t.avatarUrl!); }
+        else if (avatar.isNotEmpty && File(avatar).existsSync()) { img = FileImage(File(avatar)); }
+        else if (googleUrl!=null && googleUrl!.isNotEmpty) { img = NetworkImage(googleUrl!); }
+        final bg = _parseColor((t.avatarPresetColor ?? '#2A2A2A'));
+        final label = (t.avatarPresetInitial!=null && t.avatarPresetInitial!.isNotEmpty) ? t.avatarPresetInitial! : _initials(t.name);
         return ListTile(
-          leading: CircleAvatar(backgroundColor: const Color(0xFF2A2A2A), backgroundImage: avatar!=null && avatar.isNotEmpty && File(avatar).existsSync()? FileImage(File(avatar)) : null, child: avatar.isEmpty? const Icon(Icons.person, color: Colors.white70): null),
+          leading: CircleAvatar(
+            backgroundColor: img==null? bg : null,
+            backgroundImage: img,
+            child: img==null ? ( (t.avatarUseIcon ?? false) ? const Icon(Icons.person, color: Colors.white70) : Text(label, style: const TextStyle(color: Colors.white)) ) : null,
+          ),
           title: Text(t.name, style: const TextStyle(color: Colors.white)),
           subtitle: Text(t.email, style: const TextStyle(color: Colors.white70)),
           onTap: () async {
