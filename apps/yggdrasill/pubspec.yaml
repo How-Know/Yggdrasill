@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.4+1
+version: 1.0.4+2
 
 environment:
   sdk: '>=3.2.6 <4.0.0'
@@ -33,8 +33,8 @@ dependencies:
   file_selector: ^1.0.1
   flutter_localizations:
     sdk: flutter
-  morphable_shape: ^2.0.0 # morphable_shape 2.x 사용 (네모↔원 변형 AnimatedMorphContainer 등)
-  dimension: 0.2.0 # morphable_shape와 함께 사용되는 길이 단위 변환 패키지
+  morphable_shape: ^2.0.0 # morphable_shape 2.x ?�용 (?�모?�원 변??AnimatedMorphContainer ??
+  dimension: 0.2.0 # morphable_shape?� ?�께 ?�용?�는 길이 ?�위 변???�키지
   shared_preferences: ^2.0.15
   intl: ^0.20.2
   uuid: ^4.3.3
@@ -136,8 +136,9 @@ msix_config:
   publisher_display_name: How-Know
   identity_name: com.yggdrasill.mneme
   publisher: CN=How-Know
-  msix_version: 1.0.4.1
+  msix_version: 1.0.4.2
   logo_path: windows/runner/resources/app_icon.ico
   certificate_subject: CN=How-Know
   certificate_path: C:\\Users\\harry\\Desktop\\howknow_codesign_new.pfx
   certificate_password: "HowKnow2025!"
+
