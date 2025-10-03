@@ -33,27 +33,35 @@ class UpdateService {
 
   static const String _kLastInstalledTag = 'last_installed_tag';
 
+  // 간단한 진행 상태 노출용 모델/노티파이어 (앱 내 커스텀 UI 연동)
+  static final ValueNotifier<UpdateInfo> progressNotifier =
+      ValueNotifier<UpdateInfo>(const UpdateInfo(phase: UpdatePhase.idle));
+
+  static void _setProgress(UpdateInfo info) {
+    try { progressNotifier.value = info; } catch (_) {}
+  }
+
   // 앱 실행 시 무인 자동 업데이트: 최신 태그와 로컬 저장 태그가 다르면 ZIP 업데이트 수행
   static Future<void> checkAndUpdateSilently(BuildContext context) async {
     try {
+      _setProgress(const UpdateInfo(phase: UpdatePhase.checking));
       final tag = await _fetchLatestTag();
       if (tag == null || tag.isEmpty) return;
       final prefs = await SharedPreferences.getInstance();
       final diskTag = await _readInstalledTagFromDisk();
       final last = diskTag ?? prefs.getString(_kLastInstalledTag);
       if (last == tag) return;
-      // 설치 타입 분기: MSIX → AppInstaller 시도, 실패 시 ZIP로 폴백(로컬 경로 설치)
+      // 비차단 모드: 앱은 그대로 실행, 업데이트 준비되면 재시작 안내는 앱이 담당
       if (_isMsixInstall()) {
-        _showSnack(context, '새 버전($tag)을 App Installer로 설치합니다...');
-        final ok = await _tryTriggerAppInstaller(context);
-        if (!ok) {
-          _showSnack(context, 'App Installer가 비활성화되어 ZIP 경로로 업데이트합니다.');
-          await _updateUsingZipForArm64(context, tag: tag);
-        }
+        // App Installer는 비차단 설정(ShowPrompt=false, UpdateBlocksActivation=false)이면
+        // 백그라운드 다운로드/적용을 준비하고, 실제 적용은 다음 재시작 시 진행됨
+        _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '백그라운드에서 업데이트를 받는 중...', tag: tag));
+        unawaited(_tryTriggerAppInstaller(context).then((ok){ _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작 시 적용됩니다.', tag: tag)); }));
         return;
       }
-      _showSnack(context, '새 버전($tag)을 설치합니다...');
-      await _updateUsingZipForArm64(context, tag: tag);
+      // 포터블은 ZIP 백그라운드 업데이트를 수행하고 완료 시 재시작 안내를 앱에서 표시하도록 유지
+      _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '업데이트 다운로드 중...', tag: tag));
+      unawaited(_updateUsingZipForArm64(context, tag: tag));
     } catch (_) {}
   }
 
@@ -212,11 +220,13 @@ class UpdateService {
         (tag ?? ''),
       ], mode: ProcessStartMode.detached);
 
+      _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작합니다.', tag: tag));
       _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
       await Future.delayed(const Duration(milliseconds: 800));
       exit(0);
     } catch (e) {
       _showSnack(context, '업데이트 중 오류: $e');
+      _setProgress(UpdateInfo(phase: UpdatePhase.error, message: e.toString(), tag: tag));
     } finally {
       client.close();
     }
@@ -338,4 +348,13 @@ try {
 
 enum _WinArch { x64, arm64, unknown }
 
+
+enum UpdatePhase { idle, checking, downloading, readyToApply, error }
+
+class UpdateInfo {
+  final UpdatePhase phase;
+  final String? message;
+  final String? tag;
+  const UpdateInfo({required this.phase, this.message, this.tag});
+}
 

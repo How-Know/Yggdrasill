@@ -33,6 +33,7 @@ import 'package:path_provider/path_provider.dart';
 import 'services/runtime_flags.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
+import 'package:package_info_plus/package_info_plus.dart' as pkg;
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -457,6 +458,7 @@ class MyApp extends StatelessWidget {
                 OverlayEntry(builder: (ctx) => const _GlobalMemoFloatingBanners()),
                 OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
                 OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
+                OverlayEntry(builder: (ctx) => const _GlobalStartupUpdateCard()),
               ]);
             },
             home: const MainScreen(),
@@ -466,6 +468,93 @@ class MyApp extends StatelessWidget {
             },
           );
         },
+      ),
+    );
+  }
+}
+
+class _GlobalStartupUpdateCard extends StatefulWidget {
+  const _GlobalStartupUpdateCard();
+  @override
+  State<_GlobalStartupUpdateCard> createState() => _GlobalStartupUpdateCardState();
+}
+
+class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
+  UpdateInfo _info = const UpdateInfo(phase: UpdatePhase.idle);
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    UpdateService.progressNotifier.addListener(_onUpdate);
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await pkg.PackageInfo.fromPlatform();
+      setState(() { _version = info.version; });
+    } catch (_) {}
+  }
+
+  void _onUpdate(){ setState(() { _info = UpdateService.progressNotifier.value; }); }
+
+  @override
+  void dispose(){ UpdateService.progressNotifier.removeListener(_onUpdate); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final show = _info.phase == UpdatePhase.checking || _info.phase == UpdatePhase.downloading;
+    if (!show) return const SizedBox.shrink();
+    // 네비게이션바/앱 전체 톤에 맞춘 카드
+    return IgnorePointer(
+      ignoring: true,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 18),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 520),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F1F1F),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF2A2A2A)),
+              boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12, spreadRadius: 0, offset: Offset(0,4))],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F467D),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.apps, color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(children:[
+                        const Text('Yggdrasill', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+                        const SizedBox(width: 8),
+                        if(_version.isNotEmpty) Text('v$_version', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      ]),
+                      const SizedBox(height: 4),
+                      Text(_info.message ?? (_info.phase==UpdatePhase.checking? '업데이트 확인 중...' : '업데이트 다운로드 중...'), style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 6),
+                      const LinearProgressIndicator(minHeight: 4, color: Color(0xFF1976D2), backgroundColor: Color(0xFF2A2A2A)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
