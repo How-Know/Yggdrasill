@@ -504,8 +504,9 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
 
   @override
   Widget build(BuildContext context) {
-    final show = _info.phase == UpdatePhase.checking || _info.phase == UpdatePhase.downloading;
-    if (!show) return const SizedBox.shrink();
+    final showChecking = _info.phase == UpdatePhase.checking || _info.phase == UpdatePhase.downloading;
+    final showReady = _info.phase == UpdatePhase.readyToApply;
+    if (!showChecking && !showReady) return const SizedBox.shrink();
     // 네비게이션바/앱 전체 톤에 맞춘 카드
     return IgnorePointer(
       ignoring: true,
@@ -545,9 +546,22 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
                         if(_version.isNotEmpty) Text('v$_version', style: const TextStyle(color: Colors.white54, fontSize: 12)),
                       ]),
                       const SizedBox(height: 4),
-                      Text(_info.message ?? (_info.phase==UpdatePhase.checking? '업데이트 확인 중...' : '업데이트 다운로드 중...'), style: const TextStyle(color: Colors.white70)),
-                      const SizedBox(height: 6),
-                      const LinearProgressIndicator(minHeight: 4, color: Color(0xFF1976D2), backgroundColor: Color(0xFF2A2A2A)),
+                      if(showChecking) ...[
+                        Text(_info.message ?? (_info.phase==UpdatePhase.checking? '업데이트 확인 중...' : '업데이트 다운로드 중...'), style: const TextStyle(color: Colors.white70)),
+                        const SizedBox(height: 6),
+                        const LinearProgressIndicator(minHeight: 4, color: Color(0xFF1976D2), backgroundColor: Color(0xFF2A2A2A)),
+                      ] else ...[
+                        Text(_info.message ?? '업데이트 준비 완료. 재시작하여 적용합니다.', style: const TextStyle(color: Colors.white70)),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
+                            onPressed: () => UpdateServiceActions.restartApp(),
+                            child: const Text('지금 재시작'),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

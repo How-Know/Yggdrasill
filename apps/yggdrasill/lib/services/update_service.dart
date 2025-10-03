@@ -358,3 +358,13 @@ class UpdateInfo {
   const UpdateInfo({required this.phase, this.message, this.tag});
 }
 
+extension UpdateServiceActions on UpdateService {
+  static Future<void> restartApp() async {
+    try {
+      final exe = Platform.resolvedExecutable;
+      await Process.start(exe, <String>[], mode: ProcessStartMode.detached);
+    } catch (_) {}
+    exit(0);
+  }
+}
+
