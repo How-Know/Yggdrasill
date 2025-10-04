@@ -72,3 +72,4 @@ Set-Content apps\yggdrasill\pubspec.yaml (Get-Content apps\yggdrasill\pubspec.ya
 - AppInstaller `MainPackage.Uri`는 최신 태그(msix 파일)로 자동 갱신됨 (`bump_version.ps1`).
 
 
+

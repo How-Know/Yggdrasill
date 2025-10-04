@@ -30,6 +30,7 @@ class AttendanceCheckView extends StatefulWidget {
 }
 
 class _AttendanceCheckViewState extends State<AttendanceCheckView> {
+  // 파생 상태는 빌더에서 계산하되, 현재 페이지/센터 인덱스 계산 등에 필요한 최소 캐시만 둔다
   List<ClassSession> _classSessions = [];
   int _centerIndex = 7; // 가운데 수업 인덱스 (0~14 중 7번째)
   bool _hasPastRecords = false;
@@ -69,21 +70,10 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     super.dispose();
   }
 
-  void _onAttendanceRecordsChanged() async {
-    // 디바운싱 및 안전성 체크
-    if (_isUpdating || !mounted || widget.selectedStudent == null) return;
-    
-    _isUpdating = true;
-    print('[DEBUG][AttendanceCheckView] 출석 기록 변경 감지, _loadClassSessions 호출');
-    
-    // 짧은 지연을 추가하여 연속된 업데이트 방지
-    await Future.delayed(const Duration(milliseconds: 50));
-    
-    if (mounted && widget.selectedStudent != null) {
-      _loadClassSessions();
-    }
-    
-    _isUpdating = false;
+  void _onAttendanceRecordsChanged() {
+    if (!mounted) return;
+    // 파생 상태는 빌더에서 계산하므로 여기서 강제 setState만 호출해 즉시 리빌드
+    setState(() {});
   }
 
   DateTime _toMonday(DateTime d) {
@@ -3337,6 +3327,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       child: ValueListenableBuilder<List<AttendanceRecord>>(
       valueListenable: DataManager.instance.attendanceRecordsNotifier,
       builder: (context, attendanceRecords, child) {
+        // 파생 상태 즉시 계산: 현재 선택 학생/주차/세션을 attendanceRecords로부터 재구성
+        // 기존 _classSessions 캐시는 페이지 계산용으로만 보조적으로 사용
+        // 실시간 반영을 위해 파생 계산은 가능한 한 여기에서 수행
 
         if (widget.selectedStudent == null) {
           return Container(
@@ -3536,6 +3529,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       },
       ),
     );
+  }
+
+  Future<void> _afterSaveOptimistic({required ClassSession session, DateTime? arrival, DateTime? departure}) async {
+    // 낙관적 UI 반영: 현재 카드의 등/하원 시간을 즉시 반영
+    setState(() {
+      if (arrival != null) session.arrivalTime = arrival;
+      if (departure != null) session.departureTime = departure;
+    });
   }
 }
 
