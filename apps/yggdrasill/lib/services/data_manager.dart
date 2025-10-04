@@ -3234,7 +3234,7 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final data = await supa.from('resource_files').select('id,folder_id:parent_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
+        final data = await supa.from('resource_files').select('id,parent_id:folder_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
         return (data as List).cast<Map<String, dynamic>>();
       } catch (e, st) {
         print('[RES][files] server load failed: $e\n$st');
@@ -3255,14 +3255,14 @@ class DataManager {
         if (category == 'textbook') {
           data = await supa
               .from('resource_files')
-              .select('id,folder_id:parent_id,name,url,category,order_index')
+              .select('id,parent_id:folder_id,name,url,category,order_index')
               .eq('academy_id', academyId)
               .or('category.is.null,category.eq.textbook')
               .order('order_index');
         } else {
           data = await supa
               .from('resource_files')
-              .select('id,folder_id:parent_id,name,url,category,order_index')
+              .select('id,parent_id:folder_id,name,url,category,order_index')
               .match({'academy_id': academyId, 'category': category})
               .order('order_index');
         }
