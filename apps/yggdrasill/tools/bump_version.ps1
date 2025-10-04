@@ -23,7 +23,7 @@ Info "current=$ver+$build -> new=$ver+$new"
 # pubspec replacements
 $pubRaw = [regex]::Replace($pubRaw, 'version:\s*' + [regex]::Escape($ver) + '\+' + [regex]::Escape($build.ToString()), "version: $ver+$new")
 $pubRaw = [regex]::Replace($pubRaw, 'msix_version:\s*' + [regex]::Escape($ver) + '\.' + [regex]::Escape($build.ToString()), "msix_version: $ver.$new")
-Set-Content 'pubspec.yaml' $pubRaw
+Set-Content 'pubspec.yaml' $pubRaw -Encoding UTF8
 Ok 'pubspec.yaml updated'
 
 foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appinstaller')){
@@ -31,7 +31,7 @@ foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appins
   $ai = Get-Content $aiPath -Raw
   $ai = [regex]::Replace($ai, 'Version="' + [regex]::Escape($ver + '.' + $build) + '"', 'Version="' + ($ver + '.' + $new) + '"')
   $ai = [regex]::Replace($ai, 'releases/download/v' + [regex]::Escape($ver + '.' + $build) + '/mneme_flutter.msix', 'releases/download/v' + ($ver + '.' + $new) + '/mneme_flutter.msix')
-  Set-Content $aiPath $ai
+  Set-Content $aiPath $ai -Encoding UTF8
   Ok "$aiPath updated"
 }
 

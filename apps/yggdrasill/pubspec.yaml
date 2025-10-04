@@ -1,4 +1,4 @@
-name: mneme_flutter
+ï»¿name: mneme_flutter
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -33,8 +33,8 @@ dependencies:
   file_selector: ^1.0.1
   flutter_localizations:
     sdk: flutter
-  morphable_shape: ^2.0.0 # morphable_shape 2.x ?¬ìš© (?¤ëª¨?”ì› ë³€??AnimatedMorphContainer ??
-  dimension: 0.2.0 # morphable_shape?€ ?¨ê»˜ ?¬ìš©?˜ëŠ” ê¸¸ì´ ?¨ìœ„ ë³€???¨í‚¤ì§€
+  morphable_shape: ^2.0.0 # morphable_shape 2.x (AnimatedMorphContainer, shapes)
+  dimension: 0.2.0 # used with morphable_shape: length unit utilities
   shared_preferences: ^2.0.15
   intl: ^0.20.2
   uuid: ^4.3.3
@@ -141,4 +141,6 @@ msix_config:
   certificate_subject: CN=How-Know
   certificate_path: C:\\Users\\harry\\Desktop\\howknow_codesign_new.pfx
   certificate_password: "HowKnow2025!"
+
+
 

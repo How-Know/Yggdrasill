@@ -35,7 +35,21 @@ class TenantService {
     final existing = await getActiveAcademyId();
     if (existing != null) return existing;
 
-    // 2) try fast path: select by owner_user_id (allowed by updated policy)
+    // 2) try memberships first: if the user is a member of an academy, use it
+    try {
+      final mem = await client
+          .from('memberships')
+          .select('academy_id')
+          .eq('user_id', uid)
+          .limit(1);
+      if (mem.isNotEmpty && mem.first['academy_id'] is String) {
+        final id = mem.first['academy_id'] as String;
+        await setActiveAcademyId(id);
+        return id;
+      }
+    } catch (_) {}
+
+    // 3) then select by owner_user_id (owner path)
     try {
       final sel = await client
           .from('academies')
@@ -51,7 +65,7 @@ class TenantService {
       // ignore and fallback to RPC
     }
 
-    // 3) fallback: call RPC to create/find academy with SECURITY DEFINER
+    // 4) fallback: call RPC to create/find academy with SECURITY DEFINER
     final rpc = await client.rpc('ensure_academy');
     final id = rpc is String ? rpc : (rpc['ensure_academy'] as String?);
     if (id == null || id.isEmpty) {
@@ -59,6 +73,71 @@ class TenantService {
     }
     await setActiveAcademyId(id);
     return id;
+  }
+
+  /// Check if current auth user is the owner of the active academy.
+  /// Returns false if not logged in, no active academy, or any error occurs.
+  Future<bool> isOwnerOfActiveAcademy() async {
+    try {
+      final client = Supabase.instance.client;
+      final uid = client.auth.currentUser?.id;
+      if (uid == null || uid.isEmpty) return false;
+      final aid = await getActiveAcademyId();
+      if (aid == null || aid.isEmpty) return false;
+      final sel = await client
+          .from('academies')
+          .select('owner_user_id')
+          .eq('id', aid)
+          .limit(1);
+      if (sel.isEmpty) return false;
+      final ownerId = sel.first['owner_user_id'] as String?;
+      return ownerId == uid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Check if current auth user is a platform superadmin.
+  /// Strategy:
+  /// 1) Try querying `app_users` table (if exists) for `platform_role = 'superadmin'`.
+  /// 2) Fallback to environment allowlist by email: SUPERADMIN_EMAILS (comma-separated).
+  Future<bool> isSuperAdmin() async {
+    try {
+      final client = Supabase.instance.client;
+      final uid = client.auth.currentUser?.id;
+      if (uid == null || uid.isEmpty) return false;
+      // 0) Prefer RPC to bypass RLS issues
+      try {
+        final r = await client.rpc('is_superadmin');
+        if (r is bool) return r;
+        if (r is Map && r.values.isNotEmpty && r.values.first is bool) {
+          return r.values.first as bool;
+        }
+      } catch (_) {
+        // ignore and fallback
+      }
+      try {
+        final rows = await client
+            .from('app_users')
+            .select('platform_role')
+            .eq('user_id', uid)
+            .limit(1);
+        if (rows.isNotEmpty) {
+          final role = (rows.first['platform_role'] as String?)?.toLowerCase().trim();
+          if (role == 'superadmin') return true;
+        }
+      } catch (_) {
+        // Table may not exist yet; ignore and fallback.
+      }
+      final allow = const String.fromEnvironment('SUPERADMIN_EMAILS', defaultValue: '');
+      if (allow.trim().isEmpty) return false;
+      final currentEmail = client.auth.currentUser?.email?.toLowerCase().trim();
+      if (currentEmail == null || currentEmail.isEmpty) return false;
+      final set = allow.split(',').map((s) => s.toLowerCase().trim()).where((s) => s.isNotEmpty).toSet();
+      return set.contains(currentEmail);
+    } catch (_) {
+      return false;
+    }
   }
 }
 

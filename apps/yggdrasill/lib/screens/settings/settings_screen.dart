@@ -20,10 +20,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import '../../services/sync_service.dart';
 import '../../services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import '../../services/tenant_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum SettingType {
   academy,
+  teachers,
   general,
+  admin,
 }
 
 enum DayOfWeek {
@@ -53,6 +57,7 @@ enum DayOfWeek {
         return '일요일';
     }
   }
+
 }
 
 // TimeRange도 int 기반으로 변경
@@ -133,12 +138,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _fullscreenEnabled = false; // [추가] 전체화면 스위치 상태
   bool _maximizeEnabled = false; // [추가] 최대창 시작 스위치 상태
   ThemeMode _selectedThemeMode = ThemeMode.dark; // [추가] 테마 선택 상태
+  bool _isOwner = false; // 원장 여부 캐시
+  bool _isSuperAdmin = false; // 플랫폼 관리자 여부
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
     _loadFullscreenSetting();
+    _loadOwnerFlag();
+    _loadSuperAdminFlag();
   }
 
   void _loadFullscreenSetting() async {
@@ -147,6 +156,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _fullscreenEnabled = prefs.getBool('fullscreen_enabled') ?? false;
       _maximizeEnabled = prefs.getBool('maximize_enabled') ?? false;
     });
+  }
+
+  Future<void> _loadOwnerFlag() async {
+    try {
+      final isOwner = await TenantService.instance.isOwnerOfActiveAcademy();
+      if (!mounted) return;
+      setState(() { _isOwner = isOwner; });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _isOwner = false; });
+    }
+  }
+
+  Future<void> _loadSuperAdminFlag() async {
+    try {
+      final isAdmin = await TenantService.instance.isSuperAdmin();
+      if (!mounted) return;
+      setState(() { _isSuperAdmin = isAdmin; });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _isSuperAdmin = false; });
+    }
   }
 
   @override
@@ -2020,16 +2051,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const tabWidth = 120.0;
-                const tabCount = 3;
+                final hasAdmin = _isSuperAdmin;
+                final tabCount = hasAdmin ? 4 : 3;
                 final tabGap = 21.0;
-                final totalWidth = tabWidth * tabCount + tabGap * 2;
+                final totalWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
                 final leftPadding = (constraints.maxWidth - totalWidth) / 2;
                 return Stack(
                   children: [
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 400),
                       curve: Curves.easeOutBack,
-                      left: leftPadding + (_customTabIndex == 0 ? 0 : _customTabIndex == 1 ? tabWidth + tabGap : (tabWidth + tabGap) * 2),
+                      left: leftPadding + (_customTabIndex * (tabWidth + tabGap)),
                       bottom: 0,
                       child: Container(
                         width: tabWidth,
@@ -2068,7 +2100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: () => setState(() {
                               _prevTabIndex = _customTabIndex;
                               _customTabIndex = 1;
-                              _selectedType = SettingType.general;
+                              _selectedType = SettingType.teachers;
                             }),
                             child: Text(
                               '선생님',
@@ -2087,6 +2119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: () => setState(() {
                               _prevTabIndex = _customTabIndex;
                               _customTabIndex = 2;
+                              _selectedType = SettingType.general;
                             }),
                             child: Text(
                               '일반',
@@ -2098,6 +2131,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                         ),
+                        if (hasAdmin) ...[
+                          SizedBox(width: tabGap),
+                          SizedBox(
+                            width: tabWidth,
+                            child: TextButton(
+                              onPressed: () => setState(() {
+                                _prevTabIndex = _customTabIndex;
+                                _customTabIndex = 3;
+                                _selectedType = SettingType.admin;
+                              }),
+                              child: Text(
+                                '관리자',
+                                style: TextStyle(
+                                  color: _customTabIndex == 3 ? Colors.blue : Colors.white70,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 18,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -2134,8 +2188,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     return _buildAcademySettingsContainer();
                   } else if (_customTabIndex == 1) {
                     return _buildTeacherSettingsContainer();
-                  } else {
+                  } else if (_customTabIndex == 2) {
                     return _buildGeneralSettingsContainer();
+                  } else {
+                    return _buildAdminSettingsContainer();
                   }
                 },
               ),
@@ -2145,6 +2201,114 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       floatingActionButton: const MainFabAlternative(),
     );
+  }
+
+  Widget _buildAdminSettingsContainer() {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 48),
+        child: SizedBox(
+          width: 820,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF18181A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('관리자', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 16),
+                // Owners table
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _fetchOwnersWithCounts(),
+                  builder: (context, snapshot) {
+                    final rows = snapshot.data ?? const [];
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator());
+                    }
+                    if (rows.isEmpty) {
+                      return const Text('소유자 데이터가 없습니다.', style: TextStyle(color: Colors.white70));
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          decoration: BoxDecoration(color: const Color(0xFF1F1F1F), borderRadius: BorderRadius.circular(8)),
+                          child: Row(children: const [
+                            Expanded(child: Text('학원명', style: TextStyle(color: Colors.white70))),
+                            Expanded(child: Text('소유자 이메일', style: TextStyle(color: Colors.white70))),
+                            SizedBox(width: 120, child: Text('선생님 수', style: TextStyle(color: Colors.white70))),
+                            SizedBox(width: 120, child: Text('접근', style: TextStyle(color: Colors.white70))),
+                          ]),
+                        ),
+                        const SizedBox(height: 8),
+                        ...rows.map((r) => Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                          decoration: BoxDecoration(color: const Color(0xFF1F1F1F), borderRadius: BorderRadius.circular(8)),
+                          child: Row(children: [
+                            Expanded(child: Text((r['academy_name'] as String?) ?? '', style: const TextStyle(color: Colors.white))),
+                            Expanded(child: Text((r['owner_email'] as String?) ?? '', style: const TextStyle(color: Colors.white70))),
+                            SizedBox(width: 120, child: Text('${r['teacher_count'] ?? 0}', style: const TextStyle(color: Colors.white))),
+                            SizedBox(
+                              width: 120,
+                              child: Switch.adaptive(
+                                value: !(r['is_blocked'] as bool? ?? false),
+                                onChanged: (v) async {
+                                  try {
+                                    await Supabase.instance.client.rpc('set_owner_blocked', params: {
+                                      'p_owner_user_id': r['owner_user_id'],
+                                      'p_blocked': !v,
+                                    });
+                                    setState(() {});
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('변경 실패: $e')));
+                                  }
+                                },
+                              ),
+                            ),
+                          ]),
+                        )),
+                        const SizedBox(height: 24),
+                        // Placeholder sections for future features
+                        const Text('구독', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        const Text('추후 구현 예정입니다.', style: TextStyle(color: Colors.white54)),
+                        const SizedBox(height: 16),
+                        const Text('관리', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        const Text('추후 구현 예정입니다.', style: TextStyle(color: Colors.white54)),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchOwnersWithCounts() async {
+    try {
+      final res = await Supabase.instance.client.rpc('list_owners_with_teacher_counts');
+      if (res is List) {
+        return List<Map<String, dynamic>>.from(res);
+      }
+      if (res is Map && res.values.first is List) {
+        return List<Map<String, dynamic>>.from(res.values.first as List);
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
   }
 
   void _pickLogoImage() async {
@@ -2369,7 +2533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     ElevatedButton(
-                      onPressed: _showAddTeacherDialog,
+                      onPressed: _isOwner ? _showAddTeacherDialog : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1976D2),
                         shape: RoundedRectangleBorder(
@@ -2412,6 +2576,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           );
                         },
                         onReorder: (oldIndex, newIndex) {
+                          if (!_isOwner) return; // 원장만 순서 변경 가능
                           if (newIndex > oldIndex) newIndex--;
                           final newList = List<Teacher>.from(teachers);
                           final item = newList.removeAt(oldIndex);
@@ -2491,6 +2656,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: const Color(0xFF2A2A2A),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   onSelected: (value) async {
+                    if (!_isOwner) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원장만 수정/삭제할 수 있습니다.')));
+                      return;
+                    }
                     if (value == 'edit') {
                       await showDialog(
                         context: context,
@@ -2564,7 +2733,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 2),
                 ReorderableDragStartListener(
                   index: DataManager.instance.teachersNotifier.value.indexOf(t),
-                  child: Icon(Icons.drag_handle, color: Colors.white38),
+                  child: Icon(Icons.drag_handle, color: _isOwner ? Colors.white38 : Colors.white10),
                 ),
               ],
             ),

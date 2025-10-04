@@ -1568,6 +1568,13 @@ class DataManager {
       try {
         if (state.event == AuthChangeEvent.signedIn || state.event == AuthChangeEvent.tokenRefreshed) {
           try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
+          // 1) 첫 로그인/재로그인 시, 이메일로 교사-사용자 연결 및 멤버십 보장
+          try {
+            final email = Supabase.instance.client.auth.currentUser?.email;
+            if (email != null && email.isNotEmpty) {
+              await Supabase.instance.client.rpc('join_academy_by_email', params: {'p_email': email});
+            }
+          } catch (_) {}
           await reloadAllData();
         } else if (state.event == AuthChangeEvent.signedOut) {
           // 세션 종료 시 민감 데이터 비움
