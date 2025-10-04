@@ -505,25 +505,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 _sideSheetWasComplete = isComplete;
               }
               final attendanceTargets = isComplete ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
-              // 상태별 분류 (시트가 충분히 열린 뒤에만 실제 데이터 계산)
-              final leaved = attendanceTargets.where((t) => _leavedSetIds.contains(t.setId)).toList();
-              final attended = attendanceTargets.where((t) => _attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList()
-                ..sort((a, b) {
-                  final ta = _attendTimes[a.setId];
-                  final tb = _attendTimes[b.setId];
-                  if (ta == null && tb == null) return 0;
-                  if (ta == null) return 1; // 시간이 없는 항목은 뒤로
-                  if (tb == null) return -1;
-                  return ta.compareTo(tb); // 이른 등원 시간이 위로
-                });
-              final waiting = attendanceTargets.where((t) => !_attendedSetIds.contains(t.setId) && !_leavedSetIds.contains(t.setId)).toList();
-              // 출석 전 학생카드: 시작시간별 그룹핑
-              final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
-              if (isComplete) {
-                for (final t in waiting) {
-                  waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
-                }
-              }
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
               Widget _ellipsisWrap(List<Widget> cards, {int maxLines = 2, double spacing = 8, double runSpacing = 8}) {
                 // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
@@ -553,9 +534,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
               print('[SIDE_SHEET] containerWidth=' + containerWidth.toStringAsFixed(1) + ' / maxWidth=' + maxWidth.toStringAsFixed(1));
-              if (isComplete) {
-                print('[SIDE_SHEET] lists: leaved=' + leaved.length.toString() + ', attended=' + attended.length.toString() + ', waitingGroups=' + waitingByTime.length.toString());
-              }
+              // 파생 리스트 로그는 ValueListenableBuilder 내부에서 출력합니다.
 
               // 애니메이션 진행 중에는 내용 위젯을 전혀 생성하지 않고, 빈 컨테이너만 렌더링
               if (!isComplete) {
@@ -567,151 +546,222 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 );
               }
 
-              return AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                curve: Curves.easeInOut,
-                width: containerWidth,
-                color: const Color(0xFF1F1F1F),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // 내용: 애니메이션 완료 후에만 실제로 구성
-                    Column(
-                        children: [
-                          // 날짜/요일 표시
-                          Padding(
-                            padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
-                            child: Center(
-                              child: Text(
-                                _getTodayDateString(),
-                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                          SizedBox(height: 24),
-                          // 하원한 학생 리스트(고정 높이, 최대 3줄, 스크롤)
-                          Container(
-                            constraints: BoxConstraints(
-                              minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                              maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _leavedMaxLines + _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_leavedMaxLines - 1) + 22 * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                            ),
-                            margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
-                            child: Scrollbar(
-                              controller: _leavedScrollCtrl,
-                              thumbVisibility: true,
-                              child: SingleChildScrollView(
-                                controller: _leavedScrollCtrl,
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Wrap(
-                                    spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                    runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                    verticalDirection: VerticalDirection.down,
-                                    children: leaved
-                                        .map((t) => _buildAttendanceCard(t, status: 'leaved', key: ValueKey('leaved_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
-                                        .toList(),
+              return ValueListenableBuilder<List<AttendanceRecord>>(
+                valueListenable: DataManager.instance.attendanceRecordsNotifier,
+                builder: (context, _records, _) {
+                  // 파생 분류: attendance_records 기반 + 로컬 낙관 오버레이
+                  final List<_AttendanceTarget> leaved = [];
+                  final List<_AttendanceTarget> attended = [];
+                  final List<_AttendanceTarget> waiting = [];
+                  final Map<String, DateTime?> arrivalBySet = {};
+                  final Map<String, DateTime?> departureBySet = {};
+                  final DateTime now = DateTime.now();
+                  for (final t in attendanceTargets) {
+                    final DateTime classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+                    final AttendanceRecord? rec = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
+                    DateTime? arr = rec?.arrivalTime;
+                    DateTime? dep = rec?.departureTime;
+                    bool isArrived = arr != null;
+                    bool isLeaved = dep != null;
+                    if (!isArrived && _attendedSetIds.contains(t.setId)) {
+                      isArrived = true;
+                      arr = _attendTimes[t.setId];
+                    }
+                    if (!isLeaved && _leavedSetIds.contains(t.setId)) {
+                      isLeaved = true;
+                      dep = _leaveTimes[t.setId];
+                    }
+                    arrivalBySet[t.setId] = arr;
+                    departureBySet[t.setId] = dep;
+                    if (isLeaved) {
+                      leaved.add(t);
+                    } else if (isArrived) {
+                      attended.add(t);
+                    } else {
+                      waiting.add(t);
+                    }
+                  }
+                  attended.sort((a, b) {
+                    final ta = arrivalBySet[a.setId];
+                    final tb = arrivalBySet[b.setId];
+                    if (ta == null && tb == null) return 0;
+                    if (ta == null) return 1;
+                    if (tb == null) return -1;
+                    return ta.compareTo(tb);
+                  });
+                  final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
+                  for (final t in waiting) {
+                    waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
+                  }
+                  if (isComplete) {
+                    print('[SIDE_SHEET] lists(drv): leaved=' + leaved.length.toString() + ', attended=' + attended.length.toString() + ', waitingGroups=' + waitingByTime.length.toString());
+                  }
+
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeInOut,
+                    width: containerWidth,
+                    color: const Color(0xFF1F1F1F),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+                                child: Center(
+                                  child: Text(
+                                    _getTodayDateString(),
+                                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
-                          // 파란 네모(출석 박스) - 최대 15줄, 스크롤
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 16),
-                              width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: Color(0xFF1E252E),
-                                border: Border.all(color: Color(0xFF1E252E), width: 2),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              constraints: BoxConstraints(
-                                minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
-                              child: Scrollbar(
-                                controller: _attendedScrollCtrl,
-                                thumbVisibility: true,
-                                child: SingleChildScrollView(
-                                  controller: _attendedScrollCtrl,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      if (attended.isEmpty)
-                                        const Center(
-                                          child: Text(
-                                            '출석',
-                                            style: TextStyle(
-                                              color: Color(0xFF0F467D),
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      if (attended.isNotEmpty)
-                                        Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < attended.length; i++) ...[
-                                              _buildAttendanceCard(attended[i], status: 'attended', key: ValueKey('attended_${attended[i].setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                              if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                            ]
-                                          ],
-                                        ),
-                                    ],
-                                  ),
+                              SizedBox(height: 24),
+                              // 하원한 학생 리스트
+                              Container(
+                                constraints: BoxConstraints(
+                                  minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                  maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _leavedMaxLines + _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_leavedMaxLines - 1) + 22 * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                 ),
-                              ),
-                            ),
-                          ),
-                          // 출석 전 학생 리스트(가운데 정렬, 스크롤)
-                          if (waitingByTime.isNotEmpty)
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                                margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 0),
                                 child: Scrollbar(
-                                  controller: _waitingScrollCtrl,
+                                  controller: _leavedScrollCtrl,
                                   thumbVisibility: true,
-                                  child: ListView(
-                                    controller: _waitingScrollCtrl,
-                                    padding: EdgeInsets.zero,
-                                    children: [
-                                      for (final entry in waitingByTime.entries) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.only(bottom: 4.0),
-                                          child: Center(
-                                            child: Text(
-                                              _formatTime(entry.key),
-                                              style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
-                                            ),
-                                          ),
-                                        ),
-                                        Center(
-                                          child: Wrap(
-                                            alignment: WrapAlignment.center,
-                                            spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                            runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                            children: entry.value
-                                                .map((t) => _buildAttendanceCard(t, status: 'waiting', key: ValueKey('waiting_${t.setId}'), scale: ((containerWidth / 420.0).clamp(0.78, 1.0))))
-                                                .toList(),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                      ],
-                                    ],
+                                  child: SingleChildScrollView(
+                                    controller: _leavedScrollCtrl,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Wrap(
+                                        spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                        runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                        verticalDirection: VerticalDirection.down,
+                                        children: leaved
+                                            .map((t) => _buildAttendanceCard(
+                                                  t,
+                                                  status: 'leaved',
+                                                  key: ValueKey('leaved_${t.setId}'),
+                                                  scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                  arrival: arrivalBySet[t.setId],
+                                                  departure: departureBySet[t.setId],
+                                                ))
+                                            .toList(),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
-                    // 커버: 완료 전에는 동일 배경색으로 완전히 가림(착시/중간 노출 차단)
-                    // 커버는 isComplete 분기에서 빈 컨테이너를 반환하므로 불필요
-                  ],
-                ),
+                              // 출석 박스
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 16),
+                                  width: double.infinity,
+                                  decoration: BoxDecoration(
+                                    color: Color(0xFF1E252E),
+                                    border: Border.all(color: Color(0xFF1E252E), width: 2),
+                                    borderRadius: BorderRadius.circular(18),
+                                  ),
+                                  constraints: BoxConstraints(
+                                    minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                    maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+                                  child: Scrollbar(
+                                    controller: _attendedScrollCtrl,
+                                    thumbVisibility: true,
+                                    child: SingleChildScrollView(
+                                      controller: _attendedScrollCtrl,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (attended.isEmpty)
+                                            const Center(
+                                              child: Text(
+                                                '출석',
+                                                style: TextStyle(
+                                                  color: Color(0xFF0F467D),
+                                                  fontSize: 22,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          if (attended.isNotEmpty)
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                for (int i = 0; i < attended.length; i++) ...[
+                                                  _buildAttendanceCard(
+                                                    attended[i],
+                                                    status: 'attended',
+                                                    key: ValueKey('attended_${attended[i].setId}'),
+                                                    scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                    arrival: arrivalBySet[attended[i].setId],
+                                                    departure: departureBySet[attended[i].setId],
+                                                  ),
+                                                  if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                                ]
+                                              ],
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // 출석 전 학생 리스트
+                              if (waitingByTime.isNotEmpty)
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                                    child: Scrollbar(
+                                      controller: _waitingScrollCtrl,
+                                      thumbVisibility: true,
+                                      child: ListView(
+                                        controller: _waitingScrollCtrl,
+                                        padding: EdgeInsets.zero,
+                                        children: [
+                                          for (final entry in waitingByTime.entries) ...[
+                                            Padding(
+                                              padding: const EdgeInsets.only(bottom: 4.0),
+                                              child: Center(
+                                                child: Text(
+                                                  _formatTime(entry.key),
+                                                  style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                                ),
+                                              ),
+                                            ),
+                                            Center(
+                                              child: Wrap(
+                                                alignment: WrapAlignment.center,
+                                                spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                children: entry.value
+                                                    .map((t) => _buildAttendanceCard(
+                                                          t,
+                                                          status: 'waiting',
+                                                          key: ValueKey('waiting_${t.setId}'),
+                                                          scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                          arrival: arrivalBySet[t.setId],
+                                                          departure: departureBySet[t.setId],
+                                                        ))
+                                                    .toList(),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        // 커버 생략
+                      ],
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -751,7 +801,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
-  Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key, double scale = 1.0}) {
+  Widget _buildAttendanceCard(_AttendanceTarget t, {required String status, Key? key, double scale = 1.0, DateTime? arrival, DateTime? departure}) {
     Color borderColor;
     Color textColor = Colors.white70;
     Widget nameWidget;
@@ -767,7 +817,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           onEnter: (event) {
             final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
             final offset = overlay.globalToLocal(event.position);
-            final attendTime = _attendTimes[t.setId];
+            final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
             final tip = attendTime != null ? '등원: ' + _formatTime(attendTime) : '등원 시간 없음';
             _showTooltip(offset, tip);
           },
@@ -793,8 +843,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
             final offset = overlay.globalToLocal(event.position);
             // 등원/하원 시간 표시
-            final attendTime = _attendTimes[t.setId];
-            final leaveTime = _leaveTimes[t.setId];
+            final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
+            final DateTime? leaveTime = departure ?? _leaveTimes[t.setId];
             String tooltip = '';
             if (attendTime != null) {
               tooltip += '등원: ' + _formatTime(attendTime) + '\n';

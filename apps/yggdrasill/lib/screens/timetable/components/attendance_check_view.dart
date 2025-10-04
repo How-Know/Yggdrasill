@@ -2145,6 +2145,17 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       }
     }
     
+    // 파생 출석 레코드/상태 계산
+    AttendanceRecord? derived = null;
+    if (widget.selectedStudent != null) {
+      derived = _deriveAttendanceForSession(
+        DataManager.instance.attendanceRecords,
+        widget.selectedStudent!.student.id,
+        session.dateTime,
+      );
+    }
+    final AttendanceStatus derivedStatus = _getAttendanceStatus(derived);
+
     // 툴팁 메시지 생성
     String tooltipMessage = '';
     if (classNumber.isNotEmpty) {
@@ -2152,14 +2163,14 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     // 원본/대체 표시는 상단 배지로 충분하므로, 툴팁은 번호/등하원만 단순 표기
     // 등원/하원 시간
-    if (session.arrivalTime != null || session.departureTime != null) {
-      if (session.arrivalTime != null) {
-        final arrivalTime = session.arrivalTime!;
+    if (derived?.arrivalTime != null || derived?.departureTime != null) {
+      if (derived?.arrivalTime != null) {
+        final arrivalTime = derived!.arrivalTime!;
         if (tooltipMessage.isNotEmpty) tooltipMessage += '\n';
         tooltipMessage += '등원: ${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
       }
-      if (session.departureTime != null) {
-        final departureTime = session.departureTime!;
+      if (derived?.departureTime != null) {
+        final departureTime = derived!.departureTime!;
         if (tooltipMessage.isNotEmpty) tooltipMessage += '\n';
         tooltipMessage += '하원: ${departureTime.hour.toString().padLeft(2, '0')}:${departureTime.minute.toString().padLeft(2, '0')}';
       }
@@ -2260,7 +2271,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     // 기본: 원본 카드만 메뉴 허용. 단, 휴강 고스트 카드는 미래 일정에 한해 '휴강 취소' 허용
     final bool isSkipGhost = !isReplacement && (isGhost || isOriginalOfReplace) && _hasSkipOverrideFor(session);
     // 무단결석 카드도 메뉴 허용, 출석 완료/등원 상태는 방어 다이얼로그 처리
-    final bool canShowMenu = (!isDisabledGhost && !isPast) || (isSkipGhost && !isPast) || session.attendanceStatus == AttendanceStatus.absent;
+    final bool canShowMenu = (!isDisabledGhost && !isPast) || (isSkipGhost && !isPast) || derivedStatus == AttendanceStatus.absent;
     Offset? tapDownPosition;
     // 카드(1~3행)만 탭 영역으로, 체크박스(4행)는 카드 아래에 분리된 영역
     final interactive = Container(
@@ -2279,7 +2290,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
                   // 리스트에서와 동일한 방어 다이얼로그
                   final now = DateTime.now();
                   final isPast = session.dateTime.isBefore(now);
-                  final hasAttendance = session.attendanceStatus == AttendanceStatus.arrived || session.attendanceStatus == AttendanceStatus.completed;
+                  final hasAttendance = derivedStatus == AttendanceStatus.arrived || derivedStatus == AttendanceStatus.completed;
                   if (isPast && hasAttendance) {
                     await _showInfoDialog('이미 지난 수업이며 출석이 기록된 회차는 보강을 생성할 수 없습니다.');
                   }
