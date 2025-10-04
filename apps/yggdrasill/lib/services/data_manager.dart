@@ -1572,7 +1572,11 @@ class DataManager {
           try {
             final email = Supabase.instance.client.auth.currentUser?.email;
             if (email != null && email.isNotEmpty) {
-              await Supabase.instance.client.rpc('join_academy_by_email', params: {'p_email': email});
+              // 허용 여부 검사: 미등록 또는 차단이면 연결을 시도하지 않음
+              final allow = await Supabase.instance.client.rpc('is_teacher_email_allowed', params: {'p_email': email});
+              if (allow is bool && allow) {
+                await Supabase.instance.client.rpc('join_academy_by_email', params: {'p_email': email});
+              }
             }
           } catch (_) {}
           await reloadAllData();
