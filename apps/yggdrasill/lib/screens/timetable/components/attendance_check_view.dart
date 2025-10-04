@@ -2912,7 +2912,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           isPresent: true,
           arrivalTime: classStartTime, // 수업 시작 시간
           departureTime: classEndTime, // 수업 종료 시간
+          notes: null,
         );
+        // 낙관 반영(렌더 시에는 attendance_records에서 파생)
+        session.arrivalTime = classStartTime;
+        session.departureTime = classEndTime;
 
         setState(() {
           session.isAttended = true;
@@ -2998,7 +3002,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         isPresent: isPresent,
         arrivalTime: arrivalTime,
         departureTime: departureTime,
+        notes: null,
       );
+      // 낙관 반영(렌더 시에는 attendance_records에서 파생)
+      session.arrivalTime = arrivalTime;
+      session.departureTime = departureTime;
 
       setState(() {
         session.isAttended = isPresent;
@@ -3205,6 +3213,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             isPresent: false,
             arrivalTime: null,
             departureTime: null,
+            notes: null,
           );
 
           setState(() {
@@ -3231,7 +3240,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             isPresent: true,
             arrivalTime: result['arrivalTime'],
             departureTime: result['departureTime'],
+            notes: null,
           );
+          // 낙관 반영(렌더 시에는 attendance_records에서 파생)
+          session.arrivalTime = result['arrivalTime'];
+          session.departureTime = result['departureTime'];
 
           setState(() {
             session.isAttended = true;
@@ -3327,9 +3340,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       child: ValueListenableBuilder<List<AttendanceRecord>>(
       valueListenable: DataManager.instance.attendanceRecordsNotifier,
       builder: (context, attendanceRecords, child) {
-        // 파생 상태 즉시 계산: 현재 선택 학생/주차/세션을 attendanceRecords로부터 재구성
-        // 기존 _classSessions 캐시는 페이지 계산용으로만 보조적으로 사용
-        // 실시간 반영을 위해 파생 계산은 가능한 한 여기에서 수행
+        // 파생 상태: student_time_blocks는 카드 집합/정렬만 제공
+        // 각 카드의 등원/하원/상태는 attendance_records에서 파생
 
         if (widget.selectedStudent == null) {
           return Container(
@@ -3538,6 +3550,20 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       if (departure != null) session.departureTime = departure;
     });
   }
+
+  AttendanceRecord? _deriveAttendanceForSession(List<AttendanceRecord> records, String studentId, DateTime classDateTime) {
+    // 같은 학생 + 같은 분 단위 수업시작시간과 일치하는 기록 중 최신(updatedAt 최대)
+    final same = records.where((r) => r.studentId == studentId &&
+      r.classDateTime.year == classDateTime.year &&
+      r.classDateTime.month == classDateTime.month &&
+      r.classDateTime.day == classDateTime.day &&
+      r.classDateTime.hour == classDateTime.hour &&
+      r.classDateTime.minute == classDateTime.minute
+    ).toList();
+    if (same.isEmpty) return null;
+    same.sort((a,b)=> (a.updatedAt).compareTo(b.updatedAt));
+    return same.last;
+  }
 }
 
 // 공개 유틸: 출석 시간 수정 다이얼로그 (학생 화면 등 외부에서도 사용 가능)
@@ -3676,6 +3702,7 @@ Future<void> showAttendanceEditDialog({
         isPresent: false,
         arrivalTime: null,
         departureTime: null,
+        notes: null,
       );
     } else {
       await DataManager.instance.saveOrUpdateAttendance(
@@ -3686,6 +3713,7 @@ Future<void> showAttendanceEditDialog({
         isPresent: true,
         arrivalTime: result['arrivalTime'],
         departureTime: result['departureTime'],
+        notes: null,
       );
     }
   }
