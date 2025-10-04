@@ -25,7 +25,7 @@ class CustomNavigationRail extends StatelessWidget {
         Expanded(
           child: NavigationRail(
             backgroundColor: const Color(0xFF1F1F1F),
-            selectedIndex: selectedIndex,
+            selectedIndex: selectedIndex.clamp(0, 4),
             onDestinationSelected: onDestinationSelected,
             leading: Padding(
               padding: const EdgeInsets.only(top: 16, bottom: 8),

@@ -10,6 +10,7 @@ import 'home/home_screen.dart';
 import 'settings/settings_screen.dart';
 import 'resources/resources_screen.dart';
 import 'learning/learning_screen.dart';
+import 'class_content_screen.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
 import '../services/tag_preset_service.dart';
@@ -34,7 +35,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
-  int _selectedIndex = 0;
+  int _selectedIndex = 0; // 0~5 (5는 수업 내용 관리)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;
   late Animation<double> _sideSheetAnimation;
@@ -457,6 +458,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return const LearningScreen();
       case 4:
         return const ResourcesScreen();
+        case 5:
+          return const ClassContentScreen();
       default:
         return const SizedBox();
     }
@@ -477,11 +480,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     // print('[DEBUG] MainScreen build');
+    // 안전 가드: 네비게이션 레일은 0~4까지만 허용하므로 표시 인덱스를 보정
+    final int _railSelectedIndex = (_selectedIndex >= 0 && _selectedIndex <= 4) ? _selectedIndex : 0;
     return Scaffold(
       body: Row(
         children: [
           CustomNavigationRail(
-            selectedIndex: _selectedIndex,
+            selectedIndex: _railSelectedIndex,
             onDestinationSelected: (int index) {
               setState(() {
                 _selectedIndex = index;
@@ -609,10 +614,42 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             children: [
                               Padding(
                                 padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
-                                child: Center(
-                                  child: Text(
-                                    _getTodayDateString(),
-                                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                child: SizedBox(
+                                  height: 28,
+                                  child: Stack(
+                                    children: [
+                                      const Positioned.fill(
+                                        child: Center(
+                                          child: Text(
+                                            '',
+                                            // 실제 텍스트는 아래 Builder에서 context 기반으로 그립니다.
+                                          ),
+                                        ),
+                                      ),
+                                      // 중앙 날짜 텍스트 (항상 정확히 중앙 유지)
+                                      const Positioned.fill(
+                                        child: Center(
+                                          child: _TodayDateLabel(),
+                                        ),
+                                      ),
+                                      // 오른쪽 화살표 버튼 (6번째 페이지로 진입)
+                                      Positioned(
+                                        right: 24,
+                                        top: 0,
+                                        bottom: 0,
+                                        child: Tooltip(
+                                          message: '수업 내용 관리',
+                                          child: IconButton(
+                                            icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                                            padding: EdgeInsets.zero,
+                                            onPressed: () {
+                                              setState(() { _selectedIndex = 5; });
+                                              _rotationAnimation.reverse();
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -889,7 +926,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final List<Widget> chips = [];
     final hwList = HomeworkStore.instance.items(t.student.id);
     for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
-      chips.add(const SizedBox(width: 6));
+      chips.add(const SizedBox(width: 8));
       chips.add(
         MouseRegion(
           onEnter: (e) {
@@ -916,10 +953,27 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             },
             child: Container(
               height: 22,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999), border: Border.all(color: hw.color.withOpacity(0.6), width: 1)),
+              // 글자 영역 확보를 위해 패딩 축소
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
+                    ? Colors.transparent
+                    : const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: hw.color.withOpacity(0.6), width: 1),
+              ),
               alignment: Alignment.center,
-              child: Text(hw.title, style: const TextStyle(color: Colors.white70, fontSize: 12), overflow: TextOverflow.ellipsis),
+              child: Text(
+                hw.title,
+                style: TextStyle(
+                  color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
+                      ? Colors.white.withOpacity(0.78)
+                      : Colors.white60,
+                  fontSize: 13,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
         ),
@@ -1014,6 +1068,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: attendedChild,
             ),
           ),
+          const SizedBox(width: 10),
           // 이름 옆이 아니라 버튼들 오른쪽에 과제 요약 칩 렌더링
           ..._buildHomeworkChips(t),
         ],
@@ -1077,7 +1132,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final List<Widget> chips = [];
     final hwList = HomeworkStore.instance.items(t.student.id);
     for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
-      if (chips.isNotEmpty) chips.add(const SizedBox(width: 6));
+      if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
       chips.add(
         MouseRegion(
           onEnter: (e) {
@@ -1114,12 +1169,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               setState(() {});
             },
             child: Builder(builder: (context) {
+              final bool isRunning = (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id);
               final style = TextStyle(
-                color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
-                    ? Colors.white
-                    : Colors.white70,
-                fontSize: 13,
+                color: isRunning ? Colors.white70 : Colors.white60,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
+                height: 1.1,
               );
               // 긴 제목도 잘리지 않도록 실제 텍스트 폭을 모두 반영
               final painter = TextPainter(
@@ -1127,31 +1182,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 maxLines: 1,
                 textDirection: TextDirection.ltr,
               )..layout(minWidth: 0, maxWidth: double.infinity);
-              const double leftPad = 10;
-              const double rightPad = 12; // 오른쪽 여백 살짝 증가로 시각 중심 보정
-              final double width = painter.width + leftPad + rightPad;
+              // 폰트 14 기준: 텍스트 영역을 더 확보하기 위해 패딩 축소
+              const double leftPad = 14;
+              const double rightPad = 16;
+              // 활성화/비활성 상관없이 칩의 총 너비를 일정하게 유지하기 위해
+              // 최대 테두리 두께(2px)를 기준으로 계산한다.
+              const double borderWMax = 2.0;
+              final double borderW = isRunning ? 2.0 : 1.0; // 실제 그릴 두께
+              final double width = painter.width + leftPad + rightPad + borderWMax * 2;
+              // 폰트 사이즈 증가를 고려하되, 지나친 최소폭은 줄임표를 유발하므로 완화
+              final double minChipWidth = 70.0;
               return SizedBox(
-                width: width.clamp(40.0, 560.0),
+                width: width.clamp(minChipWidth, 560.0),
                 child: Container(
-                  height: 36,
+                  height: 46,
                   padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2A2A2A),
+                    color: isRunning ? Colors.transparent : const Color(0xFF2A2A2A),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
-                          ? hw.color.withOpacity(0.9)
-                          : Colors.white24,
-                      width: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id) ? 2 : 1,
+                      color: isRunning ? hw.color.withOpacity(0.9) : Colors.white24,
+                      width: borderW,
                     ),
                   ),
                   child: Text(
                     hw.title,
-                    style: style,
+                    style: style.copyWith(
+                      color: isRunning ? Colors.white.withOpacity(0.78) : Colors.white60,
+                    ),
+                    textAlign: TextAlign.center,
                     maxLines: 1,
                     softWrap: false,
-                    overflow: TextOverflow.visible, // 줄바꿈 방지
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               );
@@ -1161,6 +1224,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       );
     }
     return chips;
+  }
+}
+
+class _TodayDateLabel extends StatelessWidget {
+  const _TodayDateLabel();
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      _getTodayDateString(),
+      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+    );
   }
 }
 
