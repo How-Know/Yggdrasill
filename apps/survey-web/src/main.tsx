@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import './global.css';
 import { createRoot } from 'react-dom/client';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';

@@ -160,6 +160,7 @@ class DataManager {
       _subscribeAuthChanges();
       await _subscribeStudentTimeBlocksRealtime();
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
+      await _subscribePaymentsRealtime(); // 결제 Realtime 구독
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       _isInitialized = true;
     } catch (e) {
@@ -2544,6 +2545,45 @@ class DataManager {
     } catch (e) {
       // ignore
     }
+  }
+
+  // =================== PAYMENTS REALTIME ===================
+  RealtimeChannel? _paymentsRealtimeChannel;
+  Future<void> _subscribePaymentsRealtime() async {
+    try {
+      _paymentsRealtimeChannel?.unsubscribe();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:payment_records:' + academyId);
+      _paymentsRealtimeChannel = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'payment_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadPaymentRecords(); } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'payment_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadPaymentRecords(); } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'payment_records',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadPaymentRecords(); } catch (_) {}
+          },
+        )
+        ..subscribe();
+    } catch (_) {}
   }
 
   Future<void> addAttendanceRecord(AttendanceRecord record) async {

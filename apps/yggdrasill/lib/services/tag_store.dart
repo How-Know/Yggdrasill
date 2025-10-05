@@ -31,22 +31,26 @@ class TagStore {
   final ValueNotifier<bool> isSaving = ValueNotifier<bool>(false);
   final ValueNotifier<bool> reachedEnd = ValueNotifier<bool>(false);
   RealtimeChannel? _rt;
+  // UI 갱신용 개정 카운터
+  final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  void _bump(){ revision.value++; }
 
   List<TagEvent> getEventsForSet(String setId) {
     return List<TagEvent>.from(_eventsBySetId[setId] ?? const []);
   }
 
-  Future<void> _syncSetToSupabase(String setId, List<TagEvent> events) async {
+  Future<void> _syncSetToSupabase(String setId, String studentId, List<TagEvent> events) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       // 전체 교체: 해당 set_id 레코드 삭제 후 일괄 insert
-      await supa.from('tag_events').delete().match({'academy_id': academyId, 'set_id': setId});
+      await supa.from('tag_events').delete().match({'academy_id': academyId, 'set_id': setId, 'student_id': studentId});
       if (events.isNotEmpty) {
         final rows = events.map((e) => {
           // id는 서버 기본 생성 사용. 필요 시 UUID 부여 가능
           'academy_id': academyId,
           'set_id': setId,
+          'student_id': studentId,
           'tag_name': e.tagName,
           'color_value': e.colorValue,
           'icon_code': e.iconCodePoint,
@@ -60,59 +64,45 @@ class TagStore {
     } catch (_) {}
   }
 
-  void setEventsForSet(String setId, List<TagEvent> events) {
+  void setEventsForSet(String setId, String studentId, List<TagEvent> events) {
+    // 즉시 저장으로 전환했기 때문에 닫기 시점에는 메모리만 최신화
     _eventsBySetId[setId] = List<TagEvent>.from(events);
-    // DB 반영
-    if (!RuntimeFlags.serverOnly) {
-      AcademyDbService.instance.setTagEventsForSet(setId, events.map((e) => {
-      'id': '${setId}_${e.timestamp.millisecondsSinceEpoch}_${e.tagName}',
-      'tag_name': e.tagName,
-      'color_value': e.colorValue,
-      'icon_code': e.iconCodePoint,
-      'timestamp': e.timestamp.toIso8601String(),
-      'note': e.note,
-      }).toList());
-    }
-    if (dualWrite) {
-      _syncSetToSupabase(setId, events);
-    }
   }
 
-  Future<void> _appendToSupabase(String setId, TagEvent event) async {
+  Future<void> _appendToSupabase(String setId, String studentId, TagEvent event) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      await supa.from('tag_events').insert({
+      final int epochMsUtc = event.timestamp.toUtc().millisecondsSinceEpoch;
+      final String id = const Uuid().v5(
+        Uuid.NAMESPACE_URL,
+        '$studentId|$epochMsUtc|${event.tagName}',
+      );
+      final int colorSigned = (event.colorValue).toSigned(32);
+      await supa.from('tag_events').upsert({
+        'id': id,
         'academy_id': academyId,
         'set_id': setId,
+        'student_id': studentId,
         'tag_name': event.tagName,
-        'color_value': event.colorValue,
+        'color_value': colorSigned,
         'icon_code': event.iconCodePoint,
-        'occurred_at': event.timestamp.toIso8601String(),
+        'occurred_at': event.timestamp.toUtc().toIso8601String(),
         'note': event.note,
-      });
+      }, onConflict: 'id');
       // ignore: avoid_print
-      print('[TagEvents] append set_id=' + setId + ' tag=' + event.tagName);
-    } catch (_) {}
+      print('[TagEvents] upsert ok id=' + id + ' student=' + studentId + ' set=' + setId + ' tag=' + event.tagName);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[TagEvents][ERROR] upsert failed: ' + e.toString() + '\n' + st.toString());
+    }
   }
 
-  void appendEvent(String setId, TagEvent event) {
+  void appendEvent(String setId, String studentId, TagEvent event) {
     final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
     list.add(event);
-    if (!RuntimeFlags.serverOnly) {
-      AcademyDbService.instance.appendTagEvent({
-        'id': '${setId}_${event.timestamp.millisecondsSinceEpoch}_${event.tagName}',
-        'set_id': setId,
-        'tag_name': event.tagName,
-        'color_value': event.colorValue,
-        'icon_code': event.iconCodePoint,
-        'timestamp': event.timestamp.toIso8601String(),
-        'note': event.note,
-      });
-    }
-    if (dualWrite) {
-      _appendToSupabase(setId, event);
-    }
+    // 서버 즉시 저장만 수행 (로컬 DB 비사용)
+    _appendToSupabase(setId, studentId, event);
   }
 
   Future<void> loadAllFromDb() async {
@@ -123,7 +113,7 @@ class TagStore {
         final supa = Supabase.instance.client;
         final data = await supa
             .from('tag_events')
-            .select('set_id, tag_name, color_value, icon_code, occurred_at, note')
+            .select('set_id, student_id, tag_name, color_value, icon_code, occurred_at, note')
             .eq('academy_id', academyId)
             .order('occurred_at');
         for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
@@ -141,29 +131,13 @@ class TagStore {
         // ignore: avoid_print
         print('[TagEvents] loaded from Supabase sets=' + _eventsBySetId.length.toString());
         _subscribeRealtime(academyId);
+        _bump();
         return;
       } catch (_) {
         // fallback below
       }
     }
-    if (RuntimeFlags.serverOnly) {
-      return;
-    }
-    final rows = await AcademyDbService.instance.getAllTagEvents();
-    for (final r in rows) {
-      final setId = (r['set_id'] as String?) ?? '';
-      if (setId.isEmpty) continue;
-      final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
-      list.add(TagEvent(
-        tagName: (r['tag_name'] as String?) ?? '',
-        colorValue: (r['color_value'] as int?) ?? 0xFF1976D2,
-        iconCodePoint: (r['icon_code'] as int?) ?? 0,
-        timestamp: DateTime.tryParse((r['timestamp'] as String?) ?? '') ?? DateTime.now(),
-        note: r['note'] as String?,
-      ));
-    }
-    // ignore: avoid_print
-    print('[TagEvents] loaded from SQLite sets=' + _eventsBySetId.length.toString());
+    // 서버우선만 사용. 로컬 DB는 사용하지 않음.
   }
 
   void _subscribeRealtime(String academyId) {
@@ -188,6 +162,7 @@ class TagStore {
               timestamp: DateTime.tryParse((m['occurred_at'] as String?) ?? '') ?? DateTime.now(),
               note: m['note'] as String?,
             ));
+            _bump();
           },
         )
         ..onPostgresChanges(
@@ -204,6 +179,7 @@ class TagStore {
             final list = _eventsBySetId[setId];
             if (list == null) return;
             list.removeWhere((e) => e.tagName == m['tag_name'] && e.timestamp.toIso8601String() == (m['occurred_at'] as String?));
+            _bump();
           },
         )
         ..subscribe();

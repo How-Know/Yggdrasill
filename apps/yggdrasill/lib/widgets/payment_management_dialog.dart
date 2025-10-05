@@ -22,6 +22,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   void initState() {
     super.initState();
     _loadPaymentData();
+    DataManager.instance.paymentRecordsNotifier.addListener(_loadPaymentData);
   }
 
   void _loadPaymentData() {
@@ -67,6 +68,12 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       _paidThisMonthStudents = paidThisMonthStudents;
       _totalThisMonthCount = paidThisMonthStudents.length + overdueStudents.length + upcomingStudents.length;
     });
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.paymentRecordsNotifier.removeListener(_loadPaymentData);
+    super.dispose();
   }
 
   DateTime _getActualPaymentDateForMonth(String studentId, DateTime registrationDate, DateTime targetMonth) {

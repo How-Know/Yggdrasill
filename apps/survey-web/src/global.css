@@ -1,0 +1,56 @@
+@font-face {
+  font-family: 'KakaoSmallSans';
+  src: url('/fonts/kakao/KakaoSmallSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KakaoSmallSans';
+  src: url('/fonts/kakao/KakaoSmallSans-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KakaoSmallSans';
+  src: url('/fonts/kakao/KakaoSmallSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'KakaoBigSans';
+  src: url('/fonts/kakao/KakaoBigSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KakaoBigSans';
+  src: url('/fonts/kakao/KakaoBigSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KakaoBigSans';
+  src: url('/fonts/kakao/KakaoBigSans-ExtraBold.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #1F1F1F;
+  font-family: KakaoSmallSans, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans KR', Helvetica, Arial, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6, .headline, .title {
+  font-family: KakaoBigSans, KakaoSmallSans, sans-serif;
+}
+
+

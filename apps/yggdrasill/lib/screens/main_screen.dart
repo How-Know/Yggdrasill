@@ -1069,8 +1069,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(width: 10),
-          // 이름 옆이 아니라 버튼들 오른쪽에 과제 요약 칩 렌더링
-          ..._buildHomeworkChips(t),
+          // 이름 옆이 아니라 버튼들 오른쪽에 과제 요약 칩 렌더링 (실시간 반영)
+          ..._buildHomeworkChipsReactive(t),
         ],
       );
     } else {
@@ -1128,7 +1128,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
   }
 
-  List<Widget> _buildHomeworkChips(_AttendanceTarget t) {
+  List<Widget> _buildHomeworkChipsReactive(_AttendanceTarget t) {
+    return [
+      ValueListenableBuilder<int>(
+        valueListenable: HomeworkStore.instance.revision,
+        builder: (context, _rev, _) {
+          return Wrap(spacing: 0, children: _buildHomeworkChipsOnce(t));
+        },
+      )
+    ];
+  }
+
+  List<Widget> _buildHomeworkChipsOnce(_AttendanceTarget t) {
     final List<Widget> chips = [];
     final hwList = HomeworkStore.instance.items(t.student.id);
     for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
@@ -1326,17 +1337,24 @@ extension on _MainScreenState {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
             Future<void> _handleTagPressed(_ClassTag tag) async {
+              final now = DateTime.now();
+              String? note;
               if (tag.name == '기록') {
-                final note = await _openRecordNoteDialog(ctx);
+                note = await _openRecordNoteDialog(ctx);
                 if (note == null || note.trim().isEmpty) return;
-                setLocal(() {
-                  workingApplied.add(_ClassTagEvent(tag: tag, timestamp: DateTime.now(), note: note.trim()));
-                });
-              } else {
-                setLocal(() {
-                  workingApplied.add(_ClassTagEvent(tag: tag, timestamp: DateTime.now()));
-                });
               }
+              // 즉시 메모리 반영
+              setLocal(() {
+                workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now, note: note?.trim()));
+              });
+              // 즉시 서버/로컬 저장 (학생ID 포함)
+              TagStore.instance.appendEvent(target.setId, target.student.id, TagEvent(
+                tagName: tag.name,
+                colorValue: tag.color.value,
+                iconCodePoint: tag.icon.codePoint,
+                timestamp: now,
+                note: note?.trim(),
+              ));
             }
 
             Widget _buildAvailableTagChip(_ClassTag tag) {
@@ -1458,13 +1476,8 @@ extension on _MainScreenState {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(null),
-                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                ),
-                ElevatedButton(
                   onPressed: () => Navigator.of(ctx).pop(workingApplied),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-                  child: const Text('저장'),
+                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
                 ),
               ],
             );
@@ -1485,7 +1498,7 @@ extension on _MainScreenState {
         timestamp: e.timestamp,
         note: e.note,
       )).toList();
-      TagStore.instance.setEventsForSet(target.setId, events);
+      TagStore.instance.setEventsForSet(target.setId, target.student.id, events);
     }
   }
 
