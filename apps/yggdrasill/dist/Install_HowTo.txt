@@ -1,0 +1,4 @@
+﻿愿由ъ옄 PowerShell???닿퀬, ?뺤텞?????대뜑?먯꽌 ?꾨옒瑜?洹몃?濡??ㅽ뻾?섏꽭??
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\\Install-Yggdrasill.ps1 -AlsoImportToRoot

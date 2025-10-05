@@ -57,8 +57,18 @@ try{
   } catch { }
 
   Info "App Installer 실행: $AppInstaller"
-  Add-AppxPackage -AppInstallerFile $AppInstaller -ForceUpdateFromAnyVersion -ErrorAction Stop | Out-Null
-  Ok '설치(또는 업데이트) 완료'
+  try{
+    # 일부 OS/PowerShell 버전에서 -ForceUpdateFromAnyVersion가 파라미터셋 충돌을 유발하므로 사용하지 않음
+    Add-AppxPackage -AppInstallerFile $AppInstaller -ErrorAction Stop | Out-Null
+    Ok '설치(또는 업데이트) 완료'
+  } catch {
+    Warn ("Add-AppxPackage -AppInstallerFile 실패: {0}" -f $_.Exception.Message)
+    # 폴백: App Installer 프로토콜 호출 (GUI 열림)
+    $abs = (Resolve-Path $AppInstaller).Path
+    Info "ms-appinstaller 프로토콜로 폴백 실행"
+    Start-Process ("ms-appinstaller:?source={0}" -f $abs) | Out-Null
+    Ok 'App Installer를 통해 설치 창을 열었습니다.'
+  }
 } finally {
   Pop-Location | Out-Null
 }
