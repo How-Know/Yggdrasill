@@ -239,7 +239,11 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       print('[ERROR] StudentPaymentInfo 저장 실패: $e');
     }
     
-    Navigator.of(context).pop(student);
+    // 다이얼로그 종료 전에 약간의 대기 후 닫기(목록 반영 타이밍 안정화)
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (mounted) {
+      Navigator.of(context).pop(student);
+    }
   }
 
   @override

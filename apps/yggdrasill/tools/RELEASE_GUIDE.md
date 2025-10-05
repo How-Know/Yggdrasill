@@ -41,7 +41,7 @@ Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\
 ```powershell
 $tag=(Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value
 gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
-gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip --clobber
+gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip dist\Yggdrasill_Installer.zip --clobber
 gh release edit v$tag -R How-Know/Yggdrasill --draft=false
 ```
 5) 검증
@@ -66,6 +66,15 @@ Set-Content apps\yggdrasill\pubspec.yaml (Get-Content apps\yggdrasill\pubspec.ya
 - "release not found": 릴리스 create가 실패한 상태 → 다시 4) 실행
 - gh CLI 미설치: https://cli.github.com 설치 후 `gh auth login`
 - ARM64 장비: App Installer 사용이 제한될 수 있음 → ZIP(포터블) 설치 경로로 유도
+
+### 새 PC 설치(권장 시나리오)
+1) 릴리스에서 `Yggdrasill_Installer.zip`을 내려받아 압축 해제
+2) 관리자 PowerShell로 다음 실행
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+./Install-Yggdrasill.ps1 -AlsoImportToRoot
+```
+위 스크립트는 인증서를 `TrustedPeople`(필요 시 `Root`)에 설치 후 `Yggdrasill.appinstaller`로 설치/업데이트를 진행합니다.
 
 ### 참고
 - 버전 규칙: `pubspec.yaml`의 `version: x.y.z+N` ↔ `msix_version: x.y.z.N` ↔ AppInstaller `Version="x.y.z.N"`

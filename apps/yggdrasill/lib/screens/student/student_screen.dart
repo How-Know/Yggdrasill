@@ -424,6 +424,8 @@ class StudentScreenState extends State<StudentScreen> {
       builder: (context) => StudentRegistrationDialog(
         onSave: (student, basicInfo) async {
           await DataManager.instance.addStudent(student, basicInfo);
+          // 저장 직후 즉시 목록 재로딩을 한번 더 보장 (실시간/디바운스 지연 대비)
+          try { await DataManager.instance.loadStudents(); } catch (_) {}
           showAppSnackBar(context, '학생이 등록되었습니다.');
         },
         groups: DataManager.instance.groups,
