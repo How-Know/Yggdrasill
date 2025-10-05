@@ -118,6 +118,10 @@ class DataManager {
 
 
   List<SelfStudyTimeBlock> get selfStudyTimeBlocks => List.unmodifiable(_selfStudyTimeBlocks);
+
+  // 1Hz 전역 티커: 과제 러닝 타이머 UI 갱신용
+  final ValueNotifier<int> globalTick = ValueNotifier<int>(0);
+  Timer? _tickTimer;
   set selfStudyTimeBlocks(List<SelfStudyTimeBlock> value) {
     _selfStudyTimeBlocks = value;
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
@@ -162,6 +166,11 @@ class DataManager {
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
       await _subscribePaymentsRealtime(); // 결제 Realtime 구독
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
+      // 1Hz 글로벌 티커 시작
+      _tickTimer?.cancel();
+      _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        globalTick.value++;
+      });
       _isInitialized = true;
     } catch (e) {
       print('Error initializing data: $e');

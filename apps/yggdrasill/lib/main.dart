@@ -1,5 +1,6 @@
 import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/main_screen.dart';
 import 'screens/settings/settings_screen.dart';
@@ -370,7 +371,24 @@ void main() async {
   }
   // 과목/배정 메타 로드 (앱 시작 시 1회)
   await _loadExamMetaPrefs();
+  // 업데이트 완료 후 재시작 스낵바 표시(1회)
+  final sp = await SharedPreferences.getInstance();
+  final bool showUpdateSnack = sp.getBool('show_update_snack') ?? false;
+  if (showUpdateSnack) {
+    await sp.remove('show_update_snack');
+  }
   runApp(MyApp(maximizeOnStart: fullscreen || maximizeFlag));
+  if (showUpdateSnack) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(
+          content: Text('업데이트가 완료되어 새로 시작했어요.'),
+          backgroundColor: Color(0xFF1976D2),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    });
+  }
 }
 
 class MyApp extends StatelessWidget {

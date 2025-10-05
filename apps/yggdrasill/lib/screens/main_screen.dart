@@ -12,6 +12,7 @@ import 'resources/resources_screen.dart';
 import 'learning/learning_screen.dart';
 import 'class_content_screen.dart';
 import '../services/tag_store.dart';
+import 'dart:async';
 import 'learning/tag_preset_dialog.dart';
 import '../services/tag_preset_service.dart';
 import '../models/student.dart';
@@ -938,7 +939,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           child: GestureDetector(
             onTap: () {
               // 진행 시작
-              HomeworkStore.instance.start(t.student.id, hw.id);
+              unawaited(HomeworkStore.instance.start(t.student.id, hw.id));
               setState(() {});
             },
             onLongPress: () async {
@@ -948,7 +949,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             },
             onSecondaryTap: () {
               // 완료 처리
-              HomeworkStore.instance.complete(t.student.id, hw.id);
+              unawaited(HomeworkStore.instance.complete(t.student.id, hw.id));
               setState(() {});
             },
             child: Container(
@@ -1133,7 +1134,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       ValueListenableBuilder<int>(
         valueListenable: HomeworkStore.instance.revision,
         builder: (context, _rev, _) {
-          return Wrap(spacing: 0, children: _buildHomeworkChipsOnce(t));
+          return ValueListenableBuilder<int>(
+            valueListenable: DataManager.instance.globalTick,
+            builder: (context, _tick, __) {
+              return Wrap(spacing: 0, children: _buildHomeworkChipsOnce(t));
+            },
+          );
         },
       )
     ];
@@ -1157,9 +1163,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // 토글: 진행 ↔ 일시정지
               final running = HomeworkStore.instance.runningOf(t.student.id);
               if (running != null && running.id == hw.id) {
-                HomeworkStore.instance.pause(t.student.id, hw.id);
+                unawaited(HomeworkStore.instance.pause(t.student.id, hw.id));
               } else {
-                HomeworkStore.instance.start(t.student.id, hw.id);
+                unawaited(HomeworkStore.instance.start(t.student.id, hw.id));
               }
               setState(() {});
             },
@@ -1176,7 +1182,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             },
             onSecondaryTap: () {
               // 완료 처리
-              HomeworkStore.instance.complete(t.student.id, hw.id);
+              unawaited(HomeworkStore.instance.complete(t.student.id, hw.id));
               setState(() {});
             },
             child: Builder(builder: (context) {

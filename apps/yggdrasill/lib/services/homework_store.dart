@@ -181,7 +181,9 @@ class HomeworkStore {
             final String id = (old['id'] as String?) ?? '';
             if (id.isEmpty) return;
             for (final entry in _byStudentId.entries) {
-              final removed = entry.value.removeWhere((e) => e.id == id) > 0;
+              final int before = entry.value.length;
+              entry.value.removeWhere((e) => e.id == id);
+              final bool removed = entry.value.length < before;
               if (removed) {
                 _bump();
                 break;
@@ -293,61 +295,49 @@ class HomeworkStore {
     return idx == -1 ? null : list[idx];
   }
 
-  void start(String studentId, String id) {
+  Future<void> start(String studentId, String id) async {
     final list = _byStudentId[studentId];
     if (list == null) return;
-    // pause others
-    final now = DateTime.now();
-    for (final e in list) {
-      if (e.runStart != null) {
-        e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
-        e.runStart = null;
-      }
-    }
     final idx = list.indexWhere((e) => e.id == id);
-    if (idx != -1) {
-      final item = list[idx];
-      final nowTime = DateTime.now();
-      item.runStart = nowTime;
-      item.firstStartedAt ??= nowTime;
-      if (item.status == HomeworkStatus.completed || item.status == HomeworkStatus.homework) {
-        item.status = HomeworkStatus.inProgress;
-        item.completedAt = null;
-      }
-      _bump();
-      unawaited(_upsertItem(studentId, item));
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_start', params: {
+        'p_item_id': id,
+        'p_student_id': studentId,
+        'p_academy_id': academyId,
+      });
+    } catch (e) {
+      // ignore
     }
   }
 
-  void pause(String studentId, String id) {
+  Future<void> pause(String studentId, String id) async {
     final list = _byStudentId[studentId];
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
-    if (idx != -1 && list[idx].runStart != null) {
-      final now = DateTime.now();
-      list[idx].accumulatedMs += now.difference(list[idx].runStart!).inMilliseconds;
-      list[idx].runStart = null;
-      _bump();
-      unawaited(_upsertItem(studentId, list[idx]));
-    }
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_pause', params: {
+        'p_item_id': id,
+        'p_academy_id': academyId,
+      });
+    } catch (_) {}
   }
 
-  void complete(String studentId, String id) {
+  Future<void> complete(String studentId, String id) async {
     final list = _byStudentId[studentId];
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
-    if (idx != -1) {
-      final item = list[idx];
-      if (list[idx].runStart != null) {
-        final now = DateTime.now();
-        list[idx].accumulatedMs += now.difference(list[idx].runStart!).inMilliseconds;
-        list[idx].runStart = null;
-      }
-      item.status = HomeworkStatus.completed;
-      item.completedAt = DateTime.now();
-      _bump();
-      unawaited(_upsertItem(studentId, item));
-    }
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_complete', params: {
+        'p_item_id': id,
+        'p_academy_id': academyId,
+      });
+    } catch (_) {}
   }
 
   HomeworkItem continueAdd(String studentId, String sourceId, {required String body}) {

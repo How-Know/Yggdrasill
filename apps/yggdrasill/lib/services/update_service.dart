@@ -118,6 +118,10 @@ class UpdateService {
       if (can) {
         final ok = await launchUrl(uri);
         if (ok) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('show_update_snack', true);
+          } catch (_) {}
           await Future.delayed(const Duration(seconds: 2));
           exit(0);
         }
@@ -126,6 +130,10 @@ class UpdateService {
       // Fallback: explorer로 호출 (일부 환경에서 차단될 수 있음)
       try {
         await Process.start('explorer.exe', [uri.toString()]);
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('show_update_snack', true);
+        } catch (_) {}
         await Future.delayed(const Duration(seconds: 2));
         exit(0);
       } catch (_) {
@@ -223,6 +231,10 @@ class UpdateService {
       _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작합니다.', tag: tag));
       _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
       await Future.delayed(const Duration(milliseconds: 800));
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('show_update_snack', true);
+      } catch (_) {}
       exit(0);
     } catch (e) {
       _showSnack(context, '업데이트 중 오류: $e');
