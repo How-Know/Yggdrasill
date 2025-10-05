@@ -63,9 +63,12 @@ class DataManager {
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
+  // invalidation-only refresh: bump 시 화면에서 디바운스 재조회 트리거
+  final ValueNotifier<int> studentsRevision = ValueNotifier<int>(0);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<AttendanceRecord>> attendanceRecordsNotifier = ValueNotifier<List<AttendanceRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
+  final ValueNotifier<int> studentPaymentInfoRevision = ValueNotifier<int>(0);
   
   // Session Overrides (보강/예외)
   List<SessionOverride> _sessionOverrides = [];
@@ -92,9 +95,11 @@ class DataManager {
 
   List<StudentTimeBlock> _studentTimeBlocks = [];
   final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
+  final ValueNotifier<int> studentTimeBlocksRevision = ValueNotifier<int>(0);
   
   List<GroupSchedule> _groupSchedules = [];
   final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
+  final ValueNotifier<int> studentBasicInfoRevision = ValueNotifier<int>(0);
 
   List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
   set studentTimeBlocks(List<StudentTimeBlock> value) {
@@ -161,6 +166,9 @@ class DataManager {
       await reloadAllData();
       await _subscribeSessionOverridesRealtime();
       await _subscribeStudentTimeBlocksRealtime();
+      await _subscribeStudentsInvalidation();
+      await _subscribeStudentBasicInfoInvalidation();
+      await _subscribeStudentPaymentInfoInvalidation();
       _subscribeAuthChanges();
       await _subscribeStudentTimeBlocksRealtime();
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
@@ -1553,21 +1561,108 @@ class DataManager {
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { await loadStudentTimeBlocks(); },
+          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { await loadStudentTimeBlocks(); },
+          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { await loadStudentTimeBlocks(); },
+          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
+        )
+        ..subscribe();
+    } catch (_) {}
+  }
+
+  // generic debouncer
+  Timer? _debounceTimer;
+  void _debouncedReload(Future<void> Function() loader, {Duration delay = const Duration(milliseconds: 500)}) {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(delay, () async {
+      try { await loader(); } catch (_) {}
+    });
+  }
+
+  Future<void> _subscribeStudentsInvalidation() async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:students:' + academyId)
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public', table: 'students',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public', table: 'students',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public', table: 'students',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..subscribe();
+    } catch (_) {}
+  }
+
+  Future<void> _subscribeStudentBasicInfoInvalidation() async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:student_basic_info:' + academyId)
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public', table: 'student_basic_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public', table: 'student_basic_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public', table: 'student_basic_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+        )
+        ..subscribe();
+    } catch (_) {}
+  }
+
+  Future<void> _subscribeStudentPaymentInfoInvalidation() async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:student_payment_info:' + academyId)
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public', table: 'student_payment_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public', table: 'student_payment_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public', table: 'student_payment_info',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
         )
         ..subscribe();
     } catch (_) {}
