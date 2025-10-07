@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/teacher.dart';
 
 class TeacherRegistrationDialog extends StatefulWidget {
@@ -21,6 +22,7 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
   late final TextEditingController _emailController;
   late final TextEditingController _descriptionController;
   TeacherRole _role = TeacherRole.all;
+  bool _isOwnerTeacher = false;
 
   @override
   void initState() {
@@ -30,6 +32,13 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
     _emailController = TextEditingController(text: widget.teacher?.email ?? '');
     _descriptionController = TextEditingController(text: widget.teacher?.description ?? '');
     _role = widget.teacher?.role ?? TeacherRole.all;
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final t = widget.teacher;
+      _isOwnerTeacher = (uid != null && t != null && (t.userId ?? '') == uid);
+    } catch (_) {
+      _isOwnerTeacher = false;
+    }
   }
 
   @override
@@ -91,25 +100,31 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
                 const SizedBox(width: 16),
                 Expanded(
                   flex: 2,
-                  child: DropdownButtonFormField<TeacherRole>(
-                    value: _role,
-                    decoration: InputDecoration(
-                      labelText: '역할',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                  child: IgnorePointer(
+                    ignoring: _isOwnerTeacher,
+                    child: Opacity(
+                      opacity: _isOwnerTeacher ? 0.5 : 1.0,
+                      child: DropdownButtonFormField<TeacherRole>(
+                        value: _role,
+                        decoration: InputDecoration(
+                          labelText: _isOwnerTeacher ? '역할(관리자 고정)' : '역할',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                          ),
+                          focusedBorder: const OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1976D2)),
+                          ),
+                        ),
+                        dropdownColor: const Color(0xFF23232A),
+                        style: const TextStyle(color: Colors.white),
+                        items: TeacherRole.values.map((r) => DropdownMenuItem(
+                          value: r,
+                          child: Text(getTeacherRoleLabel(r)),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) setState(() { _role = v; }); },
                       ),
                     ),
-                    dropdownColor: const Color(0xFF23232A),
-                    style: const TextStyle(color: Colors.white),
-                    items: TeacherRole.values.map((r) => DropdownMenuItem(
-                      value: r,
-                      child: Text(getTeacherRoleLabel(r)),
-                    )).toList(),
-                    onChanged: (v) { if (v != null) setState(() { _role = v; }); },
                   ),
                 ),
               ],

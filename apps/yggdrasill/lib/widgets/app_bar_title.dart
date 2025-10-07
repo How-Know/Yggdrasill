@@ -431,11 +431,13 @@ class _AccountDialog extends StatefulWidget {
 class _AccountDialogState extends State<_AccountDialog> {
   Map<String, dynamic> _profileMap = const {};
   String? _activeEmail;
+  String? _ownerUserId;
 
   @override
   void initState() {
     super.initState();
     _reload();
+    _loadOwner();
     DataManager.instance.teachersNotifier.addListener(_reload);
     _ProfileStore.profilesNotifier.addListener(_reload);
   }
@@ -454,6 +456,26 @@ class _AccountDialogState extends State<_AccountDialog> {
       _profileMap = map['profiles'] as Map<String, dynamic>? ?? {};
       _activeEmail = map['activeEmail'] as String?;
     });
+  }
+
+  Future<void> _loadOwner() async {
+    try {
+      final aid = await TenantService.instance.getActiveAcademyId();
+      if (aid == null) return;
+      final client = _safeClient();
+      if (client == null) return;
+      final resp = await client
+          .from('academies')
+          .select('owner_user_id')
+          .eq('id', aid)
+          .limit(1);
+      if (!mounted) return;
+      final list = resp is List ? resp : null;
+      if (list != null && list.isNotEmpty) {
+        final owner = list.first['owner_user_id'] as String?;
+        setState(() { _ownerUserId = owner; });
+      }
+    } catch (_) {}
   }
 
   Teacher? _activeTeacher() {
@@ -493,7 +515,7 @@ class _AccountDialogState extends State<_AccountDialog> {
     final teacherPresetColor = (teacher?.avatarPresetColor as String?) ?? '';
     final teacherPresetInitial = (teacher?.avatarPresetInitial as String?) ?? '';
     final teacherUseIcon = (teacher?.avatarUseIcon as bool?) ?? false;
-    final isOwner = user?.email == email;
+    final isOwner = (teacher?.userId ?? '') == (user?.id ?? '') || (teacher?.userId ?? '') == (_ownerUserId ?? '');
     final displayName = teacher?.name ?? (email.split('@').first);
 
     Widget avatarWidget() {
@@ -564,7 +586,7 @@ class _AccountDialogState extends State<_AccountDialog> {
                       Row(children:[
                         Flexible(child: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 8),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999)), child: Text(isOwner? '원장':'선생님', style: const TextStyle(color: Colors.white70, fontSize: 12)))
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999)), child: Text(isOwner? '관리자':'선생님', style: const TextStyle(color: Colors.white70, fontSize: 12)))
                       ]),
                       const SizedBox(height: 4),
                       Text(email, style: const TextStyle(color: Colors.white70))

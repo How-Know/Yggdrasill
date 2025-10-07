@@ -1675,12 +1675,13 @@ class DataManager {
           try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
           // 1) 첫 로그인/재로그인 시, 이메일로 교사-사용자 연결 및 멤버십 보장
           try {
-            final email = Supabase.instance.client.auth.currentUser?.email;
+            final client = Supabase.instance.client;
+            final email = client.auth.currentUser?.email;
             if (email != null && email.isNotEmpty) {
-              // 허용 여부 검사: 미등록 또는 차단이면 연결을 시도하지 않음
-              final allow = await Supabase.instance.client.rpc('is_teacher_email_allowed', params: {'p_email': email});
+              final aid = await TenantService.instance.getActiveAcademyId();
+              final allow = await client.rpc('is_teacher_email_allowed', params: {'p_email': email});
               if (allow is bool && allow) {
-                await Supabase.instance.client.rpc('join_academy_by_email', params: {'p_email': email});
+                await client.rpc('join_academy_by_email', params: {'p_email': email, 'p_academy_id': aid});
               }
             }
           } catch (_) {}
@@ -1988,12 +1989,13 @@ class DataManager {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final data = await Supabase.instance.client
           .from('teachers')
-          .select('id,name,role,contact,email,description,display_order,pin_hash,avatar_url,avatar_preset_color,avatar_preset_initial,avatar_use_icon')
+          .select('id,user_id,name,role,contact,email,description,display_order,pin_hash,avatar_url,avatar_preset_color,avatar_preset_initial,avatar_use_icon')
           .eq('academy_id', academyId)
           .order('display_order', ascending: true, nullsFirst: false)
           .order('name');
       _teachers = (data as List).map((t) => Teacher(
         id: (t['id'] as String?),
+        userId: (t['user_id'] as String?),
         name: t['name'] as String? ?? '',
         role: TeacherRole.values[(t['role'] as int?) ?? 0],
         contact: t['contact'] as String? ?? '',
@@ -2021,24 +2023,7 @@ class DataManager {
       print('[DEBUG] saveTeachers(serverside) 시작: ' + _teachers.length.toString() + '명');
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      await supa.from('teachers').delete().eq('academy_id', academyId);
-      if (_teachers.isNotEmpty) {
-        final rows = _teachers.asMap().entries.map((e) => {
-          'academy_id': academyId,
-          'name': e.value.name,
-          'role': e.value.role.index,
-          'contact': e.value.contact,
-          'email': e.value.email,
-          'description': e.value.description,
-          'display_order': e.value.displayOrder ?? e.key,
-          'pin_hash': e.value.pinHash,
-          'avatar_url': e.value.avatarUrl,
-          'avatar_preset_color': e.value.avatarPresetColor,
-          'avatar_preset_initial': e.value.avatarPresetInitial,
-          'avatar_use_icon': e.value.avatarUseIcon,
-        }).toList();
-        await supa.from('teachers').insert(rows);
-      }
+      // 더 이상 전체 삭제/재삽입하지 않습니다. 필요 시 개별 단건 API를 사용하세요.
       print('[DEBUG] saveTeachers 완료');
     } catch (e, st) {
       print('[SUPA][ERROR] saveTeachers: $e\n$st');
@@ -2046,42 +2031,180 @@ class DataManager {
     }
   }
 
-  void addTeacher(Teacher teacher) {
+  Future<void> addTeacher(Teacher teacher) async {
     print('[DEBUG] addTeacher 호출: $teacher');
+    // 1) 로컬 선반영
     _teachers.add(teacher);
-    print('[DEBUG] saveTeachers 호출 전 teachers.length: ${_teachers.length}');
-    saveTeachers();
     teachersNotifier.value = List.unmodifiable(_teachers);
-    print('[DEBUG] teachersNotifier.value 갱신: ${teachersNotifier.value.length}');
+    // 2) 서버 단건 삽입
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final idx = _teachers.length - 1;
+      final row = {
+        'academy_id': academyId,
+        'user_id': teacher.userId,
+        'name': teacher.name,
+        'role': teacher.role.index,
+        'contact': teacher.contact,
+        'email': teacher.email,
+        'description': teacher.description,
+        'display_order': teacher.displayOrder ?? idx,
+        'pin_hash': teacher.pinHash,
+        'avatar_url': teacher.avatarUrl,
+        'avatar_preset_color': teacher.avatarPresetColor,
+        'avatar_preset_initial': teacher.avatarPresetInitial,
+        'avatar_use_icon': teacher.avatarUseIcon,
+      }..removeWhere((k, v) => v == null);
+      final inserted = await supa.from('teachers').insert(row).select('id,user_id,display_order').single();
+      final newId = inserted['id'] as String?;
+      final newUserId = inserted['user_id'] as String?;
+      final newOrder = (inserted['display_order'] as int?) ?? (teacher.displayOrder ?? idx);
+      // 3) 로컬 반영(id/순서 갱신)
+      final prev = _teachers[idx];
+      _teachers[idx] = Teacher(
+        id: newId ?? prev.id,
+        userId: newUserId ?? prev.userId,
+        name: prev.name,
+        role: prev.role,
+        contact: prev.contact,
+        email: prev.email,
+        description: prev.description,
+        displayOrder: newOrder,
+        pinHash: prev.pinHash,
+        avatarUrl: prev.avatarUrl,
+        avatarPresetColor: prev.avatarPresetColor,
+        avatarPresetInitial: prev.avatarPresetInitial,
+        avatarUseIcon: prev.avatarUseIcon,
+      );
+      teachersNotifier.value = List.unmodifiable(_teachers);
+    } catch (e, st) {
+      print('[SUPA][ERROR] addTeacher(insert): $e\n$st');
+      rethrow;
+    }
   }
 
-  void deleteTeacher(int idx) {
+  Future<void> deleteTeacher(int idx) async {
     if (idx >= 0 && idx < _teachers.length) {
+      final t = _teachers[idx];
+      // 서버 삭제 시도(원장 카드 삭제는 DB 트리거가 막음)
+      try {
+        final id = t.id;
+        if (id != null && id.isNotEmpty) {
+          await Supabase.instance.client.from('teachers').delete().eq('id', id);
+        }
+      } catch (e, st) {
+        print('[SUPA][ERROR] deleteTeacher: $e\n$st');
+      }
+      // 로컬에서도 제거(서버가 막은 경우 UI에서 이미 차단되어야 함)
       _teachers.removeAt(idx);
-      saveTeachers();
       teachersNotifier.value = List.unmodifiable(_teachers);
     }
   }
 
-  void updateTeacher(int idx, Teacher updated) {
+  Future<void> updateTeacher(int idx, Teacher updated) async {
     if (idx >= 0 && idx < _teachers.length) {
       final prev = _teachers[idx];
+      // 1) 로컬 선반영
       _teachers[idx] = Teacher(
         id: prev.id,
+        userId: updated.userId ?? prev.userId,
         name: updated.name,
         role: updated.role,
         contact: updated.contact,
         email: updated.email,
         description: updated.description,
-        displayOrder: updated.displayOrder,
+        displayOrder: updated.displayOrder ?? prev.displayOrder,
         pinHash: updated.pinHash ?? prev.pinHash,
         avatarUrl: updated.avatarUrl ?? prev.avatarUrl,
         avatarPresetColor: updated.avatarPresetColor ?? prev.avatarPresetColor,
         avatarPresetInitial: updated.avatarPresetInitial ?? prev.avatarPresetInitial,
         avatarUseIcon: updated.avatarUseIcon ?? prev.avatarUseIcon,
       );
-      saveTeachers();
       teachersNotifier.value = List.unmodifiable(_teachers);
+      // 2) 서버 업데이트(없으면 생성)
+      try {
+        final id = prev.id;
+        final supa = Supabase.instance.client;
+        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final row = {
+          'academy_id': academyId,
+          'user_id': updated.userId ?? prev.userId,
+          'name': updated.name,
+          'role': updated.role.index,
+          'contact': updated.contact,
+          'email': updated.email,
+          'description': updated.description,
+          'display_order': updated.displayOrder ?? prev.displayOrder,
+          'pin_hash': updated.pinHash ?? prev.pinHash,
+          'avatar_url': updated.avatarUrl ?? prev.avatarUrl,
+          'avatar_preset_color': updated.avatarPresetColor ?? prev.avatarPresetColor,
+          'avatar_preset_initial': updated.avatarPresetInitial ?? prev.avatarPresetInitial,
+          'avatar_use_icon': updated.avatarUseIcon ?? prev.avatarUseIcon,
+        }..removeWhere((k, v) => v == null);
+        if (id != null && id.isNotEmpty) {
+          await supa.from('teachers').update(row)..eq('id', id);
+        } else {
+          final inserted = await supa.from('teachers').insert(row).select('id').single();
+          final newId = inserted['id'] as String?;
+          _teachers[idx] = Teacher(
+            id: newId,
+            userId: _teachers[idx].userId,
+            name: _teachers[idx].name,
+            role: _teachers[idx].role,
+            contact: _teachers[idx].contact,
+            email: _teachers[idx].email,
+            description: _teachers[idx].description,
+            displayOrder: _teachers[idx].displayOrder,
+            pinHash: _teachers[idx].pinHash,
+            avatarUrl: _teachers[idx].avatarUrl,
+            avatarPresetColor: _teachers[idx].avatarPresetColor,
+            avatarPresetInitial: _teachers[idx].avatarPresetInitial,
+            avatarUseIcon: _teachers[idx].avatarUseIcon,
+          );
+          teachersNotifier.value = List.unmodifiable(_teachers);
+        }
+      } catch (e, st) {
+        print('[SUPA][ERROR] updateTeacher: $e\n$st');
+        rethrow;
+      }
+    }
+  }
+
+  Future<void> setMyPinHash(String pinHash, {String? emailFallback}) async {
+    try {
+      final client = Supabase.instance.client;
+      await client.rpc('set_my_pin', params: {
+        'p_pin_hash': pinHash,
+        'p_email': emailFallback,
+      });
+      // 메모리 즉시 반영: 현재 사용자 이메일/teacher 매칭
+      final email = client.auth.currentUser?.email ?? emailFallback;
+      if (email != null) {
+        final idx = _teachers.indexWhere((t) => t.email == email);
+        if (idx >= 0) {
+          final prev = _teachers[idx];
+          _teachers[idx] = Teacher(
+            id: prev.id,
+            userId: prev.userId,
+            name: prev.name,
+            role: prev.role,
+            contact: prev.contact,
+            email: prev.email,
+            description: prev.description,
+            displayOrder: prev.displayOrder,
+            pinHash: pinHash,
+            avatarUrl: prev.avatarUrl,
+            avatarPresetColor: prev.avatarPresetColor,
+            avatarPresetInitial: prev.avatarPresetInitial,
+            avatarUseIcon: prev.avatarUseIcon,
+          );
+          teachersNotifier.value = List.unmodifiable(_teachers);
+        }
+      }
+    } catch (e, st) {
+      print('[SUPA][ERROR] setMyPinHash: $e\n$st');
+      rethrow;
     }
   }
 
@@ -2093,9 +2216,51 @@ class DataManager {
   }
 
   void setTeachersOrder(List<Teacher> newOrder) {
-    _teachers = List<Teacher>.from(newOrder);
+    // 재정렬된 순서에 맞춰 displayOrder를 0부터 재계산하여 일관성 보장
+    final recalculated = <Teacher>[];
+    for (int i = 0; i < newOrder.length; i++) {
+      final t = newOrder[i];
+      recalculated.add(Teacher(
+        id: t.id,
+        userId: t.userId,
+        name: t.name,
+        role: t.role,
+        contact: t.contact,
+        email: t.email,
+        description: t.description,
+        displayOrder: i,
+        pinHash: t.pinHash,
+        avatarUrl: t.avatarUrl,
+        avatarPresetColor: t.avatarPresetColor,
+        avatarPresetInitial: t.avatarPresetInitial,
+        avatarUseIcon: t.avatarUseIcon,
+      ));
+    }
+    _teachers = List<Teacher>.from(recalculated);
     teachersNotifier.value = List.unmodifiable(_teachers);
-    saveTeachers();
+    saveTeachersOrderOnly();
+  }
+
+  Future<void> saveTeachersOrderOnly() async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      // id가 있는 항목만 display_order를 업서트. id가 null인 신규 항목은 전체 저장 경로에서 처리.
+      final rows = _teachers
+          .where((t) => (t.id ?? '').isNotEmpty)
+          .map((t) => {
+                'id': t.id,
+                'academy_id': academyId,
+                'display_order': t.displayOrder ?? 0,
+              })
+          .toList();
+      if (rows.isNotEmpty) {
+        await supa.from('teachers').upsert(rows, onConflict: 'id');
+      }
+    } catch (e, st) {
+      print('[SUPA][ERROR] saveTeachersOrderOnly: $e\n$st');
+      rethrow;
+    }
   }
 
   /// 학생별 수업블록(setId 기준) 개수 반환

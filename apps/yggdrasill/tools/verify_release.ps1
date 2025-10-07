@@ -48,6 +48,7 @@ if(-not $json){ Fail '릴리스를 찾지 못했습니다.' }
 $names = $json.assets.name
 if($names -notcontains 'mneme_flutter.msix'){ Fail 'MSIX 자산이 없습니다.' } else { Ok 'MSIX found' }
 if(($names | Where-Object { $_ -match 'Yggdrasill_portable_x64\.zip' }).Count -eq 0){ Fail 'x64 포터블 ZIP이 없습니다.' } else { Ok 'x64 ZIP found' }
+if(($names | Where-Object { $_ -match 'Yggdrasill_Installer\.zip' }).Count -eq 0){ Fail 'Installer ZIP이 없습니다.' } else { Ok 'Installer ZIP found' }
 
 # 3) 업데이트 후보 URL과 파일명 일치 여부(간단 점검)
 $urls = @(

@@ -17,7 +17,7 @@ cd apps\yggdrasill; \
 Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Yggdrasill_portable_x64.zip -Force; \
 $tag=((Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value); \
 gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d; \
-gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip --clobber; \
+gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip dist\Yggdrasill_Installer.zip --clobber; \
 gh release edit v$tag -R How-Know/Yggdrasill --draft=false; \
 cd tools; ./verify_release.ps1 -Tag v$tag
 ```

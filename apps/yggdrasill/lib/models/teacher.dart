@@ -13,6 +13,7 @@ String getTeacherRoleLabel(TeacherRole role) {
 
 class Teacher {
   final String? id;
+  final String? userId;
   final String name;
   final TeacherRole role;
   final String contact;
@@ -27,6 +28,7 @@ class Teacher {
 
   Teacher({
     this.id,
+    this.userId,
     required this.name,
     required this.role,
     required this.contact,

@@ -2630,11 +2630,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SizedBox(width: 16),
           SizedBox(
             width: 60,
-            child: Text(
-              getTeacherRoleLabel(t.role),
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
-              overflow: TextOverflow.ellipsis,
-            ),
+            child: Builder(builder: (ctx){
+              final uid = Supabase.instance.client.auth.currentUser?.id;
+              final isOwnerTeacher = (t.userId ?? '') == (uid ?? '');
+              final label = isOwnerTeacher ? '관리자' : getTeacherRoleLabel(t.role);
+              return Text(
+                label,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                overflow: TextOverflow.ellipsis,
+              );
+            }),
           ),
           SizedBox(width: 16),
           SizedBox(
@@ -2656,8 +2661,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: const Color(0xFF2A2A2A),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   onSelected: (value) async {
+                    final isOwnerTeacher = (Supabase.instance.client.auth.currentUser?.id ?? '') == (t.userId ?? '');
                     if (!_isOwner) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원장만 수정/삭제할 수 있습니다.')));
+                      return;
+                    }
+                    if (isOwnerTeacher && value == 'delete') {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원장 카드는 삭제할 수 없습니다.')));
                       return;
                     }
                     if (value == 'edit') {
@@ -2714,7 +2724,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('수정', style: TextStyle(color: Colors.white)),
                       ),
                     ),
-                    PopupMenuItem(
+                    if (!((Supabase.instance.client.auth.currentUser?.id ?? '') == (t.userId ?? ''))) PopupMenuItem(
                       value: 'delete',
                       child: ListTile(
                         leading: const Icon(Icons.delete_outline, color: Colors.red),
