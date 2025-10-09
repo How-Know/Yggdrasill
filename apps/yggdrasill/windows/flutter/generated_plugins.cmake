@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   desktop_drop
   file_selector_windows
+  flutter_secure_storage_windows
   screen_retriever
   url_launcher_windows
   webview_windows

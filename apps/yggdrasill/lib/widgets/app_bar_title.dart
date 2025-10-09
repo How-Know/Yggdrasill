@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/lib_secure_store.dart';
 import '../screens/settings/settings_screen.dart';
-import 'dart:io' show Platform, HttpServer, File;
+import 'dart:io' show Platform, HttpServer, File, InternetAddress;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
@@ -103,15 +105,6 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                       children: [
                         if (actions != null) ...actions!,
                         IconButton(
-                          icon: const Icon(Icons.apps, color: Colors.white70),
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('앱스 버튼 클릭됨')),
-                            );
-                          },
-                          tooltip: '앱스',
-                        ),
-                        IconButton(
                           icon: const Icon(Icons.settings, color: Colors.white70),
                           onPressed: onSettings ?? () {
                             Navigator.of(context).push(
@@ -142,62 +135,66 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                         ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: InkWell(
-                            onTap: () async {
-                              final client = _safeClient();
-                              final user = client?.auth.currentUser;
-                              if (user == null) {
-                                showDialog(
-                                  context: context,
-                                  barrierDismissible: true,
-                                  builder: (ctx) => const _LoginDialog(),
-                                );
-                              } else {
-                                // 프로필 상태를 미리 동기화하여 다이얼로그 최초 렌더링 시 깜빡임 방지
-                                try { await _ProfileStore.load(); } catch(_){ }
-                                await showDialog(
-                                  context: context,
-                                  barrierDismissible: true,
-                                  builder: (ctx) => const _AccountDialog(),
-                                );
-                              }
-                            },
-                            child: ValueListenableBuilder<Map<String, dynamic>>(
-                              valueListenable: _ProfileStore.profilesNotifier,
-                              builder: (ctx, map, _) {
-                                final user = _safeClient()?.auth.currentUser;
-                                final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
-                                return ValueListenableBuilder<List<Teacher>>(
-                                  valueListenable: DataManager.instance.teachersNotifier,
-                                  builder: (ctx, teachers, __) {
-                                    Teacher? t;
-                                    try { t = teachers.firstWhere((x)=>x.email==activeEmail); } catch(_){ t = null; }
-                                    final displayName = t?.name ?? ((activeEmail ?? '').split('@').first);
-                                    final googleUrl = (activeEmail == user?.email)
-                                        ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
-                                        : null;
-                                    ImageProvider? img;
-                                    if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
-                                      img = NetworkImage(t!.avatarUrl!);
-                                    } else if (googleUrl != null && googleUrl.isNotEmpty) {
-                                      img = NetworkImage(googleUrl);
-                                    }
-                                    final bg = _parseColor((t?.avatarPresetColor ?? '#2A2A2A'));
-                                    final label = (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
-                                        ? t!.avatarPresetInitial!
-                                        : _initials(displayName);
-                                    return CircleAvatar(
-                                      radius: 16,
-                                      backgroundColor: img == null ? bg : null,
-                                      backgroundImage: img,
-                                      child: (img == null && (t?.avatarUseIcon ?? false))
-                                          ? const Icon(Icons.person, color: Colors.white, size: 16)
-                                          : (img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null),
+                          child: StreamBuilder<AuthState>(
+                            stream: _safeClient()?.auth.onAuthStateChange,
+                            builder: (ctx, _) {
+                              return InkWell(
+                                onTap: () async {
+                                  final client = _safeClient();
+                                  final user = client?.auth.currentUser;
+                                  if (user == null) {
+                                    showDialog(
+                                      context: context,
+                                      barrierDismissible: true,
+                                      builder: (ctx) => const _LoginDialog(),
+                                    );
+                                  } else {
+                                    try { await _ProfileStore.load(); } catch(_){ }
+                                    await showDialog(
+                                      context: context,
+                                      barrierDismissible: true,
+                                      builder: (ctx) => const _AccountDialog(),
+                                    );
+                                  }
+                                },
+                                child: ValueListenableBuilder<Map<String, dynamic>>(
+                                  valueListenable: _ProfileStore.profilesNotifier,
+                                  builder: (ctx, map, _) {
+                                    final user = _safeClient()?.auth.currentUser;
+                                    final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
+                                    return ValueListenableBuilder<List<Teacher>>(
+                                      valueListenable: DataManager.instance.teachersNotifier,
+                                      builder: (ctx, teachers, __) {
+                                        Teacher? t;
+                                        try { t = teachers.firstWhere((x)=>x.email==activeEmail); } catch(_){ t = null; }
+                                        final displayName = t?.name ?? ((activeEmail ?? '').split('@').first);
+                                        final googleUrl = (activeEmail == user?.email)
+                                            ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
+                                            : null;
+                                        ImageProvider? img;
+                                        if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
+                                          img = NetworkImage(t!.avatarUrl!);
+                                        } else if (googleUrl != null && googleUrl.isNotEmpty) {
+                                          img = NetworkImage(googleUrl);
+                                        }
+                                        final bg = _parseColor((t?.avatarPresetColor ?? '#2A2A2A'));
+                                        final label = (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
+                                            ? t!.avatarPresetInitial!
+                                            : _initials(displayName);
+                                        return CircleAvatar(
+                                          radius: 16,
+                                          backgroundColor: img == null ? bg : null,
+                                          backgroundImage: img,
+                                          child: (img == null && (t?.avatarUseIcon ?? false))
+                                              ? const Icon(Icons.person, color: Colors.white, size: 16)
+                                              : (img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null),
+                                        );
+                                      },
                                     );
                                   },
-                                );
-                              },
-                            ),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ],
@@ -345,11 +342,18 @@ class _LoginDialogState extends State<_LoginDialog> {
                       }
                       if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
                         // 1) 데스크톱: 로컬 콜백 서버를 직접 띄우고 코드 교환 수행
-                        final server = await HttpServer.bind('127.0.0.1', 3000);
+                        // 포트 점유 에러 대비: 공유 바인드 옵션 + 사용 중이면 127.0.0.1:3001로 폴백
+                        HttpServer? server;
+                        try {
+                          server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3000, shared: true);
+                        } catch (_) {
+                          server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3001, shared: true);
+                        }
                         // 인증 시작 (브라우저로 이동)
                         await client.auth.signInWithOAuth(
                           OAuthProvider.google,
-                          redirectTo: 'http://localhost:3000',
+                          redirectTo: 'http://localhost:${server.port}',
+                          queryParams: {'prompt':'select_account'},
                         );
                         // 2) 첫 요청 수신 후 코드 교환
                         final req = await server.first;
@@ -358,10 +362,18 @@ class _LoginDialogState extends State<_LoginDialog> {
                         if (code != null && code.isNotEmpty) {
                           try {
                             await client.auth.exchangeCodeForSession(code);
-                            req.response
-                              ..statusCode = 200
-                              ..headers.set('Content-Type', 'text/html; charset=utf-8')
-                              ..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">로그인이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
+                            final ok = (client.auth.currentUser?.email ?? '').isNotEmpty;
+                            if (ok) {
+                              req.response
+                                ..statusCode = 200
+                                ..headers.set('Content-Type', 'text/html; charset=utf-8')
+                                ..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">로그인이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
+                            } else {
+                              req.response
+                                ..statusCode = 401
+                                ..headers.set('Content-Type', 'text/html; charset=utf-8')
+                                ..write('<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">로그인에 실패했습니다. 이 창을 닫고 다시 시도해 주세요.</body></html>');
+                            }
                           } catch (e) {
                             req.response
                               ..statusCode = 500
@@ -385,6 +397,7 @@ class _LoginDialogState extends State<_LoginDialog> {
                         await client.auth.signInWithOAuth(
                           OAuthProvider.google,
                           redirectTo: redirectUrl,
+                          queryParams: {'prompt':'select_account'},
                         );
                         if (mounted) Navigator.of(context).pop();
                       }
@@ -432,18 +445,40 @@ class _AccountDialogState extends State<_AccountDialog> {
   Map<String, dynamic> _profileMap = const {};
   String? _activeEmail;
   String? _ownerUserId;
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void initState() {
     super.initState();
     _reload();
     _loadOwner();
+    try {
+      _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((authState) async {
+        if (!mounted) return;
+        // 로그인 성공 시: 현재 사용자 이메일을 활성 프로필로 강제 설정(teachers에 존재할 때)
+        if (authState.event == AuthChangeEvent.signedIn || authState.event == AuthChangeEvent.tokenRefreshed) {
+          final email = Supabase.instance.client.auth.currentUser?.email;
+          if (email != null && email.isNotEmpty) {
+            try { await DataManager.instance.loadTeachers(); } catch(_) {}
+            final teachers = DataManager.instance.teachersNotifier.value;
+            final has = teachers.any((t)=> t.email.toLowerCase()==email.toLowerCase());
+            if (has) {
+              final map = _ProfileStore.profilesNotifier.value;
+              await _ProfileStore.setActive(email, map);
+              await _reload();
+            }
+          }
+        }
+        setState(() {});
+      });
+    } catch (_) {}
     DataManager.instance.teachersNotifier.addListener(_reload);
     _ProfileStore.profilesNotifier.addListener(_reload);
   }
 
   @override
   void dispose() {
+    try { _authSub?.cancel(); } catch (_) {}
     DataManager.instance.teachersNotifier.removeListener(_reload);
     _ProfileStore.profilesNotifier.removeListener(_reload);
     super.dispose();
@@ -736,8 +771,7 @@ class _ProfilesTabState extends State<_ProfilesTab> {
   }
 
   Future<void> _setActive(String email) async {
-    final ok = await showDialog<bool>(context: context, barrierDismissible: true, builder: (ctx) => _PinDialog(email: email, profileMap: _profileMap));
-    if (ok != true) return;
+    // PIN 검증은 상위 전환 다이얼로그 로직에서 처리됨. 여기서는 활성화만 수행.
     await _ProfileStore.setActive(email, _profileMap);
     await _reload();
   }
@@ -1157,17 +1191,207 @@ class _SwitchProfileDialog extends StatelessWidget{
           title: Text(t.name, style: const TextStyle(color: Colors.white)),
           subtitle: Text(t.email, style: const TextStyle(color: Colors.white70)),
           onTap: () async {
-            // 최신 서버 값을 우선 반영: pin_hash 유무에 따라 다이얼로그 모드가 달라짐
+            final client = _safeClient();
+            final current = client?.auth.currentUser;
+            // 1) 최초 전환: 선택 프로필의 이메일과 현재 로그인 이메일이 다르면 구글 로그인 유도
+            if ((current?.email ?? '').toLowerCase() != t.email.toLowerCase()) {
+              // memberships(userId)가 이미 연결된 프로필: rt가 없으면 1회 OAuth 시딩 후, PIN만으로 전환
+              if ((t.userId ?? '').isNotEmpty) {
+                try {
+                  final aid = await TenantService.instance.getActiveAcademyId();
+                  final rtSeed = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
+                  if ((rtSeed ?? '').isEmpty) {
+                    final go = await showDialog<bool>(context: context, builder: (c)=> AlertDialog(
+                      backgroundColor: const Color(0xFF1F1F1F),
+                      title: const Text('첫 로그인 필요', style: TextStyle(color: Colors.white)),
+                      content: Text('이 프로필은 최초 1회 Google 로그인으로 등록이 필요합니다. 계속하시겠습니까?\n(${t.email})', style: const TextStyle(color: Colors.white70)),
+                      actions: [TextButton(onPressed: ()=>Navigator.pop(c,false), child: const Text('취소')), FilledButton(onPressed: ()=>Navigator.pop(c,true), child: const Text('계속'))],
+                    ));
+                    if (go == true) {
+                      if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+                        HttpServer? server;
+                        try { server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3000, shared: true); } catch (_) { server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3001, shared: true); }
+                        await client!.auth.signInWithOAuth(
+                          OAuthProvider.google,
+                          redirectTo: 'http://127.0.0.1:${server.port}',
+                          queryParams: {'prompt':'select_account', 'login_hint': t.email},
+                        );
+                        final req = await server.first; final uri = req.uri; final code = uri.queryParameters['code'];
+                        if (code != null && code.isNotEmpty) {
+                          try {
+                            await client.auth.exchangeCodeForSession(code);
+                            final signedEmail = client.auth.currentUser?.email?.toLowerCase();
+                            if (signedEmail == t.email.toLowerCase()) {
+                              final rtNew = client.auth.currentSession?.refreshToken;
+                              if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
+                              req.response..statusCode=200..headers.set('Content-Type','text/html; charset=utf-8')..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">등록이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
+                            } else {
+                              req.response..statusCode=401..headers.set('Content-Type','text/html; charset=utf-8')..write('<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">선택한 이메일과 로그인 이메일이 다릅니다.</body></html>');
+                            }
+                          } catch (_) { req.response..statusCode=500..headers.set('Content-Type','text/plain; charset=utf-8')..write('세션 교환 실패'); }
+                        } else { req.response..statusCode=400..headers.set('Content-Type','text/plain; charset=utf-8')..write('유효하지 않은 콜백'); }
+                        await req.response.close(); await server.close(force: true);
+                      } else {
+                        final redirectUrl = (Platform.isAndroid || Platform.isIOS) ? 'yggdrasill://callback' : null;
+                        await client!.auth.signInWithOAuth(
+                          OAuthProvider.google,
+                          redirectTo: redirectUrl,
+                          queryParams: {'prompt':'select_account','login_hint': t.email},
+                        );
+                        final signedEmail = client.auth.currentUser?.email?.toLowerCase();
+                        if ((signedEmail ?? '') == t.email.toLowerCase()) {
+                          final rtNew = client.auth.currentSession?.refreshToken;
+                          if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
+                        } else {
+                          try { await client.auth.signOut(); } catch(_){}
+                          if (context.mounted) { await showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('로그인 실패', style: TextStyle(color: Colors.white)), content: const Text('선택한 이메일로 로그인해 주세요.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))])); }
+                          return;
+                        }
+                      }
+                    } else { return; }
+                  }
+                  // PIN만으로 전환
+                  final okPin = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+                  if (okPin==true && context.mounted) {
+                    final rtNow = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
+                    if ((rtNow ?? '').isNotEmpty) { await Supabase.instance.client.auth.setSession(rtNow!); }
+                    await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
+                    try { await DataManager.instance.reloadAllData(); } catch(_){ }
+                    Navigator.pop(context);
+                  }
+                  return;
+                } catch (_) { return; }
+              }
+              try {
+                if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+                  HttpServer? server;
+                  try {
+                    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3000, shared: true);
+                  } catch (_) {
+                    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3001, shared: true);
+                  }
+                  await client!.auth.signInWithOAuth(
+                    OAuthProvider.google,
+                    redirectTo: 'http://127.0.0.1:${server.port}',
+                    queryParams: {'prompt':'select_account', 'login_hint': t.email},
+                  );
+                  final req = await server.first;
+                  final uri = req.uri;
+                  final code = uri.queryParameters['code'];
+                  if (code != null && code.isNotEmpty) {
+                    try {
+                      await client.auth.exchangeCodeForSession(code);
+                      final signedEmail = (client.auth.currentUser?.email ?? '').toLowerCase();
+                      final expectedEmail = t.email.toLowerCase();
+                      if (signedEmail != expectedEmail) {
+                        try { await client.auth.signOut(); } catch (_) {}
+                        req.response
+                          ..statusCode = 401
+                          ..headers.set('Content-Type', 'text/html; charset=utf-8')
+                          ..write('<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">선택한 프로필의 이메일과 로그인한 이메일이 다릅니다. 이 창을 닫고 올바른 계정으로 다시 로그인해 주세요.</body></html>');
+                      } else {
+                        req.response
+                          ..statusCode = 200
+                          ..headers.set('Content-Type', 'text/html; charset=utf-8')
+                          ..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">로그인이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
+                      }
+                    } catch (e) {
+                      req.response
+                        ..statusCode = 500
+                        ..headers.set('Content-Type', 'text/plain; charset=utf-8')
+                        ..write('세션 교환 실패: $e');
+                    }
+                  } else {
+                    req.response
+                      ..statusCode = 400
+                      ..headers.set('Content-Type', 'text/plain; charset=utf-8')
+                      ..write('유효하지 않은 콜백');
+                  }
+                  await req.response.close();
+                  await server.close(force: true);
+                } else {
+                  final redirectUrl = (Platform.isAndroid || Platform.isIOS)
+                      ? 'yggdrasill://callback'
+                      : null;
+                  await client!.auth.signInWithOAuth(
+                    OAuthProvider.google,
+                    redirectTo: redirectUrl,
+                    queryParams: {'prompt':'select_account', 'login_hint': t.email},
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('OAuth 시작 실패: $e')));
+                }
+                return;
+              }
+              // 로그인 이후 이메일 일치 재검증
+              final signedInEmail = client!.auth.currentUser?.email?.toLowerCase();
+              if ((signedInEmail ?? '') != t.email.toLowerCase()) {
+                try { await client.auth.signOut(); } catch(_) {}
+                if (context.mounted) {
+                  Navigator.pop(context); // 계정 다이얼로그 닫기
+                  await showDialog(context: context, builder: (c)=> AlertDialog(
+                    backgroundColor: const Color(0xFF1F1F1F),
+                    title: const Text('로그인 실패', style: TextStyle(color: Colors.white)),
+                    content: const Text('선택한 프로필과 다른 이메일입니다.\n기존 프로필에서 로그아웃됩니다.', style: TextStyle(color: Colors.white70)),
+                    actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
+                  ));
+                }
+                return;
+              }
+              // 2) 가입/연결 보장: 선택 학원 기준으로 membership/teacher 연결
+              try {
+                final aid = await TenantService.instance.getActiveAcademyId();
+                await client.rpc('join_academy_by_email', params: {'p_email': t.email, 'p_academy_id': aid});
+                // 최초 로그인 성공: refresh_token 저장
+                final rt = client.auth.currentSession?.refreshToken;
+                if ((rt ?? '').isNotEmpty && aid != null) {
+                  await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rt!);
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('연결 실패: $e')));
+                }
+                return;
+              }
+              // 3) 데이터 재로딩 → 곧바로 PIN 설정 다이얼로그
+              try { await DataManager.instance.reloadAllData(); } catch (_) {}
+              try { await DataManager.instance.loadTeachers(); } catch (_) {}
+              // 이미 PIN이 있는 경우 바로 전환, 없으면 설정 다이얼로그
+              bool proceed = true;
+              try{
+                final tt = DataManager.instance.teachersNotifier.value.firstWhere((x)=>x.email.toLowerCase()==t.email.toLowerCase());
+                if ((tt.pinHash ?? '').isEmpty) {
+                  final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+                  proceed = ok==true;
+                }
+              }catch(_){ proceed = false; }
+              if (!proceed) return;
+              if(context.mounted){
+                // 저장된 refresh_token이 있으면 세션 전환
+                try {
+                  final aid = await TenantService.instance.getActiveAcademyId();
+                  if (aid != null) {
+                    final rt = await SecureStore.instance.loadRefreshToken(academyId: aid, email: t.email);
+                    if ((rt ?? '').isNotEmpty) {
+                      await Supabase.instance.client.auth.setSession(rt!);
+                    }
+                  }
+                } catch (_) {}
+                await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
+                try { await DataManager.instance.reloadAllData(); } catch(_){ }
+                Navigator.pop(context);
+                return; // 공통 PIN 블록 실행 방지
+              }
+            }
+            // 4) (이미 로그인 일치 상태였던 경우) PIN 검증만으로 전환
             try { await DataManager.instance.loadTeachers(); } catch (_) {}
-            final res = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
-            if(res==true && context.mounted){
+            final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+            if(ok==true && context.mounted){
               await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
-              // 즉시 헤더 아바타 리프레시를 위해 강제 재로딩
               try { await DataManager.instance.reloadAllData(); } catch(_){ }
               Navigator.pop(context);
-            }
-            if(res==false && context.mounted){
-              showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('PIN 오류', style: TextStyle(color: Colors.white)), content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))]));
             }
           },
         );

@@ -2143,7 +2143,7 @@ class DataManager {
           'avatar_use_icon': updated.avatarUseIcon ?? prev.avatarUseIcon,
         }..removeWhere((k, v) => v == null);
         if (id != null && id.isNotEmpty) {
-          await supa.from('teachers').update(row)..eq('id', id);
+          await supa.from('teachers').update(row).eq('id', id);
         } else {
           final inserted = await supa.from('teachers').insert(row).select('id').single();
           final newId = inserted['id'] as String?;
