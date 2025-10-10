@@ -446,6 +446,7 @@ class _AccountDialogState extends State<_AccountDialog> {
   String? _activeEmail;
   String? _ownerUserId;
   StreamSubscription<AuthState>? _authSub;
+  bool _ownerPinPrompted = false;
 
   @override
   void initState() {
@@ -455,10 +456,11 @@ class _AccountDialogState extends State<_AccountDialog> {
     try {
       _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((authState) async {
         if (!mounted) return;
-        // 로그인 성공 시: 현재 사용자 이메일을 활성 프로필로 강제 설정(teachers에 존재할 때)
-        if (authState.event == AuthChangeEvent.signedIn || authState.event == AuthChangeEvent.tokenRefreshed) {
+        // 로그인 직후 1회만 활성 프로필 보정(이미 activeEmail이면 건드리지 않음)
+        if (authState.event == AuthChangeEvent.signedIn) {
           final email = Supabase.instance.client.auth.currentUser?.email;
-          if (email != null && email.isNotEmpty) {
+          final currentActive = _ProfileStore.profilesNotifier.value['activeEmail'] as String?;
+          if ((currentActive == null || currentActive.isEmpty) && email != null && email.isNotEmpty) {
             try { await DataManager.instance.loadTeachers(); } catch(_) {}
             final teachers = DataManager.instance.teachersNotifier.value;
             final has = teachers.any((t)=> t.email.toLowerCase()==email.toLowerCase());
@@ -468,6 +470,59 @@ class _AccountDialogState extends State<_AccountDialog> {
               await _reload();
             }
           }
+          // 원장 최초 로그인 시 PIN 미설정이면 강제 설정 (다이얼로그 열려있는 동안 1회)
+          try {
+            if (!_ownerPinPrompted && mounted) {
+              final client = _safeClient();
+              final uid = client?.auth.currentUser?.id;
+              final signedEmail = client?.auth.currentUser?.email;
+              if (uid != null && signedEmail != null && signedEmail.isNotEmpty) {
+                // owner_user_id 확보(없으면 로드)
+                String? ownerId = _ownerUserId;
+                if (ownerId == null || ownerId.isEmpty) {
+                  try {
+                    final aid = await TenantService.instance.getActiveAcademyId();
+                    if (aid != null) {
+                      final resp = await client!.from('academies').select('owner_user_id').eq('id', aid).limit(1);
+                      final list = resp is List ? resp : null;
+                      if (list != null && list.isNotEmpty) { ownerId = list.first['owner_user_id'] as String?; }
+                    }
+                  } catch (_) {}
+                }
+                // 현재 로그인 사용자가 오너인지 확인
+                if (ownerId != null && ownerId.isNotEmpty && ownerId == uid) {
+                  try { await DataManager.instance.loadTeachers(); } catch(_) {}
+                  final teachers = DataManager.instance.teachersNotifier.value;
+                  try {
+                    final tt = teachers.firstWhere((x)=> x.email.toLowerCase() == signedEmail.toLowerCase());
+                    final noPin = (tt.pinHash ?? '').isEmpty;
+                    if (noPin) {
+                      _ownerPinPrompted = true;
+                      // PIN 설정 다이얼로그 강제
+                      final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: signedEmail, profileMap: _profileMap));
+                      if (ok != true) {
+                        // 사용자가 취소한 경우에도 중복 노출 방지
+                        _ownerPinPrompted = true;
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        // 토큰 회전 시 refresh_token을 보안 저장소에 최신화(현재 auth 이메일 기준)
+        if (authState.event == AuthChangeEvent.tokenRefreshed) {
+          try {
+            final aid = await TenantService.instance.getActiveAcademyId();
+            final email = Supabase.instance.client.auth.currentUser?.email;
+            final rt = Supabase.instance.client.auth.currentSession?.refreshToken;
+            if (aid != null && email != null && (rt ?? '').isNotEmpty) {
+              await SecureStore.instance.saveRefreshToken(academyId: aid, email: email, refreshToken: rt!);
+            }
+          } catch (_) {}
+          // 아바타 URL 서버 반영(한 번에 보정)
+          try { await DataManager.instance.updateTeacherAvatarFromCurrentAuth(); } catch (_) {}
         }
         setState(() {});
       });
@@ -550,7 +605,8 @@ class _AccountDialogState extends State<_AccountDialog> {
     final teacherPresetColor = (teacher?.avatarPresetColor as String?) ?? '';
     final teacherPresetInitial = (teacher?.avatarPresetInitial as String?) ?? '';
     final teacherUseIcon = (teacher?.avatarUseIcon as bool?) ?? false;
-    final isOwner = (teacher?.userId ?? '') == (user?.id ?? '') || (teacher?.userId ?? '') == (_ownerUserId ?? '');
+                // 오너 판단: 학원 owner_user_id == teacher.user_id
+                final isOwner = (_ownerUserId != null && _ownerUserId!.isNotEmpty) && ((teacher?.userId ?? '') == _ownerUserId);
     final displayName = teacher?.name ?? (email.split('@').first);
 
     Widget avatarWidget() {
@@ -745,11 +801,13 @@ class _ProfilesTabState extends State<_ProfilesTab> {
   List<Teacher> _teachers = const [];
   Map<String, dynamic> _profileMap = const {};
   String? _activeEmail;
+  String? _ownerUserId;
 
   @override
   void initState() {
     super.initState();
     _reload();
+    _loadOwner();
     DataManager.instance.teachersNotifier.addListener(_reload);
   }
 
@@ -768,6 +826,24 @@ class _ProfilesTabState extends State<_ProfilesTab> {
       _profileMap = map['profiles'] as Map<String, dynamic>? ?? {};
       _activeEmail = map['activeEmail'] as String?;
     });
+  }
+
+  Future<void> _loadOwner() async {
+    try {
+      final aid = await TenantService.instance.getActiveAcademyId();
+      if (aid == null) return;
+      final client = _safeClient();
+      if (client == null) return;
+      final resp = await client
+          .from('academies')
+          .select('owner_user_id')
+          .eq('id', aid)
+          .limit(1);
+      final list = resp is List ? resp : null;
+      if (list != null && list.isNotEmpty) {
+        setState(() { _ownerUserId = list.first['owner_user_id'] as String?; });
+      }
+    } catch (_) {}
   }
 
   Future<void> _setActive(String email) async {
@@ -803,7 +879,9 @@ class _ProfilesTabState extends State<_ProfilesTab> {
                 final info = (_profileMap[t.email] as Map?) ?? {};
                 final avatar = (info['avatar'] as String?) ?? '';
                 final isActive = _activeEmail == t.email;
-                final isOwner = _safeClient()?.auth.currentUser?.email == t.email;
+                // 오너 판단: 학원 owner_user_id == teacher.user_id
+                final currentOwnerId = _ownerUserId;
+                final isOwner = (currentOwnerId != null && currentOwnerId.isNotEmpty && (t.userId ?? '') == currentOwnerId);
                 return ListTile(
                   leading: CircleAvatar(
                     backgroundColor: const Color(0xFF2A2A2A),
@@ -1253,11 +1331,70 @@ class _SwitchProfileDialog extends StatelessWidget{
                   // PIN만으로 전환
                   final okPin = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
                   if (okPin==true && context.mounted) {
-                    final rtNow = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
-                    if ((rtNow ?? '').isNotEmpty) { await Supabase.instance.client.auth.setSession(rtNow!); }
+                    try {
+                      final rtNow = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
+                      if ((rtNow ?? '').isNotEmpty) {
+                        await Supabase.instance.client.auth.setSession(rtNow!);
+                      } else {
+                        // rt 없음: 시딩 유도
+                        throw Exception('No refresh token');
+                      }
+                    } catch (_) {
+                      // 세션 전환 실패 시 1회 OAuth 시딩으로 복구
+                      try {
+                        if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+                          HttpServer? server;
+                          try { server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3000, shared: true); } catch (_) { server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3001, shared: true); }
+                          await client!.auth.signInWithOAuth(
+                            OAuthProvider.google,
+                            redirectTo: 'http://127.0.0.1:${server.port}',
+                            queryParams: {'prompt':'select_account', 'login_hint': t.email},
+                          );
+                          final req = await server.first; final uri = req.uri; final code = uri.queryParameters['code'];
+                          if (code != null && code.isNotEmpty) {
+                            try {
+                              await client.auth.exchangeCodeForSession(code);
+                              final signedEmail = client.auth.currentUser?.email?.toLowerCase();
+                              if (signedEmail == t.email.toLowerCase()) {
+                                final rtNew = client.auth.currentSession?.refreshToken;
+                                if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
+                                req.response..statusCode=200..headers.set('Content-Type','text/html; charset=utf-8')..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">등록이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
+                              } else {
+                                req.response..statusCode=401..headers.set('Content-Type','text/html; charset=utf-8')..write('<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">선택한 이메일과 로그인 이메일이 다릅니다.</body></html>');
+                                return;
+                              }
+                            } catch (_) { req.response..statusCode=500..headers.set('Content-Type','text/plain; charset=utf-8')..write('세션 교환 실패'); return; }
+                          } else { req.response..statusCode=400..headers.set('Content-Type','text/plain; charset=utf-8')..write('유효하지 않은 콜백'); return; }
+                          await req.response.close(); await server.close(force: true);
+                        } else {
+                          final redirectUrl = (Platform.isAndroid || Platform.isIOS) ? 'yggdrasill://callback' : null;
+                          await client!.auth.signInWithOAuth(
+                            OAuthProvider.google,
+                            redirectTo: redirectUrl,
+                            queryParams: {'prompt':'select_account','login_hint': t.email},
+                          );
+                          final signedEmail = client.auth.currentUser?.email?.toLowerCase();
+                          if ((signedEmail ?? '') == t.email.toLowerCase()) {
+                            final rtNew = client.auth.currentSession?.refreshToken;
+                            if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
+                          } else {
+                            try { await client.auth.signOut(); } catch(_){ }
+                            if (context.mounted) { await showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('로그인 실패', style: TextStyle(color: Colors.white)), content: const Text('선택한 이메일로 로그인해 주세요.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))])); }
+                            return;
+                          }
+                        }
+                      } catch (_) { return; }
+                    }
                     await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
                     try { await DataManager.instance.reloadAllData(); } catch(_){ }
                     Navigator.pop(context);
+                  } else if (okPin==false && context.mounted) {
+                    await showDialog(context: context, builder: (c)=> AlertDialog(
+                      backgroundColor: const Color(0xFF1F1F1F),
+                      title: const Text('PIN 오류', style: TextStyle(color: Colors.white)),
+                      content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)),
+                      actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
+                    ));
                   }
                   return;
                 } catch (_) { return; }
@@ -1389,9 +1526,25 @@ class _SwitchProfileDialog extends StatelessWidget{
             try { await DataManager.instance.loadTeachers(); } catch (_) {}
             final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
             if(ok==true && context.mounted){
+              // 세션 전환 시도: 이미 시딩된 rt가 있으면 적용
+              try {
+                final aid = await TenantService.instance.getActiveAcademyId();
+                if (aid != null) {
+                  final rtNow = await SecureStore.instance.loadRefreshToken(academyId: aid, email: t.email);
+                  if ((rtNow ?? '').isNotEmpty) { await Supabase.instance.client.auth.setSession(rtNow!); }
+                }
+              } catch (_) {}
               await _ProfileStore.setActive(t.email, {'profiles': profileMap, 'activeEmail': t.email});
               try { await DataManager.instance.reloadAllData(); } catch(_){ }
               Navigator.pop(context);
+            } else if (ok==false && context.mounted) {
+              // 잘못된 PIN 안내
+              await showDialog(context: context, builder: (c)=> AlertDialog(
+                backgroundColor: const Color(0xFF1F1F1F),
+                title: const Text('PIN 오류', style: TextStyle(color: Colors.white)),
+                content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)),
+                actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
+              ));
             }
           },
         );

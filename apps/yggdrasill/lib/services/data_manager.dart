@@ -2171,6 +2171,64 @@ class DataManager {
     }
   }
 
+  // 현재 인증된 사용자의 구글 아바타 URL을 해당 이메일의 teacher.avatar_url로 저장
+  Future<void> updateTeacherAvatarFromCurrentAuth() async {
+    try {
+      final client = Supabase.instance.client;
+      final email = client.auth.currentUser?.email;
+      if (email == null || email.isEmpty) return;
+      await updateTeacherAvatarByEmail(email);
+    } catch (_) {}
+  }
+
+  // 지정 이메일의 teacher.avatar_url을 현재 인증 세션의 구글 아바타로 업데이트
+  Future<void> updateTeacherAvatarByEmail(String email) async {
+    try {
+      final client = Supabase.instance.client;
+      final meta = client.auth.currentUser?.userMetadata ?? {};
+      String? url;
+      try { url = (meta['avatar_url'] as String?); } catch (_) {}
+      url ??= (meta['picture'] as String?);
+      if ((url ?? '').isEmpty) return;
+
+      // 로컬에서 해당 교사 찾기
+      int idx = -1;
+      for (int i = 0; i < _teachers.length; i++) {
+        if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) { idx = i; break; }
+      }
+      if (idx < 0) {
+        try { await loadTeachers(); } catch (_) {}
+        for (int i = 0; i < _teachers.length; i++) {
+          if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) { idx = i; break; }
+        }
+        if (idx < 0) return;
+      }
+      final id = _teachers[idx].id;
+      if (id == null || id.isEmpty) return;
+
+      // 서버 업데이트
+      await Supabase.instance.client.from('teachers').update({'avatar_url': url}).eq('id', id);
+      // 로컬 반영
+      final prev = _teachers[idx];
+      _teachers[idx] = Teacher(
+        id: prev.id,
+        userId: prev.userId,
+        name: prev.name,
+        role: prev.role,
+        contact: prev.contact,
+        email: prev.email,
+        description: prev.description,
+        displayOrder: prev.displayOrder,
+        pinHash: prev.pinHash,
+        avatarUrl: url,
+        avatarPresetColor: prev.avatarPresetColor,
+        avatarPresetInitial: prev.avatarPresetInitial,
+        avatarUseIcon: prev.avatarUseIcon,
+      );
+      teachersNotifier.value = List.unmodifiable(_teachers);
+    } catch (_) {}
+  }
+
   Future<void> setMyPinHash(String pinHash, {String? emailFallback}) async {
     try {
       final client = Supabase.instance.client;
