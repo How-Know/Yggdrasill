@@ -28,6 +28,7 @@ import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
+import 'class_content_events_dialog.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -472,7 +473,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return const LearningScreen();
       case 4:
         return const ResourcesScreen();
-        case 5:
+      case 5:
           return const ClassContentScreen();
       default:
         return const SizedBox();
@@ -653,13 +654,26 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         bottom: 0,
                                         child: Tooltip(
                                           message: '수업 내용 관리',
-                                          child: IconButton(
-                                            icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
-                                            padding: EdgeInsets.zero,
-                                            onPressed: () {
-                                              setState(() { _selectedIndex = 5; });
-                                              _rotationAnimation.reverse();
-                                            },
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                icon: const Icon(Icons.timeline, color: Colors.white70, size: 18),
+                                                padding: EdgeInsets.zero,
+                                                onPressed: () async {
+                                                  await showDialog(context: context, builder: (_) => const ClassContentEventsDialog());
+                                                },
+                                              ),
+                                              const SizedBox(width: 6),
+                                              IconButton(
+                                                icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                                                padding: EdgeInsets.zero,
+                                                onPressed: () {
+                                                  setState(() { _selectedIndex = 5; });
+                                                  _rotationAnimation.reverse();
+                                                },
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),

@@ -46,6 +46,8 @@ class HomeworkStore {
 
   final Map<String, List<HomeworkItem>> _byStudentId = {};
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  // 확인 단계 이후, 다음 '대기' 진입 시 자동 완료 처리할 항목 ID들
+  final Set<String> _autoCompleteOnNextWaiting = <String>{};
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
@@ -151,6 +153,8 @@ class HomeworkStore {
             } else {
               list[idx] = it;
             }
+            // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
+            _maybeAutoCompleteOnWaiting(sid, it);
             _bump();
           },
         )
@@ -186,6 +190,8 @@ class HomeworkStore {
             final idx = list.indexWhere((e) => e.id == updated.id);
             if (idx != -1) {
               list[idx] = updated;
+              // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
+              _maybeAutoCompleteOnWaiting(sid, updated);
               _bump();
             }
           },
@@ -417,6 +423,18 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][wait][ERROR] ' + e.toString());
     }
+  }
+
+  void _maybeAutoCompleteOnWaiting(String studentId, HomeworkItem item) {
+    if (item.phase == 1 /* waiting */ && _autoCompleteOnNextWaiting.remove(item.id)) {
+      // 확인 → 대기로 전이된 첫 타이밍에 자동 완료
+      unawaited(complete(studentId, item.id));
+    }
+  }
+
+  // 제출 상태에서 더블클릭 시, 다음 '대기' 진입에 자동 완료되도록 표시
+  void markAutoCompleteOnNextWaiting(String id) {
+    _autoCompleteOnNextWaiting.add(id);
   }
 
   HomeworkItem continueAdd(String studentId, String sourceId, {required String body}) {
