@@ -13,10 +13,14 @@ class HomeworkItem {
   String body;
   Color color;
   HomeworkStatus status;
+  int phase; // 0: 종료, 1: 대기, 2: 수행, 3: 제출, 4: 확인
   int accumulatedMs; // 누적 시간(ms)
   DateTime? runStart; // 진행 중이면 시작 시각
   DateTime? completedAt;
   DateTime? firstStartedAt; // 처음 시작한 시간
+  DateTime? submittedAt;
+  DateTime? confirmedAt;
+  DateTime? waitingAt;
   int version; // OCC 버전
   HomeworkItem({
     required this.id,
@@ -24,10 +28,14 @@ class HomeworkItem {
     required this.body,
     this.color = const Color(0xFF1976D2),
     this.status = HomeworkStatus.inProgress,
+    this.phase = 1,
     this.accumulatedMs = 0,
     this.runStart,
     this.completedAt,
     this.firstStartedAt,
+    this.submittedAt,
+    this.confirmedAt,
+    this.waitingAt,
     this.version = 1,
   });
 }
@@ -54,7 +62,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,status,accumulated_ms,run_start,completed_at,first_started_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       _byStudentId.clear();
@@ -80,10 +88,14 @@ class HomeworkStore {
           body: (r['body'] as String?) ?? '',
           color: Color(parseInt(r['color']) ?? 0xFF1976D2),
           status: HomeworkStatus.values[((r['status'] as int?) ?? 0).clamp(0, HomeworkStatus.values.length - 1)],
+          phase: (parseInt(r['phase']) ?? 1).clamp(0, 4),
           accumulatedMs: (r['accumulated_ms'] as int?) ?? (r['accumulated_ms'] is num ? (r['accumulated_ms'] as num).toInt() : 0),
           runStart: parseTsOpt(r['run_start']),
           completedAt: parseTsOpt(r['completed_at']),
           firstStartedAt: parseTsOpt(r['first_started_at']),
+          submittedAt: parseTsOpt(r['submitted_at']),
+          confirmedAt: parseTsOpt(r['confirmed_at']),
+          waitingAt: parseTsOpt(r['waiting_at']),
           version: parseInt(r['version']) ?? 1,
         );
         _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]).add(item);
@@ -120,10 +132,14 @@ class HomeworkStore {
                 body: (r['body'] as String?) ?? '',
                 color: Color(_asInt(r['color'])),
                 status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+                phase: (_asInt(r['phase'])).clamp(0, 4),
                 accumulatedMs: _asInt(r['accumulated_ms']),
                 runStart: _parse(r['run_start']),
                 completedAt: _parse(r['completed_at']),
                 firstStartedAt: _parse(r['first_started_at']),
+                submittedAt: _parse(r['submitted_at']),
+                confirmedAt: _parse(r['confirmed_at']),
+                waitingAt: _parse(r['waiting_at']),
                 version: _asInt(r['version']),
               );
             }
@@ -156,10 +172,14 @@ class HomeworkStore {
               body: (m['body'] as String?) ?? '',
               color: Color(_asInt(m['color'])),
               status: HomeworkStatus.values[(_asInt(m['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+              phase: (_asInt(m['phase'])).clamp(0, 4),
               accumulatedMs: _asInt(m['accumulated_ms']),
               runStart: _parse(m['run_start']),
               completedAt: _parse(m['completed_at']),
               firstStartedAt: _parse(m['first_started_at']),
+              submittedAt: _parse(m['submitted_at']),
+              confirmedAt: _parse(m['confirmed_at']),
+              waitingAt: _parse(m['waiting_at']),
               version: _asInt(m['version']),
             );
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
@@ -205,10 +225,14 @@ class HomeworkStore {
         'body': it.body,
         'color': it.color.value,
         'status': it.status.index,
+        'phase': it.phase,
         'accumulated_ms': it.accumulatedMs,
         'run_start': it.runStart?.toUtc().toIso8601String(),
         'completed_at': it.completedAt?.toUtc().toIso8601String(),
         'first_started_at': it.firstStartedAt?.toUtc().toIso8601String(),
+        'submitted_at': it.submittedAt?.toUtc().toIso8601String(),
+        'confirmed_at': it.confirmedAt?.toUtc().toIso8601String(),
+        'waiting_at': it.waitingAt?.toUtc().toIso8601String(),
       };
       // OCC update: 0행이면 예외 없이 빈 배열을 받도록 select() (list)로 처리
       final updatedRows = await supa
@@ -340,6 +364,61 @@ class HomeworkStore {
     } catch (_) {}
   }
 
+  Future<void> submit(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_submit', params: {
+        'p_item_id': id,
+        'p_academy_id': academyId,
+      });
+      // 비동기 보정: 리얼타임 지연 시 강제 재로드
+      unawaited(_reloadStudent(studentId));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][submit][ERROR] ' + e.toString());
+    }
+  }
+
+  Future<void> confirm(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_confirm', params: {
+        'p_item_id': id,
+        'p_academy_id': academyId,
+      });
+      unawaited(_reloadStudent(studentId));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][confirm][ERROR] ' + e.toString());
+    }
+  }
+
+  Future<void> waitPhase(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx == -1) return;
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('homework_wait', params: {
+        'p_item_id': id,
+        'p_academy_id': academyId,
+      });
+      unawaited(_reloadStudent(studentId));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][wait][ERROR] ' + e.toString());
+    }
+  }
+
   HomeworkItem continueAdd(String studentId, String sourceId, {required String body}) {
     final list = _byStudentId[studentId];
     if (list == null) return add(studentId, title: '과제', body: body);
@@ -386,7 +465,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,status,accumulated_ms,run_start,completed_at,first_started_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('updated_at', ascending: false);
@@ -400,10 +479,14 @@ class HomeworkStore {
           body: (r['body'] as String?) ?? '',
           color: Color(_asInt(r['color'])),
           status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+          phase: (_asInt(r['phase'])).clamp(0, 4),
           accumulatedMs: _asInt(r['accumulated_ms']),
           runStart: _parse(r['run_start']),
           completedAt: _parse(r['completed_at']),
           firstStartedAt: _parse(r['first_started_at']),
+          submittedAt: _parse(r['submitted_at']),
+          confirmedAt: _parse(r['confirmed_at']),
+          waitingAt: _parse(r['waiting_at']),
           version: _asInt(r['version']),
         ));
       }

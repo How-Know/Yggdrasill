@@ -23,6 +23,7 @@ import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
 import 'dart:collection';
+import 'dart:math' as math;
 import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
@@ -44,6 +45,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late AnimationController _fabController;
   late Animation<double> _fabScaleAnimation;
   late Animation<double> _fabOpacityAnimation;
+  // UI 전용: 칩 상태/애니메이션(제출 회전·확인 깜빡임)
+  late AnimationController _uiAnimController;
   // 진단용: 사이드 시트 완료 상태 전이 추적
   bool _sideSheetWasComplete = false;
   // 사이드 시트 스크롤 컨트롤러 (경고/오버플로 방지)
@@ -62,6 +65,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   double _fabBottomPadding = 16.0;
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
   int? _prevIndex;
+  // UI 전용: 과제 칩 상태(학생ID->아이템ID->상태) & 활성 항목
+  final Map<String, Map<String, _UiPhase>> _uiPhases = {};
+  String? _activeStudentId;
+  String? _activeItemId;
 
   // 출석/하원 상태 관리
   final Set<String> _attendedSetIds = {}; // 출석한 setId
@@ -331,6 +338,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         curve: Curves.easeInOut,
       ),
     );
+    // UI 전용 애니메이션 틱(회전·깜빡임 공통)
+    _uiAnimController = AnimationController(
+      duration: const Duration(milliseconds: 1800),
+      vsync: this,
+    )..repeat();
     // 스크롤 컨트롤러 초기화
     _leavedScrollCtrl = ScrollController();
     _attendedScrollCtrl = ScrollController();
@@ -434,6 +446,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _leavedScrollCtrl.dispose();
     _attendedScrollCtrl.dispose();
     _waitingScrollCtrl.dispose();
+    _uiAnimController.dispose();
     super.dispose();
   }
 
@@ -795,10 +808,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 ),
                             ],
                           ),
-                        // 커버 생략
-                      ],
-                    ),
-                  );
+                          // 커버 생략
+                          // 임시 컨트롤: 사이드 시트 하단 고정 A/B 버튼 (추후 제거 예정)
+                          Positioned(
+                            left: 16,
+                            right: 16,
+                            bottom: 12,
+                            child: Row(
+                              children: [
+                                ElevatedButton(
+                                  onPressed: _onTempA,
+                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF39424A), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+                                  child: const Text('A (임시)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton(
+                                  onPressed: _onTempB,
+                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF39424A), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+                                  child: const Text('B (임시)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                                ),
+                                const Spacer(),
+                                const Text('임시 · 추후 제거', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
                 },
               );
             },
@@ -1137,7 +1173,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           return ValueListenableBuilder<int>(
             valueListenable: DataManager.instance.globalTick,
             builder: (context, _tick, __) {
-              return Wrap(spacing: 0, children: _buildHomeworkChipsOnce(t));
+              return AnimatedBuilder(
+                animation: _uiAnimController,
+                builder: (context, _) {
+                  return Wrap(spacing: 0, children: _buildHomeworkChipsOnce(t));
+                },
+              );
             },
           );
         },
@@ -1160,7 +1201,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           onExit: (_) => _removeTooltip(),
           child: GestureDetector(
             onTap: () {
-              // 토글: 진행 ↔ 일시정지
+              // 활성화 지정 및 토글: 진행 ↔ 일시정지
+              _activeStudentId = t.student.id;
+              _activeItemId = hw.id;
               final running = HomeworkStore.instance.runningOf(t.student.id);
               if (running != null && running.id == hw.id) {
                 unawaited(HomeworkStore.instance.pause(t.student.id, hw.id));
@@ -1170,7 +1213,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               setState(() {});
             },
             onLongPress: () async {
-              // 이어가기 다이얼로그 표시
+              // 활성화 지정 후 이어가기 다이얼로그 표시
+              _activeStudentId = t.student.id;
+              _activeItemId = hw.id;
               final res = await showDialog<Map<String, dynamic>?>(
                 context: context,
                 builder: (_) => HomeworkContinueDialog(studentId: t.student.id, title: hw.title, color: hw.color),
@@ -1181,7 +1226,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               }
             },
             onSecondaryTap: () {
-              // 완료 처리
+              // 활성화 지정 후 완료 처리
+              _activeStudentId = t.student.id;
+              _activeItemId = hw.id;
               unawaited(HomeworkStore.instance.complete(t.student.id, hw.id));
               setState(() {});
             },
@@ -1209,31 +1256,57 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final double width = painter.width + leftPad + rightPad + borderWMax * 2;
               // 폰트 사이즈 증가를 고려하되, 지나친 최소폭은 줄임표를 유발하므로 완화
               final double minChipWidth = 70.0;
+              // UI 전용 칩 상태
+              final _UiPhase phase = _getUiPhase(t.student.id, hw.id);
+              final double tick = _uiAnimController.value; // 0..1
+
+              final textChild = Text(
+                hw.title,
+                style: style.copyWith(
+                  color: isRunning
+                      ? Colors.white.withOpacity(0.78)
+                      : (phase == _UiPhase.confirmed ? Colors.white.withOpacity(0.9) : Colors.white60),
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+              );
+
+              Widget chipInner = Container(
+                height: 46,
+                padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: isRunning
+                      ? Colors.transparent
+                      : (phase == _UiPhase.confirmed
+                          ? Color.lerp(const Color(0xFF2A2A2A), const Color(0xFF33393F), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
+                          : const Color(0xFF2A2A2A)),
+                  borderRadius: BorderRadius.circular(8),
+                  border: isRunning
+                      ? Border.all(color: hw.color.withOpacity(0.9), width: 2)
+                      : (phase == _UiPhase.submitted ? null : Border.all(color: Colors.white24, width: borderW)),
+                ),
+                child: textChild,
+              );
+
+              if (!isRunning && phase == _UiPhase.submitted) {
+                // 크기 변화 없이 회전 보더만 그리기: CustomPaint의 foregroundPainter 사용
+                chipInner = CustomPaint(
+                  foregroundPainter: _RotatingBorderPainter(
+                    baseColor: hw.color,
+                    tick: tick,
+                    strokeWidth: 2.0,
+                    cornerRadius: 8.0,
+                  ),
+                  child: chipInner,
+                );
+              }
+
               return SizedBox(
                 width: width.clamp(minChipWidth, 560.0),
-                child: Container(
-                  height: 46,
-                  padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: isRunning ? Colors.transparent : const Color(0xFF2A2A2A),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isRunning ? hw.color.withOpacity(0.9) : Colors.white24,
-                      width: borderW,
-                    ),
-                  ),
-                  child: Text(
-                    hw.title,
-                    style: style.copyWith(
-                      color: isRunning ? Colors.white.withOpacity(0.78) : Colors.white60,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+                child: chipInner,
               );
             }),
           ),
@@ -1317,6 +1390,13 @@ class _ClassTag {
   const _ClassTag({required this.name, required this.color, required this.icon});
 }
 
+// UI 전용 칩 상태 정의
+enum _UiPhase {
+  // 수행 상태는 서버 running 여부로 표현, 아래 값들은 UI 전용 표시 상태
+  submitted, // 제출: 회전 테두리
+  confirmed, // 확인: 깜빡임
+  waiting,   // 대기: 비활성화
+}
 // 태그 이벤트: 태그 + 적용 시각
 class _ClassTagEvent {
   final _ClassTag tag;
@@ -1326,6 +1406,80 @@ class _ClassTagEvent {
 }
 
 extension on _MainScreenState {
+  // UI 전용 칩 상태(enum) 유틸
+  _UiPhase _getUiPhase(String studentId, String itemId) {
+    // 스토어 값 우선 (서버 동기화 상태 반영)
+    final item = HomeworkStore.instance.getById(studentId, itemId);
+    final running = (HomeworkStore.instance.runningOf(studentId)?.id == itemId);
+    if (running) {
+      // running이면 UI에선 수행 표시(파란 테두리는 chipInner에서 별도 처리)
+      return _UiPhase.waiting; // 수행은 전용 테두리로 표현하고 phase 맵은 제출/확인/대기만 사용
+    }
+    if (item != null) {
+      switch (item.phase) {
+        case 3: // 제출
+          return _UiPhase.submitted;
+        case 4: // 확인
+          return _UiPhase.confirmed;
+        case 1: // 대기
+        case 0: // 종료 → UI에서는 대기 같은 비활성로 표현
+        default:
+          return _UiPhase.waiting;
+      }
+    }
+    // 로컬 UI 전용 맵은 보조 용도로 유지
+    final byItem = _uiPhases[studentId];
+    if (byItem == null) return _UiPhase.waiting;
+    return byItem[itemId] ?? _UiPhase.waiting;
+  }
+
+  void _setUiPhase(String studentId, String itemId, _UiPhase phase) {
+    setState(() {
+      _uiPhases.putIfAbsent(studentId, () => <String, _UiPhase>{})[itemId] = phase;
+    });
+  }
+
+  void _onTempA() {
+    if (_activeStudentId == null || _activeItemId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('활성화된 과제를 먼저 선택하세요.')),
+      );
+      return;
+    }
+    final curr = _getUiPhase(_activeStudentId!, _activeItemId!);
+    final running = (HomeworkStore.instance.runningOf(_activeStudentId!)?.id == _activeItemId);
+    // A: running이면 먼저 일시정지 후 제출로 전환 (서버)
+    if (running) {
+      unawaited(HomeworkStore.instance.pause(_activeStudentId!, _activeItemId!));
+      unawaited(HomeworkStore.instance.submit(_activeStudentId!, _activeItemId!));
+      _setUiPhase(_activeStudentId!, _activeItemId!, _UiPhase.submitted);
+      return;
+    }
+    // submitted/confirmed -> waiting, waiting/기타 -> submitted (서버)
+    if (curr == _UiPhase.submitted || curr == _UiPhase.confirmed) {
+      unawaited(HomeworkStore.instance.waitPhase(_activeStudentId!, _activeItemId!));
+      _setUiPhase(_activeStudentId!, _activeItemId!, _UiPhase.waiting);
+    } else {
+      unawaited(HomeworkStore.instance.submit(_activeStudentId!, _activeItemId!));
+      _setUiPhase(_activeStudentId!, _activeItemId!, _UiPhase.submitted);
+    }
+  }
+
+  void _onTempB() {
+    if (_activeStudentId == null || _activeItemId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('활성화된 과제를 먼저 선택하세요.')),
+      );
+      return;
+    }
+    // B: running이면 먼저 일시정지 후 확인으로 전환 (서버)
+    final running = (HomeworkStore.instance.runningOf(_activeStudentId!)?.id == _activeItemId);
+    if (running) {
+      unawaited(HomeworkStore.instance.pause(_activeStudentId!, _activeItemId!));
+    }
+    unawaited(HomeworkStore.instance.confirm(_activeStudentId!, _activeItemId!));
+    _setUiPhase(_activeStudentId!, _activeItemId!, _UiPhase.confirmed);
+  }
   Future<void> _openClassTagDialog(_AttendanceTarget target) async {
     final List<_ClassTagEvent> initialApplied = List<_ClassTagEvent>.from(_classTagEventsBySetId[target.setId] ?? const []);
     List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(initialApplied);
@@ -1672,5 +1826,41 @@ extension on _MainScreenState {
         );
       },
     );
+  }
+}
+
+// 회전 보더 페인터: 내부 child의 레이아웃을 바꾸지 않고, 외곽선만 회전시키며 그린다
+class _RotatingBorderPainter extends CustomPainter {
+  final Color baseColor;
+  final double tick; // 0..1
+  final double strokeWidth;
+  final double cornerRadius;
+  _RotatingBorderPainter({required this.baseColor, required this.tick, this.strokeWidth = 2.0, this.cornerRadius = 8.0});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectXY(rect.deflate(strokeWidth / 2), cornerRadius, cornerRadius);
+    // 원형(라운드) 경로를 따라 그라디언트 스트로크를 회전
+    final sweepShader = SweepGradient(
+      startAngle: 0.0,
+      endAngle: 2 * math.pi,
+      transform: GradientRotation(2 * math.pi * tick),
+      colors: [
+        baseColor.withOpacity(0.1),
+        baseColor.withOpacity(0.9),
+        baseColor.withOpacity(0.1),
+      ],
+      stops: const [0.0, 0.5, 1.0],
+    ).createShader(rect);
+    final paint = Paint()
+      ..shader = sweepShader
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..isAntiAlias = true;
+    canvas.drawRRect(rrect, paint);
+  }
+  @override
+  bool shouldRepaint(covariant _RotatingBorderPainter oldDelegate) {
+    return oldDelegate.tick != tick || oldDelegate.baseColor != baseColor || oldDelegate.strokeWidth != strokeWidth || oldDelegate.cornerRadius != cornerRadius;
   }
 }
