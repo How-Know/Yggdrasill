@@ -425,6 +425,15 @@ Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String i
   const double leftPad = 40; // 좌우 여백 확대
   const double rightPad = 40; // 좌우 여백 확대
   final double borderW = isRunning ? 3.0 : 2.0; // 테두리 두께 증가
+  const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
+
+  // 폭 고정: 텍스트 실제 폭 + 패딩 + 최대 테두리 두께*2
+  final painter = TextPainter(
+    text: TextSpan(text: title, style: style),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+  )..layout(minWidth: 0, maxWidth: double.infinity);
+  final double fixedWidth = (painter.width + leftPad + rightPad + borderWMax * 2).clamp(72.0, 760.0);
 
   Widget chipInner = Container(
     height: ClassContentScreen._attendingCardHeight,
@@ -451,7 +460,7 @@ Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String i
     );
   }
 
-  return IntrinsicWidth(child: chipInner);
+  return SizedBox(width: fixedWidth, child: chipInner);
 }
 
 // 회전 보더 페인터: 내부 child 레이아웃을 바꾸지 않고 외곽선만 회전시켜 그림
