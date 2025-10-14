@@ -1,0 +1,10 @@
+^C:\USERS\HARRY\YGGDRASILL\SIMULATOR\LVGL\BUILD\CMAKEFILES\4CB9AFF1A12333E6B34285E4665ACFC1\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/harry/Yggdrasill/simulator/lvgl -BC:/Users/harry/Yggdrasill/simulator/lvgl/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/harry/Yggdrasill/simulator/lvgl/build/m5_lvgl_sdl_sim.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

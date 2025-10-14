@@ -1,0 +1,10 @@
+^C:\USERS\HARRY\YGGDRASILL\SIMULATOR\LVGL\BUILD\_DEPS\LVGL-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild -BC:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild --check-stamp-file C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

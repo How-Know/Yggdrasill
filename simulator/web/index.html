@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>M5 Web Simulator</title>
+    <style>
+      :root{ --chip-h:48px; --chip-br:10px; --bg:#0e0e0e; --fg:#e6e6e6; --muted:#2a2a2a; }
+      body{ background:#0a0a0a; color:var(--fg); }
+      .chips{ display:flex; gap:12px; flex-wrap:wrap; }
+      .hw-chip{ height:var(--chip-h); display:inline-flex; align-items:center; padding:0 20px; border-radius:var(--chip-br); border:2px solid #555; background:#141414; white-space:nowrap; }
+      .hw-perf{ border-color: var(--ring,#4fa3ff); background: transparent; }
+      .hw-wait{ border-color:#777; background:#1a1a1a; color:#bbb; }
+      .hw-conf{ animation:pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse{ 0%{ background:#16202a;} 50%{ background:#1f2f3d;} 100%{ background:#16202a;} }
+      .rot-wrap{ position:relative; padding:3px; border-radius:calc(var(--chip-br) + 3px); display:inline-block; }
+      .rot-wrap > .rot-ring{ position:absolute; inset:0; border-radius:inherit; background:conic-gradient(from 0turn, var(--ring,#bb86fc) 0 25%, transparent 25% 50%, var(--ring,#bb86fc) 50% 75%, transparent 75% 100%); animation:spin 2s linear infinite; filter:brightness(1.2); }
+      .rot-wrap > .rot-hole{ position:absolute; inset:3px; border-radius:var(--chip-br); background:var(--bg); }
+      .rot-wrap > .hw-chip{ position:relative; background:#151515; border:2px solid #2c2c2c; }
+      @keyframes spin{ to{ transform:rotate(1turn);} }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script type="module" src="/main.js"></script>
+  </body>
+  </html>
+
+

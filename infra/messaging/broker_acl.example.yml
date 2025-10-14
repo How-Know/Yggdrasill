@@ -1,0 +1,11 @@
+users:
+  - username: gateway
+    publish: ["academies/+/ack/+"]
+    subscribe: ["academies/+/students/+/homework/+/command","academies/+/devices/+/presence","academies/+/devices/+/command"]
+  - username: device:${student_id}
+    publish: ["academies/${academy_id}/students/${student_id}/homework/+/command","academies/${academy_id}/devices/${device_id}/presence"]
+    subscribe: ["academies/${academy_id}/devices/${device_id}/students_today"]
+  - username: teacher:tablet
+    publish: []
+    subscribe: ["academies/${academy_id}/students/${student_id}/homework/+/command", "academies/${academy_id}/ack/+"]
+

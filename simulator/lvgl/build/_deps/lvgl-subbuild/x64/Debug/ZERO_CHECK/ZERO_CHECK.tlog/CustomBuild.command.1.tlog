@@ -1,0 +1,10 @@
+^C:\USERS\HARRY\YGGDRASILL\SIMULATOR\LVGL\BUILD\_DEPS\LVGL-SUBBUILD\CMAKEFILES\E0CDE9F714972FC33BDAA5EE95E1EF7E\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild -BC:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/lvgl-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

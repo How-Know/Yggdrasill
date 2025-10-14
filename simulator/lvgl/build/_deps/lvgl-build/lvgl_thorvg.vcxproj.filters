@@ -1,0 +1,118 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgAnimation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgBezier.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgCanvas.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgCapi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgCompressor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgFill.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgInitializer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgMath.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgPaint.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgPicture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgRawLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgRender.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSaver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgScene.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgShape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgStr.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSvgCssStyle.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSvgLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSvgPath.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSvgSceneBuilder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSvgUtil.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwCanvas.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwFill.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwImage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwMath.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwMemPool.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwRaster.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwRle.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwShape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgSwStroke.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgTaskScheduler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\libs\thorvg\tvgXmlParser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\src\others\vg_lite_tvg\vg_lite_tvg.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\harry\Yggdrasill\simulator\lvgl\build\_deps\lvgl-src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{0F71FDEC-ECC8-3C01-8EF8-973DC928C114}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

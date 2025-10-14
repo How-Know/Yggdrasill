@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/harry/Yggdrasill/simulator/lvgl/build/cmake_install.cmake",
+		"C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

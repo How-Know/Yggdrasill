@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/lvgl-populate"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/e0cde9f714972fc33bdaa5ee95e1ef7e/lvgl-populate.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/7e8cf78ed41c0182213a297bd8d2b996/lvgl-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-subbuild/CMakeFiles/ee25aa6c53e431feaa87ad4ee06162c1/lvgl-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"lvgl-populate"
+		],
+		"name" : "lvgl-populate"
+	}
+}

@@ -1,0 +1,10 @@
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/CMakeFiles/m5_lvgl_sim.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/CMakeFiles/INSTALL.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/CMakeFiles/ZERO_CHECK.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/lvgl.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/lvgl_thorvg.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/lvgl_examples.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/lvgl_demos.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/INSTALL.dir
+C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build/CMakeFiles/ALL_BUILD.dir

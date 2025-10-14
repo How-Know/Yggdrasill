@@ -1,0 +1,34 @@
+version: 1
+broker: emqx
+topics:
+  - name: academies/{academy_id}/students/{student_id}/homework/{item_id}/command
+    qos: 1
+    retain: false
+    acl:
+      publish: ["device:{student_id}"]
+      subscribe: ["gateway", "teacher:tablet"]
+routes:
+  - match:
+      action: start
+    rpc: homework_start
+    required: ["academy_id", "student_id", "item_id"]
+  - match:
+      action: pause
+    rpc: homework_pause
+    required: ["academy_id", "item_id"]
+  - match:
+      action: submit
+    rpc: homework_submit
+    required: ["academy_id", "item_id"]
+  - match:
+      action: confirm
+    rpc: homework_confirm
+    required: ["academy_id", "item_id"]
+  - match:
+      action: wait
+    rpc: homework_wait
+    required: ["academy_id", "item_id"]
+schemas:
+  payload: "infra/messaging/schemas/homework_command.v1.json"
+
+
