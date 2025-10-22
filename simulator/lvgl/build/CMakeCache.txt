@@ -204,7 +204,7 @@ CMAKE_STATIC_LINKER_FLAGS_RELEASE:STRING=
 CMAKE_STATIC_LINKER_FLAGS_RELWITHDEBINFO:STRING=
 
 //The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake
+CMAKE_TOOLCHAIN_FILE:FILEPATH=C:/Users/harry/vcpkg/scripts/buildsystems/vcpkg.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -235,18 +235,26 @@ FETCHCONTENT_UPDATES_DISCONNECTED_LVGL:BOOL=OFF
 //Git command line client
 GIT_EXECUTABLE:FILEPATH=C:/Program Files/Git/cmd/git.exe
 
+//No help, variable specified on the command line.
+LVGL_BUILD_DEMOS:UNINITIALIZED=OFF
+
+//No help, variable specified on the command line.
+LVGL_BUILD_EXAMPLES:UNINITIALIZED=OFF
+
 LV_CONF_BUILD_DISABLE_DEMOS:BOOL=ON
 
 LV_CONF_BUILD_DISABLE_EXAMPLES:BOOL=ON
 
 //Use #include "lv_conf.h" instead of #include "../../lv_conf.h"
-LV_CONF_INCLUDE_SIMPLE:BOOL=ON
+LV_CONF_INCLUDE_SIMPLE:BOOL=1
+
+LV_CONF_PATH:STRING=C:/Users/harry/Yggdrasill/simulator/lvgl/lv_conf.h
 
 //Use #include "lvgl.h" instead of #include "../../lvgl.h"
 LV_LVGL_H_INCLUDE_SIMPLE:BOOL=ON
 
 //The directory containing a CMake configuration file for SDL2.
-SDL2_DIR:PATH=C:/tools/vcpkg/installed/x64-windows/share/sdl2
+SDL2_DIR:PATH=C:/Users/harry/vcpkg/installed/x64-windows/share/sdl2
 
 //Automatically copy dependencies into the output directory for
 // executables.
@@ -254,7 +262,7 @@ VCPKG_APPLOCAL_DEPS:BOOL=ON
 
 //The directory which contains the installed libraries for each
 // triplet
-VCPKG_INSTALLED_DIR:PATH=C:/tools/vcpkg/installed
+VCPKG_INSTALLED_DIR:PATH=C:/Users/harry/vcpkg/installed
 
 //The path to the vcpkg manifest directory.
 VCPKG_MANIFEST_DIR:PATH=
@@ -295,7 +303,7 @@ Z_VCPKG_PWSH_PATH:FILEPATH=Z_VCPKG_PWSH_PATH-NOTFOUND
 
 //The directory which contains the installed libraries for each
 // triplet
-_VCPKG_INSTALLED_DIR:PATH=C:/tools/vcpkg/installed
+_VCPKG_INSTALLED_DIR:PATH=C:/Users/harry/vcpkg/installed
 
 //Value Computed by CMake
 lvgl_BINARY_DIR:STATIC=C:/Users/harry/Yggdrasill/simulator/lvgl/build/_deps/lvgl-build
@@ -314,6 +322,12 @@ m5_lvgl_sdl_sim_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
 m5_lvgl_sdl_sim_SOURCE_DIR:STATIC=C:/Users/harry/Yggdrasill/simulator/lvgl
+
+//The directory containing a CMake configuration file for parson.
+parson_DIR:PATH=C:/Users/harry/vcpkg/installed/x64-windows/share/parson
+
+//The directory containing a CMake configuration file for unofficial-mosquitto.
+unofficial-mosquitto_DIR:PATH=C:/Users/harry/vcpkg/installed/x64-windows/share/unofficial-mosquitto
 
 
 ########################
@@ -478,5 +492,5 @@ Z_VCPKG_CHECK_MANIFEST_MODE:INTERNAL=OFF
 //The path to the PowerShell implementation to use.
 Z_VCPKG_POWERSHELL_PATH:INTERNAL=C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
 //Vcpkg root directory
-Z_VCPKG_ROOT_DIR:INTERNAL=C:/tools/vcpkg
+Z_VCPKG_ROOT_DIR:INTERNAL=C:/Users/harry/vcpkg
 

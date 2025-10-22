@@ -4,6 +4,30 @@
     <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\screensaver.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\settings_ui.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\wifi_ui.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\icon_home.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\icon_volume_up.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\icon_settings.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\icon_wifi.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\harry\Yggdrasill\simulator\lvgl\icon_refresh.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="C:\Users\harry\Yggdrasill\simulator\lvgl\lv_conf.h">
