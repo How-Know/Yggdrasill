@@ -1214,7 +1214,7 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay> with SingleTicke
 class _ExamFabCluster extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Material(
+      return Material(
       color: Colors.transparent,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -3621,6 +3621,7 @@ class _MemoBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final double screenW = MediaQuery.of(context).size.width;
+    final bool isHwDone = (memo.summary.isNotEmpty ? memo.summary : memo.original).contains('완료');
     // 최소창(≈1430)에서 14, 넓을수록 18까지 선형 증가
     const double minW = 1430;
     const double maxW = 2200;
@@ -3637,10 +3638,10 @@ class _MemoBanner extends StatelessWidget {
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       constraints: const BoxConstraints(maxWidth: 360),
-      decoration: BoxDecoration(
+        decoration: BoxDecoration(
         color: const Color(0xFF232326),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white24),
+          border: Border.all(color: isHwDone ? const Color(0xFF1976D2) : Colors.white24),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 6)),
         ],

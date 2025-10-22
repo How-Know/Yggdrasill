@@ -8,6 +8,8 @@ import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
+import 'package:uuid/uuid.dart';
+import '../models/memo.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
 class ClassContentScreen extends StatefulWidget {
@@ -22,6 +24,7 @@ class ClassContentScreen extends StatefulWidget {
 
 class _ClassContentScreenState extends State<ClassContentScreen> with SingleTickerProviderStateMixin {
   late final AnimationController _uiAnimController;
+  final List<_NoteEntry> _notes = <_NoteEntry>[]; // ephemeral, not persisted
 
   @override
   void initState() {
@@ -38,46 +41,89 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   @override
   Widget build(BuildContext context) {
     final attending = _computeAttendingStudentsRealtime();
-    return Container(
-      color: const Color(0xFF1F1F1F),
-      width: double.infinity,
-      child: ValueListenableBuilder<List<AttendanceRecord>>(
-        valueListenable: DataManager.instance.attendanceRecordsNotifier,
-        builder: (context, _records, __) {
-          // sessionOverrides 변화도 함께 트리거
-          final _ = DataManager.instance.sessionOverridesNotifier.value;
-          final list = _computeAttendingStudentsRealtime();
-          return ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            itemCount: list.length,
-            itemBuilder: (ctx, i) {
-              final s = list[i];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
-                    const SizedBox(width: 24),
-                    Flexible(
-                      fit: FlexFit.loose,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
+    return Stack(
+      children: [
+        Container(
+          color: const Color(0xFF1F1F1F),
+          width: double.infinity,
+          child: ValueListenableBuilder<List<AttendanceRecord>>(
+            valueListenable: DataManager.instance.attendanceRecordsNotifier,
+            builder: (context, _records, __) {
+              // sessionOverrides 변화도 함께 트리거
+              final _ = DataManager.instance.sessionOverridesNotifier.value;
+              final list = _computeAttendingStudentsRealtime();
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                itemCount: list.length,
+                itemBuilder: (ctx, i) {
+                  final s = list[i];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
+                        const SizedBox(width: 24),
+                        Flexible(
+                          fit: FlexFit.loose,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
                         child: AnimatedBuilder(
-                          animation: _uiAnimController,
-                          builder: (context, __) {
-                            final tick = _uiAnimController.value; // 0..1
-                            return _buildHomeworkChipsReactiveForStudent(s.id, tick);
-                          },
+                              animation: _uiAnimController,
+                              builder: (context, __) {
+                                final tick = _uiAnimController.value; // 0..1
+                            return _buildHomeworkChipsReactiveForStudent(
+                              s.id,
+                              tick,
+                              (text) { if (!mounted) return; setState(() { _notes.add(_NoteEntry(text)); }); },
+                            );
+                              },
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               );
             },
-          );
-        },
+          ),
+        ),
+        // Floating completion notes (ephemeral)
+        Positioned(
+          right: 16,
+          top: 16,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: _notes.map((n) => _buildNote(n)).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNote(_NoteEntry n) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1F1F1F),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF1976D2), width: 1.5), // blue border
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 4))],
+      ),
+      constraints: const BoxConstraints(maxWidth: 420),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Expanded(child: Text(n.text, style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.2)) ),
+          const SizedBox(width: 8),
+          InkWell(
+            onTap: () { setState(() { _notes.remove(n); }); },
+            borderRadius: BorderRadius.circular(999),
+            child: const Icon(Icons.close, color: Colors.white60, size: 18),
+          ),
+        ],
       ),
     );
   }
@@ -340,7 +386,7 @@ String _formatDateTime(DateTime dt) {
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
 // ------------------------
-Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
+Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void Function(String text) onComplete) {
   return ValueListenableBuilder<int>(
     valueListenable: HomeworkStore.instance.revision,
     builder: (context, _rev, _) {
@@ -348,13 +394,13 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
         spacing: 24, // 칩 간격 2배
         runSpacing: 24,
         crossAxisAlignment: WrapCrossAlignment.center,
-        children: _buildHomeworkChipsOnceForStudent(context, studentId, tick),
+        children: _buildHomeworkChipsOnceForStudent(context, studentId, tick, onComplete),
       );
     },
   );
 }
 
-List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String studentId, double tick) {
+List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String studentId, double tick, void Function(String text) onComplete) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance.items(studentId)
       .where((e) => e.status != HomeworkStatus.completed)
@@ -400,6 +446,26 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
             final phase = HomeworkStore.instance.getById(studentId, hw.id)?.phase ?? 1;
             if (phase == 3) {
               unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
+              final item = HomeworkStore.instance.getById(studentId, hw.id);
+              final accMs = item?.accumulatedMs ?? 0;
+              final d = Duration(milliseconds: accMs);
+              final h = d.inHours; final m = d.inMinutes.remainder(60);
+              final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
+              final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+              final title = (item?.title ?? '').trim();
+              final body = (item?.body ?? '').trim();
+              final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
+              final now = DateTime.now();
+              final memo = Memo(
+                id: const Uuid().v4(),
+                original: original,
+                summary: original,
+                scheduledAt: now.add(const Duration(hours: 24)),
+                dismissed: false,
+                createdAt: now,
+                updatedAt: now,
+              );
+              unawaited(DataManager.instance.addMemo(memo));
             }
           },
           onDoubleTap: () {
@@ -407,7 +473,54 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
             if (phase == 3) {
               HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
               unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
+              final item = HomeworkStore.instance.getById(studentId, hw.id);
+              final accMs = item?.accumulatedMs ?? 0;
+              final d = Duration(milliseconds: accMs);
+              final h = d.inHours; final m = d.inMinutes.remainder(60);
+              final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
+              final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+              final title = (item?.title ?? '').trim();
+              final body = (item?.body ?? '').trim();
+              final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
+              final now = DateTime.now();
+              final memo = Memo(
+                id: const Uuid().v4(),
+                original: original,
+                summary: original,
+                scheduledAt: now.add(const Duration(hours: 24)),
+                dismissed: false,
+                createdAt: now,
+                updatedAt: now,
+              );
+              unawaited(DataManager.instance.addMemo(memo));
             }
+          },
+          onSecondaryTap: () {
+            final phase = HomeworkStore.instance.getById(studentId, hw.id)?.phase ?? 1;
+            if (phase != 3) return;
+            // 확인으로 전이 + 다음 대기 진입 시 자동 완료 플래그 설정
+            HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+            unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
+            final item = HomeworkStore.instance.getById(studentId, hw.id);
+            final accMs = item?.accumulatedMs ?? 0;
+            final d = Duration(milliseconds: accMs);
+            final h = d.inHours; final m = d.inMinutes.remainder(60);
+            final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
+            final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+            final title = (item?.title ?? '').trim();
+            final body = (item?.body ?? '').trim();
+            final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
+            final now = DateTime.now();
+            final memo = Memo(
+              id: const Uuid().v4(),
+              original: original,
+              summary: original,
+              scheduledAt: now.add(const Duration(hours: 24)),
+              dismissed: false,
+              createdAt: now,
+              updatedAt: now,
+            );
+            unawaited(DataManager.instance.addMemo(memo));
           },
           child: _buildHomeworkChipVisual(context, studentId, hw.id, hw.title, hw.color, tick: tick),
         ),
@@ -427,17 +540,27 @@ Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String i
   final double borderW = isRunning ? 3.0 : 2.0; // 테두리 두께 증가
   const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
 
-  // 폭 고정: 텍스트 실제 폭 + 패딩 + 최대 테두리 두께*2
+  // 폭 고정: 텍스트 실제 폭 + 패딩 + 최대 테두리 두께*2 (+여유 6px) - 영문 조기 ellipsis 방지
   final painter = TextPainter(
     text: TextSpan(text: title, style: style),
     maxLines: 1,
     textDirection: TextDirection.ltr,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
-  final double fixedWidth = (painter.width + leftPad + rightPad + borderWMax * 2).clamp(72.0, 760.0);
+  // 여유폭을 14px로 상향하고 최소폭을 110px로 늘려 영문 조기 ellipsis 방지
+  final double fixedWidth = (painter.width + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(110.0, 760.0);
+
+  // 칩 내부: 제목 + 본문/총 수행시간(2줄) 표시
+  final String body = HomeworkStore.instance.getById(studentId, id)?.body ?? '';
+  final int accumulatedMs = HomeworkStore.instance.getById(studentId, id)?.accumulatedMs ?? 0;
+  final Duration acc = Duration(milliseconds: accumulatedMs);
+  final int hours = acc.inHours;
+  final int minutes = acc.inMinutes.remainder(60);
+  final String timeText = hours > 0 ? ('$hours시간 $minutes분') : ('$minutes분');
 
   Widget chipInner = Container(
     height: ClassContentScreen._attendingCardHeight,
-    padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
+    padding: const EdgeInsets.fromLTRB(leftPad, 10, rightPad, 10),
     alignment: Alignment.center,
     decoration: BoxDecoration(
       color: isRunning
@@ -450,7 +573,32 @@ Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String i
           ? Border.all(color: color.withOpacity(0.9), width: borderW)
           : (phase == 3 ? null : Border.all(color: Colors.white24, width: borderW)),
     ),
-    child: Text(title, style: style, maxLines: 1, overflow: TextOverflow.ellipsis),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // 제목은 필요시 폰트를 약간 축소해 잘림을 방지
+        SizedBox(
+          width: fixedWidth - leftPad - rightPad - 4,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.center,
+            child: Text(title, style: style, maxLines: 1, softWrap: false),
+          ),
+        ),
+        const SizedBox(height: 10),
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
+          child: Text(
+            body.isNotEmpty ? (body + ' · ' + timeText) : timeText,
+            style: const TextStyle(color: Colors.white60, fontSize: 14, height: 1.15),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ],
+    ),
   );
 
   if (!isRunning && phase == 3) {
@@ -528,13 +676,54 @@ class _AttendingButton extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Row(
-          mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.circle, size: 18, color: color),
-                const SizedBox(width: 12),
-                Text(name, style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w600)),
-              ],
+            ValueListenableBuilder<int>(
+              valueListenable: HomeworkStore.instance.revision,
+              builder: (context, _rev, _) {
+                // 과제 진행 상태 확인
+                final items = HomeworkStore.instance
+                    .items(studentId)
+                    .where((e) => e.status != HomeworkStatus.completed)
+                    .toList();
+                final bool hasAny = items.isNotEmpty;
+                final bool hasRunning = HomeworkStore.instance.runningOf(studentId) != null;
+                final bool isResting = hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
+
+                // 학생 정보 조회(학교/학년)
+                String school = '';
+                String gradeText = '';
+                try {
+                  final swi = DataManager.instance.students.firstWhere((s) => s.student.id == studentId);
+                  school = swi.student.school;
+                  final int g = swi.student.grade;
+                  gradeText = g > 0 ? (g.toString() + '학년') : '';
+                } catch (_) {}
+
+                final nameStyle = TextStyle(
+                  color: isResting ? Colors.white54 : Colors.white,
+                  fontSize: 34,
+                  fontWeight: FontWeight.w600,
+                );
+
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(name, style: nameStyle, overflow: TextOverflow.ellipsis),
+                    const SizedBox(width: 22),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(school, style: const TextStyle(color: Colors.white70, fontSize: 16, height: 1.15, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          SizedBox(height: 8),
+                          Text(gradeText, style: const TextStyle(color: Colors.white60, fontSize: 15, height: 1.15), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
             const Spacer(),
             Row(
@@ -573,6 +762,11 @@ class _AttendingButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NoteEntry {
+  final String text;
+  _NoteEntry(this.text);
 }
 
 

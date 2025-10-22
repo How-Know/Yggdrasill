@@ -311,16 +311,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 240),
       vsync: this,
     );
-    // 진단용: 애니메이션 진행도 및 상태 로깅
-    _rotationAnimation.addListener(() {
-      final v = _rotationAnimation.value;
-      if (v == 0.0 || v == 1.0) {
-        print('[SIDE_SHEET][controller.value]=$v');
-      }
-    });
-    _rotationAnimation.addStatusListener((status) {
-      print('[SIDE_SHEET][controller.status]=$status');
-    });
+    // 진단 로그 제거됨
     _sideSheetAnimation = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(
         parent: _rotationAnimation,
@@ -348,11 +339,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 1800),
       vsync: this,
     )..repeat();
-    // 애니메이션 상태 주기적 로깅(2초마다)
-    _animLogTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!mounted) return;
-      debugPrint('[ANIM][ui] value=' + _uiAnimController.value.toStringAsFixed(3));
-    });
+    // 진단 타이머 제거됨
     // 스크롤 컨트롤러 초기화
     _leavedScrollCtrl = ScrollController();
     _attendedScrollCtrl = ScrollController();
@@ -462,7 +449,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _toggleSideSheet() {
-    print('[SIDE_SHEET] toggle requested. status=${_rotationAnimation.status} value=${_rotationAnimation.value}');
+    
     if (_rotationAnimation.status == AnimationStatus.completed) {
       _rotationAnimation.reverse();
     } else {
@@ -471,7 +458,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildContent() {
-    print('[DEBUG] _buildContent 진입, _selectedIndex= [38;5;246m$_selectedIndex [0m');
+    
     switch (_selectedIndex) {
       case 0:
         return const HomeScreen();
@@ -524,16 +511,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             animation: _sideSheetAnimation,
             builder: (context, child) {
               final progress = _sideSheetAnimation.value;
-              if (progress <= 0.9) {
-                print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 숨김)');
-              } else {
-                print('[SIDE_SHEET] progress=' + progress.toStringAsFixed(2) + ' (내용 표시 시작)');
-              }
+              
               final bool isComplete = _rotationAnimation.status == AnimationStatus.completed && progress >= 1.0;
-              if (isComplete != _sideSheetWasComplete) {
-                print('[SIDE_SHEET] isComplete changed -> ' + isComplete.toString());
-                _sideSheetWasComplete = isComplete;
-              }
+              if (isComplete != _sideSheetWasComplete) { _sideSheetWasComplete = isComplete; }
               final attendanceTargets = isComplete ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
               Widget _ellipsisWrap(List<Widget> cards, {int maxLines = 2, double spacing = 8, double runSpacing = 8}) {
@@ -563,7 +543,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final maxWidth = screenWidth * baseRatio;
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
-              print('[SIDE_SHEET] containerWidth=' + containerWidth.toStringAsFixed(1) + ' / maxWidth=' + maxWidth.toStringAsFixed(1));
+              
               // 파생 리스트 로그는 ValueListenableBuilder 내부에서 출력합니다.
 
               // 애니메이션 진행 중에는 내용 위젯을 전혀 생성하지 않고, 빈 컨테이너만 렌더링
@@ -623,9 +603,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   for (final t in waiting) {
                     waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
                   }
-                  if (isComplete) {
-                    print('[SIDE_SHEET] lists(drv): leaved=' + leaved.length.toString() + ', attended=' + attended.length.toString() + ', waitingGroups=' + waitingByTime.length.toString());
-                  }
+                  
 
                   return AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
