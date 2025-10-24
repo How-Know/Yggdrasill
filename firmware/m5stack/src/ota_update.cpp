@@ -16,6 +16,7 @@ bool checkForUpdate(String& outLatestVersion, String& outDownloadUrl) {
   
   Serial.printf("[OTA] Checking: %s\n", apiUrl.c_str());
   http.begin(apiUrl);
+  http.setUserAgent("M5Stack-OTA");
   http.addHeader("Accept", "application/vnd.github.v3+json");
   
   int httpCode = http.GET();
@@ -75,11 +76,38 @@ bool performOtaUpdate(const String& downloadUrl, OtaProgressCallback progressCal
 
   HTTPClient http;
   http.begin(downloadUrl);
+  http.setUserAgent("M5Stack-OTA");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   
   Serial.printf("[OTA] Downloading: %s\n", downloadUrl.c_str());
   if (progressCallback) progressCallback(0, "Connecting...");
   
   int httpCode = http.GET();
+  Serial.printf("[OTA] Initial response: %d\n", httpCode);
+  
+  // 수동 리다이렉트 처리 (최대 5번)
+  int redirectCount = 0;
+  while ((httpCode == 301 || httpCode == 302 || httpCode == 303 || httpCode == 307 || httpCode == 308) && redirectCount < 5) {
+    String newUrl = http.getLocation();
+    Serial.printf("[OTA] Redirect(%d) Location header: %s\n", httpCode, newUrl.c_str());
+    
+    if (newUrl.length() == 0) {
+      Serial.println("[OTA] Empty redirect location");
+      break;
+    }
+    
+    http.end();
+    delay(100);
+    
+    Serial.printf("[OTA] Following redirect to: %s\n", newUrl.c_str());
+    http.begin(newUrl);
+    http.setUserAgent("M5Stack-OTA");
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    httpCode = http.GET();
+    Serial.printf("[OTA] Redirected response: %d\n", httpCode);
+    redirectCount++;
+  }
+  
   if (httpCode != 200) {
     Serial.printf("[OTA] Download error: %d\n", httpCode);
     if (progressCallback) progressCallback(0, "Download failed");

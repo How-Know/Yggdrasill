@@ -376,7 +376,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_img_recolor_opa(set_img, LV_OPA_COVER, 0);
   lv_img_set_zoom(set_img, 200);
   lv_obj_center(set_img);
-  lv_obj_add_event_cb(settings_btn, [](lv_event_t* e){ (void)e; ui_port_show_settings("1.0.0"); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(settings_btn, [](lv_event_t* e){ (void)e; ui_port_show_settings(FIRMWARE_VERSION); }, LV_EVENT_CLICKED, NULL);
 
   // FAB (휴식)
   if (!s_fab) {
@@ -821,6 +821,8 @@ void ui_port_update_homeworks(const JsonArray& items) {
     lv_obj_t* lbl = lv_label_create(card);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
     lv_label_set_text(lbl, title);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, lv_pct(60));
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_add_flag(lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
     

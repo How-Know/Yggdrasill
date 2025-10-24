@@ -1,5 +1,5 @@
 param(
-  [string]$CertFile = 'HowKnow_CodeSign.cer',
+  [string]$CertFile = 'howknow_codesign_new.cer',
   [string]$AppInstaller = 'Yggdrasill.appinstaller',
   [switch]$AlsoImportToRoot = $false,
   [switch]$Quiet = $false
