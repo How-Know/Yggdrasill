@@ -135,7 +135,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('problem_bank')
-          .select('id,problem_number,image_url,subject,difficulty,tags,created_at')
+          .select('id,problem_number,image_url,subject,difficulty,tags,problem_type,is_essay,choice_image_url,created_at')
           .eq('academy_id', academyId)
           .order('created_at', ascending: false)
           .limit(50);
@@ -324,7 +324,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final imageUrl = p['image_url'] as String? ?? '';
         final number = p['problem_number'] as String? ?? '번호 미지정';
         final subject = p['subject'] as String? ?? '';
+        final pType = p['problem_type'] as String? ?? '주관식';
+        final isEssay = p['is_essay'] as bool? ?? false;
         final isSelected = _selectedProblemIds.contains(id);
+        
+        // 유형 칩 텍스트 생성
+        String chipText = pType == '주관식' ? '주관' : (pType == '객관식' ? '객관' : '주객');
+        if (isEssay) chipText += '+서술';
         
         return InkWell(
           onTap: () {
@@ -375,7 +381,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: const Color(0xFF1976D2), width: 1),
                         ),
-                        child: const Text('주관', style: TextStyle(color: Color(0xFF64B5F6), fontSize: 11, fontWeight: FontWeight.w600)),
+                        child: Text(chipText, style: const TextStyle(color: Color(0xFF64B5F6), fontSize: 11, fontWeight: FontWeight.w600)),
                       ),
                       if (isSelected) ...[
                         const SizedBox(width: 8),
@@ -653,6 +659,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         child: Text('서술형', style: TextStyle(color: _isEssay ? Colors.white : Colors.white60, fontSize: 11), textAlign: TextAlign.center),
                       ),
                     ),
+                    if (_problemType == '모두' && _selectedRect != null) ...[
+                      const SizedBox(height: 8),
+                      Text('💡 문제 저장 후 선지 영역을 추가로 크롭하세요', 
+                        style: const TextStyle(color: Colors.amber, fontSize: 11), textAlign: TextAlign.center),
+                    ],
                   ],
                 ),
               ),
@@ -897,15 +908,24 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       
       final imageUrl = supa.storage.from('problem-images').getPublicUrl('$academyId/$fileName');
       
+      // 선지 이미지 업로드 (모두 선택 시)
+      String? choiceImageUrl;
+      if (_problemType == '모두' && _choiceRect != null) {
+        // TODO: 선지 영역 크롭 및 업로드
+      }
+      
       // DB 저장
       await supa.from('problem_bank').insert({
         'id': id,
         'academy_id': academyId,
-        'problem_number': '', // 추후 입력
+        'problem_number': '',
         'image_url': imageUrl,
         'subject': '',
         'difficulty': 0,
         'tags': [],
+        'problem_type': _problemType,
+        'is_essay': _isEssay,
+        'choice_image_url': choiceImageUrl,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
       
@@ -914,6 +934,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         _selectedRect = null;
         _croppedPreview = null;
         _croppedImage = null;
+        _manualRotation = 0;
+        _problemType = '주관식';
+        _isEssay = false;
+        _choiceRect = null;
       });
       
       // 목록 새로고침
@@ -1106,7 +1130,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final col = posInPage % 2;
         final row = posInPage ~/ 2;
         final x = margin + col * (colWidth + gap);
-        final y = margin + (row == 0 ? 0 : topRowH);
+        final y = margin + (row == 0 ? 0 : topRowH + gap);
         final cellH = (row == 0) ? topRowH : bottomRowH;
         
         // 번호 그리기 (크고 굵게, 여백 추가)
