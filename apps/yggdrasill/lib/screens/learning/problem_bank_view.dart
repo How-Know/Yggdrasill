@@ -64,6 +64,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   // 입력 모드: PDF 또는 붙여넣기
   bool _isPasteMode = false;
   
+  // 선지 크롭 단계
+  bool _isChoicePhase = false;
+  String? _waitingProblemId; // 선지 대기 중인 문제 ID
+  
   @override
   void initState() {
     super.initState();
@@ -159,8 +163,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             padding: const EdgeInsets.all(16.0),
             child: Row(
               children: [
-                Text(_isCropMode ? '문제은행 · 크롭 모드' : '문제은행', 
-                  style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700)),
+                Text(_isCropMode ? (_isChoicePhase ? '문제은행 · 선지 크롭' : '문제은행 · 크롭 모드') : '문제은행', 
+                  style: TextStyle(color: _isChoicePhase ? Colors.amber : Colors.white70, fontSize: 18, fontWeight: FontWeight.w700)),
                 if (!_isCropMode) ...[
                   const SizedBox(width: 24),
                   // 과정 버튼
@@ -469,16 +473,42 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           border: Border.all(color: _dragOver ? const Color(0xFF64B5F6) : Colors.white24, width: 2),
                         ),
                         child: _isPasteMode
-                            ? Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: const [
-                                    Icon(Icons.content_paste, color: Colors.white70, size: 48),
-                                    SizedBox(height: 12),
-                                    Text('Ctrl+V로 스크린샷 붙여넣기', style: TextStyle(color: Colors.white70, fontSize: 16)),
-                                    SizedBox(height: 6),
-                                    Text('어도비 뷰어 등에서 스크린샷 후 바로 붙여넣기', style: TextStyle(color: Colors.white38, fontSize: 13)),
-                                  ],
+                            ? desktop_drop.DropTarget(
+                                onDragEntered: (_) => setState(() => _dragOver = true),
+                                onDragExited: (_) => setState(() => _dragOver = false),
+                                onDragDone: (detail) async {
+                                  setState(() => _dragOver = false);
+                                  final imgFiles = detail.files
+                                      .where((f) => f.name.toLowerCase().endsWith('.png') || 
+                                                    f.name.toLowerCase().endsWith('.jpg') || 
+                                                    f.name.toLowerCase().endsWith('.jpeg'))
+                                      .map((f) => f.path ?? '')
+                                      .where((p) => p.isNotEmpty)
+                                      .toList();
+                                  if (imgFiles.isEmpty) {
+                                    _log('이미지 파일(.png, .jpg)만 가능합니다');
+                                    return;
+                                  }
+                                  final path = imgFiles.first;
+                                  _log('이미지 로드: $path');
+                                  try {
+                                    // TODO: 이미지 파일 로드 → PdfDocument처럼 뷰어 표시
+                                    _log('붙여넣기 모드는 곧 구현 예정');
+                                  } catch (e) {
+                                    _log('로드 실패: $e');
+                                  }
+                                },
+                                child: Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: const [
+                                      Icon(Icons.image, color: Colors.white70, size: 48),
+                                      SizedBox(height: 12),
+                                      Text('이미지 파일 드롭 (PNG/JPG)', style: TextStyle(color: Colors.white70, fontSize: 16)),
+                                      SizedBox(height: 6),
+                                      Text('스크린샷을 파일로 저장 후 드롭', style: TextStyle(color: Colors.white38, fontSize: 13)),
+                                    ],
+                                  ),
                                 ),
                               )
                             : _DropPdfArea(
@@ -592,9 +622,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     children: [
                       Expanded(
                         child: FilledButton(
-                          onPressed: _croppedImage != null ? () => _saveProblemToServer() : null,
+                          onPressed: _croppedImage != null
+                              ? (_isChoicePhase ? () => _saveChoiceToServer() : () => _saveProblemToServer())
+                              : null,
                           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                          child: const Text('저장'),
+                          child: Text(_isChoicePhase ? '선지 저장' : '저장'),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -883,6 +915,51 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
   
+  Future<void> _saveChoiceToServer() async {
+    if (_croppedImage == null || _waitingProblemId == null) return;
+    try {
+      _log('선지 저장 중...');
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (academyId == null) return;
+      
+      final supa = Supabase.instance.client;
+      final fileName = '${_waitingProblemId}_choice.png';
+      
+      // 수동 회전 반영
+      final finalImage = img.copyRotate(_croppedImage!, angle: _manualRotation);
+      final pngBytes = img.encodePng(finalImage);
+      
+      // Storage 업로드
+      await supa.storage
+          .from('problem-images')
+          .uploadBinary('$academyId/$fileName', Uint8List.fromList(pngBytes));
+      
+      final choiceUrl = supa.storage.from('problem-images').getPublicUrl('$academyId/$fileName');
+      
+      // DB 업데이트
+      await supa.from('problem_bank')
+          .update({'choice_image_url': choiceUrl, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _waitingProblemId!);
+      
+      _log('선지 저장 완료');
+      setState(() {
+        _selectedRect = null;
+        _croppedPreview = null;
+        _croppedImage = null;
+        _manualRotation = 0;
+        _problemType = '주관식';
+        _isEssay = false;
+        _choiceRect = null;
+        _isChoicePhase = false;
+        _waitingProblemId = null;
+      });
+      
+      await _loadSavedProblems();
+    } catch (e) {
+      _log('선지 저장 실패: $e');
+    }
+  }
+  
   Future<void> _saveProblemToServer() async {
     if (_croppedImage == null) return;
     try {
@@ -908,13 +985,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       
       final imageUrl = supa.storage.from('problem-images').getPublicUrl('$academyId/$fileName');
       
-      // 선지 이미지 업로드 (모두 선택 시)
-      String? choiceImageUrl;
-      if (_problemType == '모두' && _choiceRect != null) {
-        // TODO: 선지 영역 크롭 및 업로드
-      }
-      
-      // DB 저장
+      // DB 저장 (선지 없이 먼저)
       await supa.from('problem_bank').insert({
         'id': id,
         'academy_id': academyId,
@@ -925,11 +996,27 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         'tags': [],
         'problem_type': _problemType,
         'is_essay': _isEssay,
-        'choice_image_url': choiceImageUrl,
+        'choice_image_url': null,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
       
-      _log('저장 완료: $fileName');
+      _log('문제 저장 완료: $fileName');
+      
+      // "모두" 선택 시 선지 크롭 단계로 전환
+      if (_problemType == '모두') {
+        setState(() {
+          _isChoicePhase = true;
+          _waitingProblemId = id;
+          _selectedRect = null;
+          _croppedPreview = null;
+          _croppedImage = null;
+          _manualRotation = 0;
+        });
+        _log('💡 선지 영역을 선택하세요 (선택 안 하면 저장 안 됨)');
+        return; // 선지 크롭 대기
+      }
+      
+      // 일반 문제는 바로 완료
       setState(() {
         _selectedRect = null;
         _croppedPreview = null;
@@ -938,6 +1025,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         _problemType = '주관식';
         _isEssay = false;
         _choiceRect = null;
+        _isChoicePhase = false;
+        _waitingProblemId = null;
       });
       
       // 목록 새로고침
@@ -1118,11 +1207,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         if (currentPage == null || posInPage == 0) {
           currentPage = doc.pages.add();
           
-          // 가운데 세로 구분선 (굵게)
+          // 가운데 세로 구분선 (검은색, 1pt, 여백 고려한 중앙)
+          final centerX = margin + colWidth + gap / 2;
           currentPage.graphics.drawLine(
-            sf.PdfPen(sf.PdfColor(160, 160, 160), width: 1.5),
-            Offset(pageWidth / 2, margin),
-            Offset(pageWidth / 2, pageHeight - margin),
+            sf.PdfPen(sf.PdfColor(0, 0, 0), width: 1.0),
+            Offset(centerX, margin),
+            Offset(centerX, pageHeight - margin),
           );
         }
         
