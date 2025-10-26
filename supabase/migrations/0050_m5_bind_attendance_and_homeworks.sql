@@ -47,7 +47,8 @@ begin
 end; $$;
 
 -- 3) List active homeworks for a student
-create or replace function public.m5_list_homeworks(
+drop function if exists public.m5_list_homeworks(uuid, uuid);
+create function public.m5_list_homeworks(
   p_academy_id uuid,
   p_student_id uuid
 ) returns table(

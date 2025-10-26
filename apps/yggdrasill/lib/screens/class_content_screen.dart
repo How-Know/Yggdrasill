@@ -25,22 +25,30 @@ class ClassContentScreen extends StatefulWidget {
 class _ClassContentScreenState extends State<ClassContentScreen> with SingleTickerProviderStateMixin {
   late final AnimationController _uiAnimController;
   final List<_NoteEntry> _notes = <_NoteEntry>[]; // ephemeral, not persisted
+  late final Timer _clockTimer;
+  DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
     _uiAnimController = AnimationController(duration: const Duration(milliseconds: 1800), vsync: this)..repeat();
+    _clockTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      setState(() {
+        _now = DateTime.now();
+      });
+    });
   }
 
   @override
   void dispose() {
     _uiAnimController.dispose();
+    _clockTimer.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final attending = _computeAttendingStudentsRealtime();
     return Stack(
       children: [
         Container(
@@ -52,39 +60,73 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
               // sessionOverrides 변화도 함께 트리거
               final _ = DataManager.instance.sessionOverridesNotifier.value;
               final list = _computeAttendingStudentsRealtime();
-              return ListView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                itemCount: list.length,
-                itemBuilder: (ctx, i) {
-                  final s = list[i];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 24),
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
-                        const SizedBox(width: 24),
-                        Flexible(
-                          fit: FlexFit.loose,
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                        child: AnimatedBuilder(
-                              animation: _uiAnimController,
-                              builder: (context, __) {
-                                final tick = _uiAnimController.value; // 0..1
-                            return _buildHomeworkChipsReactiveForStudent(
-                              s.id,
-                              tick,
-                              (text) { if (!mounted) return; setState(() { _notes.add(_NoteEntry(text)); }); },
-                            );
-                              },
+                        Expanded(
+                          child: RichText(
+                            text: TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: _formatDateWithWeekdayAndTime(_now),
+                                  style: const TextStyle(color: Colors.white, fontSize: 50, fontWeight: FontWeight.bold),
+                                ),
+                                const WidgetSpan(child: SizedBox(width: 30)),
+                                TextSpan(
+                                  text: '등원중: ' + list.length.toString() + '명',
+                                  style: const TextStyle(color: Colors.white60, fontSize: 40, fontWeight: FontWeight.bold),
+                                ),
+                              ],
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     ),
-                  );
-                },
+                  ),
+                  const SizedBox(height: 24),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                      itemCount: list.length,
+                      itemBuilder: (ctx, i) {
+                        final s = list[i];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 24),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
+                              const SizedBox(width: 24),
+                              Flexible(
+                                fit: FlexFit.loose,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: AnimatedBuilder(
+                                    animation: _uiAnimController,
+                                    builder: (context, __) {
+                                      final tick = _uiAnimController.value; // 0..1
+                                      return _buildHomeworkChipsReactiveForStudent(
+                                        s.id,
+                                        tick,
+                                        (text) { if (!mounted) return; setState(() { _notes.add(_NoteEntry(text)); }); },
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -381,6 +423,12 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
 String _formatDateTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   return '${dt.year}.${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+}
+
+String _formatDateWithWeekdayAndTime(DateTime dt) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  const week = ['월', '화', '수', '목', '금', '토', '일'];
+  return two(dt.month) + '.' + two(dt.day) + ' (' + week[dt.weekday - 1] + ') ' + two(dt.hour) + '시 ' + two(dt.minute) + '분';
 }
 
 // ------------------------

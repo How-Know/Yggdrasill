@@ -158,21 +158,27 @@ void onMqttConnect(bool sessionPresent) {
     String presTopic = String("academies/") + academyId + "/devices/" + deviceId + "/presence";
     mqtt.publish(presTopic.c_str(), 1, true, p.c_str());
   }
-  // Request initial data: list_today
-  {
+  
+  // Request initial data: 바인딩된 학생이 있으면 student_info 요청, 없으면 list_today 요청
+  String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  if (studentId.length() > 0) {
+    // 바인딩된 학생이 있으면 정보 요청 (homeworks는 서버에서 자동 푸시)
+    Serial.printf("[MQTT] Requesting student_info for: %s\n", studentId.c_str());
+    fw_publish_student_info(studentId.c_str());
+  } else {
+    // 바인딩 없으면 학생 리스트 요청
     DynamicJsonDocument cmd(64);
     cmd["action"] = "list_today";
     String payload; serializeJson(cmd, payload);
-    String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
     mqtt.publish(cmdTopic.c_str(), 1, false, payload.c_str());
-    Serial.println("Requested list_today");
+    Serial.println("[MQTT] Requested list_today");
   }
+  
   // Optionally also check for updates once
   {
     DynamicJsonDocument doc(64);
     doc["action"] = "check_update";
     String payload; serializeJson(doc, payload);
-    String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
     mqtt.publish(cmdTopic.c_str(), 1, false, payload.c_str());
   }
 }
@@ -262,6 +268,18 @@ void sendCommand(const char* action, const char* itemId) {
 void fw_publish_bind(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   studentId = studentIdArg; // track bound student on device
+  
+  // LittleFS에 바인딩된 학생 ID 저장 (재시작 후 복원용)
+  if (LittleFS.begin()) {
+    File f = LittleFS.open("/student_id.txt", "w");
+    if (f) {
+      f.print(studentIdArg);
+      f.close();
+      Serial.printf("[BIND] Saved student_id: %s\n", studentIdArg);
+    }
+    LittleFS.end();
+  }
+  
   DynamicJsonDocument doc(128);
   doc["action"] = "bind";
   doc["student_id"] = studentIdArg;
@@ -277,6 +295,16 @@ void fw_publish_unbind() {
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  
+  // LittleFS에서 바인딩 정보 삭제
+  if (LittleFS.begin()) {
+    if (LittleFS.exists("/student_id.txt")) {
+      LittleFS.remove("/student_id.txt");
+      Serial.println("[UNBIND] Removed student_id.txt");
+    }
+    LittleFS.end();
+  }
+  
   studentId = ""; // clear tracked student
 }
 

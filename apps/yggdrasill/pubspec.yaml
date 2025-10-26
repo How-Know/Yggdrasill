@@ -59,6 +59,7 @@ dependencies:
   url_launcher: ^6.3.0
   syncfusion_flutter_pdf: ^24.1.41
   pdfrx: ^1.0.77
+  image: ^4.2.0
   webview_windows: ^0.4.0
   package_info_plus: ^9.0.0
   flutter_secure_storage: ^9.2.2

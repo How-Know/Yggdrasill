@@ -6,6 +6,9 @@
 #include "ota_update.h"
 #include "version.h"
 
+// main.cpp에 정의된 전역 변수 (바인딩 추적용)
+extern String studentId;
+
 // External icon declarations
 LV_IMG_DECLARE(home_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(volume_mute_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
@@ -61,13 +64,32 @@ static void update_phase2_time_cb(lv_timer_t* timer) {
   if (!timer || !timer->user_data) return;
   Phase2CardData* data = (Phase2CardData*)timer->user_data;
   
-  // 카드나 라벨이 유효하지 않으면 타이머 중지
-  if (!data->card || !lv_obj_is_valid(data->card) || !data->time_lbl || !lv_obj_is_valid(data->time_lbl)) {
+  // 강화된 유효성 체크: 카드와 라벨 모두 확인
+  if (!data->card || !data->time_lbl) {
+    Serial.println("[TIMER] Invalid data pointers - deleting timer");
     lv_timer_del(timer);
     free(data);
     return;
   }
   
+  // lv_obj_is_valid는 완벽하지 않으므로, 추가로 부모 체크
+  if (!lv_obj_is_valid(data->card) || !lv_obj_is_valid(data->time_lbl)) {
+    Serial.println("[TIMER] Objects invalidated - deleting timer");
+    lv_timer_del(timer);
+    free(data);
+    return;
+  }
+  
+  // 카드가 리스트에 여전히 속해있는지 확인
+  lv_obj_t* parent = lv_obj_get_parent(data->card);
+  if (!parent || !lv_obj_is_valid(parent)) {
+    Serial.println("[TIMER] Parent invalidated - deleting timer");
+    lv_timer_del(timer);
+    free(data);
+    return;
+  }
+  
+  // 정상 동작
   uint32_t elapsed_sec = (lv_tick_get() - data->start_tick) / 1000;
   uint32_t total_sec = data->base_accumulated + elapsed_sec;
   int hours = total_sec / 3600;
@@ -400,7 +422,8 @@ static void build_homeworks_ui_internal() {
 }
 
 void ui_port_init() { 
-  // Load saved brightness/volume from LittleFS
+  // Load saved brightness/volume/student_id from LittleFS
+  String savedStudentId = "";
   if (LittleFS.begin()) {
     File f = LittleFS.open("/brightness.txt", "r");
     if (f) {
@@ -420,9 +443,27 @@ void ui_port_init() {
       Serial.printf("[INIT] Loaded volume: %d\n", s_current_volume);
       f.close();
     }
+    // 바인딩된 학생 ID 복원
+    f = LittleFS.open("/student_id.txt", "r");
+    if (f) {
+      savedStudentId = f.readStringUntil('\n');
+      savedStudentId.trim();
+      f.close();
+      Serial.printf("[INIT] Loaded student_id: %s\n", savedStudentId.c_str());
+    }
     LittleFS.end();
   }
-  build_student_list_ui(); 
+  
+  // 바인딩된 학생이 있으면 과제 모드로 시작, 없으면 학생 리스트 모드
+  if (savedStudentId.length() > 0) {
+    studentId = savedStudentId;
+    build_homeworks_ui_internal();
+    Serial.printf("[INIT] Starting in homework mode for student: %s\n", studentId.c_str());
+    // MQTT 연결 후 student_info와 homeworks는 onMqttConnect에서 자동 요청됨
+  } else {
+    build_student_list_ui();
+    Serial.println("[INIT] Starting in student list mode");
+  }
 }
 
 void ui_port_set_global_font(const lv_font_t* font) {
@@ -769,9 +810,12 @@ void ui_port_update_students(const JsonArray& students) {
   }
 }
 
-// Debounce: M5에서 연속 업데이트 시 충돌 방지 (150ms)
+// Debounce: M5에서 연속 업데이트 시 충돌 방지 (300ms)
 static uint32_t s_last_homework_update_ms = 0;
-static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 150;
+static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 300;
+// 카드 클릭 디바운스 (500ms)
+static uint32_t s_last_card_click_ms = 0;
+static const uint32_t CARD_CLICK_DEBOUNCE_MS = 500;
 
 void ui_port_update_homeworks(const JsonArray& items) {
   uint32_t now = millis();
@@ -784,6 +828,24 @@ void ui_port_update_homeworks(const JsonArray& items) {
   if (!s_homeworks_mode) {
     build_homeworks_ui_internal();
   }
+  
+  // 기존 Phase2 타이머 모두 강제 정리 (카드 삭제 전) - 해결책 2
+  if (s_list && lv_obj_is_valid(s_list)) {
+    uint32_t child_count = lv_obj_get_child_cnt(s_list);
+    for (uint32_t i = 0; i < child_count; i++) {
+      lv_obj_t* frame = lv_obj_get_child(s_list, i);
+      if (!frame || !lv_obj_is_valid(frame)) continue;
+      if (lv_obj_get_child_cnt(frame) == 0) continue;
+      lv_obj_t* card = lv_obj_get_child(frame, 0);
+      if (!card || !lv_obj_is_valid(card)) continue;
+      
+      // DELETE 이벤트 핸들러 수동 트리거하여 타이머 정리
+      lv_event_send(card, LV_EVENT_DELETE, NULL);
+    }
+    // 약간의 지연으로 이벤트 처리 완료 보장
+    lv_timer_handler();
+  }
+  
   g_should_vibrate_phase4 = false;
   lv_obj_clean(s_list);
   for (JsonObject it : items) {
@@ -957,11 +1019,21 @@ void ui_port_update_homeworks(const JsonArray& items) {
       if (d) {
         strncpy(d->id, itemId, sizeof(d->id)-1); d->id[sizeof(d->id)-1] = '\0';
         d->phase = phase;
-        // 클릭 이벤트
+        // 클릭 이벤트 (디바운스 적용) - 해결책 1
         lv_obj_add_event_cb(card, [](lv_event_t* e){
+          uint32_t now = millis();
+          if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) {
+            Serial.println("[CARD] Click debounced - too fast");
+            return;
+          }
+          s_last_card_click_ms = now;
+          
           HwData* dd = (HwData*)lv_event_get_user_data(e);
           const char* act = nullptr;
-          if (dd->phase == 1) act = "start"; else if (dd->phase == 2) act = "submit"; else if (dd->phase == 4) act = "wait"; else act = nullptr;
+          if (dd->phase == 1) act = "start"; 
+          else if (dd->phase == 2) act = "submit"; 
+          else if (dd->phase == 4) act = "wait"; 
+          else act = nullptr;
           if (act) fw_publish_homework_action(act, dd->id);
         }, LV_EVENT_CLICKED, d);
         // 삭제 시 user_data 해제

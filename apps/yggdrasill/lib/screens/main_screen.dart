@@ -28,6 +28,7 @@ import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
+import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
 
 class MainScreen extends StatefulWidget {
@@ -353,8 +354,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     // 강제 마이그레이션 실행
     await DataManager.instance.forceMigration();
     
-    // 과거 수업 정리 로직 실행 (등원시간만 있는 경우 정상 출석 처리, 기록 없는 경우 무단결석 처리)
-    await DataManager.instance.processPastClassesAttendance();
+    // 어제(KST) 미하원 자동 처리: 등원만 있고 하원이 없는 경우 등원+수업시간 후 하원으로 기록
+    await DataManager.instance.fixMissingDeparturesForYesterdayKst();
     
     // 태그 이벤트 DB → 메모리 적재
     await TagStore.instance.loadAllFromDb();
@@ -954,10 +955,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           },
           onExit: (_) => _removeTooltip(),
           child: GestureDetector(
-            onTap: () {
-              // 진행 시작
-              unawaited(HomeworkStore.instance.start(t.student.id, hw.id));
-              setState(() {});
+            onTap: () async {
+              await _openHomeworkEditDialog(t.student.id, hw.id);
+              if (mounted) setState(() {});
             },
             onLongPress: () async {
               // 이어가기: 동일 제목/색상으로 내용만 빈 과제 추가
@@ -1222,17 +1222,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           },
           onExit: (_) => _removeTooltip(),
           child: GestureDetector(
-            onTap: () {
-              // 활성화 지정 및 토글: 진행 ↔ 일시정지
+            onTap: () async {
               _activeStudentId = t.student.id;
               _activeItemId = hw.id;
-              final running = HomeworkStore.instance.runningOf(t.student.id);
-              if (running != null && running.id == hw.id) {
-                unawaited(HomeworkStore.instance.pause(t.student.id, hw.id));
-              } else {
-                unawaited(HomeworkStore.instance.start(t.student.id, hw.id));
-              }
-              setState(() {});
+              await _openHomeworkEditDialog(t.student.id, hw.id);
+              if (mounted) setState(() {});
             },
             onLongPress: () async {
               // 활성화 지정 후 이어가기 다이얼로그 표시
@@ -1469,6 +1463,33 @@ extension on _MainScreenState {
     setState(() {
       _uiPhases.putIfAbsent(studentId, () => <String, _UiPhase>{})[itemId] = phase;
     });
+  }
+
+  Future<void> _openHomeworkEditDialog(String studentId, String itemId) async {
+    final item = HomeworkStore.instance.getById(studentId, itemId);
+    if (item == null) return;
+    final edited = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => HomeworkEditDialog(initialTitle: item.title, initialBody: item.body, initialColor: item.color),
+    );
+    if (edited == null) return;
+    final updated = HomeworkItem(
+      id: item.id,
+      title: (edited['title'] as String).trim(),
+      body: (edited['body'] as String).trim(),
+      color: (edited['color'] as Color),
+      status: item.status,
+      phase: item.phase,
+      accumulatedMs: item.accumulatedMs,
+      runStart: item.runStart,
+      completedAt: item.completedAt,
+      firstStartedAt: item.firstStartedAt,
+      submittedAt: item.submittedAt,
+      confirmedAt: item.confirmedAt,
+      waitingAt: item.waitingAt,
+      version: item.version,
+    );
+    HomeworkStore.instance.edit(studentId, updated);
   }
 
   // 임시 A/B 버튼 핸들러 제거됨

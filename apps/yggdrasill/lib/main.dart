@@ -1088,7 +1088,7 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
             child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
-            children: combined.take(5).map((m) {
+            children: combined.take(12).map((m) {
               return _MemoBanner(
                 memo: m,
                 onClose: () async {

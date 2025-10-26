@@ -65,7 +65,8 @@ begin
 end; $$;
 
 -- today students (basic): by student_time_blocks day_index
-create or replace function public.m5_get_students_today_basic(
+drop function if exists public.m5_get_students_today_basic(uuid);
+create function public.m5_get_students_today_basic(
   p_academy_id uuid
 ) returns table(student_id uuid, name text) as $$
 declare

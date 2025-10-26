@@ -3157,112 +3157,37 @@ class DataManager {
     print('[DEBUG] planned→completed 링크 완료: overrideId=${updated.id}');
   }
 
-  // 과거 수업 정리 로직 (등원시간만 있고 하원시간이 없는 경우 정상 출석 처리)
-  Future<void> processPastClassesAttendance() async {
-    final now = DateTime.now();
-    final yesterday = now.subtract(const Duration(days: 1));
-    final yesterdayEndOfDay = DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59);
+  // 어제(KST) 등원했지만 하원 기록이 없는 경우 자동 하원 처리
+  Future<void> fixMissingDeparturesForYesterdayKst() async {
+    try {
+      final int lessonMinutes = _academySettings.lessonDuration;
+      final DateTime nowKst = DateTime.now().toUtc().add(const Duration(hours: 9));
+      final DateTime ymdYesterdayKst = DateTime(nowKst.year, nowKst.month, nowKst.day).subtract(const Duration(days: 1));
 
-    final recordsToUpdate = <AttendanceRecord>[];
-    final recordsToCreate = <AttendanceRecord>[];
-
-    // 모든 학생의 수업 시간 블록을 확인
-    for (final student in _studentsWithInfo) {
-      final studentId = student.student.id;
-      // 백필 시작일: 학생 등록일(자정) 기준, 없으면 안전 기본값(30일 전)
-      final DateTime todayStart = DateTime(now.year, now.month, now.day);
-      final DateTime registrationStart = student.basicInfo.registrationDate != null
-          ? DateTime(
-              student.basicInfo.registrationDate!.year,
-              student.basicInfo.registrationDate!.month,
-              student.basicInfo.registrationDate!.day,
-            )
-          : todayStart.subtract(const Duration(days: 30));
-      final DateTime registrationDate = registrationStart;
-
-      // 해당 학생의 time blocks 가져오기
-      final timeBlocks = studentTimeBlocks
-          .where((block) => block.studentId == studentId)
-          .toList();
-      
-      if (timeBlocks.isEmpty) continue;
-
-      // SET_ID별로 timeBlocks 그룹화
-      final Map<String?, List<StudentTimeBlock>> blocksBySetId = {};
-      for (final block in timeBlocks) {
-        blocksBySetId.putIfAbsent(block.setId, () => []).add(block);
+      bool isSameKstDay(DateTime dt, DateTime ymdKst) {
+        final k = dt.toUtc().add(const Duration(hours: 9));
+        return k.year == ymdKst.year && k.month == ymdKst.month && k.day == ymdKst.day;
       }
 
-      // 등록일부터 어제까지의 모든 수업 일정 생성 (오늘 수업은 제외)
-      for (DateTime date = registrationDate; date.isBefore(yesterdayEndOfDay); date = date.add(const Duration(days: 1))) {
-        for (final entry in blocksBySetId.entries) {
-          final blocks = entry.value;
-          if (blocks.isEmpty) continue;
-          
-          final firstBlock = blocks.first;
-          
-          // 해당 날짜가 수업 요일인지 확인
-          if (date.weekday - 1 != firstBlock.dayIndex) continue;
-          
-          final classDateTime = DateTime(
-            date.year,
-            date.month,
-            date.day,
-            firstBlock.startHour,
-            firstBlock.startMinute,
-          );
-          
-          final classEndTime = classDateTime.add(firstBlock.duration);
+      int updated = 0;
+      for (final rec in _attendanceRecords) {
+        final arrival = rec.arrivalTime;
+        if (arrival == null) continue;
+        if (rec.departureTime != null) continue;
+        if (!isSameKstDay(arrival, ymdYesterdayKst)) continue;
 
-          // 기존 출석 기록 확인
-          final existingRecord = getAttendanceRecord(studentId, classDateTime);
-          
-          if (existingRecord != null) {
-            // 등원시간만 있고 하원시간이 없는 경우 정상 출석으로 처리
-            if (existingRecord.arrivalTime != null && existingRecord.departureTime == null) {
-              final updated = existingRecord.copyWith(
-                isPresent: true,
-                arrivalTime: existingRecord.arrivalTime, // 실제 등원시간 유지
-                departureTime: classEndTime, // 수업 종료 시간으로 설정
-              );
-              recordsToUpdate.add(updated);
-            }
-          } else {
-            // 출석 기록이 없는 경우 무단결석으로 기록
-            String className = '수업';
-            try {
-              final classInfo = classes.firstWhere((c) => c.id == firstBlock.sessionTypeId);
-              className = classInfo.name;
-            } catch (e) {
-              // 클래스 정보를 찾지 못한 경우 기본값 사용
-            }
-
-            final newRecord = AttendanceRecord.create(
-              studentId: studentId,
-              classDateTime: classDateTime,
-              classEndTime: classEndTime,
-              className: className,
-              isPresent: false, // 무단결석
-              arrivalTime: null,
-              departureTime: null,
-            );
-            recordsToCreate.add(newRecord);
-          }
-        }
+        final DateTime dep = arrival.add(Duration(minutes: lessonMinutes));
+        final updatedRec = rec.copyWith(
+          isPresent: true,
+          departureTime: dep,
+        );
+        await updateAttendanceRecord(updatedRec);
+        updated++;
       }
+      print('[ATT] 어제(KST) 미하원 자동 처리: ' + updated.toString() + '건');
+    } catch (e, st) {
+      print('[ATT][ERROR] 미하원 자동 처리 실패: ' + e.toString() + '\n' + st.toString());
     }
-
-    // 업데이트 실행
-    for (final record in recordsToUpdate) {
-      await updateAttendanceRecord(record);
-    }
-
-    // 생성 실행
-    for (final record in recordsToCreate) {
-      await addAttendanceRecord(record);
-    }
-
-    print('[DEBUG] 과거 수업 정리 완료: ${recordsToUpdate.length}개 업데이트, ${recordsToCreate.length}개 생성');
   }
 
   // =================== STUDENT PAYMENT INFO ===================

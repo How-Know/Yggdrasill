@@ -8,6 +8,7 @@ import '../../models/student.dart';
 import '../../services/tag_store.dart';
 import 'tag_preset_dialog.dart';
 import '../../services/homework_store.dart';
+import 'problem_bank_view.dart';
 
 class LearningScreen extends StatefulWidget {
   const LearningScreen({super.key});
@@ -17,7 +18,7 @@ class LearningScreen extends StatefulWidget {
 }
 
 class _LearningScreenState extends State<LearningScreen> {
-  int _selectedTab = 0; // 0: 기록, 1: 커리큘럼
+  int _selectedTab = 0; // 0: 기록, 1: 커리큘럼, 2: 문제은행
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +30,7 @@ class _LearningScreenState extends State<LearningScreen> {
           const SizedBox(height: 5),
           CustomTabBar(
             selectedIndex: _selectedTab,
-            tabs: const ['기록', '커리큘럼'],
+            tabs: const ['기록', '커리큘럼', '문제은행'],
             onTabSelected: (i) {
               setState(() {
                 _selectedTab = i;
@@ -40,7 +41,9 @@ class _LearningScreenState extends State<LearningScreen> {
           Expanded(
             child: _selectedTab == 0
                 ? const _LearningRecordsView()
-                : const _LearningCurriculumView(),
+                : (_selectedTab == 1
+                    ? const _LearningCurriculumView()
+                    : const ProblemBankView()),
           ),
           const SizedBox(height: 24),
         ],
