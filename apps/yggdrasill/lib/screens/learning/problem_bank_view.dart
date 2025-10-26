@@ -35,6 +35,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Offset? _dragCurrent;
   Uint8List? _croppedPreview;
   img.Image? _croppedImage; // 실제 크롭된 이미지 (서버 저장용)
+  double _manualRotation = 0.0; // 수동 회전각
   
   final GlobalKey _pdfViewKey = GlobalKey();
   final GlobalKey _containerKey = GlobalKey();
@@ -94,12 +95,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   if (_currentDoc != null) ...[
                     IconButton(
                       icon: const Icon(Icons.arrow_back, color: Colors.white70),
-                      onPressed: _currentPage > 1 ? () => setState(() => _currentPage--) : null,
+                      onPressed: _currentPage > 1 ? () => setState(() { 
+                        _currentPage--;
+                        _selectedRect = null;
+                        _croppedPreview = null;
+                        _manualRotation = 0;
+                      }) : null,
                     ),
                     Text('$_currentPage / ${_currentDoc!.pages.length}', style: const TextStyle(color: Colors.white70)),
                     IconButton(
                       icon: const Icon(Icons.arrow_forward, color: Colors.white70),
-                      onPressed: _currentPage < _currentDoc!.pages.length ? () => setState(() => _currentPage++) : null,
+                      onPressed: _currentPage < _currentDoc!.pages.length ? () => setState(() { 
+                        _currentPage++;
+                        _selectedRect = null;
+                        _croppedPreview = null;
+                        _manualRotation = 0;
+                      }) : null,
                     ),
                     const SizedBox(width: 16),
                   ],
@@ -158,22 +169,24 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       );
     }
     
-    return ListView.builder(
+    return GridView.builder(
       padding: const EdgeInsets.all(24),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 5,
+        childAspectRatio: 3.5,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+      ),
       itemCount: _savedProblems.length,
       itemBuilder: (context, i) {
-        final p = _savedProblems[i];
-        final id = p['id'] as String? ?? '';
-        final imageUrl = p['image_url'] as String? ?? '';
-        final number = p['problem_number'] as String? ?? '번호 미지정';
-        final subject = p['subject'] as String? ?? '';
-        final isSelected = _selectedProblemIds.contains(id);
-        
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: SizedBox(
-            width: 900, // 고정 너비
-            child: InkWell(
+            final p = _savedProblems[i];
+            final id = p['id'] as String? ?? '';
+            final imageUrl = p['image_url'] as String? ?? '';
+            final number = p['problem_number'] as String? ?? '번호 미지정';
+            final subject = p['subject'] as String? ?? '';
+            final isSelected = _selectedProblemIds.contains(id);
+            
+            return InkWell(
               onTap: () {
                 setState(() {
                   if (isSelected) {
@@ -185,7 +198,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               },
               borderRadius: BorderRadius.circular(10),
               child: Container(
-                height: 120,
                 decoration: BoxDecoration(
                   color: const Color(0xFF262626),
                   borderRadius: BorderRadius.circular(10),
@@ -194,66 +206,62 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     width: isSelected ? 3 : 1,
                   ),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 좌측: 이미지 (가로로 길게, 흰 배경)
+                    // 첫줄: 제목/출처 + 체크박스
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '중등 수학 1-1 · 쎈',
+                              style: const TextStyle(color: Colors.white60, fontSize: 12),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isSelected)
+                            const Icon(Icons.check_circle, color: Color(0xFF1976D2), size: 18),
+                        ],
+                      ),
+                    ),
+                    // 둘째줄: 문제 이미지 (흰 배경, 상단 정렬)
                     Expanded(
-                      flex: 5,
                       child: Container(
-                        decoration: const BoxDecoration(
+                        width: double.infinity,
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.horizontal(left: Radius.circular(10)),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: ClipRRect(
-                          borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
+                          borderRadius: BorderRadius.circular(6),
                           child: imageUrl.isNotEmpty
-                              ? Image.network(imageUrl, fit: BoxFit.contain, height: double.infinity)
+                              ? Align(
+                                  alignment: Alignment.topCenter,
+                                  child: Image.network(imageUrl, fit: BoxFit.fitWidth),
+                                )
                               : Container(color: const Color(0xFFEEEEEE)),
                         ),
                       ),
                     ),
+                    // 셋째줄: 태그/상세
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                      child: Text(
+                        '난이도: 중 · 유형: 함수',
+                        style: const TextStyle(color: Colors.white54, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  // 우측: 정보 (작은 영역)
-                  Container(
-                    width: 180,
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Row(
-                          children: [
-                            if (isSelected)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 8),
-                                child: Icon(Icons.check_circle, color: Color(0xFF1976D2), size: 20),
-                              ),
-                            Expanded(
-                              child: Text(number, 
-                                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (subject.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(subject, 
-                            style: const TextStyle(color: Colors.white60, fontSize: 13),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
     );
   }
   
@@ -314,6 +322,53 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             style: const TextStyle(color: Colors.white54), textAlign: TextAlign.center),
                         ),
                 ),
+                // 수동 회전 조정
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('수동 회전', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.rotate_left, size: 18),
+                            onPressed: () {
+                              setState(() => _manualRotation -= 0.1);
+                              _applyManualRotation();
+                            },
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            color: Colors.white70,
+                          ),
+                          Expanded(
+                            child: Slider(
+                              value: _manualRotation.clamp(-2.0, 2.0),
+                              min: -2.0,
+                              max: 2.0,
+                              divisions: 80,
+                              label: '${_manualRotation.toStringAsFixed(1)}°',
+                              onChanged: (v) {
+                                setState(() => _manualRotation = v);
+                                _applyManualRotation();
+                              },
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.rotate_right, size: 18),
+                            onPressed: () {
+                              setState(() => _manualRotation += 0.1);
+                              _applyManualRotation();
+                            },
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            color: Colors.white70,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Row(
@@ -333,6 +388,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           _dragCurrent = null;
                           _croppedPreview = null;
                           _croppedImage = null;
+                          _manualRotation = 0;
                         }),
                         child: const Text('취소', style: TextStyle(color: Colors.white70)),
                       ),
@@ -446,6 +502,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               child: Container(
                                 decoration: BoxDecoration(border: Border.all(color: Colors.white24, width: 2)),
                                 child: pdfrx.PdfPageView(
+                                  key: ValueKey('page_$_currentPage'),
                                   document: _currentDoc!,
                                   pageNumber: _currentPage,
                                 ),
@@ -503,7 +560,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       }
       
       _log('고해상도 캡처 중...');
-      final ui.Image fullImg = await rb.toImage(pixelRatio: 6.0); // 고해상도
+      final ui.Image fullImg = await rb.toImage(pixelRatio: 8.0); // B4 인쇄 품질
       final ByteData? bd = await fullImg.toByteData(format: ui.ImageByteFormat.png);
       if (bd == null) return;
       
@@ -530,17 +587,29 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final cropped = img.copyCrop(decoded, x: cropX, y: cropY, width: cropW, height: cropH);
       
       // 수평 자동 조절 (회전각 탐지 후 보정)
-      final corrected = _autoLevelImage(cropped);
+      final autoLeveled = _autoLevelImage(cropped);
       
-      final croppedPng = img.encodePng(corrected);
-      setState(() {
-        _croppedImage = corrected; // 서버 저장용
-        _croppedPreview = Uint8List.fromList(croppedPng);
-      });
+      // 수동 회전 적용
+      _croppedImage = autoLeveled;
+      _updatePreviewWithRotation();
       _log('미리보기 생성 완료: ${cropW}x${cropH}');
     } catch (e) {
       _log('미리보기 생성 실패: $e');
     }
+  }
+  
+  void _applyManualRotation() {
+    if (_croppedImage == null) return;
+    _updatePreviewWithRotation();
+  }
+  
+  void _updatePreviewWithRotation() {
+    if (_croppedImage == null) return;
+    final rotated = img.copyRotate(_croppedImage!, angle: _manualRotation);
+    final png = img.encodePng(rotated);
+    setState(() {
+      _croppedPreview = Uint8List.fromList(png);
+    });
   }
   
   Future<void> _saveProblemToServer() async {
@@ -556,7 +625,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final supa = Supabase.instance.client;
       final id = const Uuid().v4();
       final fileName = '$id.png';
-      final pngBytes = img.encodePng(_croppedImage!);
+      
+      // 수동 회전 반영
+      final finalImage = img.copyRotate(_croppedImage!, angle: _manualRotation);
+      final pngBytes = img.encodePng(finalImage);
       
       // Storage 업로드
       await supa.storage
@@ -591,79 +663,106 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
   }
   
-  // 수평 자동 조절: 맨 윗줄(텍스트 상단 라인)을 평평하게 보정
+  // 수평 자동 조절: Otsu + 여러 텍스트 라인 샘플링 + 중앙값
   img.Image _autoLevelImage(img.Image src) {
     try {
       final gray = img.grayscale(src);
       final w = gray.width;
       final h = gray.height;
       
-      // 평균 밝기로 임계값 계산
-      int sum = 0;
+      // 1) Otsu 임계값 계산
+      final histogram = List<int>.filled(256, 0);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          sum += gray.getPixel(x, y).luminance.toInt();
+          histogram[gray.getPixel(x, y).luminance.toInt()]++;
         }
       }
-      final threshold = ((sum / (w * h)) * 0.75).round();
+      final threshold = _otsuThreshold(histogram, w * h);
+      _log('Otsu 임계: $threshold');
       
-      // 맨 윗줄 찾기: 상단 10%에서 텍스트가 처음 나타나는 행
-      int topTextRow = -1;
-      final scanH = (h * 0.1).round();
-      for (int y = 0; y < scanH; y++) {
+      // 2) 상단 40% 영역에서 텍스트 라인 여러 개 샘플링
+      final scanH = (h * 0.4).round();
+      final List<double> angles = [];
+      
+      for (int y = 0; y < scanH; y += math.max(1, (h * 0.025).round())) {
         int blackCnt = 0;
         for (int x = (w * 0.1).round(); x < (w * 0.9).round(); x++) {
           if (gray.getPixel(x, y).luminance.toInt() < threshold) blackCnt++;
         }
-        if (blackCnt > w * 0.05) { // 5% 이상 검은 픽셀
-          topTextRow = y;
-          break;
+        
+        // 텍스트가 충분히 있는 행만 샘플
+        if (blackCnt < w * 0.08) continue;
+        
+        // 해당 행의 좌우 끝 텍스트 위치
+        int? leftX, rightX;
+        for (int x = (w * 0.05).round(); x < (w * 0.95).round(); x++) {
+          if (gray.getPixel(x, y).luminance.toInt() < threshold) {
+            if (leftX == null) leftX = x;
+            rightX = x;
+          }
         }
-      }
-      
-      if (topTextRow < 0 || topTextRow >= h - 2) {
-        _log('윗줄 못 찾음');
-        return src;
-      }
-      
-      // 해당 행의 좌우 검은 픽셀 위치 찾기
-      int? leftX, rightX;
-      for (int x = (w * 0.05).round(); x < (w * 0.95).round(); x++) {
-        if (gray.getPixel(x, topTextRow).luminance.toInt() < threshold) {
-          if (leftX == null) leftX = x;
-          rightX = x;
+        
+        if (leftX == null || rightX == null || (rightX - leftX) < w * 0.25) continue;
+        
+        // 정밀 y 탐색 (±5px)
+        int leftY = y, rightY = y;
+        for (int dy = -5; dy <= 5; dy++) {
+          final yy = (y + dy).clamp(0, h - 1);
+          if (gray.getPixel(leftX, yy).luminance.toInt() < threshold) leftY = yy;
+          if (gray.getPixel(rightX, yy).luminance.toInt() < threshold) rightY = yy;
         }
+        
+        // 각도 계산
+        final slope = (rightY - leftY).toDouble() / (rightX - leftX).toDouble();
+        final angleDeg = math.atan(slope) * 180 / math.pi;
+        if (angleDeg.abs() < 3.0) angles.add(angleDeg);
       }
       
-      if (leftX == null || rightX == null || (rightX - leftX) < w * 0.2) {
-        _log('좌우 끝점 부족');
+      if (angles.isEmpty) {
+        _log('라인 샘플 부족');
         return src;
       }
       
-      // 좌우 끝점 y 좌표 정밀 탐색 (±3px 범위)
-      int leftY = topTextRow, rightY = topTextRow;
-      for (int dy = -3; dy <= 3; dy++) {
-        final y = (topTextRow + dy).clamp(0, h - 1);
-        if (gray.getPixel(leftX, y).luminance.toInt() < threshold) leftY = y;
-        if (gray.getPixel(rightX, y).luminance.toInt() < threshold) rightY = y;
-      }
+      // 중앙값 사용 (이상치 제거)
+      angles.sort();
+      final median = angles[angles.length ~/ 2];
+      _log('각도 샘플: ${angles.length}개, 중앙값=${median.toStringAsFixed(3)}°');
       
-      // 기울기 계산: (rightY - leftY) / (rightX - leftX)
-      final slope = (rightY - leftY).toDouble() / (rightX - leftX).toDouble();
-      final angleRad = math.atan(slope);
-      final angleDeg = angleRad * 180 / math.pi;
-      
-      if (angleDeg.abs() < 0.08) {
-        _log('수평 보정 불필요: ${angleDeg.toStringAsFixed(2)}°');
+      if (median.abs() < 0.05) {
+        _log('수평 보정 불필요');
         return src;
       }
       
-      _log('수평 보정: ${angleDeg.toStringAsFixed(2)}° (윗줄 기준)');
-      return img.copyRotate(src, angle: -angleDeg);
+      _log('수평 보정: ${median.toStringAsFixed(2)}°');
+      return img.copyRotate(src, angle: -median);
     } catch (e) {
       _log('수평 보정 실패: $e');
       return src;
     }
+  }
+  
+  int _otsuThreshold(List<int> histogram, int total) {
+    double sum = 0;
+    for (int i = 0; i < 256; i++) sum += i * histogram[i];
+    double sumB = 0;
+    int wB = 0;
+    double maxVar = 0;
+    int threshold = 0;
+    for (int t = 0; t < 256; t++) {
+      wB += histogram[t];
+      if (wB == 0) continue;
+      final wF = total - wB;
+      if (wF == 0) break;
+      sumB += t * histogram[t];
+      final mB = sumB / wB;
+      final mF = (sum - sumB) / wF;
+      final varBetween = wB * wF * (mB - mF) * (mB - mF);
+      if (varBetween > maxVar) {
+        maxVar = varBetween;
+        threshold = t;
+      }
+    }
+    return threshold;
   }
   
   Future<void> _printSelected() async {
@@ -674,20 +773,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       // 선택된 문제 가져오기
       final selected = _savedProblems.where((p) => _selectedProblemIds.contains(p['id'])).toList();
       
-      // PDF 생성 (2단 레이아웃)
+      // PDF 생성 (2×2 레이아웃, 한 페이지 4문제)
       final doc = sf.PdfDocument();
       const double margin = 30;
-      const double pageWidth = 595; // A4 width (points)
-      const double pageHeight = 842; // A4 height (points)
-      const double gap = 20; // 컬럼 간 간격
-      const double colWidth = (pageWidth - margin * 2 - gap) / 2; // 2단
+      const double pageWidth = 595;
+      const double pageHeight = 842;
+      const double gap = 20;
+      const double colWidth = (pageWidth - margin * 2 - gap) / 2;
+      const double rowHeight = (pageHeight - margin * 2 - gap) / 2;
+      const double maxProbH = rowHeight - 30; // 번호 공간 확보
       
+      int problemNumber = 1;
+      int pageCount = 0;
       sf.PdfPage? currentPage;
-      int currentCol = 0; // 0: 왼쪽, 1: 오른쪽
-      double leftY = margin;
-      double rightY = margin;
       
-      for (final prob in selected) {
+      for (int i = 0; i < selected.length; i++) {
+        final prob = selected[i];
         final imageUrl = prob['image_url'] as String? ?? '';
         if (imageUrl.isEmpty) continue;
         
@@ -699,47 +800,57 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final decoded = img.decodePng(imgData);
         if (decoded == null) continue;
         
-        // 이미지 크기 계산 (컬럼 너비에 맞춤)
         final imgAspect = decoded.width / decoded.height;
         final displayWidth = colWidth;
         final displayHeight = displayWidth / imgAspect;
         
-        // 현재 컬럼 Y 위치
-        final currentY = (currentCol == 0) ? leftY : rightY;
+        // 세로로 긴 문제는 한 페이지 전체 사용
+        final isTall = displayHeight > maxProbH * 1.5;
         
-        // 페이지 넘김 필요 여부 (현재 컬럼 기준)
-        if (currentPage == null || currentY + displayHeight > pageHeight - margin) {
-          // 왼쪽 컬럼이 가득 찼으면 오른쪽으로, 오른쪽도 가득 찼으면 새 페이지
-          if (currentPage != null && currentCol == 0 && rightY + displayHeight <= pageHeight - margin) {
-            currentCol = 1; // 오른쪽 컬럼으로
-          } else {
-            currentPage = doc.pages.add();
-            leftY = margin;
-            rightY = margin;
-            currentCol = 0;
-          }
-        }
+        // 페이지 내 위치 (0~3: 좌상, 우상, 좌하, 우하)
+        final posInPage = i % 4;
         
-        // 이미지 그리기
-        final x = (currentCol == 0) ? margin : (margin + colWidth + gap);
-        final y = (currentCol == 0) ? leftY : rightY;
-        
-        if (currentPage != null) {
-          currentPage.graphics.drawImage(
-            sf.PdfBitmap(imgData),
-            Rect.fromLTWH(x, y, displayWidth, displayHeight),
+        if (currentPage == null || posInPage == 0) {
+          currentPage = doc.pages.add();
+          pageCount++;
+          
+          // 가운데 세로 구분선
+          currentPage.graphics.drawLine(
+            sf.PdfPen(sf.PdfColor(200, 200, 200), width: 0.5),
+            Offset(pageWidth / 2, margin),
+            Offset(pageWidth / 2, pageHeight - margin),
+          );
+          
+          // 가운데 가로 구분선
+          currentPage.graphics.drawLine(
+            sf.PdfPen(sf.PdfColor(200, 200, 200), width: 0.5),
+            Offset(margin, pageHeight / 2),
+            Offset(pageWidth - margin, pageHeight / 2),
           );
         }
         
-        // Y 위치 갱신
-        if (currentCol == 0) {
-          leftY = y + displayHeight + 16;
-        } else {
-          rightY = y + displayHeight + 16;
-        }
+        // 셀 위치 계산
+        final col = posInPage % 2;
+        final row = posInPage ~/ 2;
+        final x = margin + col * (colWidth + gap);
+        final y = margin + row * (rowHeight + gap);
         
-        // 다음 문제는 반대 컬럼으로 (왼쪽↔오른쪽 번갈아)
-        currentCol = 1 - currentCol;
+        // 번호 그리기
+        currentPage.graphics.drawString(
+          '$problemNumber.',
+          sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 11),
+          bounds: Rect.fromLTWH(x, y, colWidth, 20),
+        );
+        
+        // 이미지 그리기
+        final imgY = y + 22;
+        final fitH = math.min(displayHeight, maxProbH);
+        currentPage.graphics.drawImage(
+          sf.PdfBitmap(imgData),
+          Rect.fromLTWH(x, imgY, displayWidth, fitH),
+        );
+        
+        problemNumber++;
       }
       
       // PDF 저장 및 열기

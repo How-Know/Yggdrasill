@@ -196,3 +196,4 @@ for each row execute function public._attendance_defaults();
 
 
 
+
