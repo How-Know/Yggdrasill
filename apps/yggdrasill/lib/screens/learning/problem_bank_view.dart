@@ -49,6 +49,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   // 선택된 문제 ID 목록
   Set<String> _selectedProblemIds = {};
   
+  // 필터
+  String _filterLevel = '전체'; // 전체, 초, 중, 고
+  String _filterGrade = '전체';
+  String _filterSubject = '전체';
+  String _filterSource = '전체'; // 전체, 시중교재, 교과서, 내교재
+  String _searchQuery = '';
+  
+  // 문제 유형 선택 (크롭 시)
+  String _problemType = '주관식'; // 주관식, 객관식, 모두
+  bool _isEssay = false; // 서술형 여부
+  Rect? _choiceRect; // 선지 영역 (모두 선택 시)
+  
+  // 입력 모드: PDF 또는 붙여넣기
+  bool _isPasteMode = false;
+  
   @override
   void initState() {
     super.initState();
@@ -56,6 +71,62 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
   
   void _log(String s) { setState(() { _logs.insert(0, s); }); }
+  
+  Widget _buildLevelButton(String level) {
+    final isSelected = _filterLevel == level;
+    return InkWell(
+      onTap: () => setState(() {
+        _filterLevel = level;
+        _filterGrade = '전체'; // 과정 변경 시 학년 초기화
+      }),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF1976D2) : const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: isSelected ? const Color(0xFF1976D2) : Colors.white24),
+        ),
+        child: Text(level, style: TextStyle(color: isSelected ? Colors.white : Colors.white70, fontSize: 13)),
+      ),
+    );
+  }
+  
+  Widget _buildGradeDropdown() {
+    List<String> items = ['전체'];
+    if (_filterLevel == '중') {
+      items.addAll(['중1-1', '중1-2', '중2-1', '중2-2', '중3-1', '중3-2']);
+    } else if (_filterLevel == '고') {
+      items.addAll(['고1', '고2', '고3']);
+    } else if (_filterLevel == '초') {
+      items.addAll(['초1', '초2', '초3', '초4', '초5', '초6']);
+    }
+    if (!items.contains(_filterGrade)) {
+      _filterGrade = '전체';
+    }
+    return _buildFilterDropdown('학년', _filterGrade, items, (v) => setState(() => _filterGrade = v));
+  }
+  
+  Widget _buildFilterDropdown(String label, String value, List<String> items, void Function(String) onChanged) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          dropdownColor: const Color(0xFF1F1F1F),
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
+          items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+          onChanged: (v) { if (v != null) onChanged(v); },
+          isDense: true,
+        ),
+      ),
+    );
+  }
   
   Future<void> _loadSavedProblems() async {
     try {
@@ -90,6 +161,68 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               children: [
                 Text(_isCropMode ? '문제은행 · 크롭 모드' : '문제은행', 
                   style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700)),
+                if (!_isCropMode) ...[
+                  const SizedBox(width: 24),
+                  // 과정 버튼
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final level in ['전체', '초', '중', '고'])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: _buildLevelButton(level),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(width: 16),
+                  // 학년 드롭다운 (과정에 따라 변경)
+                  _buildGradeDropdown(),
+                  const SizedBox(width: 12),
+                  // 과목 드롭다운
+                  _buildFilterDropdown('과목', _filterSubject, ['전체', '공통수학1', '공통수학2', '대수', '미적분1', '확률과 통계', '미적분2', '기하'], (v) => setState(() => _filterSubject = v)),
+                  const SizedBox(width: 16),
+                  // 교재 라디오
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final src in ['시중교재', '교과서', '내교재'])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: InkWell(
+                            onTap: () => setState(() => _filterSource = src),
+                            borderRadius: BorderRadius.circular(16),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: _filterSource == src ? const Color(0xFF1976D2) : Colors.transparent,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: _filterSource == src ? const Color(0xFF1976D2) : Colors.white24),
+                              ),
+                              child: Text(src, style: TextStyle(color: _filterSource == src ? Colors.white : Colors.white60, fontSize: 12)),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(width: 12),
+                  // 검색 입력
+                  SizedBox(
+                    width: 200,
+                    child: TextField(
+                      onChanged: (v) => setState(() => _searchQuery = v),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: '검색',
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        prefixIcon: const Icon(Icons.search, color: Colors.white54, size: 18),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.white24)),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.white24)),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF1976D2))),
+                      ),
+                    ),
+                  ),
+                ],
                 const Spacer(),
                 if (_isCropMode) ...[
                   if (_currentDoc != null) ...[
@@ -136,6 +269,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E7D32)),
                     ),
                     const SizedBox(width: 8),
+                    FilledButton.icon(
+                      onPressed: () => _deleteSelected(),
+                      icon: const Icon(Icons.delete, size: 18),
+                      label: Text('삭제 (${_selectedProblemIds.length}개)'),
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD32F2F)),
+                    ),
+                    const SizedBox(width: 8),
                     OutlinedButton(
                       onPressed: () => setState(() => _selectedProblemIds.clear()),
                       child: const Text('선택 해제', style: TextStyle(color: Colors.white70)),
@@ -173,132 +313,189 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       padding: const EdgeInsets.all(24),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 5,
-        childAspectRatio: 3.5,
+        childAspectRatio: 1.75, // 높이 2배 (3.5 → 1.75)
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
       ),
       itemCount: _savedProblems.length,
       itemBuilder: (context, i) {
-            final p = _savedProblems[i];
-            final id = p['id'] as String? ?? '';
-            final imageUrl = p['image_url'] as String? ?? '';
-            final number = p['problem_number'] as String? ?? '번호 미지정';
-            final subject = p['subject'] as String? ?? '';
-            final isSelected = _selectedProblemIds.contains(id);
-            
-            return InkWell(
-              onTap: () {
-                setState(() {
-                  if (isSelected) {
-                    _selectedProblemIds.remove(id);
-                  } else {
-                    _selectedProblemIds.add(id);
-                  }
-                });
-              },
+        final p = _savedProblems[i];
+        final id = p['id'] as String? ?? '';
+        final imageUrl = p['image_url'] as String? ?? '';
+        final number = p['problem_number'] as String? ?? '번호 미지정';
+        final subject = p['subject'] as String? ?? '';
+        final isSelected = _selectedProblemIds.contains(id);
+        
+        return InkWell(
+          onTap: () {
+            setState(() {
+              if (isSelected) {
+                _selectedProblemIds.remove(id);
+              } else {
+                _selectedProblemIds.add(id);
+              }
+            });
+          },
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF262626),
               borderRadius: BorderRadius.circular(10),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF262626),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isSelected ? const Color(0xFF1976D2) : Colors.white24, 
-                    width: isSelected ? 3 : 1,
+              border: Border.all(
+                color: isSelected ? const Color(0xFF1976D2) : Colors.white24, 
+                width: isSelected ? 3 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 첫줄: 번호 + 제목/출처 + 유형칩 + 체크박스
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                  child: Row(
+                    children: [
+                      Text(
+                        '${i + 1}',
+                        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '중등 수학 1-1 · 쎈',
+                          style: const TextStyle(color: Colors.white60, fontSize: 18),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      // 유형 칩
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1976D2).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF1976D2), width: 1),
+                        ),
+                        child: const Text('주관', style: TextStyle(color: Color(0xFF64B5F6), fontSize: 11, fontWeight: FontWeight.w600)),
+                      ),
+                      if (isSelected) ...[
+                        const SizedBox(width: 8),
+                        const Icon(Icons.check_circle, color: Color(0xFF1976D2), size: 22),
+                      ],
+                    ],
                   ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 첫줄: 제목/출처 + 체크박스
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '중등 수학 1-1 · 쎈',
-                              style: const TextStyle(color: Colors.white60, fontSize: 12),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (isSelected)
-                            const Icon(Icons.check_circle, color: Color(0xFF1976D2), size: 18),
-                        ],
-                      ),
+                // 둘째줄: 문제 이미지 (흰 배경, 상단 정렬, 너비 가득)
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    // 둘째줄: 문제 이미지 (흰 배경, 상단 정렬)
-                    Expanded(
-                      child: Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: imageUrl.isNotEmpty
-                              ? Align(
-                                  alignment: Alignment.topCenter,
-                                  child: Image.network(imageUrl, fit: BoxFit.fitWidth),
-                                )
-                              : Container(color: const Color(0xFFEEEEEE)),
-                        ),
-                      ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: imageUrl.isNotEmpty
+                          ? SingleChildScrollView(
+                              child: Image.network(imageUrl, fit: BoxFit.fitWidth, width: double.infinity),
+                            )
+                          : Container(color: const Color(0xFFEEEEEE)),
                     ),
-                    // 셋째줄: 태그/상세
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                      child: Text(
-                        '난이도: 중 · 유형: 함수',
-                        style: const TextStyle(color: Colors.white54, fontSize: 11),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            );
-          },
+                // 셋째줄: 태그/상세
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                  child: Text(
+                    '난이도: 중 · 유형: 함수',
+                    style: const TextStyle(color: Colors.white54, fontSize: 16.5),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
   
   Widget _buildCropMode() {
     return Row(
       children: [
-        // PDF 뷰어 (Expanded로 최대 확장)
+        // PDF 뷰어 또는 붙여넣기 (Expanded로 최대 확장)
         Expanded(
           child: _currentDoc == null
               ? Center(
-                  child: Container(
-                    width: 520,
-                    height: 280,
-                    decoration: BoxDecoration(
-                      color: _dragOver ? const Color(0xFF23262C) : const Color(0xFF222222),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _dragOver ? const Color(0xFF64B5F6) : Colors.white24, width: 2),
-                    ),
-                    child: _DropPdfArea(
-                      onDrag: (v) => setState(() => _dragOver = v),
-                      onFiles: (paths) async {
-                        if (paths.isEmpty) return;
-                        final path = paths.first;
-                        _log('PDF 로드: $path');
-                        try {
-                          final doc = await pdfrx.PdfDocument.openFile(path);
-                          setState(() {
-                            _currentDoc = doc;
-                            _currentPath = path;
-                            _currentPage = 1;
-                          });
-                          _log('${doc.pages.length}페이지 로드 완료');
-                        } catch (e) {
-                          _log('로드 실패: $e');
-                        }
-                      },
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: () => setState(() => _isPasteMode = false),
+                            icon: const Icon(Icons.picture_as_pdf, size: 18),
+                            label: const Text('PDF 드롭'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: !_isPasteMode ? const Color(0xFF1976D2) : const Color(0xFF616161),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: () => setState(() => _isPasteMode = true),
+                            icon: const Icon(Icons.content_paste, size: 18),
+                            label: const Text('붙여넣기'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _isPasteMode ? const Color(0xFF1976D2) : const Color(0xFF616161),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Container(
+                        width: 520,
+                        height: 280,
+                        decoration: BoxDecoration(
+                          color: _dragOver ? const Color(0xFF23262C) : const Color(0xFF222222),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: _dragOver ? const Color(0xFF64B5F6) : Colors.white24, width: 2),
+                        ),
+                        child: _isPasteMode
+                            ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    Icon(Icons.content_paste, color: Colors.white70, size: 48),
+                                    SizedBox(height: 12),
+                                    Text('Ctrl+V로 스크린샷 붙여넣기', style: TextStyle(color: Colors.white70, fontSize: 16)),
+                                    SizedBox(height: 6),
+                                    Text('어도비 뷰어 등에서 스크린샷 후 바로 붙여넣기', style: TextStyle(color: Colors.white38, fontSize: 13)),
+                                  ],
+                                ),
+                              )
+                            : _DropPdfArea(
+                                onDrag: (v) => setState(() => _dragOver = v),
+                                onFiles: (paths) async {
+                                  if (paths.isEmpty) return;
+                                  final path = paths.first;
+                                  _log('PDF 로드: $path');
+                                  try {
+                                    final doc = await pdfrx.PdfDocument.openFile(path);
+                                    setState(() {
+                                      _currentDoc = doc;
+                                      _currentPath = path;
+                                      _currentPage = 1;
+                                    });
+                                    _log('${doc.pages.length}페이지 로드 완료');
+                                  } catch (e) {
+                                    _log('로드 실패: $e');
+                                  }
+                                },
+                              ),
+                      ),
+                    ],
                   ),
                 )
               : _buildPdfViewer(),
@@ -316,7 +513,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   color: const Color(0xFF222222),
                   padding: const EdgeInsets.all(8),
                   child: _croppedPreview != null
-                      ? Image.memory(_croppedPreview!, fit: BoxFit.contain)
+                      ? Stack(
+                          children: [
+                            Image.memory(_croppedPreview!, fit: BoxFit.contain),
+                            // 가로 보조선 (중앙)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              top: 110, // 220 / 2
+                              child: Container(
+                                height: 1,
+                                color: const Color(0xFF64B5F6).withOpacity(0.8),
+                              ),
+                            ),
+                          ],
+                        )
                       : Center(
                           child: Text('크롭 영역\n(${(_selectedRect!.width * 100).toStringAsFixed(0)}% × ${(_selectedRect!.height * 100).toStringAsFixed(0)}%)', 
                             style: const TextStyle(color: Colors.white54), textAlign: TextAlign.center),
@@ -397,6 +608,55 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 ),
                 const Divider(color: Colors.white24, height: 1),
               ],
+              // 문제 유형 선택
+              Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('문제 유형', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        for (final type in ['주관식', '객관식', '모두'])
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: InkWell(
+                                onTap: () => setState(() => _problemType = type),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: _problemType == type ? const Color(0xFF1976D2) : const Color(0xFF2A2A2A),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: _problemType == type ? const Color(0xFF1976D2) : Colors.white24),
+                                  ),
+                                  child: Text(type, style: TextStyle(color: _problemType == type ? Colors.white : Colors.white60, fontSize: 11), textAlign: TextAlign.center),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: () => setState(() => _isEssay = !_isEssay),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _isEssay ? const Color(0xFF2E7D32) : const Color(0xFF2A2A2A),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _isEssay ? const Color(0xFF2E7D32) : Colors.white24),
+                        ),
+                        child: Text('서술형', style: TextStyle(color: _isEssay ? Colors.white : Colors.white60, fontSize: 11), textAlign: TextAlign.center),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(color: Colors.white24, height: 1),
               Expanded(
                 child: ListView.builder(
                   padding: const EdgeInsets.all(12),
@@ -765,6 +1025,30 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return threshold;
   }
   
+  Future<void> _deleteSelected() async {
+    if (_selectedProblemIds.isEmpty) return;
+    try {
+      final supa = Supabase.instance.client;
+      for (final id in _selectedProblemIds) {
+        await supa.from('problem_bank').delete().eq('id', id);
+        // Storage도 삭제
+        final prob = _savedProblems.firstWhere((p) => p['id'] == id, orElse: () => {});
+        final imageUrl = prob['image_url'] as String? ?? '';
+        if (imageUrl.isNotEmpty) {
+          try {
+            final path = imageUrl.split('/problem-images/').last;
+            await supa.storage.from('problem-images').remove([path]);
+          } catch (_) {}
+        }
+      }
+      _log('${_selectedProblemIds.length}개 문제 삭제 완료');
+      setState(() => _selectedProblemIds.clear());
+      await _loadSavedProblems();
+    } catch (e) {
+      _log('삭제 실패: $e');
+    }
+  }
+  
   Future<void> _printSelected() async {
     if (_selectedProblemIds.isEmpty) return;
     try {
@@ -773,18 +1057,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       // 선택된 문제 가져오기
       final selected = _savedProblems.where((p) => _selectedProblemIds.contains(p['id'])).toList();
       
-      // PDF 생성 (2×2 레이아웃, 한 페이지 4문제)
+      // PDF 생성 (2×2 레이아웃, 상단 40% 하단 50%, 한 페이지 4문제)
       final doc = sf.PdfDocument();
-      const double margin = 30;
+      const double margin = 20; // 좌측 여백 감소
       const double pageWidth = 595;
       const double pageHeight = 842;
       const double gap = 20;
       const double colWidth = (pageWidth - margin * 2 - gap) / 2;
-      const double rowHeight = (pageHeight - margin * 2 - gap) / 2;
-      const double maxProbH = rowHeight - 30; // 번호 공간 확보
+      const double totalH = pageHeight - margin * 2;
+      const double topRowH = totalH * 0.4; // 위 40%
+      const double bottomRowH = totalH * 0.5; // 아래 50% (10% 더)
       
       int problemNumber = 1;
-      int pageCount = 0;
       sf.PdfPage? currentPage;
       
       for (int i = 0; i < selected.length; i++) {
@@ -804,28 +1088,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final displayWidth = colWidth;
         final displayHeight = displayWidth / imgAspect;
         
-        // 세로로 긴 문제는 한 페이지 전체 사용
-        final isTall = displayHeight > maxProbH * 1.5;
-        
-        // 페이지 내 위치 (0~3: 좌상, 우상, 좌하, 우하)
+        // 페이지 내 위치 (0~3)
         final posInPage = i % 4;
         
         if (currentPage == null || posInPage == 0) {
           currentPage = doc.pages.add();
-          pageCount++;
           
-          // 가운데 세로 구분선
+          // 가운데 세로 구분선 (굵게)
           currentPage.graphics.drawLine(
-            sf.PdfPen(sf.PdfColor(200, 200, 200), width: 0.5),
+            sf.PdfPen(sf.PdfColor(160, 160, 160), width: 1.5),
             Offset(pageWidth / 2, margin),
             Offset(pageWidth / 2, pageHeight - margin),
-          );
-          
-          // 가운데 가로 구분선
-          currentPage.graphics.drawLine(
-            sf.PdfPen(sf.PdfColor(200, 200, 200), width: 0.5),
-            Offset(margin, pageHeight / 2),
-            Offset(pageWidth - margin, pageHeight / 2),
           );
         }
         
@@ -833,18 +1106,20 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final col = posInPage % 2;
         final row = posInPage ~/ 2;
         final x = margin + col * (colWidth + gap);
-        final y = margin + row * (rowHeight + gap);
+        final y = margin + (row == 0 ? 0 : topRowH);
+        final cellH = (row == 0) ? topRowH : bottomRowH;
         
-        // 번호 그리기
+        // 번호 그리기 (크고 굵게, 여백 추가)
         currentPage.graphics.drawString(
           '$problemNumber.',
-          sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 11),
-          bounds: Rect.fromLTWH(x, y, colWidth, 20),
+          sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 16, style: sf.PdfFontStyle.bold),
+          bounds: Rect.fromLTWH(x + 5, y + 5, colWidth, 20),
         );
         
         // 이미지 그리기
-        final imgY = y + 22;
-        final fitH = math.min(displayHeight, maxProbH);
+        final imgY = y + 25; // 번호 여백 5 + 높이 20
+        final maxImgH = cellH - 25;
+        final fitH = math.min(displayHeight, maxImgH);
         currentPage.graphics.drawImage(
           sf.PdfBitmap(imgData),
           Rect.fromLTWH(x, imgY, displayWidth, fitH),
