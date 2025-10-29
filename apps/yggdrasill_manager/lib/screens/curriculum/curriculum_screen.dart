@@ -41,8 +41,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 소단원 개수 캐시 (chapterId -> count)
   Map<String, int> _sectionCounts = {};
   
-  // 개념 그룹 높이 캐시 (groupId -> height)
-  final Map<String, double> _groupHeights = {};
+  // 화살표 절대 좌표 (Y 위치)
+  double? _arrowAbsoluteY;
   
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
@@ -452,25 +452,18 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     // 확장된 구분선의 그룹 찾기
     Map<String, dynamic>? expandedGroup;
-    int expandedGroupIndex = 0;
     double topOffset = 20.0; // 기본 패딩
     
     if (_expandedGroupId != null && _conceptGroups.isNotEmpty) {
       try {
-        expandedGroupIndex = _conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
+        final expandedGroupIndex = _conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
         if (expandedGroupIndex >= 0) {
           expandedGroup = _conceptGroups[expandedGroupIndex];
           
-          // 확장된 그룹 이전의 모든 그룹 높이 합산
-          for (int i = 0; i < expandedGroupIndex; i++) {
-            final groupId = _conceptGroups[i]['id'] as String;
-            final height = _groupHeights[groupId] ?? 100.0; // 기본값 100px
-            topOffset += height;
+          // 화살표의 절대 좌표가 있으면 사용
+          if (_arrowAbsoluteY != null) {
+            topOffset = _arrowAbsoluteY!;
           }
-          
-          // 확장된 그룹 자신의 절반 높이도 더함 (화살표가 중간쯤에 있으므로)
-          final expandedGroupHeight = _groupHeights[_expandedGroupId!] ?? 100.0;
-          topOffset += expandedGroupHeight / 2;
         }
       } catch (_) {}
     }
@@ -533,9 +526,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
                 });
               },
-              onGroupHeightChanged: (groupId, height) {
+              onArrowPositionMeasured: (arrowY) {
                 setState(() {
-                  _groupHeights[groupId] = height;
+                  _arrowAbsoluteY = arrowY;
                 });
               },
             ),

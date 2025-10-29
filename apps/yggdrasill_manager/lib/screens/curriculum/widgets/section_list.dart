@@ -20,7 +20,7 @@ class SectionList extends StatelessWidget {
   final void Function(String groupId, int oldIndex, int newIndex) onReorderConcepts;
   final void Function(Map<String, dynamic> concept, String groupId) onConceptContextMenu;
   final void Function(String groupId) onToggleNotes;
-  final void Function(String groupId, double height)? onGroupHeightChanged;
+  final void Function(double arrowY)? onArrowPositionMeasured;
 
   const SectionList({
     super.key,
@@ -39,7 +39,7 @@ class SectionList extends StatelessWidget {
     required this.onReorderConcepts,
     required this.onConceptContextMenu,
     required this.onToggleNotes,
-    this.onGroupHeightChanged,
+    this.onArrowPositionMeasured,
   });
 
   @override
@@ -174,7 +174,7 @@ class SectionList extends StatelessWidget {
                   onConceptContextMenu: onConceptContextMenu,
                   isNotesExpanded: expandedGroupId == groupId,
                   onToggleNotes: () => onToggleNotes(groupId),
-                  onHeightChanged: onGroupHeightChanged,
+                  onArrowPositionMeasured: onArrowPositionMeasured,
                 );
               }).toList(),
             ),

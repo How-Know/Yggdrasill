@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'measure_size.dart';
 
-class ConceptGroup extends StatelessWidget {
+class ConceptGroup extends StatefulWidget {
   final Map<String, dynamic> group;
   final int groupNumber;
   final String sectionId;
@@ -12,7 +11,7 @@ class ConceptGroup extends StatelessWidget {
   final Function(Map<String, dynamic>, String) onConceptContextMenu;
   final bool isNotesExpanded;
   final VoidCallback onToggleNotes;
-  final Function(String, double)? onHeightChanged;
+  final Function(double)? onArrowPositionMeasured;
 
   const ConceptGroup({
     super.key,
@@ -26,23 +25,34 @@ class ConceptGroup extends StatelessWidget {
     required this.onConceptContextMenu,
     required this.isNotesExpanded,
     required this.onToggleNotes,
-    this.onHeightChanged,
+    this.onArrowPositionMeasured,
   });
 
   @override
+  State<ConceptGroup> createState() => _ConceptGroupState();
+}
+
+class _ConceptGroupState extends State<ConceptGroup> {
+  final GlobalKey _arrowKey = GlobalKey();
+
+  void _measureArrowPosition() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final RenderBox? box = _arrowKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null && widget.onArrowPositionMeasured != null) {
+        final position = box.localToGlobal(Offset.zero);
+        widget.onArrowPositionMeasured!(position.dy);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final groupId = group['id'] as String;
-    final groupName = group['name'] as String? ?? '';
+    final groupId = widget.group['id'] as String;
+    final groupName = widget.group['name'] as String? ?? '';
     
-    return MeasureSize(
-      onChange: (size) {
-        if (onHeightChanged != null) {
-          onHeightChanged!(groupId, size.height);
-        }
-      },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        child: Column(
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 구분선
@@ -51,11 +61,11 @@ class ConceptGroup extends StatelessWidget {
             children: [
               // 괄호 숫자
               GestureDetector(
-                onTap: () => onAddConcept(groupId),
-                onLongPress: () => onShowContextMenu(group, sectionId),
-                onSecondaryTap: () => onShowContextMenu(group, sectionId),
+                onTap: () => widget.onAddConcept(groupId),
+                onLongPress: () => widget.onShowContextMenu(widget.group, widget.sectionId),
+                onSecondaryTap: () => widget.onShowContextMenu(widget.group, widget.sectionId),
                 child: Text(
-                  '($groupNumber)',
+                  '(${widget.groupNumber})',
                   style: const TextStyle(
                     color: Color(0xFF999999),
                     fontSize: 18,
@@ -83,18 +93,22 @@ class ConceptGroup extends StatelessWidget {
           const SizedBox(width: 8),
           // 노트 펼치기 버튼
           GestureDetector(
-            onTap: onToggleNotes,
+            onTap: () {
+              widget.onToggleNotes();
+              _measureArrowPosition();
+            },
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: isNotesExpanded 
+                color: widget.isNotesExpanded 
                     ? const Color(0xFF4A9EFF).withOpacity(0.2)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Icon(
-                isNotesExpanded ? Icons.chevron_left : Icons.chevron_right,
-                color: isNotesExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF666666),
+                key: _arrowKey,
+                widget.isNotesExpanded ? Icons.chevron_left : Icons.chevron_right,
+                color: widget.isNotesExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF666666),
                 size: 20,
               ),
             ),
@@ -106,14 +120,13 @@ class ConceptGroup extends StatelessWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: concepts.asMap().entries.map((entry) {
+            children: widget.concepts.asMap().entries.map((entry) {
               final index = entry.key;
               final concept = entry.value;
               return _buildDraggableConceptChip(concept, groupId, index);
             }).toList(),
           ),
         ],
-      ),
       ),
     );
   }
@@ -155,7 +168,7 @@ class ConceptGroup extends StatelessWidget {
       ),
       child: DragTarget<int>(
         onAcceptWithDetails: (details) {
-          onReorder(groupId, details.data, index);
+          widget.onReorder(groupId, details.data, index);
         },
         builder: (context, candidateData, rejectedData) {
           return _buildConceptChip(concept, groupId);
@@ -173,7 +186,7 @@ class ConceptGroup extends StatelessWidget {
         : (hasTheorem ? const Color(0xFF4A9EFF) : const Color(0xFF999999));
     
     return GestureDetector(
-      onSecondaryTap: () => onConceptContextMenu(concept, groupId),
+      onSecondaryTap: () => widget.onConceptContextMenu(concept, groupId),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
