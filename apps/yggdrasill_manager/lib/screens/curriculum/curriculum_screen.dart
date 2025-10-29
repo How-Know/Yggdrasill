@@ -300,7 +300,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ? await _supabase
               .from('thought_card')
               .select()
-              .is('folder_id', null)
+              .filter('folder_id', 'is', null)
               .order('display_order', ascending: true)
           : await _supabase
               .from('thought_card')
