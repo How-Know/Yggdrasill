@@ -3,6 +3,7 @@ import 'dart:convert';
 
 class NoteArea extends StatelessWidget {
   final Map<String, dynamic> group;
+  final int alignmentGroupIndex;
   final Function(Map<String, dynamic>) onAddNoteGroup;
   final Function(Map<String, dynamic>, Map<String, dynamic>) onAddNote;
   final Function(Map<String, dynamic>, int) onDeleteNoteGroup;
@@ -11,6 +12,7 @@ class NoteArea extends StatelessWidget {
   const NoteArea({
     super.key,
     required this.group,
+    required this.alignmentGroupIndex,
     required this.onAddNoteGroup,
     required this.onAddNote,
     required this.onDeleteNoteGroup,
@@ -62,9 +64,18 @@ class NoteArea extends StatelessWidget {
       }
     }
     
+    // 확장된 그룹의 위치에 맞춰 상단 패딩 계산
+    // 각 ConceptGroup의 평균 높이를 100px로 추정
+    final topPadding = 20.0 + (alignmentGroupIndex * 100.0);
+    
     return Container(
       width: 500,
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: topPadding,
+        bottom: 20,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,

@@ -448,9 +448,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     // 확장된 구분선의 그룹 찾기
     Map<String, dynamic>? expandedGroup;
+    int expandedGroupIndex = 0;
     if (_expandedGroupId != null && _conceptGroups.isNotEmpty) {
       try {
-        expandedGroup = _conceptGroups.firstWhere((g) => g['id'] == _expandedGroupId);
+        expandedGroupIndex = _conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
+        if (expandedGroupIndex >= 0) {
+          expandedGroup = _conceptGroups[expandedGroupIndex];
+        }
       } catch (_) {}
     }
     
@@ -520,6 +524,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             const SizedBox(width: 20),
             NoteArea(
               group: expandedGroup!,
+              alignmentGroupIndex: expandedGroupIndex,
               onAddNoteGroup: (g) => _addNoteGroup(g),
               onAddNote: (g, noteGroup) => _addNoteToGroup(g, noteGroup),
               onDeleteNoteGroup: (g, idx) => _deleteNoteGroup(g, idx),
