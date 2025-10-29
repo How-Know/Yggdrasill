@@ -44,7 +44,10 @@ class SectionList extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 518,
-      height: 864,
+      constraints: const BoxConstraints(
+        minHeight: 200,
+        maxHeight: 864,
+      ),
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -61,6 +64,8 @@ class SectionList extends StatelessWidget {
               ),
             )
           : ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
               buildDefaultDragHandles: false,
               itemCount: sections.length,
               onReorder: (oldIndex, newIndex) => onReorderSections(oldIndex, newIndex),
