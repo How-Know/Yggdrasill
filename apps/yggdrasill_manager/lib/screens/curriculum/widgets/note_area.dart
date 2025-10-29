@@ -64,18 +64,15 @@ class NoteArea extends StatelessWidget {
       }
     }
     
-    return Container(
-      width: 500,
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: topOffset,
-        bottom: 20,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
+    return Transform.translate(
+      offset: Offset(0, topOffset),
+      child: Container(
+        width: 500,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
           Row(
             children: [
               const Text(
@@ -122,6 +119,7 @@ class NoteArea extends StatelessWidget {
               );
             }),
         ],
+      ),
       ),
     );
   }
