@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'widgets/section_list.dart';
 import 'widgets/note_area.dart';
+import 'widgets/chapter_card.dart';
 
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
@@ -380,7 +381,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         crossAxisAlignment: CrossAxisAlignment.center, // 중앙 정렬
         children: [
           // 대단원 카드
-          GestureDetector(
+          ChapterCard(
+            chapter: chapter,
+            isExpanded: isExpanded,
+            sectionCount: sectionCount,
             onTap: () {
               setState(() {
                 if (isExpanded) {
@@ -392,58 +396,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                 }
               });
             },
-            onDoubleTap: () {
-              _showAddSectionDialog(chapterId);
-            },
-            onSecondaryTap: () {
-              _showChapterContextMenu(chapter);
-            },
-            child: Container(
-              width: 288, // 추가 20% 증가 (240 → 288)
-              height: 172, // 추가 20% 증가 (144 → 172)
-              padding: const EdgeInsets.all(28), // 추가 20% 증가 (24 → 28)
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF3A3A3A),
-                  width: isExpanded ? 2 : 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          chapter['name'] as String,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24, // 3 증가 (21 → 24)
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      Icon(
-                        isExpanded ? Icons.chevron_right : Icons.chevron_left,
-                        color: Colors.white70,
-                        size: 28, // 크기 증가
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    '소단원 $sectionCount개',
-                    style: const TextStyle(
-                      color: Color(0xFFB3B3B3),
-                      fontSize: 17, // 3 증가 (14 → 17)
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            onDoubleTap: () => _showAddSectionDialog(chapterId),
+            onSecondaryTap: () => _showChapterContextMenu(chapter),
           ),
           
           // 확장 시 소단원 트리뷰 공간 (오른쪽에 표시)
