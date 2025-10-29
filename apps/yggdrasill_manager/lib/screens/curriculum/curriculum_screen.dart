@@ -41,8 +41,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 소단원 개수 캐시 (chapterId -> count)
   Map<String, int> _sectionCounts = {};
   
-  // 화살표 절대 좌표 (Y 위치)
-  double? _arrowAbsoluteY;
+  // 화살표 상대 오프셋 (중앙선 기준)
+  double? _arrowRelativeOffset;
   
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
@@ -452,7 +452,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     // 확장된 구분선의 그룹 찾기
     Map<String, dynamic>? expandedGroup;
-    double topOffset = 20.0; // 기본 패딩
+    double topOffset = 0.0; // 중앙선 기준
     
     if (_expandedGroupId != null && _conceptGroups.isNotEmpty) {
       try {
@@ -460,9 +460,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         if (expandedGroupIndex >= 0) {
           expandedGroup = _conceptGroups[expandedGroupIndex];
           
-          // 화살표의 절대 좌표가 있으면 사용
-          if (_arrowAbsoluteY != null) {
-            topOffset = _arrowAbsoluteY!;
+          // 화살표의 상대 오프셋이 있으면 사용
+          if (_arrowRelativeOffset != null) {
+            topOffset = _arrowRelativeOffset!;
           }
         }
       } catch (_) {}
@@ -526,9 +526,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
                 });
               },
-              onArrowPositionMeasured: (arrowY) {
+              onArrowPositionMeasured: (relativeOffset) {
                 setState(() {
-                  _arrowAbsoluteY = arrowY;
+                  _arrowRelativeOffset = relativeOffset;
                 });
               },
             ),

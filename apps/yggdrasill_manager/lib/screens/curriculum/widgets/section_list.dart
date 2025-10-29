@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'concept_group.dart';
 
-class SectionList extends StatelessWidget {
+class SectionList extends StatefulWidget {
   final String chapterId;
   final List<Map<String, dynamic>> sections;
   final String? expandedSectionId;
@@ -20,7 +20,7 @@ class SectionList extends StatelessWidget {
   final void Function(String groupId, int oldIndex, int newIndex) onReorderConcepts;
   final void Function(Map<String, dynamic> concept, String groupId) onConceptContextMenu;
   final void Function(String groupId) onToggleNotes;
-  final void Function(double arrowY)? onArrowPositionMeasured;
+  final void Function(double relativeOffset)? onArrowPositionMeasured;
 
   const SectionList({
     super.key,
@@ -43,8 +43,29 @@ class SectionList extends StatelessWidget {
   });
 
   @override
+  State<SectionList> createState() => _SectionListState();
+}
+
+class _SectionListState extends State<SectionList> {
+  final GlobalKey _containerKey = GlobalKey();
+
+  void _handleArrowPositionMeasured(double arrowAbsoluteY) {
+    final RenderBox? box = _containerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null && widget.onArrowPositionMeasured != null) {
+      final containerPosition = box.localToGlobal(Offset.zero);
+      final containerCenterY = containerPosition.dy + (box.size.height / 2);
+      
+      // 상대 오프셋 = 화살표 위치 - 컨테이너 중앙
+      final relativeOffset = arrowAbsoluteY - containerCenterY;
+      
+      widget.onArrowPositionMeasured!(relativeOffset);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
+      key: _containerKey,
       width: 518,
       constraints: const BoxConstraints(
         minHeight: 200,
@@ -54,7 +75,7 @@ class SectionList extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
       ),
-      child: sections.isEmpty
+      child: widget.sections.isEmpty
           ? Center(
               child: Text(
                 '소단원이 없습니다\n대단원을 더블클릭하여 추가하세요',
@@ -69,12 +90,12 @@ class SectionList extends StatelessWidget {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               buildDefaultDragHandles: false,
-              itemCount: sections.length,
-              onReorder: (oldIndex, newIndex) => onReorderSections(oldIndex, newIndex),
+              itemCount: widget.sections.length,
+              onReorder: (oldIndex, newIndex) => widget.onReorderSections(oldIndex, newIndex),
               itemBuilder: (context, index) {
-                final section = sections[index];
+                final section = widget.sections[index];
                 final sectionId = section['id'] as String;
-                final isSectionExpanded = expandedSectionId == sectionId;
+                final isSectionExpanded = widget.expandedSectionId == sectionId;
 
                 return Column(
                   key: ValueKey(sectionId),
@@ -82,9 +103,9 @@ class SectionList extends StatelessWidget {
                     ReorderableDelayedDragStartListener(
                       index: index,
                       child: GestureDetector(
-                        onTap: () => onTapSection(sectionId),
-                        onDoubleTap: () => onAddConceptGroup(sectionId),
-                        onSecondaryTap: () => onSectionContextMenu(section, chapterId),
+                        onTap: () => widget.onTapSection(sectionId),
+                        onDoubleTap: () => widget.onAddConceptGroup(sectionId),
+                        onSecondaryTap: () => widget.onSectionContextMenu(section, widget.chapterId),
                         child: Container(
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -145,7 +166,7 @@ class SectionList extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFF3A3A3A)),
       ),
-      child: conceptGroups.isEmpty
+      child: widget.conceptGroups.isEmpty
           ? Center(
               child: Text(
                 '더블클릭하여 구분선 추가',
@@ -157,24 +178,24 @@ class SectionList extends StatelessWidget {
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: conceptGroups.asMap().entries.map((entry) {
+              children: widget.conceptGroups.asMap().entries.map((entry) {
                 final groupIndex = entry.key;
                 final group = entry.value;
                 final groupId = group['id'] as String;
-                final concepts = conceptsCache[groupId] ?? const <Map<String, dynamic>>[];
+                final concepts = widget.conceptsCache[groupId] ?? const <Map<String, dynamic>>[];
 
                 return ConceptGroup(
                   group: group,
                   groupNumber: groupIndex + 1,
                   sectionId: sectionId,
                   concepts: concepts,
-                  onAddConcept: onAddConcept,
-                  onShowContextMenu: onGroupContextMenu,
-                  onReorder: onReorderConcepts,
-                  onConceptContextMenu: onConceptContextMenu,
-                  isNotesExpanded: expandedGroupId == groupId,
-                  onToggleNotes: () => onToggleNotes(groupId),
-                  onArrowPositionMeasured: onArrowPositionMeasured,
+                  onAddConcept: widget.onAddConcept,
+                  onShowContextMenu: widget.onGroupContextMenu,
+                  onReorder: widget.onReorderConcepts,
+                  onConceptContextMenu: widget.onConceptContextMenu,
+                  isNotesExpanded: widget.expandedGroupId == groupId,
+                  onToggleNotes: () => widget.onToggleNotes(groupId),
+                  onArrowPositionMeasured: _handleArrowPositionMeasured,
                 );
               }).toList(),
             ),
