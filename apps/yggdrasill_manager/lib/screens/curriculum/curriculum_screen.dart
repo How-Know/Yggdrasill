@@ -1,0 +1,2393 @@
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+
+class CurriculumScreen extends StatefulWidget {
+  const CurriculumScreen({super.key});
+
+  @override
+  State<CurriculumScreen> createState() => _CurriculumScreenState();
+}
+
+class _CurriculumScreenState extends State<CurriculumScreen> {
+  final _supabase = Supabase.instance.client;
+  
+  // 학년 선택 상태
+  String? _selectedCurriculumId;
+  String? _selectedGradeId;
+  String _schoolLevel = '중'; // '중' or '고'
+  
+  // 확장된 대단원 ID (나중에 소단원 트리뷰 표시용)
+  String? _expandedChapterId;
+  
+  // 확장된 소단원 ID (개념 보기)
+  String? _expandedSectionId;
+  
+  // 확장된 구분선 ID (노트 보기)
+  String? _expandedGroupId;
+  
+  // 데이터 목록
+  List<Map<String, dynamic>> _curriculums = [];
+  List<Map<String, dynamic>> _grades = [];
+  List<Map<String, dynamic>> _chapters = [];
+  List<Map<String, dynamic>> _sections = [];
+  List<Map<String, dynamic>> _conceptGroups = [];
+  List<Map<String, dynamic>> _concepts = [];
+  
+  // 소단원 개수 캐시 (chapterId -> count)
+  Map<String, int> _sectionCounts = {};
+  
+  // 소단원 캐시 (chapterId -> sections)
+  Map<String, List<Map<String, dynamic>>> _sectionsCache = {};
+  
+  // 개념 그룹 캐시 (sectionId -> groups)
+  Map<String, List<Map<String, dynamic>>> _conceptGroupsCache = {};
+  
+  // 개념 캐시 (groupId -> concepts)
+  Map<String, List<Map<String, dynamic>>> _conceptsCache = {};
+  
+  bool _isLoading = true;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadCurriculums();
+  }
+  
+  // 교육과정 목록 불러오기
+  Future<void> _loadCurriculums() async {
+    try {
+      final data = await _supabase
+          .from('curriculum')
+          .select()
+          .order('created_at');
+      
+      setState(() {
+        _curriculums = List<Map<String, dynamic>>.from(data);
+        if (_curriculums.isNotEmpty) {
+          _selectedCurriculumId = _curriculums[0]['id'];
+          _loadGrades();
+        }
+      });
+    } catch (e) {
+      _showError('교육과정 로드 실패: $e');
+    }
+  }
+  
+  // 학년 목록 불러오기
+  Future<void> _loadGrades() async {
+    if (_selectedCurriculumId == null) return;
+    
+    try {
+      // 캐시 초기화 (교육과정이나 학년이 변경됨)
+      _sectionsCache.clear();
+      _sectionCounts.clear();
+      _expandedChapterId = null;
+      _sections = [];
+      
+      final data = await _supabase
+          .from('grade')
+          .select()
+          .eq('curriculum_id', _selectedCurriculumId!)
+          .eq('school_level', _schoolLevel)
+          .order('display_order');
+      
+      setState(() {
+        _grades = List<Map<String, dynamic>>.from(data);
+        if (_grades.isNotEmpty) {
+          _selectedGradeId = _grades[0]['id'];
+          _loadChapters();
+        } else {
+          _chapters = [];
+          _isLoading = false;
+        }
+      });
+    } catch (e) {
+      _showError('학년 로드 실패: $e');
+    }
+  }
+  
+  // 대단원 목록 불러오기
+  Future<void> _loadChapters() async {
+    if (_selectedGradeId == null) return;
+    
+    try {
+      final data = await _supabase
+          .from('chapter')
+          .select()
+          .eq('grade_id', _selectedGradeId!)
+          .order('display_order', ascending: true); // 오름차순 명시
+      
+      setState(() {
+        _chapters = List<Map<String, dynamic>>.from(data);
+        _isLoading = false;
+      });
+      
+      // 각 대단원의 소단원 개수 미리 로드
+      await _loadAllSectionCounts();
+    } catch (e) {
+      _showError('대단원 로드 실패: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+  
+  // 모든 대단원의 소단원 개수 로드
+  Future<void> _loadAllSectionCounts() async {
+    try {
+      for (var chapter in _chapters) {
+        final chapterId = chapter['id'] as String;
+        final countData = await _supabase
+            .from('section')
+            .select()
+            .eq('chapter_id', chapterId);
+        
+        setState(() {
+          _sectionCounts[chapterId] = countData.length;
+        });
+      }
+    } catch (e) {
+      // 개수 로드 실패는 무시 (치명적이지 않음)
+    }
+  }
+  
+  // 소단원 목록 불러오기 (특정 대단원)
+  Future<void> _loadSections(String chapterId, {bool forceRefresh = false}) async {
+    // 강제 새로고침이 아니고 캐시에 있으면 즉시 표시
+    if (!forceRefresh && _sectionsCache.containsKey(chapterId)) {
+      setState(() {
+        _sections = _sectionsCache[chapterId]!;
+      });
+      return;
+    }
+    
+    try {
+      final data = await _supabase
+          .from('section')
+          .select()
+          .eq('chapter_id', chapterId)
+          .order('display_order', ascending: true); // 오름차순 명시
+      
+      final sections = List<Map<String, dynamic>>.from(data);
+      
+      setState(() {
+        _sections = sections;
+        _sectionsCache[chapterId] = sections; // 캐시에 저장
+        _sectionCounts[chapterId] = sections.length; // 개수 업데이트
+      });
+    } catch (e) {
+      _showError('소단원 로드 실패: $e');
+    }
+  }
+  
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Container(
+        color: const Color(0xFF1F1F1F),
+        child: const Center(
+          child: CircularProgressIndicator(color: Color(0xFF4A9EFF)),
+        ),
+      );
+    }
+    
+    return Container(
+      color: const Color(0xFF1F1F1F),
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 학년 선택 UI (상단)
+          _buildGradeSelector(),
+          
+          const SizedBox(height: 32),
+          
+          // 대단원 카드 리스트 (왼쪽 정렬)
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _buildChapterList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 학년 선택 UI (교육과정 + 중/고 토글 + 드롭다운)
+  Widget _buildGradeSelector() {
+    return Row(
+      children: [
+        // 교육과정 드롭다운
+        if (_curriculums.isNotEmpty)
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF3A3A3A)),
+            ),
+            child: DropdownButton<String>(
+              value: _selectedCurriculumId,
+              dropdownColor: const Color(0xFF2A2A2A),
+              underline: const SizedBox(),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
+              items: _curriculums
+                  .map((curriculum) => DropdownMenuItem(
+                        value: curriculum['id'] as String,
+                        child: Text(curriculum['name'] as String),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedCurriculumId = value;
+                  _loadGrades();
+                });
+              },
+            ),
+          ),
+        
+        const SizedBox(width: 12),
+        
+        // 중/고 토글 버튼
+        Container(
+          height: 44,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF3A3A3A)),
+          ),
+          child: Row(
+            children: [
+              _buildToggleButton('중'),
+              _buildToggleButton('고'),
+            ],
+          ),
+        ),
+        
+        const SizedBox(width: 12),
+        
+        // 학기/과목 드롭다운
+        if (_grades.isNotEmpty)
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF3A3A3A)),
+            ),
+            child: DropdownButton<String>(
+              value: _selectedGradeId,
+              dropdownColor: const Color(0xFF2A2A2A),
+              underline: const SizedBox(),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
+              items: _grades
+                  .map((grade) => DropdownMenuItem(
+                        value: grade['id'] as String,
+                        child: Text(grade['name'] as String),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedGradeId = value;
+                  _loadChapters();
+                });
+              },
+            ),
+          ),
+      ],
+    );
+  }
+  
+  // 중/고 토글 버튼
+  Widget _buildToggleButton(String level) {
+    final isSelected = _schoolLevel == level;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _schoolLevel = level;
+          _expandedChapterId = null; // 확장 상태 초기화
+          _loadGrades(); // 학년 목록 다시 로드
+        });
+      },
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF4A9EFF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          level,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.white70,
+            fontSize: 15,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  // 대단원 카드 리스트 (가로 스크롤)
+  Widget _buildChapterList() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center, // 카드들 세로 중앙 정렬
+        children: [
+          ..._chapters.map((chapter) => _buildChapterCard(chapter)),
+          
+          // 대단원 추가 버튼
+          _buildAddChapterButton(),
+        ],
+      ),
+    );
+  }
+  
+  // 대단원 카드
+  Widget _buildChapterCard(Map<String, dynamic> chapter) {
+    final isExpanded = _expandedChapterId == chapter['id'];
+    
+    // 소단원 개수 계산 (캐시에서 가져오기)
+    final chapterId = chapter['id'] as String;
+    final sectionCount = _sectionCounts[chapterId] ?? 0;
+    
+    // 확장된 구분선의 그룹 찾기
+    Map<String, dynamic>? expandedGroup;
+    if (_expandedGroupId != null && _conceptGroups.isNotEmpty) {
+      try {
+        expandedGroup = _conceptGroups.firstWhere((g) => g['id'] == _expandedGroupId);
+      } catch (_) {}
+    }
+    
+    return Container(
+      margin: const EdgeInsets.only(right: 20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center, // 중앙 정렬
+        children: [
+          // 대단원 카드
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedChapterId = null;
+                  _sections = [];
+                } else {
+                  _expandedChapterId = chapterId;
+                  _loadSections(chapterId);
+                }
+              });
+            },
+            onDoubleTap: () {
+              _showAddSectionDialog(chapterId);
+            },
+            onSecondaryTap: () {
+              _showChapterContextMenu(chapter);
+            },
+            child: Container(
+              width: 288, // 추가 20% 증가 (240 → 288)
+              height: 172, // 추가 20% 증가 (144 → 172)
+              padding: const EdgeInsets.all(28), // 추가 20% 증가 (24 → 28)
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF3A3A3A),
+                  width: isExpanded ? 2 : 1,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          chapter['name'] as String,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24, // 3 증가 (21 → 24)
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        isExpanded ? Icons.chevron_right : Icons.chevron_left,
+                        color: Colors.white70,
+                        size: 28, // 크기 증가
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '소단원 $sectionCount개',
+                    style: const TextStyle(
+                      color: Color(0xFFB3B3B3),
+                      fontSize: 17, // 3 증가 (14 → 17)
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          // 확장 시 소단원 트리뷰 공간 (오른쪽에 표시)
+          if (isExpanded) ...[
+            const SizedBox(width: 20),
+            Container(
+              width: 432,
+              height: 864, // 1.5배 증가 (576 → 864)
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF3A3A3A)),
+              ),
+              child: _sections.isEmpty
+                  ? Center(
+                      child: Text(
+                        '소단원이 없습니다\n대단원을 더블클릭하여 추가하세요',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.3),
+                          fontSize: 17,
+                        ),
+                      ),
+                    )
+                  : ReorderableListView.builder(
+                      buildDefaultDragHandles: false,
+                      itemCount: _sections.length,
+                      onReorder: (oldIndex, newIndex) {
+                        _reorderSections(chapterId, oldIndex, newIndex);
+                      },
+                      itemBuilder: (context, index) {
+                        final section = _sections[index];
+                        final sectionId = section['id'] as String;
+                        final isSectionExpanded = _expandedSectionId == sectionId;
+                        
+                        return Column(
+                          key: ValueKey(sectionId),
+                          children: [
+                            ReorderableDelayedDragStartListener(
+                              index: index,
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    if (isSectionExpanded) {
+                                      _expandedSectionId = null;
+                                      _conceptGroups = [];
+                                    } else {
+                                      _expandedSectionId = sectionId;
+                                      _loadConceptGroups(sectionId);
+                                    }
+                                  });
+                                },
+                                onDoubleTap: () {
+                                  _addConceptGroup(sectionId);
+                                },
+                                onSecondaryTap: () {
+                                  _showSectionContextMenu(section, chapterId);
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 4),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                                    textBaseline: TextBaseline.alphabetic,
+                                    children: [
+                                      Text(
+                                        '${index + 1}.',
+                                        style: const TextStyle(
+                                          color: Color(0xFF999999),
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          section['name'] as String,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 20,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isSectionExpanded)
+                                        const Icon(
+                                          Icons.expand_more,
+                                          color: Colors.white54,
+                                          size: 20,
+                                        )
+                                      else
+                                        const Icon(
+                                          Icons.chevron_right,
+                                          color: Colors.white54,
+                                          size: 20,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (isSectionExpanded) _buildConceptsArea(sectionId),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          ],
+          
+          // 노트 영역 (소단원 드롭다운 오른쪽에 표시)
+          if (isExpanded && expandedGroup != null) ...[
+            const SizedBox(width: 20),
+            _buildNotesArea(expandedGroup),
+          ],
+        ],
+      ),
+    );
+  }
+  
+  // 소단원 추가 다이얼로그
+  Future<void> _showAddSectionDialog(String chapterId) async {
+    String inputText = '';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('소단원 추가', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '소단원 이름',
+                hintStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white54),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                ),
+              ),
+              keyboardType: TextInputType.text,
+              textInputAction: TextInputAction.done,
+              onChanged: (value) {
+                setDialogState(() {
+                  inputText = value;
+                });
+              },
+              onSubmitted: (value) async {
+                if (value.trim().isNotEmpty) {
+                  Navigator.pop(context);
+                  await _addSection(chapterId, value.trim());
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (inputText.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _addSection(chapterId, inputText.trim());
+                  }
+                },
+                child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  // 소단원 추가
+  Future<void> _addSection(String chapterId, String name) async {
+    try {
+      // 현재 최대 순서 찾기
+      int maxOrder = 0;
+      if (_sections.isNotEmpty) {
+        for (var section in _sections) {
+          final order = section['display_order'];
+          if (order != null && order is int && order > maxOrder) {
+            maxOrder = order;
+          }
+        }
+      }
+      
+      // 소단원 추가
+      final result = await _supabase.from('section').insert({
+        'chapter_id': chapterId,
+        'name': name,
+        'display_order': maxOrder + 1,
+      }).select();
+      
+      if (result.isEmpty) {
+        _showError('소단원 추가 실패: 응답이 비어있습니다');
+        return;
+      }
+      
+      // 강제 새로고침
+      await _loadSections(chapterId, forceRefresh: true);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('소단원 "$name" 추가됨')),
+        );
+      }
+    } catch (e) {
+      _showError('소단원 추가 실패: $e');
+    }
+  }
+  
+  // 소단원 삭제
+  Future<void> _deleteSection(String sectionId) async {
+    try {
+      await _supabase.from('section').delete().eq('id', sectionId);
+      
+      if (_expandedChapterId != null) {
+        // 캐시 무효화 후 새로고침
+        _sectionsCache.remove(_expandedChapterId);
+        await _loadSections(_expandedChapterId!);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('소단원 삭제됨')),
+        );
+      }
+    } catch (e) {
+      _showError('소단원 삭제 실패: $e');
+    }
+  }
+  
+  // 소단원 우클릭 메뉴
+  void _showSectionContextMenu(Map<String, dynamic> section, String chapterId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: Text(
+          section['name'] as String,
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit, color: Color(0xFF4A9EFF)),
+              title: const Text('편집', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _showEditSectionDialog(section, chapterId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              title: const Text('삭제', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDeleteSection(section, chapterId);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  // 소단원 편집 다이얼로그
+  Future<void> _showEditSectionDialog(Map<String, dynamic> section, String chapterId) async {
+    String inputText = section['name'] as String;
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('소단원 편집', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              controller: TextEditingController(text: inputText)
+                ..selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: inputText.length,
+                ),
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '소단원 이름',
+                hintStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white54),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                ),
+              ),
+              onChanged: (value) {
+                setDialogState(() {
+                  inputText = value;
+                });
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (inputText.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _updateSection(section['id'] as String, inputText.trim(), chapterId);
+                  }
+                },
+                child: const Text('저장', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  // 소단원 업데이트
+  Future<void> _updateSection(String sectionId, String name, String chapterId) async {
+    try {
+      await _supabase.from('section').update({
+        'name': name,
+      }).eq('id', sectionId);
+      
+      // 강제 새로고침
+      await _loadSections(chapterId, forceRefresh: true);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('소단원 "$name"(으)로 수정됨')),
+        );
+      }
+    } catch (e) {
+      _showError('소단원 수정 실패: $e');
+    }
+  }
+  
+  // 소단원 삭제 확인
+  void _confirmDeleteSection(Map<String, dynamic> section, String chapterId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('소단원 삭제', style: TextStyle(color: Colors.white)),
+        content: Text(
+          '"${section['name']}" 소단원을 삭제하시겠습니까?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _deleteSection(section['id'] as String);
+            },
+            child: const Text('삭제', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 소단원 순서 변경
+  Future<void> _reorderSections(String chapterId, int oldIndex, int newIndex) async {
+    try {
+      // UI 먼저 업데이트 (즉각 반응)
+      if (newIndex > oldIndex) {
+        newIndex -= 1;
+      }
+      
+      final List<Map<String, dynamic>> reorderedSections = List.from(_sections);
+      final item = reorderedSections.removeAt(oldIndex);
+      reorderedSections.insert(newIndex, item);
+      
+      setState(() {
+        _sections = reorderedSections;
+      });
+      
+      // 데이터베이스 업데이트 (순서대로)
+      for (int i = 0; i < reorderedSections.length; i++) {
+        final section = reorderedSections[i];
+        final sectionId = section['id'] as String;
+        
+        await _supabase.from('section').update({
+          'display_order': i + 1,
+        }).eq('id', sectionId);
+      }
+      
+      // 데이터베이스 업데이트 완료 후 강제 새로고침
+      await _loadSections(chapterId, forceRefresh: true);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('순서 변경됨'), duration: Duration(seconds: 1)),
+        );
+      }
+    } catch (e) {
+      _showError('순서 변경 실패: $e');
+      // 오류 발생 시 강제 새로고침
+      await _loadSections(chapterId, forceRefresh: true);
+    }
+  }
+  
+  // 대단원 추가 버튼
+  Widget _buildAddChapterButton() {
+    return GestureDetector(
+      onTap: () {
+        _showAddChapterDialog();
+      },
+      child: Container(
+        width: 288, // 추가 20% 증가 (240 → 288)
+        height: 172, // 추가 20% 증가 (144 → 172)
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFF3A3A3A),
+            style: BorderStyle.solid,
+          ),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.add_circle_outline,
+              color: Color(0xFF4A9EFF),
+              size: 50, // 추가 20% 증가 (42 → 50)
+            ),
+            SizedBox(height: 16),
+            Text(
+              '대단원 추가',
+              style: TextStyle(
+                color: Color(0xFF4A9EFF),
+                fontSize: 19, // 3 증가 (16 → 19)
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  // 대단원 추가 다이얼로그
+  Future<void> _showAddChapterDialog() async {
+    if (_selectedGradeId == null) return;
+    
+    String inputText = '';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('대단원 추가', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '대단원 이름',
+                hintStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white54),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                ),
+              ),
+              keyboardType: TextInputType.text,
+              textInputAction: TextInputAction.done,
+              onChanged: (value) {
+                setDialogState(() {
+                  inputText = value;
+                });
+              },
+              onSubmitted: (value) async {
+                if (value.trim().isNotEmpty) {
+                  Navigator.pop(context);
+                  await _addChapter(value.trim());
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (inputText.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _addChapter(inputText.trim());
+                  }
+                },
+                child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  // 대단원 추가
+  Future<void> _addChapter(String name) async {
+    if (_selectedGradeId == null) return;
+    
+    try {
+      // 현재 최대 순서 찾기
+      int maxOrder = 0;
+      if (_chapters.isNotEmpty) {
+        for (var chapter in _chapters) {
+          final order = chapter['display_order'];
+          if (order != null && order is int && order > maxOrder) {
+            maxOrder = order;
+          }
+        }
+      }
+      
+      // 대단원 추가
+      final result = await _supabase.from('chapter').insert({
+        'grade_id': _selectedGradeId,
+        'name': name,
+        'display_order': maxOrder + 1,
+      }).select();
+      
+      // 추가된 대단원의 소단원 개수는 0
+      if (result.isNotEmpty) {
+        final newChapterId = result[0]['id'] as String;
+        _sectionCounts[newChapterId] = 0;
+      }
+      
+      // 목록 새로고침
+      await _loadChapters();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('대단원 "$name" 추가됨')),
+        );
+      }
+    } catch (e) {
+      _showError('대단원 추가 실패: $e');
+    }
+  }
+  
+  // 대단원 우클릭 메뉴
+  void _showChapterContextMenu(Map<String, dynamic> chapter) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: Text(
+          chapter['name'] as String,
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit, color: Color(0xFF4A9EFF)),
+              title: const Text('편집', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _showEditChapterDialog(chapter);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              title: const Text('삭제', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDeleteChapter(chapter);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  // 대단원 편집 다이얼로그
+  Future<void> _showEditChapterDialog(Map<String, dynamic> chapter) async {
+    String inputText = chapter['name'] as String;
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('대단원 편집', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              controller: TextEditingController(text: inputText)
+                ..selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: inputText.length,
+                ),
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '대단원 이름',
+                hintStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white54),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                ),
+              ),
+              onChanged: (value) {
+                setDialogState(() {
+                  inputText = value;
+                });
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (inputText.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _updateChapter(chapter['id'] as String, inputText.trim());
+                  }
+                },
+                child: const Text('저장', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  // 대단원 업데이트
+  Future<void> _updateChapter(String chapterId, String name) async {
+    try {
+      await _supabase.from('chapter').update({
+        'name': name,
+      }).eq('id', chapterId);
+      
+      await _loadChapters();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('대단원 "$name"(으)로 수정됨')),
+        );
+      }
+    } catch (e) {
+      _showError('대단원 수정 실패: $e');
+    }
+  }
+  
+  // 대단원 삭제 확인
+  void _confirmDeleteChapter(Map<String, dynamic> chapter) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('대단원 삭제', style: TextStyle(color: Colors.white)),
+        content: Text(
+          '"${chapter['name']}" 대단원을 삭제하시겠습니까?\n\n소단원도 모두 삭제됩니다.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _deleteChapter(chapter['id'] as String);
+            },
+            child: const Text('삭제', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 대단원 삭제
+  Future<void> _deleteChapter(String chapterId) async {
+    try {
+      await _supabase.from('chapter').delete().eq('id', chapterId);
+      
+      // 확장된 대단원이 삭제되면 상태 초기화
+      if (_expandedChapterId == chapterId) {
+        setState(() {
+          _expandedChapterId = null;
+          _sections = [];
+        });
+      }
+      
+      // 캐시에서 제거
+      _sectionsCache.remove(chapterId);
+      _sectionCounts.remove(chapterId);
+      
+      await _loadChapters();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('대단원 삭제됨')),
+        );
+      }
+    } catch (e) {
+      _showError('대단원 삭제 실패: $e');
+    }
+  }
+  
+  // 개념 그룹 로드
+  Future<void> _loadConceptGroups(String sectionId) async {
+    try {
+      final data = await _supabase
+          .from('concept_group')
+          .select()
+          .eq('section_id', sectionId)
+          .order('display_order', ascending: true);
+      
+      // 데이터 파싱 시 notes 필드도 명시적으로 처리
+      final groups = (data as List).map((item) {
+        final map = Map<String, dynamic>.from(item as Map);
+        // notes 필드가 JSONB라서 이미 파싱된 상태로 올 수 있음
+        if (map.containsKey('notes') && map['notes'] != null) {
+          print('원본 notes: ${map['notes']}'); // 디버그
+        }
+        return map;
+      }).toList();
+      
+      setState(() {
+        _conceptGroups = groups;
+        _conceptGroupsCache[sectionId] = _conceptGroups;
+      });
+      
+      // 각 그룹의 개념도 미리 로드
+      for (var group in _conceptGroups) {
+        await _loadConcepts(group['id'] as String);
+      }
+    } catch (e) {
+      _showError('개념 그룹 로드 실패: $e');
+    }
+  }
+  
+  // 개념 로드
+  Future<void> _loadConcepts(String groupId) async {
+    try {
+      final data = await _supabase
+          .from('concept')
+          .select()
+          .eq('group_id', groupId)
+          .order('display_order', ascending: true);
+      
+      var concepts = List<Map<String, dynamic>>.from(data);
+      
+      // SharedPreferences에서 로컬 순서 불러오기
+      final prefs = await SharedPreferences.getInstance();
+      final localOrderJson = prefs.getString('concept_order_$groupId');
+      if (localOrderJson != null) {
+        try {
+          final localOrder = List<String>.from(jsonDecode(localOrderJson));
+          // 로컬 순서대로 재정렬
+          final orderedConcepts = <Map<String, dynamic>>[];
+          for (var conceptId in localOrder) {
+            final concept = concepts.firstWhere(
+              (c) => c['id'] == conceptId,
+              orElse: () => {},
+            );
+            if (concept.isNotEmpty) {
+              orderedConcepts.add(concept);
+            }
+          }
+          // 로컬에 없는 새 개념은 뒤에 추가
+          for (var concept in concepts) {
+            if (!localOrder.contains(concept['id'])) {
+              orderedConcepts.add(concept);
+            }
+          }
+          concepts = orderedConcepts;
+        } catch (_) {}
+      }
+      
+      setState(() {
+        _conceptsCache[groupId] = concepts;
+      });
+    } catch (e) {
+      _showError('개념 로드 실패: $e');
+    }
+  }
+  
+  // 개념 영역 UI
+  Widget _buildConceptsArea(String sectionId) {
+    return Container(
+      margin: const EdgeInsets.only(left: 20, top: 8, bottom: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        // 배경색 제거
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: _conceptGroups.isEmpty
+          ? Center(
+              child: Text(
+                '더블클릭하여 구분선 추가',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.3),
+                  fontSize: 14,
+                ),
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: _conceptGroups.asMap().entries.map((entry) {
+                final groupIndex = entry.key;
+                final group = entry.value;
+                return _buildConceptGroup(group, groupIndex + 1, sectionId);
+              }).toList(),
+            ),
+    );
+  }
+  
+  // 개념 그룹 UI (구분선 + 개념들)
+  Widget _buildConceptGroup(Map<String, dynamic> group, int groupNumber, String sectionId) {
+    final groupId = group['id'] as String;
+    final groupName = group['name'] as String? ?? '';
+    final concepts = _conceptsCache[groupId] ?? [];
+    final isExpanded = _expandedGroupId == groupId;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 구분선
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // 괄호 숫자
+              GestureDetector(
+                onTap: () => _addConcept(groupId),
+                onLongPress: () => _showGroupContextMenu(group, sectionId),
+                onSecondaryTap: () => _showGroupContextMenu(group, sectionId),
+                child: Text(
+                  '($groupNumber)',
+                  style: const TextStyle(
+                    color: Color(0xFF999999),
+                    fontSize: 18, // 2pt 증가 (16 → 18)
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (groupName.isNotEmpty) ...[
+                const SizedBox(width: 8), // 여백 감소 (12 → 8)
+                Text(
+                  groupName,
+                  style: const TextStyle(
+                    color: Color(0xFF999999),
+                    fontSize: 18, // 2pt 증가 (16 → 18)
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(width: 8), // 여백 감소 (12 → 8)
+              // 구분선
+              Expanded(
+                child: Container(
+                  height: 2,
+                  color: const Color(0xFF666666),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 노트 펼치기 버튼
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _expandedGroupId = isExpanded ? null : groupId;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: isExpanded 
+                        ? const Color(0xFF4A9EFF).withOpacity(0.2)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(
+                    isExpanded ? Icons.chevron_left : Icons.chevron_right,
+                    color: isExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF666666),
+                    size: 20,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // 개념 칩들
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: concepts.asMap().entries.map((entry) {
+              final index = entry.key;
+              final concept = entry.value;
+              return _buildDraggableConceptChip(concept, groupId, index);
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 노트 영역 UI
+  Widget _buildNotesArea(Map<String, dynamic> group) {
+    final groupId = group['id'] as String;
+    
+    // notes를 JSON으로 파싱 (구분선별 그룹화)
+    List<Map<String, dynamic>> noteGroups = [];
+    
+    final notesData = group['notes'];
+    
+    if (notesData == null || (notesData is List && notesData.isEmpty)) {
+      noteGroups = [];
+    } else if (notesData is List && notesData.isNotEmpty) {
+      final firstItem = notesData[0];
+      
+      if (firstItem is String) {
+        // JSONB가 JSON 문자열로 반환된 경우 (Supabase text[] 타입)
+        try {
+          // 각 항목을 JSON으로 파싱
+          noteGroups = notesData.map((item) {
+            final parsed = jsonDecode(item as String) as Map<String, dynamic>;
+            return {
+              'id': parsed['id']?.toString() ?? 'unknown',
+              'name': parsed['name']?.toString() ?? '',
+              'items': parsed['items'] != null 
+                  ? List<String>.from(parsed['items'] as List)
+                  : <String>[],
+            };
+          }).toList();
+          print('JSON 문자열 파싱 성공: ${noteGroups.length}개 그룹'); // 디버그
+        } catch (e) {
+          print('JSON 파싱 실패: $e');
+          // 단순 문자열 배열로 처리
+          noteGroups = [
+            {'id': 'default', 'name': '', 'items': List<String>.from(notesData)}
+          ];
+        }
+      } else if (firstItem is Map) {
+        // 이미 Map으로 파싱된 경우
+        noteGroups = notesData.map((item) {
+          final itemMap = item as Map;
+          return {
+            'id': itemMap['id']?.toString() ?? 'unknown',
+            'name': itemMap['name']?.toString() ?? '',
+            'items': itemMap['items'] != null 
+                ? List<String>.from(itemMap['items'] as List)
+                : <String>[],
+          };
+        }).toList();
+      }
+    }
+    
+    return Container(
+      width: 500, // 2배 증가 (250 → 500)
+      padding: const EdgeInsets.all(20),
+      // 배경색과 윤곽선 제거
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '정리/명제/공식',
+                style: TextStyle(
+                  color: Color(0xFF999999),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              // 구분선 추가 버튼
+              GestureDetector(
+                onTap: () => _addNoteGroup(group),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF666666),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.add, color: Colors.white70, size: 20),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (noteGroups.isEmpty)
+            Center(
+              child: Text(
+                '+ 버튼을 눌러 구분선 추가',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.3),
+                  fontSize: 14,
+                ),
+              ),
+            )
+          else
+            ...noteGroups.asMap().entries.map((entry) {
+              final noteGroupIndex = entry.key;
+              final noteGroup = entry.value;
+              return _buildNoteGroup(group, noteGroup, noteGroupIndex + 1);
+            }),
+        ],
+      ),
+    );
+  }
+  
+  // 노트 그룹 UI (구분선 + 노트들)
+  Widget _buildNoteGroup(Map<String, dynamic> group, Map<String, dynamic> noteGroup, int groupNumber) {
+    final items = List<String>.from(noteGroup['items'] as List<dynamic>? ?? []);
+    
+    // name 필드 안전하게 추출
+    String noteGroupName = '';
+    if (noteGroup.containsKey('name')) {
+      final nameValue = noteGroup['name'];
+      if (nameValue != null) {
+        noteGroupName = nameValue.toString();
+      }
+    }
+    
+    print('노트 그룹 $groupNumber: name="$noteGroupName", items=${items.length}개'); // 디버그
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 구분선
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // 숫자 버튼 (아웃라인 원형)
+              GestureDetector(
+                onTap: () => _addNoteToGroup(group, noteGroup),
+                onLongPress: () => _deleteNoteGroup(group, groupNumber - 1),
+                onSecondaryTap: () => _deleteNoteGroup(group, groupNumber - 1),
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFF666666), width: 2),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '$groupNumber',
+                      style: const TextStyle(
+                        color: Color(0xFF999999),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (noteGroupName.isNotEmpty)
+                Text(
+                  noteGroupName,
+                  style: const TextStyle(
+                    color: Color(0xFF999999),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  height: 1,
+                  color: const Color(0xFF666666),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 노트 항목들
+          ...items.asMap().entries.map((entry) {
+            final itemIndex = entry.key;
+            final item = entry.value;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item,
+                      style: const TextStyle(
+                        color: Color(0xFFB3B3B3),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => _deleteNoteItem(group, groupNumber - 1, itemIndex),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white54,
+                      size: 16,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+  
+  // 노트 구분선 추가
+  Future<void> _addNoteGroup(Map<String, dynamic> group) async {
+    final controller = TextEditingController();
+    
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('노트 구분선 추가', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+          decoration: const InputDecoration(
+            hintText: '구분선 이름 (예: 중요 정리)',
+            hintStyle: TextStyle(color: Colors.white54),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white54),
+            ),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+            ),
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              Navigator.pop(context, value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(context, name);
+              }
+            },
+            child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+          ),
+        ],
+      ),
+    );
+    
+    if (result != null && result.isNotEmpty) {
+      await _saveNoteGroup(group, result);
+    }
+  }
+  
+  Future<void> _saveNoteGroup(Map<String, dynamic> group, String name) async {
+    try {
+      final groupId = group['id'] as String;
+      final notesData = group['notes'];
+      
+      // 구조화된 형식으로 변환
+      List<Map<String, dynamic>> noteGroups = [];
+      
+      if (notesData == null || (notesData is List && notesData.isEmpty)) {
+        noteGroups = [];
+      } else if (notesData is List && notesData.isNotEmpty) {
+        final firstItem = notesData[0];
+        if (firstItem is String) {
+          // 기존 단순 배열 형식 → 새 형식으로 변환
+          noteGroups = [
+            {
+              'id': 'default',
+              'name': '',
+              'items': List<String>.from(notesData),
+            }
+          ];
+        } else if (firstItem is Map) {
+          // 이미 새 형식
+          noteGroups = notesData.map((item) {
+            final map = item as Map;
+            return {
+              'id': map['id']?.toString() ?? 'unknown',
+              'name': map['name']?.toString() ?? '',
+              'items': map['items'] != null ? List<String>.from(map['items'] as List) : <String>[],
+            };
+          }).toList();
+        }
+      }
+      
+      // 새 구분선 추가
+      final newGroup = {
+        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'name': name,
+        'items': <String>[],
+      };
+      
+      noteGroups.add(newGroup);
+      
+      print('저장할 노트 데이터: $noteGroups'); // 디버그
+      
+      await _supabase.from('concept_group').update({
+        'notes': noteGroups,
+      }).eq('id', groupId);
+      
+      if (_expandedSectionId != null) {
+        await _loadConceptGroups(_expandedSectionId!);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('구분선 "$name" 추가됨')),
+        );
+      }
+    } catch (e) {
+      _showError('노트 구분선 추가 실패: $e');
+      print('노트 구분선 추가 오류 상세: $e');
+    }
+  }
+  
+  // 노트 그룹에 항목 추가
+  Future<void> _addNoteToGroup(Map<String, dynamic> group, Map<String, dynamic> noteGroup) async {
+    String noteText = '';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('정리/명제/공식 추가', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              maxLines: 3,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: const InputDecoration(
+                hintText: '예: 피타고라스 정리의 역\n직각삼각형에서 a²+b²=c²',
+                hintStyle: TextStyle(color: Colors.white54),
+              ),
+              onChanged: (value) {
+                setDialogState(() {
+                  noteText = value;
+                });
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (noteText.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _saveNoteToGroup(group, noteGroup, noteText.trim());
+                  }
+                },
+                child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  Future<void> _saveNoteToGroup(Map<String, dynamic> group, Map<String, dynamic> noteGroup, String noteText) async {
+    try {
+      final groupId = group['id'] as String;
+      final notesData = group['notes'] as List<dynamic>? ?? [];
+      
+      List<Map<String, dynamic>> noteGroups = [];
+      if (notesData.isNotEmpty) {
+        if (notesData[0] is Map) {
+          noteGroups = notesData.map((item) {
+            return Map<String, dynamic>.from(item as Map);
+          }).toList();
+        } else {
+          noteGroups = [
+            {'id': 'default', 'name': '', 'items': notesData}
+          ];
+        }
+      }
+      
+      // 해당 구분선 찾아서 항목 추가
+      for (var ng in noteGroups) {
+        if (ng['id'] == noteGroup['id']) {
+          final items = List<String>.from(ng['items'] as List<dynamic>? ?? []);
+          items.add(noteText);
+          ng['items'] = items;
+          break;
+        }
+      }
+      
+      await _supabase.from('concept_group').update({
+        'notes': noteGroups,
+      }).eq('id', groupId);
+      
+      if (_expandedSectionId != null) {
+        await _loadConceptGroups(_expandedSectionId!);
+      }
+    } catch (e) {
+      _showError('노트 추가 실패: $e');
+    }
+  }
+  
+  Future<void> _deleteNoteGroup(Map<String, dynamic> group, int groupIndex) async {
+    try {
+      final groupId = group['id'] as String;
+      final notesData = group['notes'] as List<dynamic>? ?? [];
+      
+      List<Map<String, dynamic>> noteGroups = [];
+      if (notesData.isNotEmpty && notesData[0] is Map) {
+        noteGroups = notesData.map((item) {
+          return Map<String, dynamic>.from(item as Map);
+        }).toList();
+      }
+      
+      if (groupIndex < noteGroups.length) {
+        noteGroups.removeAt(groupIndex);
+      }
+      
+      await _supabase.from('concept_group').update({
+        'notes': noteGroups,
+      }).eq('id', groupId);
+      
+      if (_expandedSectionId != null) {
+        await _loadConceptGroups(_expandedSectionId!);
+      }
+    } catch (e) {
+      _showError('노트 구분선 삭제 실패: $e');
+    }
+  }
+  
+  Future<void> _deleteNoteItem(Map<String, dynamic> group, int groupIndex, int itemIndex) async {
+    try {
+      final groupId = group['id'] as String;
+      final notesData = group['notes'] as List<dynamic>? ?? [];
+      
+      List<Map<String, dynamic>> noteGroups = [];
+      if (notesData.isNotEmpty && notesData[0] is Map) {
+        noteGroups = notesData.map((item) {
+          return Map<String, dynamic>.from(item as Map);
+        }).toList();
+      }
+      
+      if (groupIndex < noteGroups.length) {
+        final items = List<String>.from(noteGroups[groupIndex]['items'] as List<dynamic>? ?? []);
+        if (itemIndex < items.length) {
+          items.removeAt(itemIndex);
+          noteGroups[groupIndex]['items'] = items;
+        }
+      }
+      
+      await _supabase.from('concept_group').update({
+        'notes': noteGroups,
+      }).eq('id', groupId);
+      
+      if (_expandedSectionId != null) {
+        await _loadConceptGroups(_expandedSectionId!);
+      }
+    } catch (e) {
+      _showError('노트 삭제 실패: $e');
+    }
+  }
+  
+  // 드래그 가능한 개념 칩
+  Widget _buildDraggableConceptChip(Map<String, dynamic> concept, String groupId, int index) {
+    final tags = concept['tags'] as List<dynamic>? ?? [];
+    final hasDefinition = tags.contains('정의');
+    final hasTheorem = tags.contains('정리');
+    final chipColor = hasDefinition 
+        ? const Color(0xFFFF5252) 
+        : (hasTheorem ? const Color(0xFF4A9EFF) : const Color(0xFF999999));
+    
+    return LongPressDraggable<int>(
+      data: index,
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(
+          opacity: 0.8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: chipColor.withOpacity(0.3),
+              border: Border.all(color: chipColor, width: 2),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              concept['name'] as String,
+              style: TextStyle(
+                color: chipColor,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: _buildConceptChip(concept, groupId),
+      ),
+      child: DragTarget<int>(
+        onAcceptWithDetails: (details) {
+          _reorderConcepts(groupId, details.data, index);
+        },
+        builder: (context, candidateData, rejectedData) {
+          return _buildConceptChip(concept, groupId);
+        },
+      ),
+    );
+  }
+  
+  // 개념 칩 UI (기본)
+  Widget _buildConceptChip(Map<String, dynamic> concept, String groupId) {
+    final tags = concept['tags'] as List<dynamic>? ?? [];
+    final hasDefinition = tags.contains('정의');
+    final hasTheorem = tags.contains('정리');
+    final chipColor = hasDefinition 
+        ? const Color(0xFFFF5252) 
+        : (hasTheorem ? const Color(0xFF4A9EFF) : const Color(0xFF999999));
+    
+    return GestureDetector(
+      onSecondaryTap: () => _showConceptContextMenu(concept, groupId),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          // 배경색 제거 (투명)
+          border: Border.all(color: chipColor, width: 1.5),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          concept['name'] as String,
+          style: TextStyle(
+            color: chipColor,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  // 개념 순서 변경 (로컬만)
+  Future<void> _reorderConcepts(String groupId, int oldIndex, int newIndex) async {
+    if (oldIndex == newIndex) return;
+    
+    final concepts = _conceptsCache[groupId] ?? [];
+    if (oldIndex >= concepts.length || newIndex >= concepts.length) return;
+    
+    // UI 업데이트
+    final item = concepts.removeAt(oldIndex);
+    concepts.insert(newIndex, item);
+    
+    setState(() {
+      _conceptsCache[groupId] = concepts;
+    });
+    
+    // SharedPreferences에 순서만 저장
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final conceptIds = concepts.map((c) => c['id'] as String).toList();
+      await prefs.setString('concept_order_$groupId', jsonEncode(conceptIds));
+    } catch (e) {
+      _showError('순서 저장 실패: $e');
+    }
+  }
+  
+  // 구분선 추가
+  Future<void> _addConceptGroup(String sectionId) async {
+    String groupName = '';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('구분선 추가', style: TextStyle(color: Colors.white)),
+            content: TextField(
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '구분선 이름 (예: 기본 개념)',
+                hintStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white54),
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                ),
+              ),
+              onChanged: (value) {
+                setDialogState(() {
+                  groupName = value;
+                });
+              },
+              onSubmitted: (value) async {
+                if (value.trim().isNotEmpty) {
+                  Navigator.pop(context);
+                  await _saveConceptGroup(sectionId, value.trim());
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (groupName.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _saveConceptGroup(sectionId, groupName.trim());
+                  }
+                },
+                child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  Future<void> _saveConceptGroup(String sectionId, String name) async {
+    try {
+      final maxOrder = _conceptGroups.isEmpty
+          ? 0
+          : _conceptGroups.map((g) => g['display_order'] as int? ?? 0).reduce((a, b) => a > b ? a : b);
+      
+      await _supabase.from('concept_group').insert({
+        'section_id': sectionId,
+        'name': name,
+        'display_order': maxOrder + 1,
+      });
+      
+      await _loadConceptGroups(sectionId);
+    } catch (e) {
+      _showError('구분선 추가 실패: $e');
+    }
+  }
+  
+  // 개념 추가
+  Future<void> _addConcept(String groupId) async {
+    String name = '';
+    String selectedTag = ''; // '', '정의', '정리'
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('개념 추가', style: TextStyle(color: Colors.white)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  decoration: const InputDecoration(
+                    hintText: '개념 이름',
+                    hintStyle: TextStyle(color: Colors.white54),
+                    enabledBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white54),
+                    ),
+                    focusedBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+                    ),
+                  ),
+                  onChanged: (value) => name = value,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('태그: ', style: TextStyle(color: Colors.white70)),
+                    const SizedBox(width: 12),
+                    // 정의 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '정의' ? '' : '정의';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '정의'
+                              ? const Color(0xFFFF5252).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '정의'
+                                ? const Color(0xFFFF5252) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '정의',
+                          style: TextStyle(
+                            color: selectedTag == '정의'
+                                ? const Color(0xFFFF5252) 
+                                : const Color(0xFF999999),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '정의' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 정리 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '정리' ? '' : '정리';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '정리'
+                              ? const Color(0xFF4A9EFF).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '정리'
+                                ? const Color(0xFF4A9EFF) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '정리',
+                          style: TextStyle(
+                            color: selectedTag == '정리'
+                                ? const Color(0xFF4A9EFF) 
+                                : const Color(0xFF999999),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '정리' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (name.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _saveNewConcept(groupId, name.trim(), selectedTag);
+                  }
+                },
+                child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  Future<void> _saveNewConcept(String groupId, String name, String tag) async {
+    try {
+      final concepts = _conceptsCache[groupId] ?? [];
+      final maxOrder = concepts.isEmpty
+          ? 0
+          : concepts.map((c) => c['display_order'] as int? ?? 0).reduce((a, b) => a > b ? a : b);
+      
+      final tags = tag.isNotEmpty ? [tag] : [];
+      final color = tag == '정의' ? '#FF5252' : (tag == '정리' ? '#4A9EFF' : '#999999');
+      
+      await _supabase.from('concept').insert({
+        'group_id': groupId,
+        'name': name,
+        'color': color,
+        'tags': tags,
+        'display_order': maxOrder + 1,
+      });
+      
+      await _loadConcepts(groupId);
+    } catch (e) {
+      _showError('개념 추가 실패: $e');
+    }
+  }
+  
+  // 구분선 컨텍스트 메뉴
+  void _showGroupContextMenu(Map<String, dynamic> group, String sectionId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('구분선', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              title: const Text('삭제', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _deleteConceptGroup(group['id'] as String, sectionId);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Future<void> _deleteConceptGroup(String groupId, String sectionId) async {
+    try {
+      await _supabase.from('concept_group').delete().eq('id', groupId);
+      _conceptsCache.remove(groupId);
+      await _loadConceptGroups(sectionId);
+    } catch (e) {
+      _showError('구분선 삭제 실패: $e');
+    }
+  }
+  
+  // 개념 컨텍스트 메뉴
+  void _showConceptContextMenu(Map<String, dynamic> concept, String groupId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: Text(concept['name'] as String, style: const TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit, color: Color(0xFF4A9EFF)),
+              title: const Text('편집', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _editConcept(concept, groupId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              title: const Text('삭제', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _deleteConcept(concept['id'] as String, groupId);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Future<void> _editConcept(Map<String, dynamic> concept, String groupId) async {
+    String name = concept['name'] as String;
+    final tags = List<String>.from(concept['tags'] as List<dynamic>? ?? []);
+    String selectedTag = tags.isEmpty ? '' : tags[0]; // '정의', '정리', ''
+    
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text('개념 편집', style: TextStyle(color: Colors.white)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: TextEditingController(text: name)
+                    ..selection = TextSelection(baseOffset: 0, extentOffset: name.length),
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  decoration: const InputDecoration(
+                    hintText: '개념 이름',
+                    hintStyle: TextStyle(color: Colors.white54),
+                  ),
+                  onChanged: (value) => name = value,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('태그: ', style: TextStyle(color: Colors.white70)),
+                    const SizedBox(width: 12),
+                    // 정의 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '정의' ? '' : '정의';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '정의'
+                              ? const Color(0xFFFF5252).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '정의'
+                                ? const Color(0xFFFF5252) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '정의',
+                          style: TextStyle(
+                            color: selectedTag == '정의'
+                                ? const Color(0xFFFF5252) 
+                                : const Color(0xFF999999),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '정의' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 정리 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '정리' ? '' : '정리';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '정리'
+                              ? const Color(0xFF4A9EFF).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '정리'
+                                ? const Color(0xFF4A9EFF) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '정리',
+                          style: TextStyle(
+                            color: selectedTag == '정리'
+                                ? const Color(0xFF4A9EFF) 
+                                : const Color(0xFF999999),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '정리' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () async {
+                  if (name.trim().isNotEmpty) {
+                    Navigator.pop(context);
+                    await _updateConcept(concept['id'] as String, name.trim(), selectedTag, groupId);
+                  }
+                },
+                child: const Text('저장', style: TextStyle(color: Color(0xFF4A9EFF))),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+  
+  Future<void> _updateConcept(String conceptId, String name, String tag, String groupId) async {
+    try {
+      final tags = tag.isNotEmpty ? [tag] : [];
+      final color = tag == '정의' ? '#FF5252' : (tag == '정리' ? '#4A9EFF' : '#999999');
+      
+      await _supabase.from('concept').update({
+        'name': name,
+        'color': color,
+        'tags': tags,
+      }).eq('id', conceptId);
+      
+      await _loadConcepts(groupId);
+    } catch (e) {
+      _showError('개념 수정 실패: $e');
+    }
+  }
+  
+  Future<void> _deleteConcept(String conceptId, String groupId) async {
+    try {
+      await _supabase.from('concept').delete().eq('id', conceptId);
+      await _loadConcepts(groupId);
+    } catch (e) {
+      _showError('개념 삭제 실패: $e');
+    }
+  }
+}
+
+
+

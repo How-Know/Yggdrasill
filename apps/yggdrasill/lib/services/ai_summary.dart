@@ -1,13 +1,33 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AiSummaryService {
+  // platform_config에서 API 키 가져오기
+  static Future<String> _getApiKey() async {
+    try {
+      final res = await Supabase.instance.client
+          .from('platform_config')
+          .select('config_value')
+          .eq('config_key', 'openai_api_key')
+          .maybeSingle();
+      return (res?['config_value'] as String?) ?? '';
+    } catch (e) {
+      print('[AI] API 키 로드 실패: $e');
+      return '';
+    }
+  }
+
   static Future<String> summarize(String text, {int maxChars = 60}) async {
+    // AI 기능 활성화 확인
     final prefs = await SharedPreferences.getInstance();
-    final persisted = prefs.getString('openai_api_key') ?? '';
-    final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
-    final apiKey = persisted.isNotEmpty ? persisted : defined;
+    final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
+    if (!isEnabled) {
+      return toSingleSentence(text, maxChars: maxChars);
+    }
+    
+    final apiKey = await _getApiKey();
     if (apiKey.isEmpty) {
       return toSingleSentence(text, maxChars: maxChars);
     }
@@ -116,9 +136,12 @@ class AiSummaryService {
     // 1) GPT 시도 (상대일이 아닌 경우에만)
     try {
       final prefs = await SharedPreferences.getInstance();
-      final persisted = prefs.getString('openai_api_key') ?? '';
-      final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
-      final apiKey = persisted.isNotEmpty ? persisted : defined;
+      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
+      if (!isEnabled) {
+        return null;
+      }
+      
+      final apiKey = await _getApiKey();
       if (apiKey.isNotEmpty) {
         final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
         final body = jsonEncode({
@@ -234,9 +257,19 @@ class AiSummaryService {
     // 1) GPT 시도: 010-1234-5678 포맷으로만, 없으면 null
     try {
       final prefs = await SharedPreferences.getInstance();
-      final persisted = prefs.getString('openai_api_key') ?? '';
-      final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
-      final apiKey = persisted.isNotEmpty ? persisted : defined;
+      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
+      if (!isEnabled) {
+        // GPT 비활성화 시 정규식으로 직접 처리
+        final phoneRegex = RegExp(r'01[0-9]-?\d{3,4}-?\d{4}');
+        final match = phoneRegex.firstMatch(text);
+        if (match != null) {
+          final phone = match.group(0) ?? '';
+          return phone.replaceAll(RegExp(r'[^0-9]'), '').replaceAllMapped(RegExp(r'^(01[0-9])(\d{3,4})(\d{4})$'), (m) => '${m[1]}-${m[2]}-${m[3]}');
+        }
+        return null;
+      }
+      
+      final apiKey = await _getApiKey();
       if (apiKey.isNotEmpty) {
         final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
         final body = jsonEncode({
@@ -301,9 +334,15 @@ class AiSummaryService {
   static Future<String?> extractKoreanName(String text) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final persisted = prefs.getString('openai_api_key') ?? '';
-      final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
-      final apiKey = persisted.isNotEmpty ? persisted : defined;
+      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
+      if (!isEnabled) {
+        // GPT 비활성화 시 정규식으로 직접 처리
+        final nameRegex = RegExp(r'[가-힣]{2,4}(?:\s+[가-힣]{2,4})?');
+        final match = nameRegex.firstMatch(text);
+        return match?.group(0);
+      }
+      
+      final apiKey = await _getApiKey();
       if (apiKey.isNotEmpty) {
         final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
         final body = jsonEncode({

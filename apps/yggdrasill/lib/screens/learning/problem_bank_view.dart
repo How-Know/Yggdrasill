@@ -856,23 +856,33 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Future<void> _generateCropPreview() async {
     if (_selectedRect == null) return;
     try {
-      final RenderRepaintBoundary? rb = _pdfViewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (rb == null) {
-        _log('미리보기 생성 실패: 렌더 객체 없음');
+      _log('고해상도 PDF 렌더링 중...');
+      
+      // PDF 페이지를 직접 고해상도로 렌더링 (화면 캡처 대신)
+      final page = _currentDoc!.pages[_currentPage - 1];
+      final pageImg = await page.render(
+        fullWidth: page.width * 5.0,  // 5배 확대 렌더링 (double)
+        fullHeight: page.height * 5.0,
+      );
+      
+      if (pageImg == null) {
+        _log('PDF 렌더링 실패');
         return;
       }
       
-      _log('고해상도 캡처 중...');
-      final ui.Image fullImg = await rb.toImage(pixelRatio: 8.0); // B4 인쇄 품질
-      final ByteData? bd = await fullImg.toByteData(format: ui.ImageByteFormat.png);
-      if (bd == null) return;
+      // PdfImage를 RGBA 바이트로 변환
+      final bytes = pageImg.pixels;
       
-      final bytes = bd.buffer.asUint8List();
-      final decoded = img.decodePng(bytes);
-      if (decoded == null) {
-        _log('PNG 디코딩 실패');
-        return;
-      }
+      // RGBA 바이트를 img.Image로 변환
+      final decoded = img.Image.fromBytes(
+        width: pageImg.width,
+        height: pageImg.height,
+        bytes: bytes.buffer,
+        format: img.Format.uint8,
+        numChannels: 4,  // RGBA
+      );
+      
+      _log('렌더링 완료: ${decoded.width}x${decoded.height}');
       
       // 선택 영역만 크롭 (약간 여유 추가로 우측 잘림 방지)
       final marginRel = 0.005; // 0.5% 여유
@@ -889,8 +899,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _log('크롭: ${cropX},${cropY} ${cropW}x${cropH}');
       final cropped = img.copyCrop(decoded, x: cropX, y: cropY, width: cropW, height: cropH);
       
+      // 이미지 품질 개선 (대비 향상 + 샤프닝)
+      final enhanced = _enhanceImage(cropped);
+      
       // 수평 자동 조절 (회전각 탐지 후 보정)
-      final autoLeveled = _autoLevelImage(cropped);
+      final autoLeveled = _autoLevelImage(enhanced);
       
       // 수동 회전 적용
       _croppedImage = autoLeveled;
@@ -1036,6 +1049,27 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
   }
   
+  // 이미지 품질 개선: 부드러운 샤프닝 (배경 보존)
+  img.Image _enhanceImage(img.Image src) {
+    try {
+      // 약한 샤프닝만 적용 (배경 회색 방지)
+      // 커널: [ 0 -1  0]
+      //       [-1  5 -1]
+      //       [ 0 -1  0]
+      final sharpened = img.convolution(src, filter: [
+         0, -1,  0,
+        -1,  5, -1,
+         0, -1,  0,
+      ]);
+      
+      _log('이미지 개선: 부드러운 샤프닝');
+      return sharpened;
+    } catch (e) {
+      _log('이미지 개선 실패: $e');
+      return src;
+    }
+  }
+  
   // 수평 자동 조절: Otsu + 여러 텍스트 라인 샘플링 + 중앙값
   img.Image _autoLevelImage(img.Image src) {
     try {
@@ -1172,6 +1206,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       
       // PDF 생성 (2×2 레이아웃, 상단 40% 하단 50%, 한 페이지 4문제)
       final doc = sf.PdfDocument();
+      
+      // 문서 페이지 설정 (여백 0으로 설정)
+      doc.pageSettings.size = const Size(595, 842); // A4
+      doc.pageSettings.margins.all = 0; // 모든 여백 제거
+      
       const double margin = 20; // 좌측 여백 감소
       const double pageWidth = 595;
       const double pageHeight = 842;

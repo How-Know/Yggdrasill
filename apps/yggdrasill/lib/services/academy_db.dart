@@ -50,8 +50,7 @@ class AcademyDbService {
             lesson_duration INTEGER,
             payment_type TEXT,
             logo BLOB,
-            session_cycle INTEGER DEFAULT 1, -- [추가] 수강 횟수
-            openai_api_key TEXT
+            session_cycle INTEGER DEFAULT 1 -- [추가] 수강 횟수
           )
         ''');
         // tag_events: 수업 태그 이벤트 저장 테이블
@@ -859,13 +858,7 @@ class AcademyDbService {
             )
           ''');
         }
-        if (oldVersion < 20) {
-          final columns = await db.rawQuery("PRAGMA table_info(academy_settings)");
-          final hasApiKey = columns.any((col) => col['name'] == 'openai_api_key');
-          if (!hasApiKey) {
-            await db.execute('ALTER TABLE academy_settings ADD COLUMN openai_api_key TEXT');
-          }
-        }
+        // v20: openai_api_key - 제거됨 (platform_config로 이전)
         if (oldVersion < 21) {
           final columns = await db.rawQuery("PRAGMA table_info(memos)");
           final hasRecurrenceType = columns.any((c) => c['name'] == 'recurrence_type');
@@ -1295,14 +1288,6 @@ class AcademyDbService {
       if (paymentType == 'perClass' || paymentType == 'session') paymentTypeStr = 'session';
       if (paymentType == 'monthly') paymentTypeStr = 'monthly';
       print('[DB] saveAcademySettings: $settings, paymentType: $paymentTypeStr');
-      // 기존에 저장된 openai_api_key가 있으면 보존 (REPLACE 시 컬럼 유실 방지)
-      String? existingApiKey;
-      try {
-        final existing = await dbClient.query('academy_settings', where: 'id = ?', whereArgs: [1], limit: 1);
-        if (existing.isNotEmpty) {
-          existingApiKey = existing.first['openai_api_key'] as String?;
-        }
-      } catch (_) {}
       await dbClient.insert(
         'academy_settings',
         {
@@ -1314,7 +1299,6 @@ class AcademyDbService {
           'payment_type': paymentTypeStr,
           'logo': settings.logo,
           'session_cycle': settings.sessionCycle, // [추가]
-          'openai_api_key': existingApiKey,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );

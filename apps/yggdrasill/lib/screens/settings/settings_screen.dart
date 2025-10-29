@@ -27,7 +27,6 @@ enum SettingType {
   academy,
   teachers,
   general,
-  admin,
 }
 
 enum DayOfWeek {
@@ -308,11 +307,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                // OpenAI API 키 섹션
+                // AI 기능 토글
                 const Padding(
                   padding: EdgeInsets.only(top: 24),
                   child: Text(
-                    'AI 요약',
+                    'AI',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 20,
@@ -320,91 +319,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                FutureBuilder<Map<String, String?>>( 
+                const SizedBox(height: 12),
+                FutureBuilder<bool>(
                   future: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    final mem = prefs.getString('openai_api_key');
-                    // DB fallback
-                    String? dbKey;
                     try {
-                      final db = await AcademyDbService.instance.db;
-                      final rows = await db.query('academy_settings', where: 'id = ?', whereArgs: [1]);
-                      if (rows.isNotEmpty) dbKey = rows.first['openai_api_key'] as String?;
-                    } catch (_) {}
-                    return {'prefs': mem, 'db': dbKey};
+                      // platform_config에서 API 키가 설정되어 있는지 확인
+                      final res = await Supabase.instance.client
+                          .from('platform_config')
+                          .select('config_value')
+                          .eq('config_key', 'openai_api_key')
+                          .maybeSingle();
+                      return res != null && (res['config_value'] as String? ?? '').isNotEmpty;
+                    } catch (_) {
+                      return false;
+                    }
                   }(),
                   builder: (context, snapshot) {
-                    final initial = (snapshot.data?['prefs'] ?? snapshot.data?['db']) ?? '';
-                    final controller = TextEditingController(text: initial);
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            style: const TextStyle(color: Colors.white),
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'OpenAI API Key',
-                              labelStyle: TextStyle(color: Colors.white70),
-                              hintText: 'sk-로 시작하는 키를 입력하세요',
-                              hintStyle: TextStyle(color: Colors.white24),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24),
-                              ),
-                              focusedBorder: const OutlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFF1976D2)),
-                              ),
-                            ),
+                    final hasApiKey = snapshot.data ?? false;
+                    return FutureBuilder<bool>(
+                      future: SharedPreferences.getInstance().then((p) => p.getBool('ai_summary_enabled') ?? false),
+                      builder: (context, enabledSnapshot) {
+                        final isEnabled = enabledSnapshot.data ?? false;
+                        return Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1F1F1F),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white12),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            final value = controller.text.trim();
-                            if (value.isEmpty) {
-                              await prefs.remove('openai_api_key');
-                              // DB에도 반영
-                              final db = await AcademyDbService.instance.db;
-                              await db.update('academy_settings', {'openai_api_key': null}, where: 'id = ?', whereArgs: [1]);
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                                content: Text('API 키가 제거되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
-                              ));
-                            } else {
-                              await prefs.setString('openai_api_key', value);
-                              // DB에도 반영(없으면 insert)
-                              final db = await AcademyDbService.instance.db;
-                              final exists = await db.query('academy_settings', where: 'id = ?', whereArgs: [1]);
-                              if (exists.isEmpty) {
-                                await db.insert('academy_settings', {'id': 1, 'openai_api_key': value});
-                              } else {
-                                await db.update('academy_settings', {'openai_api_key': value}, where: 'id = ?', whereArgs: [1]);
-                              }
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                                content: Text('API 키가 저장되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
-                              ));
-                            }
-                            setState(() {}); // 상태표시 리프레시
-                          },
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                          child: const Text('저장'),
-                        ),
-                        const SizedBox(width: 8),
-                        FutureBuilder<String?>(
-                          future: SharedPreferences.getInstance().then((p) => p.getString('openai_api_key')),
-                          builder: (context, snap) {
-                            final hasKey = (snap.data != null && (snap.data ?? '').isNotEmpty);
-                            return Row(children: [
-                              Icon(hasKey ? Icons.check_circle : Icons.error_outline, color: hasKey ? Colors.lightGreen : Colors.orangeAccent, size: 18),
-                              const SizedBox(width: 6),
-                              Text(hasKey ? '사용 중' : '미사용', style: const TextStyle(color: Colors.white70)),
-                            ]);
-                          },
-                        ),
-                      ],
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'AI 요약 사용',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      hasApiKey
+                                          ? 'AI가 자동으로 메모를 요약합니다.'
+                                          : 'API 키가 설정되지 않았습니다. 관리자에게 문의하세요.',
+                                      style: TextStyle(
+                                        color: hasApiKey ? Colors.white70 : Colors.amber,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Switch.adaptive(
+                                value: hasApiKey && isEnabled,
+                                onChanged: hasApiKey ? (value) async {
+                                  final p = await SharedPreferences.getInstance();
+                                  await p.setBool('ai_summary_enabled', value);
+                                  setState(() {});
+                                } : null,
+                                activeColor: const Color(0xFF1976D2),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -2051,8 +2033,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const tabWidth = 120.0;
-                final hasAdmin = _isSuperAdmin;
-                final tabCount = hasAdmin ? 4 : 3;
+                final tabCount = 3; // 학원, 선생님, 일반
                 final tabGap = 21.0;
                 final totalWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
                 final leftPadding = (constraints.maxWidth - totalWidth) / 2;
@@ -2131,27 +2112,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                         ),
-                        if (hasAdmin) ...[
-                          SizedBox(width: tabGap),
-                          SizedBox(
-                            width: tabWidth,
-                            child: TextButton(
-                              onPressed: () => setState(() {
-                                _prevTabIndex = _customTabIndex;
-                                _customTabIndex = 3;
-                                _selectedType = SettingType.admin;
-                              }),
-                              child: Text(
-                                '관리자',
-                                style: TextStyle(
-                                  color: _customTabIndex == 3 ? Colors.blue : Colors.white70,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
                       ],
                     ),
                   ],
@@ -2188,10 +2148,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     return _buildAcademySettingsContainer();
                   } else if (_customTabIndex == 1) {
                     return _buildTeacherSettingsContainer();
-                  } else if (_customTabIndex == 2) {
-                    return _buildGeneralSettingsContainer();
                   } else {
-                    return _buildAdminSettingsContainer();
+                    return _buildGeneralSettingsContainer();
                   }
                 },
               ),
@@ -2203,113 +2161,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildAdminSettingsContainer() {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 48),
-        child: SizedBox(
-          width: 820,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF18181A),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('관리자', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 16),
-                // Owners table
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: _fetchOwnersWithCounts(),
-                  builder: (context, snapshot) {
-                    final rows = snapshot.data ?? const [];
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator());
-                    }
-                    if (rows.isEmpty) {
-                      return const Text('소유자 데이터가 없습니다.', style: TextStyle(color: Colors.white70));
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                          decoration: BoxDecoration(color: const Color(0xFF1F1F1F), borderRadius: BorderRadius.circular(8)),
-                          child: Row(children: const [
-                            Expanded(child: Text('학원명', style: TextStyle(color: Colors.white70))),
-                            Expanded(child: Text('소유자 이메일', style: TextStyle(color: Colors.white70))),
-                            SizedBox(width: 120, child: Text('선생님 수', style: TextStyle(color: Colors.white70))),
-                            SizedBox(width: 120, child: Text('접근', style: TextStyle(color: Colors.white70))),
-                          ]),
-                        ),
-                        const SizedBox(height: 8),
-                        ...rows.map((r) => Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                          decoration: BoxDecoration(color: const Color(0xFF1F1F1F), borderRadius: BorderRadius.circular(8)),
-                          child: Row(children: [
-                            Expanded(child: Text((r['academy_name'] as String?) ?? '', style: const TextStyle(color: Colors.white))),
-                            Expanded(child: Text((r['owner_email'] as String?) ?? '', style: const TextStyle(color: Colors.white70))),
-                            SizedBox(width: 120, child: Text('${r['teacher_count'] ?? 0}', style: const TextStyle(color: Colors.white))),
-                            SizedBox(
-                              width: 120,
-                              child: Switch.adaptive(
-                                value: !(r['is_blocked'] as bool? ?? false),
-                                onChanged: (v) async {
-                                  try {
-                                    await Supabase.instance.client.rpc('set_owner_blocked', params: {
-                                      'p_owner_user_id': r['owner_user_id'],
-                                      'p_blocked': !v,
-                                    });
-                                    setState(() {});
-                                  } catch (e) {
-                                    if (!mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('변경 실패: $e')));
-                                  }
-                                },
-                              ),
-                            ),
-                          ]),
-                        )),
-                        const SizedBox(height: 24),
-                        // Placeholder sections for future features
-                        const Text('구독', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        const Text('추후 구현 예정입니다.', style: TextStyle(color: Colors.white54)),
-                        const SizedBox(height: 16),
-                        const Text('관리', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        const Text('추후 구현 예정입니다.', style: TextStyle(color: Colors.white54)),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchOwnersWithCounts() async {
-    try {
-      final res = await Supabase.instance.client.rpc('list_owners_with_teacher_counts');
-      if (res is List) {
-        return List<Map<String, dynamic>>.from(res);
-      }
-      if (res is Map && res.values.first is List) {
-        return List<Map<String, dynamic>>.from(res.values.first as List);
-      }
-      return const [];
-    } catch (_) {
-      return const [];
-    }
-  }
 
   void _pickLogoImage() async {
     if (kIsWeb) {
