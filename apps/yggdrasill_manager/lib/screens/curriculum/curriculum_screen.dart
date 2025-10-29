@@ -371,13 +371,19 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               .map((f) => f['display_order'] as int? ?? 0)
               .reduce((a, b) => a > b ? a : b);
       
-      await _supabase.from('thought_folder').insert({
+      final inserted = await _supabase.from('thought_folder').insert({
         'parent_id': parentId,
         'name': name,
         'display_order': maxOrder + 1,
-      });
+      }).select();
+      debugPrint('폴더 추가됨 parent=$parentId name=$name → $inserted');
       
       await _loadThoughtFolders();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('폴더 "$name" 추가됨')),
+        );
+      }
     } catch (e) {
       _showError('폴더 추가 실패: $e');
     }
@@ -452,14 +458,20 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               .map((c) => c['display_order'] as int? ?? 0)
               .reduce((a, b) => a > b ? a : b);
       
-      await _supabase.from('thought_card').insert({
+      final inserted = await _supabase.from('thought_card').insert({
         'folder_id': folderId,
         'title': title,
         'content': content,
         'display_order': maxOrder + 1,
-      });
+      }).select();
+      debugPrint('사고카드 추가됨 folder=$folderId title=$title → $inserted');
       
       await _loadThoughtCards(folderId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('카드 "$title" 추가됨')),
+        );
+      }
     } catch (e) {
       _showError('사고카드 추가 실패: $e');
     }
@@ -603,6 +615,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                       color: Colors.white,
                       fontSize: 14,
                     ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => _addThoughtFolder(folderId),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Icon(Icons.add, color: Colors.white54, size: 16),
                   ),
                 ),
               ],
