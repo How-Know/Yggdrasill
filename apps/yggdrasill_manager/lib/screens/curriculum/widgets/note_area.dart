@@ -73,43 +73,7 @@ class NoteArea extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-          Row(
-            children: [
-              const Text(
-                '정리/명제/공식',
-                style: TextStyle(
-                  color: Color(0xFF999999),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              GestureDetector(
-                onTap: () => onAddNoteGroup(group),
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF666666),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Icon(Icons.add, color: Colors.white70, size: 20),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (noteGroups.isEmpty)
-            Center(
-              child: Text(
-                '+ 버튼을 눌러 구분선 추가',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.3),
-                  fontSize: 14,
-                ),
-              ),
-            )
-          else
-            ...noteGroups.asMap().entries.map((entry) {
+          ...noteGroups.asMap().entries.map((entry) {
               final noteGroupIndex = entry.key;
               final noteGroup = entry.value;
               return _buildNoteGroup(

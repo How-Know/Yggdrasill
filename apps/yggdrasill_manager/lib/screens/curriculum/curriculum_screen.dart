@@ -531,6 +531,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   _arrowRelativeOffset = relativeOffset;
                 });
               },
+              onAddNoteGroup: (group) => _addNoteGroup(group),
             ),
           ],
           
@@ -1465,27 +1466,35 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   // 개념 순서 변경 (로컬만)
   Future<void> _reorderConcepts(String groupId, int oldIndex, int newIndex) async {
+    print('드래그앤드롭: $oldIndex → $newIndex (groupId: $groupId)');
+    
     if (oldIndex == newIndex) return;
     
-    final concepts = _conceptsCache[groupId] ?? [];
+    final concepts = List<Map<String, dynamic>>.from(_conceptsCache[groupId] ?? []);
     if (oldIndex >= concepts.length || newIndex >= concepts.length) return;
+    
+    print('이전 순서: ${concepts.map((c) => c['name']).toList()}');
     
     // UI 업데이트
     final item = concepts.removeAt(oldIndex);
     concepts.insert(newIndex, item);
     
-    setState(() {
-      _conceptsCache[groupId] = concepts;
-    });
+    print('새 순서: ${concepts.map((c) => c['name']).toList()}');
     
-    // SharedPreferences에 순서만 저장
+    // SharedPreferences에 순서 저장
     try {
       final prefs = await SharedPreferences.getInstance();
       final conceptIds = concepts.map((c) => c['id'] as String).toList();
       await prefs.setString('concept_order_$groupId', jsonEncode(conceptIds));
+      print('순서 저장 완료: $conceptIds');
     } catch (e) {
       _showError('순서 저장 실패: $e');
     }
+    
+    // 캐시 업데이트 및 강제 리렌더링
+    setState(() {
+      _conceptsCache[groupId] = concepts;
+    });
   }
   
   // 구분선 추가

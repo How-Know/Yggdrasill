@@ -21,6 +21,7 @@ class SectionList extends StatefulWidget {
   final void Function(Map<String, dynamic> concept, String groupId) onConceptContextMenu;
   final void Function(String groupId) onToggleNotes;
   final void Function(double relativeOffset)? onArrowPositionMeasured;
+  final void Function(Map<String, dynamic> group)? onAddNoteGroup;
 
   const SectionList({
     super.key,
@@ -40,6 +41,7 @@ class SectionList extends StatefulWidget {
     required this.onConceptContextMenu,
     required this.onToggleNotes,
     this.onArrowPositionMeasured,
+    this.onAddNoteGroup,
   });
 
   @override
@@ -196,6 +198,9 @@ class _SectionListState extends State<SectionList> {
                   isNotesExpanded: widget.expandedGroupId == groupId,
                   onToggleNotes: () => widget.onToggleNotes(groupId),
                   onArrowPositionMeasured: _handleArrowPositionMeasured,
+                  onAddNoteGroup: widget.onAddNoteGroup != null 
+                      ? () => widget.onAddNoteGroup!(group) 
+                      : null,
                 );
               }).toList(),
             ),

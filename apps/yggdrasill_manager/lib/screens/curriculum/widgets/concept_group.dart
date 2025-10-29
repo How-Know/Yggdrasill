@@ -12,6 +12,7 @@ class ConceptGroup extends StatefulWidget {
   final bool isNotesExpanded;
   final VoidCallback onToggleNotes;
   final Function(double)? onArrowPositionMeasured;
+  final VoidCallback? onAddNoteGroup;
 
   const ConceptGroup({
     super.key,
@@ -26,6 +27,7 @@ class ConceptGroup extends StatefulWidget {
     required this.isNotesExpanded,
     required this.onToggleNotes,
     this.onArrowPositionMeasured,
+    this.onAddNoteGroup,
   });
 
   @override
@@ -75,12 +77,19 @@ class _ConceptGroupState extends State<ConceptGroup> {
               ),
               const SizedBox(width: 8),
               if (groupName.isNotEmpty)
-                Text(
-                  groupName,
-                  style: const TextStyle(
-                    color: Color(0xFF999999),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+                GestureDetector(
+                  onDoubleTap: () {
+                    if (widget.onAddNoteGroup != null) {
+                      widget.onAddNoteGroup!();
+                    }
+                  },
+                  child: Text(
+                    groupName,
+                    style: const TextStyle(
+                      color: Color(0xFF999999),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               const SizedBox(width: 8),
