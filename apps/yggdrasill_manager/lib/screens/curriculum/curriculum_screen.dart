@@ -46,8 +46,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   // 사고리스트 데이터
   List<Map<String, dynamic>> _thoughtFolders = [];
-  List<Map<String, dynamic>> _thoughtCards = [];
-  String? _expandedFolderId;
+  Map<String, List<Map<String, dynamic>>> _thoughtCardsByFolder = {};
+  final Set<String> _expandedFolderIds = {};
   
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
@@ -294,22 +294,16 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
   
   // 사고 카드 로드
-  Future<void> _loadThoughtCards(String? folderId) async {
+  Future<void> _loadThoughtCards(String folderId) async {
     try {
-      final data = folderId == null
-          ? await _supabase
-              .from('thought_card')
-              .select()
-              .filter('folder_id', 'is', null)
-              .order('display_order', ascending: true)
-          : await _supabase
-              .from('thought_card')
-              .select()
-              .eq('folder_id', folderId)
-              .order('display_order', ascending: true);
+      final data = await _supabase
+          .from('thought_card')
+          .select()
+          .eq('folder_id', folderId)
+          .order('display_order', ascending: true);
       
       setState(() {
-        _thoughtCards = List<Map<String, dynamic>>.from(data);
+        _thoughtCardsByFolder[folderId] = List<Map<String, dynamic>>.from(data);
       });
     } catch (e) {
       _showError('사고 카드 로드 실패: $e');
@@ -451,10 +445,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   Future<void> _saveThoughtCard(String? folderId, String title, String? content) async {
     try {
-      final maxOrder = _thoughtCards.where((c) => c['folder_id'] == folderId).isEmpty
+      final current = _thoughtCardsByFolder[folderId ?? ''] ?? const <Map<String, dynamic>>[];
+      final maxOrder = current.isEmpty
           ? 0
-          : _thoughtCards
-              .where((c) => c['folder_id'] == folderId)
+          : current
               .map((c) => c['display_order'] as int? ?? 0)
               .reduce((a, b) => a > b ? a : b);
       
@@ -466,7 +460,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       }).select();
       debugPrint('사고카드 추가됨 folder=$folderId title=$title → $inserted');
       
-      await _loadThoughtCards(folderId);
+      if (folderId != null) {
+        await _loadThoughtCards(folderId);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('카드 "$title" 추가됨')),
@@ -577,7 +573,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 폴더 아이템 (재귀적으로 중첩 폴더 표시)
   Widget _buildFolderItem(Map<String, dynamic> folder, int depth) {
     final folderId = folder['id'] as String;
-    final isExpanded = _expandedFolderId == folderId;
+    final isExpanded = _expandedFolderIds.contains(folderId);
     final childFolders = _thoughtFolders.where((f) => f['parent_id'] == folderId).toList();
     
     return Column(
@@ -586,8 +582,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         GestureDetector(
           onTap: () {
             setState(() {
-              _expandedFolderId = isExpanded ? null : folderId;
-              if (!isExpanded) {
+              if (isExpanded) {
+                _expandedFolderIds.remove(folderId);
+              } else {
+                _expandedFolderIds.add(folderId);
                 _loadThoughtCards(folderId);
               }
             });
@@ -636,7 +634,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           }),
           
           // 사고카드들
-          ..._thoughtCards.where((c) => c['folder_id'] == folderId).map((card) {
+          ...(_thoughtCardsByFolder[folderId] ?? const <Map<String, dynamic>>[]).map((card) {
             return _buildThoughtCard(card, depth + 1);
           }),
         ],
