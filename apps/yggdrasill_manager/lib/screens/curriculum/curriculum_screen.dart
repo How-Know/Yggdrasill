@@ -285,20 +285,75 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     return Container(
       color: const Color(0xFF1F1F1F),
+      child: Row(
+        children: [
+          // 왼쪽 70%: 커리큘럼 영역
+          Expanded(
+            flex: 7,
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 학년 선택 UI (상단)
+                  _buildGradeSelector(),
+                  
+                  const SizedBox(height: 32),
+                  
+                  // 대단원 카드 리스트 (왼쪽 정렬)
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _buildChapterList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          // 오른쪽 30%: 사고리스트 영역
+          Expanded(
+            flex: 3,
+            child: _buildThoughtList(),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 사고리스트 영역
+  Widget _buildThoughtList() {
+    return Container(
+      color: const Color(0xFF2A2A2A),
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 학년 선택 UI (상단)
-          _buildGradeSelector(),
-          
-          const SizedBox(height: 32),
-          
-          // 대단원 카드 리스트 (왼쪽 정렬)
+          const Text(
+            '사고 목록',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
           Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _buildChapterList(),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF3A3A3A)),
+              ),
+              child: Center(
+                child: Text(
+                  '우클릭하여 폴더 추가',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.3),
+                    fontSize: 14,
+                  ),
+                ),
+              ),
             ),
           ),
         ],
