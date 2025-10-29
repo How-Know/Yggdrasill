@@ -194,7 +194,7 @@ class NoteArea extends StatelessWidget {
                       item,
                       style: const TextStyle(
                         color: Color(0xFFB3B3B3),
-                        fontSize: 13,
+                        fontSize: 15,
                       ),
                     ),
                   ),
