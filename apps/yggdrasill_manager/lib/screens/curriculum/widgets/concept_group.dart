@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'measure_size.dart';
 
 class ConceptGroup extends StatelessWidget {
   final Map<String, dynamic> group;
@@ -11,6 +12,7 @@ class ConceptGroup extends StatelessWidget {
   final Function(Map<String, dynamic>, String) onConceptContextMenu;
   final bool isNotesExpanded;
   final VoidCallback onToggleNotes;
+  final Function(String, double)? onHeightChanged;
 
   const ConceptGroup({
     super.key,
@@ -24,6 +26,7 @@ class ConceptGroup extends StatelessWidget {
     required this.onConceptContextMenu,
     required this.isNotesExpanded,
     required this.onToggleNotes,
+    this.onHeightChanged,
   });
 
   @override
@@ -31,9 +34,15 @@ class ConceptGroup extends StatelessWidget {
     final groupId = group['id'] as String;
     final groupName = group['name'] as String? ?? '';
     
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Column(
+    return MeasureSize(
+      onChange: (size) {
+        if (onHeightChanged != null) {
+          onHeightChanged!(groupId, size.height);
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 구분선
@@ -104,6 +113,7 @@ class ConceptGroup extends StatelessWidget {
             }).toList(),
           ),
         ],
+      ),
       ),
     );
   }
