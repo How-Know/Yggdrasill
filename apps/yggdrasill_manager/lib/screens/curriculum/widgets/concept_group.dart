@@ -9,6 +9,8 @@ class ConceptGroup extends StatelessWidget {
   final Function(Map<String, dynamic>, String) onShowContextMenu;
   final Function(String, int, int) onReorder;
   final Function(Map<String, dynamic>, String) onConceptContextMenu;
+  final bool isNotesExpanded;
+  final VoidCallback onToggleNotes;
 
   const ConceptGroup({
     super.key,
@@ -20,6 +22,8 @@ class ConceptGroup extends StatelessWidget {
     required this.onShowContextMenu,
     required this.onReorder,
     required this.onConceptContextMenu,
+    required this.isNotesExpanded,
+    required this.onToggleNotes,
   });
 
   @override
@@ -67,6 +71,25 @@ class ConceptGroup extends StatelessWidget {
                   color: const Color(0xFF666666),
                 ),
               ),
+          const SizedBox(width: 8),
+          // 노트 펼치기 버튼
+          GestureDetector(
+            onTap: onToggleNotes,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: isNotesExpanded 
+                    ? const Color(0xFF4A9EFF).withOpacity(0.2)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(
+                isNotesExpanded ? Icons.chevron_left : Icons.chevron_right,
+                color: isNotesExpanded ? const Color(0xFF4A9EFF) : const Color(0xFF666666),
+                size: 20,
+              ),
+            ),
+          ),
             ],
           ),
           const SizedBox(height: 12),

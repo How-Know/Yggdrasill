@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'widgets/section_list.dart';
+import 'widgets/note_area.dart';
 
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
@@ -447,113 +449,49 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           // 확장 시 소단원 트리뷰 공간 (오른쪽에 표시)
           if (isExpanded) ...[
             const SizedBox(width: 20),
-            Container(
-              width: 432,
-              height: 864, // 1.5배 증가 (576 → 864)
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF3A3A3A)),
-              ),
-              child: _sections.isEmpty
-                  ? Center(
-                      child: Text(
-                        '소단원이 없습니다\n대단원을 더블클릭하여 추가하세요',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.3),
-                          fontSize: 17,
-                        ),
-                      ),
-                    )
-                  : ReorderableListView.builder(
-                      buildDefaultDragHandles: false,
-                      itemCount: _sections.length,
-                      onReorder: (oldIndex, newIndex) {
-                        _reorderSections(chapterId, oldIndex, newIndex);
-                      },
-                      itemBuilder: (context, index) {
-                        final section = _sections[index];
-                        final sectionId = section['id'] as String;
-                        final isSectionExpanded = _expandedSectionId == sectionId;
-                        
-                        return Column(
-                          key: ValueKey(sectionId),
-                          children: [
-                            ReorderableDelayedDragStartListener(
-                              index: index,
-                              child: GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    if (isSectionExpanded) {
-                                      _expandedSectionId = null;
-                                      _conceptGroups = [];
-                                    } else {
-                                      _expandedSectionId = sectionId;
-                                      _loadConceptGroups(sectionId);
-                                    }
-                                  });
-                                },
-                                onDoubleTap: () {
-                                  _addConceptGroup(sectionId);
-                                },
-                                onSecondaryTap: () {
-                                  _showSectionContextMenu(section, chapterId);
-                                },
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(vertical: 4),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                                    textBaseline: TextBaseline.alphabetic,
-                                    children: [
-                                      Text(
-                                        '${index + 1}.',
-                                        style: const TextStyle(
-                                          color: Color(0xFF999999),
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          section['name'] as String,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 20,
-                                          ),
-                                        ),
-                                      ),
-                                      if (isSectionExpanded)
-                                        const Icon(
-                                          Icons.expand_more,
-                                          color: Colors.white54,
-                                          size: 20,
-                                        )
-                                      else
-                                        const Icon(
-                                          Icons.chevron_right,
-                                          color: Colors.white54,
-                                          size: 20,
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (isSectionExpanded) _buildConceptsArea(sectionId),
-                          ],
-                        );
-                      },
-                    ),
+            SectionList(
+              chapterId: chapterId,
+              sections: _sections,
+              expandedSectionId: _expandedSectionId,
+              conceptGroups: _conceptGroups,
+              conceptsCache: _conceptsCache,
+              expandedGroupId: _expandedGroupId,
+              onReorderSections: (oldIndex, newIndex) => _reorderSections(chapterId, oldIndex, newIndex),
+              onTapSection: (sectionId) {
+                setState(() {
+                  if (_expandedSectionId == sectionId) {
+                    _expandedSectionId = null;
+                    _conceptGroups = [];
+                  } else {
+                    _expandedSectionId = sectionId;
+                    _loadConceptGroups(sectionId);
+                  }
+                });
+              },
+              onAddConceptGroup: (sectionId) => _addConceptGroup(sectionId),
+              onSectionContextMenu: (section, chapId) => _showSectionContextMenu(section, chapId),
+              onAddConcept: (groupId) => _addConcept(groupId),
+              onGroupContextMenu: (group, secId) => _showGroupContextMenu(group, secId),
+              onReorderConcepts: (groupId, oldIndex, newIndex) => _reorderConcepts(groupId, oldIndex, newIndex),
+              onConceptContextMenu: (concept, groupId) => _showConceptContextMenu(concept, groupId),
+              onToggleNotes: (groupId) {
+                setState(() {
+                  _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
+                });
+              },
             ),
           ],
           
           // 노트 영역 (소단원 드롭다운 오른쪽에 표시)
           if (isExpanded && expandedGroup != null) ...[
             const SizedBox(width: 20),
-            _buildNotesArea(expandedGroup),
+            NoteArea(
+              group: expandedGroup!,
+              onAddNoteGroup: (g) => _addNoteGroup(g),
+              onAddNote: (g, noteGroup) => _addNoteToGroup(g, noteGroup),
+              onDeleteNoteGroup: (g, idx) => _deleteNoteGroup(g, idx),
+              onDeleteNote: (g, gi, ii) => _deleteNoteItem(g, gi, ii),
+            ),
           ],
         ],
       ),
