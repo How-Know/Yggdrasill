@@ -44,6 +44,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 화살표 상대 오프셋 (중앙선 기준)
   double? _arrowRelativeOffset;
   
+  // 사고리스트 데이터
+  List<Map<String, dynamic>> _thoughtFolders = [];
+  List<Map<String, dynamic>> _thoughtCards = [];
+  String? _expandedFolderId;
+  
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
   List<Map<String, dynamic>> _normalizeNotes(dynamic notesData) {
@@ -139,6 +144,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   void initState() {
     super.initState();
     _loadCurriculums();
+    _loadThoughtFolders();
   }
   
   // 교육과정 목록 불러오기
@@ -272,6 +278,190 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
   
+  // 사고 폴더 로드
+  Future<void> _loadThoughtFolders() async {
+    try {
+      final data = await _supabase
+          .from('thought_folder')
+          .select()
+          .order('display_order', ascending: true);
+      setState(() {
+        _thoughtFolders = List<Map<String, dynamic>>.from(data);
+      });
+    } catch (e) {
+      _showError('사고 폴더 로드 실패: $e');
+    }
+  }
+  
+  // 사고 카드 로드
+  Future<void> _loadThoughtCards(String? folderId) async {
+    try {
+      final query = _supabase
+          .from('thought_card')
+          .select()
+          .order('display_order', ascending: true);
+      
+      final data = folderId == null
+          ? await query.isFilter('folder_id', null)
+          : await query.eq('folder_id', folderId);
+      
+      setState(() {
+        _thoughtCards = List<Map<String, dynamic>>.from(data);
+      });
+    } catch (e) {
+      _showError('사고 카드 로드 실패: $e');
+    }
+  }
+  
+  // 사고 폴더 추가
+  Future<void> _addThoughtFolder(String? parentId) async {
+    final controller = TextEditingController();
+    
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('폴더 추가', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+          decoration: const InputDecoration(
+            hintText: '폴더 이름',
+            hintStyle: TextStyle(color: Colors.white54),
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              Navigator.pop(context, value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(context, name);
+              }
+            },
+            child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+          ),
+        ],
+      ),
+    );
+    
+    if (result != null && result.isNotEmpty) {
+      await _saveThoughtFolder(parentId, result);
+    }
+  }
+  
+  Future<void> _saveThoughtFolder(String? parentId, String name) async {
+    try {
+      final maxOrder = _thoughtFolders.where((f) => f['parent_id'] == parentId).isEmpty
+          ? 0
+          : _thoughtFolders
+              .where((f) => f['parent_id'] == parentId)
+              .map((f) => f['display_order'] as int? ?? 0)
+              .reduce((a, b) => a > b ? a : b);
+      
+      await _supabase.from('thought_folder').insert({
+        'parent_id': parentId,
+        'name': name,
+        'display_order': maxOrder + 1,
+      });
+      
+      await _loadThoughtFolders();
+    } catch (e) {
+      _showError('폴더 추가 실패: $e');
+    }
+  }
+  
+  // 사고 카드 추가
+  Future<void> _addThoughtCard(String? folderId) async {
+    final titleController = TextEditingController();
+    final contentController = TextEditingController();
+    
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('사고카드 추가', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+              decoration: const InputDecoration(
+                hintText: '카드 제목',
+                hintStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: contentController,
+              maxLines: 3,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: const InputDecoration(
+                hintText: '내용 (선택)',
+                hintStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () {
+              final title = titleController.text.trim();
+              if (title.isNotEmpty) {
+                Navigator.pop(context, {
+                  'title': title,
+                  'content': contentController.text.trim(),
+                });
+              }
+            },
+            child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
+          ),
+        ],
+      ),
+    );
+    
+    if (result != null) {
+      await _saveThoughtCard(folderId, result['title']!, result['content']);
+    }
+  }
+  
+  Future<void> _saveThoughtCard(String? folderId, String title, String? content) async {
+    try {
+      final maxOrder = _thoughtCards.where((c) => c['folder_id'] == folderId).isEmpty
+          ? 0
+          : _thoughtCards
+              .where((c) => c['folder_id'] == folderId)
+              .map((c) => c['display_order'] as int? ?? 0)
+              .reduce((a, b) => a > b ? a : b);
+      
+      await _supabase.from('thought_card').insert({
+        'folder_id': folderId,
+        'title': title,
+        'content': content,
+        'display_order': maxOrder + 1,
+      });
+      
+      await _loadThoughtCards(folderId);
+    } catch (e) {
+      _showError('사고카드 추가 실패: $e');
+    }
+  }
+  
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -287,9 +477,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       color: const Color(0xFF1F1F1F),
       child: Row(
         children: [
-          // 왼쪽 70%: 커리큘럼 영역
+          // 왼쪽 80%: 커리큘럼 영역
           Expanded(
-            flex: 7,
+            flex: 8,
             child: Container(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -312,9 +502,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ),
           
-          // 오른쪽 30%: 사고리스트 영역
+          // 오른쪽 20%: 사고리스트 영역
           Expanded(
-            flex: 3,
+            flex: 2,
             child: _buildThoughtList(),
           ),
         ],
@@ -324,39 +514,188 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   // 사고리스트 영역
   Widget _buildThoughtList() {
+    final rootFolders = _thoughtFolders.where((f) => f['parent_id'] == null).toList();
+    
+    return GestureDetector(
+      onSecondaryTap: () => _showThoughtContextMenu(null),
+      child: Container(
+        color: const Color(0xFF2A2A2A),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '사고 목록',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _thoughtFolders.isEmpty
+                  ? Center(
+                      child: Text(
+                        '우클릭하여 폴더 추가',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.3),
+                          fontSize: 14,
+                        ),
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: rootFolders.map((folder) {
+                          return _buildFolderItem(folder, 0);
+                        }).toList(),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  // 폴더 아이템 (재귀적으로 중첩 폴더 표시)
+  Widget _buildFolderItem(Map<String, dynamic> folder, int depth) {
+    final folderId = folder['id'] as String;
+    final isExpanded = _expandedFolderId == folderId;
+    final childFolders = _thoughtFolders.where((f) => f['parent_id'] == folderId).toList();
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _expandedFolderId = isExpanded ? null : folderId;
+              if (!isExpanded) {
+                _loadThoughtCards(folderId);
+              }
+            });
+          },
+          onSecondaryTap: () => _showThoughtContextMenu(folderId),
+          child: Container(
+            padding: EdgeInsets.only(
+              left: depth * 16.0 + 8,
+              top: 6,
+              bottom: 6,
+              right: 8,
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isExpanded ? Icons.folder_open : Icons.folder,
+                  color: const Color(0xFF4A9EFF),
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    folder['name'] as String,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        // 하위 폴더 및 사고카드
+        if (isExpanded) ...[
+          ...childFolders.map((childFolder) {
+            return _buildFolderItem(childFolder, depth + 1);
+          }),
+          
+          // 사고카드들
+          ..._thoughtCards.where((c) => c['folder_id'] == folderId).map((card) {
+            return _buildThoughtCard(card, depth + 1);
+          }),
+        ],
+      ],
+    );
+  }
+  
+  // 사고카드 UI
+  Widget _buildThoughtCard(Map<String, dynamic> card, int depth) {
     return Container(
-      color: const Color(0xFF2A2A2A),
-      padding: const EdgeInsets.all(24),
+      margin: EdgeInsets.only(
+        left: depth * 16.0 + 8,
+        right: 8,
+        bottom: 8,
+      ),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A3A3A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF4A4A4A)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '사고 목록',
-            style: TextStyle(
+          Text(
+            card['title'] as String,
+            style: const TextStyle(
               color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF3A3A3A)),
+          if (card['content'] != null && (card['content'] as String).isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              card['content'] as String,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.7),
+                fontSize: 11,
               ),
-              child: Center(
-                child: Text(
-                  '우클릭하여 폴더 추가',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.3),
-                    fontSize: 14,
-                  ),
-                ),
-              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
+          ],
         ],
+      ),
+    );
+  }
+  
+  // 사고리스트 컨텍스트 메뉴
+  void _showThoughtContextMenu(String? folderId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: Text(
+          folderId == null ? '사고 목록' : '폴더',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.create_new_folder, color: Color(0xFF4A9EFF)),
+              title: const Text('폴더 추가', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                _addThoughtFolder(folderId);
+              },
+            ),
+            if (folderId != null)
+              ListTile(
+                leading: const Icon(Icons.note_add, color: Color(0xFF66BB6A)),
+                title: const Text('사고카드 추가', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _addThoughtCard(folderId);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
