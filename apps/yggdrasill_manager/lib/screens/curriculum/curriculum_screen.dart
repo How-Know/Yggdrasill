@@ -1575,7 +1575,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 개념 추가
   Future<void> _addConcept(String groupId) async {
     String name = '';
-    String selectedTag = ''; // '', '정의', '정리'
+    String selectedTag = ''; // '', '정의', '정리', '방법'
     
     await showDialog(
       context: context,
@@ -1670,6 +1670,40 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                                 : const Color(0xFF999999),
                             fontSize: 13,
                             fontWeight: selectedTag == '정리' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 방법 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '방법' ? '' : '방법';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '방법'
+                              ? const Color(0xFF999999).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '방법'
+                                ? const Color(0xFF999999) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '방법',
+                          style: TextStyle(
+                            color: selectedTag == '방법'
+                                ? const Color(0xFF999999) 
+                                : const Color(0xFF666666),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '방법' ? FontWeight.bold : FontWeight.normal,
                           ),
                         ),
                       ),
@@ -1792,7 +1826,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _editConcept(Map<String, dynamic> concept, String groupId) async {
     String name = concept['name'] as String;
     final tags = List<String>.from(concept['tags'] as List<dynamic>? ?? []);
-    String selectedTag = tags.isEmpty ? '' : tags[0]; // '정의', '정리', ''
+    String selectedTag = tags.isEmpty ? '' : tags[0]; // '정의', '정리', '방법', ''
     
     await showDialog(
       context: context,
@@ -1883,6 +1917,40 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                                 : const Color(0xFF999999),
                             fontSize: 13,
                             fontWeight: selectedTag == '정리' ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 방법 태그
+                    GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          selectedTag = selectedTag == '방법' ? '' : '방법';
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selectedTag == '방법'
+                              ? const Color(0xFF999999).withOpacity(0.2) 
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: selectedTag == '방법'
+                                ? const Color(0xFF999999) 
+                                : const Color(0xFF666666),
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          '방법',
+                          style: TextStyle(
+                            color: selectedTag == '방법'
+                                ? const Color(0xFF999999) 
+                                : const Color(0xFF666666),
+                            fontSize: 13,
+                            fontWeight: selectedTag == '방법' ? FontWeight.bold : FontWeight.normal,
                           ),
                         ),
                       ),
