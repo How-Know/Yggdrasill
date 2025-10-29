@@ -40,6 +40,85 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   // 소단원 개수 캐시 (chapterId -> count)
   Map<String, int> _sectionCounts = {};
+  // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
+  // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
+  List<Map<String, dynamic>> _normalizeNotes(dynamic notesData) {
+    if (notesData == null) return <Map<String, dynamic>>[];
+    if (notesData is! List || notesData.isEmpty) return <Map<String, dynamic>>[];
+
+    final list = List<dynamic>.from(notesData);
+    final first = list.first;
+
+    // Case A: 이미 [{id,name,items:[...]}, ...] 형태
+    if (first is Map) {
+      return list.map((e) {
+        final m = Map<String, dynamic>.from(e as Map);
+        final rawItems = m['items'];
+        List<String> items;
+        if (rawItems is List) {
+          // items 내부에 JSON 문자열이 있는 경우 파싱 시도 후, 실패하면 원본 문자열 유지
+          items = rawItems.map((it) {
+            if (it is String) {
+              try {
+                final parsed = jsonDecode(it);
+                // 만약 잘못 저장된 group JSON 같은 경우 사람이 읽는 텍스트가 아니므로 무시
+                // 파싱 성공했더라도 표시할 텍스트가 없으므로 원 문자열 반환
+                return it;
+              } catch (_) {
+                return it;
+              }
+            }
+            return it.toString();
+          }).toList().cast<String>();
+        } else {
+          items = <String>[];
+        }
+        return {
+          'id': m['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          'name': m['name']?.toString() ?? '',
+          'items': items,
+        };
+      }).toList();
+    }
+
+    // Case B: ["{...}", "{...}"] 형태(과거 문자열 JSON 배열)
+    if (first is String) {
+      final decoded = <Map<String, dynamic>>[];
+      bool allObjects = true;
+      for (final s in list.cast<String>()) {
+        try {
+          final obj = jsonDecode(s);
+          if (obj is Map && (obj.containsKey('id') || obj.containsKey('items') || obj.containsKey('name'))) {
+            decoded.add({
+              'id': obj['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+              'name': obj['name']?.toString() ?? '',
+              'items': (obj['items'] is List)
+                  ? List<String>.from((obj['items'] as List).map((e) => e.toString()))
+                  : <String>[],
+            });
+          } else {
+            allObjects = false;
+            break;
+          }
+        } catch (_) {
+          allObjects = false;
+          break;
+        }
+      }
+      if (allObjects) return decoded;
+
+      // 문자열 일반 리스트였던 경우(default 그룹으로 감쌈)
+      return [
+        {
+          'id': 'default',
+          'name': '',
+          'items': List<String>.from(list.map((e) => e.toString())),
+        }
+      ];
+    }
+
+    return <Map<String, dynamic>>[];
+  }
   
   // 소단원 캐시 (chapterId -> sections)
   Map<String, List<Map<String, dynamic>>> _sectionsCache = {};
@@ -1204,35 +1283,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     try {
       final groupId = group['id'] as String;
       final notesData = group['notes'];
-      
-      // 구조화된 형식으로 변환
-      List<Map<String, dynamic>> noteGroups = [];
-      
-      if (notesData == null || (notesData is List && notesData.isEmpty)) {
-        noteGroups = [];
-      } else if (notesData is List && notesData.isNotEmpty) {
-        final firstItem = notesData[0];
-        if (firstItem is String) {
-          // 기존 단순 배열 형식 → 새 형식으로 변환
-          noteGroups = [
-            {
-              'id': 'default',
-              'name': '',
-              'items': List<String>.from(notesData),
-            }
-          ];
-        } else if (firstItem is Map) {
-          // 이미 새 형식
-          noteGroups = notesData.map((item) {
-            final map = item as Map;
-            return {
-              'id': map['id']?.toString() ?? 'unknown',
-              'name': map['name']?.toString() ?? '',
-              'items': map['items'] != null ? List<String>.from(map['items'] as List) : <String>[],
-            };
-          }).toList();
-        }
-      }
+      // 현재 notes를 일관된 구조로 정규화
+      List<Map<String, dynamic>> noteGroups = _normalizeNotes(notesData);
       
       // 새 구분선 추가
       final newGroup = {
@@ -1313,20 +1365,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _saveNoteToGroup(Map<String, dynamic> group, Map<String, dynamic> noteGroup, String noteText) async {
     try {
       final groupId = group['id'] as String;
-      final notesData = group['notes'] as List<dynamic>? ?? [];
-      
-      List<Map<String, dynamic>> noteGroups = [];
-      if (notesData.isNotEmpty) {
-        if (notesData[0] is Map) {
-          noteGroups = notesData.map((item) {
-            return Map<String, dynamic>.from(item as Map);
-          }).toList();
-        } else {
-          noteGroups = [
-            {'id': 'default', 'name': '', 'items': notesData}
-          ];
-        }
-      }
+      final notesData = group['notes'];
+      // 일관된 그룹 구조로 변환
+      List<Map<String, dynamic>> noteGroups = _normalizeNotes(notesData);
       
       // 해당 구분선 찾아서 항목 추가
       for (var ng in noteGroups) {
@@ -1353,14 +1394,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _deleteNoteGroup(Map<String, dynamic> group, int groupIndex) async {
     try {
       final groupId = group['id'] as String;
-      final notesData = group['notes'] as List<dynamic>? ?? [];
-      
-      List<Map<String, dynamic>> noteGroups = [];
-      if (notesData.isNotEmpty && notesData[0] is Map) {
-        noteGroups = notesData.map((item) {
-          return Map<String, dynamic>.from(item as Map);
-        }).toList();
-      }
+      final notesData = group['notes'];
+      List<Map<String, dynamic>> noteGroups = _normalizeNotes(notesData);
       
       if (groupIndex < noteGroups.length) {
         noteGroups.removeAt(groupIndex);
@@ -1381,14 +1416,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _deleteNoteItem(Map<String, dynamic> group, int groupIndex, int itemIndex) async {
     try {
       final groupId = group['id'] as String;
-      final notesData = group['notes'] as List<dynamic>? ?? [];
-      
-      List<Map<String, dynamic>> noteGroups = [];
-      if (notesData.isNotEmpty && notesData[0] is Map) {
-        noteGroups = notesData.map((item) {
-          return Map<String, dynamic>.from(item as Map);
-        }).toList();
-      }
+      final notesData = group['notes'];
+      List<Map<String, dynamic>> noteGroups = _normalizeNotes(notesData);
       
       if (groupIndex < noteGroups.length) {
         final items = List<String>.from(noteGroups[groupIndex]['items'] as List<dynamic>? ?? []);

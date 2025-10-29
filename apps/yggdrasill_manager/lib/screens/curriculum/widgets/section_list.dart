@@ -43,12 +43,11 @@ class SectionList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 432,
+      width: 518,
       height: 864,
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF3A3A3A)),
       ),
       child: sections.isEmpty
           ? Center(
