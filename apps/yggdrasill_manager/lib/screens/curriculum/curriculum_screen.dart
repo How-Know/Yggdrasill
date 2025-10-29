@@ -296,14 +296,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 사고 카드 로드
   Future<void> _loadThoughtCards(String? folderId) async {
     try {
-      final query = _supabase
-          .from('thought_card')
-          .select()
-          .order('display_order', ascending: true);
-      
       final data = folderId == null
-          ? await query.is_('folder_id', null)
-          : await query.eq('folder_id', folderId);
+          ? await _supabase
+              .from('thought_card')
+              .select()
+              .is_('folder_id', null)
+              .order('display_order', ascending: true)
+          : await _supabase
+              .from('thought_card')
+              .select()
+              .eq('folder_id', folderId)
+              .order('display_order', ascending: true);
       
       setState(() {
         _thoughtCards = List<Map<String, dynamic>>.from(data);
