@@ -302,7 +302,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           .order('display_order', ascending: true);
       
       final data = folderId == null
-          ? await query.isFilter('folder_id', null)
+          ? await query.is_('folder_id', null)
           : await query.eq('folder_id', folderId);
       
       setState(() {
