@@ -61,14 +61,16 @@ class _ConceptGroupState extends State<ConceptGroup> {
     
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // 왼쪽: 구분선 + 개념 칩
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // 왼쪽: 구분선 + 개념 칩
+            Expanded(
+              flex: widget.isNotesExpanded ? 3 : 1,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                 // 구분선
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
@@ -154,9 +156,13 @@ class _ConceptGroupState extends State<ConceptGroup> {
           // 오른쪽: 노트 영역
           if (widget.isNotesExpanded && widget.onAddNote != null) ...[
             const SizedBox(width: 20),
-            _buildNoteArea(),
+            Expanded(
+              flex: 2,
+              child: _buildNoteArea(),
+            ),
           ],
         ],
+      ),
       ),
     );
   }
@@ -205,7 +211,6 @@ class _ConceptGroupState extends State<ConceptGroup> {
     }
     
     return Container(
-      width: 400,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF252525),
