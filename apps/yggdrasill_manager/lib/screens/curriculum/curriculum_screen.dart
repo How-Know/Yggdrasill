@@ -21,8 +21,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   String? _selectedGradeId;
   String _schoolLevel = '중'; // '중' or '고'
   
-  // 확장된 대단원 ID (나중에 소단원 트리뷰 표시용)
-  String? _expandedChapterId;
+  // 대단원별 확장 레벨: 0=닫힘, 1=소단원, 2=개념, 3=노트
+  Map<String, int> _chapterExpandLevels = {};
   
   // 확장된 소단원 ID (개념 보기)
   String? _expandedSectionId;
@@ -43,11 +43,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   
   // 화살표 상대 오프셋 (중앙선 기준)
   double? _arrowRelativeOffset;
-  
-  // 사고리스트 데이터
-  List<Map<String, dynamic>> _thoughtFolders = [];
-  Map<String, List<Map<String, dynamic>>> _thoughtCardsByFolder = {};
-  final Set<String> _expandedFolderIds = {};
   
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
@@ -144,7 +139,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   void initState() {
     super.initState();
     _loadCurriculums();
-    _loadThoughtFolders();
   }
   
   // 교육과정 목록 불러오기
@@ -175,7 +169,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       // 캐시 초기화 (교육과정이나 학년이 변경됨)
       _sectionsCache.clear();
       _sectionCounts.clear();
-      _expandedChapterId = null;
+      _chapterExpandLevels.clear();
       _sections = [];
       
       final data = await _supabase
@@ -278,200 +272,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
   
-  // 사고 폴더 로드
-  Future<void> _loadThoughtFolders() async {
-    try {
-      final data = await _supabase
-          .from('thought_folder')
-          .select()
-          .order('display_order', ascending: true);
-      setState(() {
-        _thoughtFolders = List<Map<String, dynamic>>.from(data);
-      });
-    } catch (e) {
-      _showError('사고 폴더 로드 실패: $e');
-    }
-  }
-  
-  // 사고 카드 로드
-  Future<void> _loadThoughtCards(String folderId) async {
-    try {
-      final data = await _supabase
-          .from('thought_card')
-          .select()
-          .eq('folder_id', folderId)
-          .order('display_order', ascending: true);
-      
-      setState(() {
-        _thoughtCardsByFolder[folderId] = List<Map<String, dynamic>>.from(data);
-      });
-    } catch (e) {
-      _showError('사고 카드 로드 실패: $e');
-    }
-  }
-  
-  // 사고 폴더 추가
-  Future<void> _addThoughtFolder(String? parentId) async {
-    final controller = TextEditingController();
-    
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: const Text('폴더 추가', style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-          decoration: const InputDecoration(
-            hintText: '폴더 이름',
-            hintStyle: TextStyle(color: Colors.white54),
-          ),
-          onSubmitted: (value) {
-            if (value.trim().isNotEmpty) {
-              Navigator.pop(context, value.trim());
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('취소', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                Navigator.pop(context, name);
-              }
-            },
-            child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
-          ),
-        ],
-      ),
-    );
-    
-    if (result != null && result.isNotEmpty) {
-      await _saveThoughtFolder(parentId, result);
-    }
-  }
-  
-  Future<void> _saveThoughtFolder(String? parentId, String name) async {
-    try {
-      final maxOrder = _thoughtFolders.where((f) => f['parent_id'] == parentId).isEmpty
-          ? 0
-          : _thoughtFolders
-              .where((f) => f['parent_id'] == parentId)
-              .map((f) => f['display_order'] as int? ?? 0)
-              .reduce((a, b) => a > b ? a : b);
-      
-      final inserted = await _supabase.from('thought_folder').insert({
-        'parent_id': parentId,
-        'name': name,
-        'display_order': maxOrder + 1,
-      }).select();
-      debugPrint('폴더 추가됨 parent=$parentId name=$name → $inserted');
-      
-      await _loadThoughtFolders();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('폴더 "$name" 추가됨')),
-        );
-      }
-    } catch (e) {
-      _showError('폴더 추가 실패: $e');
-    }
-  }
-  
-  // 사고 카드 추가
-  Future<void> _addThoughtCard(String? folderId) async {
-    final titleController = TextEditingController();
-    final contentController = TextEditingController();
-    
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: const Text('사고카드 추가', style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              autofocus: true,
-              style: const TextStyle(color: Colors.white, fontSize: 16),
-              decoration: const InputDecoration(
-                hintText: '카드 제목',
-                hintStyle: TextStyle(color: Colors.white54),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: contentController,
-              maxLines: 3,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: const InputDecoration(
-                hintText: '내용 (선택)',
-                hintStyle: TextStyle(color: Colors.white54),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('취소', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () {
-              final title = titleController.text.trim();
-              if (title.isNotEmpty) {
-                Navigator.pop(context, {
-                  'title': title,
-                  'content': contentController.text.trim(),
-                });
-              }
-            },
-            child: const Text('추가', style: TextStyle(color: Color(0xFF4A9EFF))),
-          ),
-        ],
-      ),
-    );
-    
-    if (result != null) {
-      await _saveThoughtCard(folderId, result['title']!, result['content']);
-    }
-  }
-  
-  Future<void> _saveThoughtCard(String? folderId, String title, String? content) async {
-    try {
-      final current = _thoughtCardsByFolder[folderId ?? ''] ?? const <Map<String, dynamic>>[];
-      final maxOrder = current.isEmpty
-          ? 0
-          : current
-              .map((c) => c['display_order'] as int? ?? 0)
-              .reduce((a, b) => a > b ? a : b);
-      
-      final inserted = await _supabase.from('thought_card').insert({
-        'folder_id': folderId,
-        'title': title,
-        'content': content,
-        'display_order': maxOrder + 1,
-      }).select();
-      debugPrint('사고카드 추가됨 folder=$folderId title=$title → $inserted');
-      
-      if (folderId != null) {
-        await _loadThoughtCards(folderId);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('카드 "$title" 추가됨')),
-        );
-      }
-    } catch (e) {
-      _showError('사고카드 추가 실패: $e');
-    }
-  }
   
   @override
   Widget build(BuildContext context) {
@@ -513,209 +313,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ),
           
-          // 오른쪽 20%: 사고리스트 영역
-          Expanded(
-            flex: 2,
-            child: _buildThoughtList(),
-          ),
         ],
-      ),
-    );
-  }
-  
-  // 사고리스트 영역
-  Widget _buildThoughtList() {
-    final rootFolders = _thoughtFolders.where((f) => f['parent_id'] == null).toList();
-    
-    return GestureDetector(
-      onSecondaryTap: () => _showThoughtContextMenu(null),
-      child: Container(
-        color: const Color(0xFF2A2A2A),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '사고 목록',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _thoughtFolders.isEmpty
-                  ? Center(
-                      child: Text(
-                        '우클릭하여 폴더 추가',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.3),
-                          fontSize: 14,
-                        ),
-                      ),
-                    )
-                  : SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: rootFolders.map((folder) {
-                          return _buildFolderItem(folder, 0);
-                        }).toList(),
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  // 폴더 아이템 (재귀적으로 중첩 폴더 표시)
-  Widget _buildFolderItem(Map<String, dynamic> folder, int depth) {
-    final folderId = folder['id'] as String;
-    final isExpanded = _expandedFolderIds.contains(folderId);
-    final childFolders = _thoughtFolders.where((f) => f['parent_id'] == folderId).toList();
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              if (isExpanded) {
-                _expandedFolderIds.remove(folderId);
-              } else {
-                _expandedFolderIds.add(folderId);
-                _loadThoughtCards(folderId);
-              }
-            });
-          },
-          onSecondaryTap: () => _showThoughtContextMenu(folderId),
-          child: Container(
-            padding: EdgeInsets.only(
-              left: depth * 16.0 + 8,
-              top: 6,
-              bottom: 6,
-              right: 8,
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isExpanded ? Icons.folder_open : Icons.folder,
-                  color: const Color(0xFF4A9EFF),
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    folder['name'] as String,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () => _addThoughtFolder(folderId),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4),
-                    child: Icon(Icons.add, color: Colors.white54, size: 16),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        
-        // 하위 폴더 및 사고카드
-        if (isExpanded) ...[
-          ...childFolders.map((childFolder) {
-            return _buildFolderItem(childFolder, depth + 1);
-          }),
-          
-          // 사고카드들
-          ...(_thoughtCardsByFolder[folderId] ?? const <Map<String, dynamic>>[]).map((card) {
-            return _buildThoughtCard(card, depth + 1);
-          }),
-        ],
-      ],
-    );
-  }
-  
-  // 사고카드 UI
-  Widget _buildThoughtCard(Map<String, dynamic> card, int depth) {
-    return Container(
-      margin: EdgeInsets.only(
-        left: depth * 16.0 + 8,
-        right: 8,
-        bottom: 8,
-      ),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF3A3A3A),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF4A4A4A)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            card['title'] as String,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          if (card['content'] != null && (card['content'] as String).isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              card['content'] as String,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.7),
-                fontSize: 11,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-  
-  // 사고리스트 컨텍스트 메뉴
-  void _showThoughtContextMenu(String? folderId) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: Text(
-          folderId == null ? '사고 목록' : '폴더',
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.create_new_folder, color: Color(0xFF4A9EFF)),
-              title: const Text('폴더 추가', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _addThoughtFolder(folderId);
-              },
-            ),
-            if (folderId != null)
-              ListTile(
-                leading: const Icon(Icons.note_add, color: Color(0xFF66BB6A)),
-                title: const Text('사고카드 추가', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _addThoughtCard(folderId);
-                },
-              ),
-          ],
-        ),
       ),
     );
   }
@@ -816,7 +414,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       onTap: () {
         setState(() {
           _schoolLevel = level;
-          _expandedChapterId = null; // 확장 상태 초기화
+          _chapterExpandLevels.clear(); // 확장 상태 초기화
           _loadGrades(); // 학년 목록 다시 로드
         });
       },
@@ -856,19 +454,77 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
   
+  // 확장 레벨 증가 (>, 다음 단계로)
+  void _expandChapterMore(String chapterId) async {
+    final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
+    if (currentLevel < 3) {
+      setState(() {
+        _chapterExpandLevels[chapterId] = currentLevel + 1;
+      });
+      
+      // 레벨에 따라 필요한 데이터 로드
+      if (currentLevel == 0) {
+        // 0 → 1: 소단원 로드
+        await _loadSections(chapterId);
+      } else if (currentLevel == 1) {
+        // 1 → 2: 첫 번째 소단원 자동 선택 및 개념 그룹 로드
+        if (_sections.isNotEmpty) {
+          final firstSectionId = _sections.first['id'] as String;
+          setState(() {
+            _expandedSectionId = firstSectionId;
+          });
+          await _loadConceptGroups(firstSectionId);
+        }
+      } else if (currentLevel == 2) {
+        // 2 → 3: 첫 번째 개념 그룹의 노트 자동 확장
+        if (_conceptGroups.isNotEmpty) {
+          final firstGroupId = _conceptGroups.first['id'] as String;
+          setState(() {
+            _expandedGroupId = firstGroupId;
+          });
+        }
+      }
+    }
+  }
+  
+  // 확장 레벨 감소 (<, 이전 단계로)
+  void _expandChapterLess(String chapterId) {
+    final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
+    if (currentLevel > 0) {
+      setState(() {
+        _chapterExpandLevels[chapterId] = currentLevel - 1;
+        
+        // 레벨에 따라 상태 초기화
+        if (currentLevel == 1) {
+          // 1 → 0: 소단원 닫기
+          _sections = [];
+        } else if (currentLevel == 2) {
+          // 2 → 1: 개념 닫기
+          _expandedSectionId = null;
+          _conceptGroups = [];
+        } else if (currentLevel == 3) {
+          // 3 → 2: 노트 닫기
+          _expandedGroupId = null;
+          _arrowRelativeOffset = null;
+        }
+      });
+    }
+  }
+  
   // 대단원 카드
   Widget _buildChapterCard(Map<String, dynamic> chapter) {
-    final isExpanded = _expandedChapterId == chapter['id'];
+    final chapterId = chapter['id'] as String;
+    final expandLevel = _chapterExpandLevels[chapterId] ?? 0;
+    final isExpanded = expandLevel > 0;
     
     // 소단원 개수 계산 (캐시에서 가져오기)
-    final chapterId = chapter['id'] as String;
     final sectionCount = _sectionCounts[chapterId] ?? 0;
     
     // 확장된 구분선의 그룹 찾기
     Map<String, dynamic>? expandedGroup;
     double topOffset = 0.0; // 중앙선 기준
     
-    if (_expandedGroupId != null && _conceptGroups.isNotEmpty) {
+    if (_expandedGroupId != null && _conceptGroups.isNotEmpty && expandLevel >= 2) {
       try {
         final expandedGroupIndex = _conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
         if (expandedGroupIndex >= 0) {
@@ -891,43 +547,41 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ChapterCard(
             chapter: chapter,
             isExpanded: isExpanded,
+            expandLevel: expandLevel,
             sectionCount: sectionCount,
             onTap: () {
-              setState(() {
-                if (isExpanded) {
-                  _expandedChapterId = null;
-                  _sections = [];
-                } else {
-                  _expandedChapterId = chapterId;
-                  _loadSections(chapterId);
-                }
-              });
+              // 카드 클릭은 더블탭만 (소단원 추가)
             },
             onDoubleTap: () => _showAddSectionDialog(chapterId),
             onSecondaryTap: () => _showChapterContextMenu(chapter),
+            onExpandMore: () => _expandChapterMore(chapterId),
+            onExpandLess: () => _expandChapterLess(chapterId),
           ),
           
           // 확장 시 소단원 트리뷰 공간 (오른쪽에 표시)
-          if (isExpanded) ...[
+          if (expandLevel >= 1) ...[
             const SizedBox(width: 20),
             SectionList(
               chapterId: chapterId,
               sections: _sections,
-              expandedSectionId: _expandedSectionId,
+              expandedSectionId: expandLevel >= 2 ? _expandedSectionId : null,
+              showConcepts: expandLevel >= 2,
               conceptGroups: _conceptGroups,
               conceptsCache: _conceptsCache,
-              expandedGroupId: _expandedGroupId,
+              expandedGroupId: expandLevel >= 3 ? _expandedGroupId : null,
               onReorderSections: (oldIndex, newIndex) => _reorderSections(chapterId, oldIndex, newIndex),
               onTapSection: (sectionId) {
-                setState(() {
-                  if (_expandedSectionId == sectionId) {
-                    _expandedSectionId = null;
-                    _conceptGroups = [];
-                  } else {
-                    _expandedSectionId = sectionId;
-                    _loadConceptGroups(sectionId);
-                  }
-                });
+                if (expandLevel >= 2) {
+                  setState(() {
+                    if (_expandedSectionId == sectionId) {
+                      _expandedSectionId = null;
+                      _conceptGroups = [];
+                    } else {
+                      _expandedSectionId = sectionId;
+                      _loadConceptGroups(sectionId);
+                    }
+                  });
+                }
               },
               onAddConceptGroup: (sectionId) => _addConceptGroup(sectionId),
               onSectionContextMenu: (section, chapId) => _showSectionContextMenu(section, chapId),
@@ -936,9 +590,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               onReorderConcepts: (groupId, oldIndex, newIndex) => _reorderConcepts(groupId, oldIndex, newIndex),
               onConceptContextMenu: (concept, groupId) => _showConceptContextMenu(concept, groupId),
               onToggleNotes: (groupId) {
-                setState(() {
-                  _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
-                });
+                if (expandLevel >= 3) {
+                  setState(() {
+                    _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
+                  });
+                }
               },
               onArrowPositionMeasured: (relativeOffset) {
                 setState(() {
@@ -949,8 +605,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ],
           
-          // 노트 영역 (소단원 드롭다운 오른쪽에 표시)
-          if (isExpanded && expandedGroup != null) ...[
+          // 노트 영역 (레벨 3일 때만 표시)
+          if (expandLevel >= 3 && expandedGroup != null) ...[
             const SizedBox(width: 20),
             NoteArea(
               group: expandedGroup!,
@@ -1069,10 +725,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     try {
       await _supabase.from('section').delete().eq('id', sectionId);
       
-      if (_expandedChapterId != null) {
-        // 캐시 무효화 후 새로고침
-        _sectionsCache.remove(_expandedChapterId);
-        await _loadSections(_expandedChapterId!);
+      // 확장된 대단원이 있으면 새로고침
+      for (final chapterId in _chapterExpandLevels.keys) {
+        if (_chapterExpandLevels[chapterId]! >= 1) {
+          _sectionsCache.remove(chapterId);
+          await _loadSections(chapterId);
+        }
       }
       
       if (mounted) {
@@ -1552,9 +1210,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       await _supabase.from('chapter').delete().eq('id', chapterId);
       
       // 확장된 대단원이 삭제되면 상태 초기화
-      if (_expandedChapterId == chapterId) {
+      if (_chapterExpandLevels.containsKey(chapterId)) {
         setState(() {
-          _expandedChapterId = null;
+          _chapterExpandLevels.remove(chapterId);
           _sections = [];
         });
       }

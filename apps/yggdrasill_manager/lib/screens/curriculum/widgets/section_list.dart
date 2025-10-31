@@ -6,6 +6,7 @@ class SectionList extends StatefulWidget {
   final String chapterId;
   final List<Map<String, dynamic>> sections;
   final String? expandedSectionId;
+  final bool showConcepts;
   final List<Map<String, dynamic>> conceptGroups;
   final Map<String, List<Map<String, dynamic>>> conceptsCache;
   final String? expandedGroupId;
@@ -28,6 +29,7 @@ class SectionList extends StatefulWidget {
     required this.chapterId,
     required this.sections,
     required this.expandedSectionId,
+    required this.showConcepts,
     required this.conceptGroups,
     required this.conceptsCache,
     required this.expandedGroupId,
@@ -151,8 +153,12 @@ class _SectionListState extends State<SectionList> {
                       ),
                     ),
 
-                    if (isSectionExpanded)
-                      _buildConceptsArea(sectionId),
+                    if (isSectionExpanded && widget.showConcepts)
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                        child: _buildConceptsArea(sectionId),
+                      ),
                   ],
                 );
               },

@@ -3,19 +3,25 @@ import 'package:flutter/material.dart';
 class ChapterCard extends StatelessWidget {
   final Map<String, dynamic> chapter;
   final bool isExpanded;
+  final int expandLevel;
   final int sectionCount;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final VoidCallback onSecondaryTap;
+  final VoidCallback onExpandMore;
+  final VoidCallback onExpandLess;
 
   const ChapterCard({
     super.key,
     required this.chapter,
     required this.isExpanded,
+    required this.expandLevel,
     required this.sectionCount,
     required this.onTap,
     required this.onDoubleTap,
     required this.onSecondaryTap,
+    required this.onExpandMore,
+    required this.onExpandLess,
   });
 
   @override
@@ -52,11 +58,46 @@ class ChapterCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Icon(
-                  isExpanded ? Icons.chevron_right : Icons.chevron_left,
-                  color: Colors.white70,
-                  size: 28,
-                ),
+                const SizedBox(width: 8),
+                // < 버튼 (이전 단계로)
+                if (expandLevel > 0)
+                  GestureDetector(
+                    onTap: onExpandLess,
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3A3A3A),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF4A4A4A)),
+                      ),
+                      child: const Icon(
+                        Icons.chevron_left,
+                        color: Colors.white70,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                if (expandLevel > 0) const SizedBox(width: 4),
+                // > 버튼 (다음 단계로)
+                if (expandLevel < 3)
+                  GestureDetector(
+                    onTap: onExpandMore,
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3A3A3A),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF4A4A4A)),
+                      ),
+                      child: const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white70,
+                        size: 20,
+                      ),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
