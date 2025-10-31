@@ -457,6 +457,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 모든 소단원 ID를 담는 Set
   final Set<String> _allExpandedSections = {};
   
+  // 화살표 버튼으로 확장했는지 여부 (true면 가운데 정렬)
+  bool _isExpandedByButton = false;
+  
   // 확장 레벨 증가 (>, 다음 단계로)
   void _expandChapterMore(String chapterId) async {
     final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
@@ -487,12 +490,18 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           });
         }
       } else if (currentLevel == 2) {
-        // 2 → 3: 첫 번째 개념 그룹의 노트 자동 확장
-        if (_conceptGroups.isNotEmpty) {
-          final firstGroupId = _conceptGroups.first['id'] as String;
-          setState(() {
-            _expandedGroupId = firstGroupId;
-          });
+        // 2 → 3: 첫 번째 개념 그룹의 노트 자동 확장 (가운데 정렬)
+        // 첫 번째 소단원의 첫 번째 개념 그룹 찾기
+        if (_sections.isNotEmpty && _expandedSectionId != null) {
+          final groups = _conceptGroupsCache[_expandedSectionId] ?? [];
+          if (groups.isNotEmpty) {
+            final firstGroupId = groups.first['id'] as String;
+            setState(() {
+              _expandedGroupId = firstGroupId;
+              _isExpandedByButton = true; // 버튼으로 확장했음을 표시
+              _arrowRelativeOffset = 0.0; // 가운데 정렬
+            });
+          }
         }
       }
     }
@@ -535,16 +544,19 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     // 확장된 구분선의 그룹 찾기
     Map<String, dynamic>? expandedGroup;
-    double topOffset = 0.0; // 중앙선 기준
+    double topOffset = 0.0; // 중앙선 기준 (기본값: 가운데 정렬)
     
-    if (_expandedGroupId != null && _conceptGroups.isNotEmpty && expandLevel >= 2) {
+    if (_expandedGroupId != null && _expandedSectionId != null && expandLevel >= 3) {
       try {
-        final expandedGroupIndex = _conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
+        // 선택된 소단원의 개념 그룹 가져오기
+        final conceptGroups = _conceptGroupsCache[_expandedSectionId] ?? [];
+        final expandedGroupIndex = conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
         if (expandedGroupIndex >= 0) {
-          expandedGroup = _conceptGroups[expandedGroupIndex];
+          expandedGroup = conceptGroups[expandedGroupIndex];
           
-          // 화살표의 상대 오프셋이 있으면 사용
-          if (_arrowRelativeOffset != null) {
+          // 버튼으로 확장한 경우 가운데 정렬 (topOffset = 0)
+          // 화살표로 확장한 경우 상대 오프셋 사용
+          if (!_isExpandedByButton && _arrowRelativeOffset != null) {
             topOffset = _arrowRelativeOffset!;
           }
         }
@@ -607,12 +619,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                 if (expandLevel >= 3) {
                   setState(() {
                     _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
+                    _isExpandedByButton = false; // 화살표 클릭으로 확장
                   });
                 }
               },
               onArrowPositionMeasured: (relativeOffset) {
                 setState(() {
                   _arrowRelativeOffset = relativeOffset;
+                  _isExpandedByButton = false; // 화살표 위치 사용
                 });
               },
               onAddNoteGroup: (group) => _addNoteGroup(group),
