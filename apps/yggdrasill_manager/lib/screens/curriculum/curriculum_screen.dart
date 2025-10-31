@@ -27,8 +27,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 확장된 소단원 ID (개념 보기)
   String? _expandedSectionId;
   
-  // 확장된 구분선 ID (노트 보기)
-  String? _expandedGroupId;
+  // 확장된 구분선 ID들 (노트 보기) - Set으로 여러 개 동시 확장 가능
+  final Set<String> _expandedGroupIds = {};
   
   // 데이터 목록
   List<Map<String, dynamic>> _curriculums = [];
@@ -484,17 +484,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           });
         }
       } else if (currentLevel == 2) {
-        // 2 → 3: 첫 번째 개념 그룹의 노트 자동 확장 (가운데 정렬)
-        // 첫 번째 소단원의 첫 번째 개념 그룹 찾기
-        if (_sections.isNotEmpty && _expandedSectionId != null) {
-          final groups = _conceptGroupsCache[_expandedSectionId] ?? [];
-          if (groups.isNotEmpty) {
-            final firstGroupId = groups.first['id'] as String;
-            setState(() {
-              _expandedGroupId = firstGroupId;
-            });
+        // 2 → 3: 모든 개념 그룹의 노트 자동 확장
+        _expandedGroupIds.clear();
+        for (final section in _sections) {
+          final sectionId = section['id'] as String;
+          final groups = _conceptGroupsCache[sectionId] ?? [];
+          for (final group in groups) {
+            final groupId = group['id'] as String;
+            _expandedGroupIds.add(groupId);
           }
         }
+        setState(() {});
       }
     }
   }
@@ -517,8 +517,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           _conceptGroups = [];
           _allExpandedSections.clear();
         } else if (currentLevel == 3) {
-          // 3 → 2: 노트 닫기
-          _expandedGroupId = null;
+          // 3 → 2: 모든 노트 닫기
+          _expandedGroupIds.clear();
         }
       });
     }
@@ -564,7 +564,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               showConcepts: expandLevel >= 2,
               conceptGroupsCache: _conceptGroupsCache,
               conceptsCache: _conceptsCache,
-              expandedGroupId: expandLevel >= 3 ? _expandedGroupId : null,
+              expandedGroupIds: expandLevel >= 3 ? _expandedGroupIds : const {},
               onReorderSections: (oldIndex, newIndex) => _reorderSections(chapterId, oldIndex, newIndex),
               onTapSection: (sectionId) {
                 if (expandLevel >= 2) {
@@ -588,7 +588,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               onToggleNotes: (groupId) {
                 if (expandLevel >= 3) {
                   setState(() {
-                    _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
+                    if (_expandedGroupIds.contains(groupId)) {
+                      _expandedGroupIds.remove(groupId);
+                    } else {
+                      _expandedGroupIds.add(groupId);
+                    }
                   });
                 }
               },

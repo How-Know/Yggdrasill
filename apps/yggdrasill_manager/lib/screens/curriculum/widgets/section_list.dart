@@ -10,7 +10,7 @@ class SectionList extends StatefulWidget {
   final bool showConcepts;
   final Map<String, List<Map<String, dynamic>>> conceptGroupsCache;
   final Map<String, List<Map<String, dynamic>>> conceptsCache;
-  final String? expandedGroupId;
+  final Set<String> expandedGroupIds;
 
   final void Function(int oldIndex, int newIndex) onReorderSections;
   final void Function(String sectionId) onTapSection;
@@ -37,7 +37,7 @@ class SectionList extends StatefulWidget {
     required this.showConcepts,
     required this.conceptGroupsCache,
     required this.conceptsCache,
-    required this.expandedGroupId,
+    required this.expandedGroupIds,
     required this.onReorderSections,
     required this.onTapSection,
     required this.onAddConceptGroup,
@@ -76,9 +76,12 @@ class _SectionListState extends State<SectionList> {
 
   @override
   Widget build(BuildContext context) {
+    // 노트가 펼쳐진 개수 확인
+    final hasExpandedNotes = widget.expandedGroupIds.isNotEmpty;
+    
     return Container(
       key: _containerKey,
-      width: 518,
+      width: hasExpandedNotes ? 518 * 2 : 518, // 노트 펼칠 때 2배
       constraints: const BoxConstraints(
         minHeight: 200,
         maxHeight: 864,
@@ -181,10 +184,6 @@ class _SectionListState extends State<SectionList> {
     return Container(
       margin: const EdgeInsets.only(left: 20, top: 8, bottom: 8),
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF3A3A3A)),
-      ),
       child: conceptGroups.isEmpty
           ? Center(
               child: Text(
@@ -212,7 +211,7 @@ class _SectionListState extends State<SectionList> {
                   onShowContextMenu: widget.onGroupContextMenu,
                   onReorder: widget.onReorderConcepts,
                   onConceptContextMenu: widget.onConceptContextMenu,
-                  isNotesExpanded: widget.expandedGroupId == groupId,
+                  isNotesExpanded: widget.expandedGroupIds.contains(groupId),
                   onToggleNotes: () => widget.onToggleNotes(groupId),
                   onArrowPositionMeasured: _handleArrowPositionMeasured,
                   onAddNoteGroup: widget.onAddNoteGroup != null 

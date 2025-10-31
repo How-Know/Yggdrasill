@@ -67,7 +67,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
           children: [
             // 왼쪽: 구분선 + 개념 칩
             Expanded(
-              flex: widget.isNotesExpanded ? 3 : 1,
+              flex: widget.isNotesExpanded ? 1 : 1,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -157,7 +157,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
           if (widget.isNotesExpanded && widget.onAddNote != null) ...[
             const SizedBox(width: 20),
             Expanded(
-              flex: 2,
+              flex: 1,
               child: _buildNoteArea(),
             ),
           ],
