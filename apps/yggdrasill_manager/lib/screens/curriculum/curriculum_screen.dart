@@ -41,9 +41,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 소단원 개수 캐시 (chapterId -> count)
   Map<String, int> _sectionCounts = {};
   
-  // 화살표 상대 오프셋 (중앙선 기준)
-  double? _arrowRelativeOffset;
-  
   // notes 필드 normalization: 다양한 형태(null, List<Map>, List<String> JSON, default wrapper 등)를
   // 일관된 List<Map{id,name,items:List<String>}> 형태로 변환
   List<Map<String, dynamic>> _normalizeNotes(dynamic notesData) {
@@ -457,9 +454,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // 모든 소단원 ID를 담는 Set
   final Set<String> _allExpandedSections = {};
   
-  // 화살표 버튼으로 확장했는지 여부 (true면 가운데 정렬)
-  bool _isExpandedByButton = false;
-  
   // 확장 레벨 증가 (>, 다음 단계로)
   void _expandChapterMore(String chapterId) async {
     final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
@@ -498,8 +492,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             final firstGroupId = groups.first['id'] as String;
             setState(() {
               _expandedGroupId = firstGroupId;
-              _isExpandedByButton = true; // 버튼으로 확장했음을 표시
-              _arrowRelativeOffset = 0.0; // 가운데 정렬
             });
           }
         }
@@ -527,7 +519,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         } else if (currentLevel == 3) {
           // 3 → 2: 노트 닫기
           _expandedGroupId = null;
-          _arrowRelativeOffset = null;
         }
       });
     }
@@ -541,27 +532,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     
     // 소단원 개수 계산 (캐시에서 가져오기)
     final sectionCount = _sectionCounts[chapterId] ?? 0;
-    
-    // 확장된 구분선의 그룹 찾기
-    Map<String, dynamic>? expandedGroup;
-    double topOffset = 0.0; // 중앙선 기준 (기본값: 가운데 정렬)
-    
-    if (_expandedGroupId != null && _expandedSectionId != null && expandLevel >= 3) {
-      try {
-        // 선택된 소단원의 개념 그룹 가져오기
-        final conceptGroups = _conceptGroupsCache[_expandedSectionId] ?? [];
-        final expandedGroupIndex = conceptGroups.indexWhere((g) => g['id'] == _expandedGroupId);
-        if (expandedGroupIndex >= 0) {
-          expandedGroup = conceptGroups[expandedGroupIndex];
-          
-          // 버튼으로 확장한 경우 가운데 정렬 (topOffset = 0)
-          // 화살표로 확장한 경우 상대 오프셋 사용
-          if (!_isExpandedByButton && _arrowRelativeOffset != null) {
-            topOffset = _arrowRelativeOffset!;
-          }
-        }
-      } catch (_) {}
-    }
     
     return Container(
       margin: const EdgeInsets.only(right: 20),
@@ -619,30 +589,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                 if (expandLevel >= 3) {
                   setState(() {
                     _expandedGroupId = _expandedGroupId == groupId ? null : groupId;
-                    _isExpandedByButton = false; // 화살표 클릭으로 확장
                   });
                 }
               },
-              onArrowPositionMeasured: (relativeOffset) {
-                setState(() {
-                  _arrowRelativeOffset = relativeOffset;
-                  _isExpandedByButton = false; // 화살표 위치 사용
-                });
-              },
+              onArrowPositionMeasured: null, // 더 이상 사용하지 않음
               onAddNoteGroup: (group) => _addNoteGroup(group),
-            ),
-          ],
-          
-          // 노트 영역 (레벨 3일 때만 표시)
-          if (expandLevel >= 3 && expandedGroup != null) ...[
-            const SizedBox(width: 20),
-            NoteArea(
-              group: expandedGroup!,
-              topOffset: topOffset,
-              onAddNoteGroup: (g) => _addNoteGroup(g),
-              onAddNote: (g, noteGroup) => _addNoteToGroup(g, noteGroup),
-              onDeleteNoteGroup: (g, idx) => _deleteNoteGroup(g, idx),
-              onDeleteNote: (g, gi, ii) => _deleteNoteItem(g, gi, ii),
+              onAddNote: (group, noteGroup) => _addNoteToGroup(group, noteGroup),
+              onDeleteNoteGroup: (group, idx) => _deleteNoteGroup(group, idx),
+              onDeleteNote: (group, gi, ii) => _deleteNoteItem(group, gi, ii),
             ),
           ],
         ],

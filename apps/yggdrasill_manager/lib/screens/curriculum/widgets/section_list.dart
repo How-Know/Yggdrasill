@@ -24,6 +24,9 @@ class SectionList extends StatefulWidget {
   final void Function(String groupId) onToggleNotes;
   final void Function(double relativeOffset)? onArrowPositionMeasured;
   final void Function(Map<String, dynamic> group)? onAddNoteGroup;
+  final void Function(Map<String, dynamic> group, Map<String, dynamic> noteGroup)? onAddNote;
+  final void Function(Map<String, dynamic> group, int noteGroupIndex)? onDeleteNoteGroup;
+  final void Function(Map<String, dynamic> group, int noteGroupIndex, int itemIndex)? onDeleteNote;
 
   const SectionList({
     super.key,
@@ -46,6 +49,9 @@ class SectionList extends StatefulWidget {
     required this.onToggleNotes,
     this.onArrowPositionMeasured,
     this.onAddNoteGroup,
+    this.onAddNote,
+    this.onDeleteNoteGroup,
+    this.onDeleteNote,
   });
 
   @override
@@ -212,6 +218,9 @@ class _SectionListState extends State<SectionList> {
                   onAddNoteGroup: widget.onAddNoteGroup != null 
                       ? () => widget.onAddNoteGroup!(group) 
                       : null,
+                  onAddNote: widget.onAddNote,
+                  onDeleteNoteGroup: widget.onDeleteNoteGroup,
+                  onDeleteNote: widget.onDeleteNote,
                 );
               }).toList(),
             ),
