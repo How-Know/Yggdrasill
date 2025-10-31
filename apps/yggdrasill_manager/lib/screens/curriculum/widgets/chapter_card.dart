@@ -60,44 +60,24 @@ class ChapterCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 // < 버튼 (이전 단계로)
-                if (expandLevel > 0)
-                  GestureDetector(
-                    onTap: onExpandLess,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3A3A3A),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: const Color(0xFF4A4A4A)),
-                      ),
-                      child: const Icon(
-                        Icons.chevron_left,
-                        color: Colors.white70,
-                        size: 20,
-                      ),
-                    ),
+                GestureDetector(
+                  onTap: expandLevel > 0 ? onExpandLess : null,
+                  child: Icon(
+                    Icons.chevron_left,
+                    color: expandLevel > 0 ? Colors.white70 : Colors.white24,
+                    size: 24,
                   ),
-                if (expandLevel > 0) const SizedBox(width: 4),
+                ),
+                const SizedBox(width: 4),
                 // > 버튼 (다음 단계로)
-                if (expandLevel < 3)
-                  GestureDetector(
-                    onTap: onExpandMore,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3A3A3A),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: const Color(0xFF4A4A4A)),
-                      ),
-                      child: const Icon(
-                        Icons.chevron_right,
-                        color: Colors.white70,
-                        size: 20,
-                      ),
-                    ),
+                GestureDetector(
+                  onTap: expandLevel < 3 ? onExpandMore : null,
+                  child: Icon(
+                    Icons.chevron_right,
+                    color: expandLevel < 3 ? Colors.white70 : Colors.white24,
+                    size: 24,
                   ),
+                ),
               ],
             ),
             const SizedBox(height: 12),

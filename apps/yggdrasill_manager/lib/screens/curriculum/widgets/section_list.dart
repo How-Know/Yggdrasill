@@ -6,8 +6,9 @@ class SectionList extends StatefulWidget {
   final String chapterId;
   final List<Map<String, dynamic>> sections;
   final String? expandedSectionId;
+  final Set<String> allExpandedSections;
   final bool showConcepts;
-  final List<Map<String, dynamic>> conceptGroups;
+  final Map<String, List<Map<String, dynamic>>> conceptGroupsCache;
   final Map<String, List<Map<String, dynamic>>> conceptsCache;
   final String? expandedGroupId;
 
@@ -29,8 +30,9 @@ class SectionList extends StatefulWidget {
     required this.chapterId,
     required this.sections,
     required this.expandedSectionId,
+    required this.allExpandedSections,
     required this.showConcepts,
-    required this.conceptGroups,
+    required this.conceptGroupsCache,
     required this.conceptsCache,
     required this.expandedGroupId,
     required this.onReorderSections,
@@ -99,7 +101,8 @@ class _SectionListState extends State<SectionList> {
               itemBuilder: (context, index) {
                 final section = widget.sections[index];
                 final sectionId = section['id'] as String;
-                final isSectionExpanded = widget.expandedSectionId == sectionId;
+                final isSectionExpanded = widget.allExpandedSections.contains(sectionId) || 
+                                         widget.expandedSectionId == sectionId;
 
                 return Column(
                   key: ValueKey(sectionId),
@@ -167,6 +170,8 @@ class _SectionListState extends State<SectionList> {
   }
 
   Widget _buildConceptsArea(String sectionId) {
+    final conceptGroups = widget.conceptGroupsCache[sectionId] ?? const <Map<String, dynamic>>[];
+    
     return Container(
       margin: const EdgeInsets.only(left: 20, top: 8, bottom: 8),
       padding: const EdgeInsets.all(16),
@@ -174,7 +179,7 @@ class _SectionListState extends State<SectionList> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFF3A3A3A)),
       ),
-      child: widget.conceptGroups.isEmpty
+      child: conceptGroups.isEmpty
           ? Center(
               child: Text(
                 '더블클릭하여 구분선 추가',
@@ -186,7 +191,7 @@ class _SectionListState extends State<SectionList> {
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: widget.conceptGroups.asMap().entries.map((entry) {
+              children: conceptGroups.asMap().entries.map((entry) {
                 final groupIndex = entry.key;
                 final group = entry.value;
                 final groupId = group['id'] as String;

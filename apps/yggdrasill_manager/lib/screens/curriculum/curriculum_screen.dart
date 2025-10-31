@@ -454,6 +454,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
   
+  // 모든 소단원 ID를 담는 Set
+  final Set<String> _allExpandedSections = {};
+  
   // 확장 레벨 증가 (>, 다음 단계로)
   void _expandChapterMore(String chapterId) async {
     final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
@@ -467,13 +470,21 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         // 0 → 1: 소단원 로드
         await _loadSections(chapterId);
       } else if (currentLevel == 1) {
-        // 1 → 2: 첫 번째 소단원 자동 선택 및 개념 그룹 로드
+        // 1 → 2: 모든 소단원 펼치고 각 소단원의 개념 그룹 로드
         if (_sections.isNotEmpty) {
+          // 모든 소단원을 확장 상태로
+          _allExpandedSections.clear();
+          for (final section in _sections) {
+            final sectionId = section['id'] as String;
+            _allExpandedSections.add(sectionId);
+            await _loadConceptGroups(sectionId);
+          }
+          
+          // 첫 번째 소단원을 선택 상태로
           final firstSectionId = _sections.first['id'] as String;
           setState(() {
             _expandedSectionId = firstSectionId;
           });
-          await _loadConceptGroups(firstSectionId);
         }
       } else if (currentLevel == 2) {
         // 2 → 3: 첫 번째 개념 그룹의 노트 자동 확장
@@ -498,10 +509,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         if (currentLevel == 1) {
           // 1 → 0: 소단원 닫기
           _sections = [];
+          _allExpandedSections.clear();
         } else if (currentLevel == 2) {
-          // 2 → 1: 개념 닫기
+          // 2 → 1: 모든 개념 닫기
           _expandedSectionId = null;
           _conceptGroups = [];
+          _allExpandedSections.clear();
         } else if (currentLevel == 3) {
           // 3 → 2: 노트 닫기
           _expandedGroupId = null;
@@ -565,8 +578,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               chapterId: chapterId,
               sections: _sections,
               expandedSectionId: expandLevel >= 2 ? _expandedSectionId : null,
+              allExpandedSections: expandLevel >= 2 ? _allExpandedSections : const {},
               showConcepts: expandLevel >= 2,
-              conceptGroups: _conceptGroups,
+              conceptGroupsCache: _conceptGroupsCache,
               conceptsCache: _conceptsCache,
               expandedGroupId: expandLevel >= 3 ? _expandedGroupId : null,
               onReorderSections: (oldIndex, newIndex) => _reorderSections(chapterId, oldIndex, newIndex),
