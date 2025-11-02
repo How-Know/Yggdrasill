@@ -133,7 +133,7 @@ class _SectionListState extends State<SectionList> {
                                 '${index + 1}.',
                                 style: const TextStyle(
                                   color: Color(0xFF999999),
-                                  fontSize: 22,
+                                  fontSize: 24, // 22 → 24
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -143,7 +143,7 @@ class _SectionListState extends State<SectionList> {
                                   section['name'] as String,
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 20,
+                                    fontSize: 22, // 20 → 22
                                   ),
                                 ),
                               ),

@@ -572,7 +572,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             expandLevel: expandLevel,
             sectionCount: sectionCount,
             onTap: () {
-              // 카드 클릭은 더블탭만 (소단원 추가)
+              // 카드 클릭 시 레벨 1로 토글
+              if (expandLevel == 0) {
+                _expandChapterMore(chapterId);
+              } else {
+                setState(() {
+                  _chapterExpandLevels[chapterId] = 0;
+                  _sections = [];
+                  _allExpandedSections.clear();
+                  _expandedGroupIds.clear();
+                });
+              }
             },
             onDoubleTap: () => _showAddSectionDialog(chapterId),
             onSecondaryTap: () => _showChapterContextMenu(chapter),

@@ -84,7 +84,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
                         '(${widget.groupNumber})',
                         style: const TextStyle(
                           color: Color(0xFF999999),
-                          fontSize: 18,
+                          fontSize: 20, // 18 → 20
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -101,7 +101,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
                           groupName,
                           style: const TextStyle(
                             color: Color(0xFF999999),
-                            fontSize: 18,
+                            fontSize: 20, // 18 → 20
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -260,18 +260,18 @@ class _ConceptGroupState extends State<ConceptGroup> {
                   }
                 },
                 child: Container(
-                  width: 24,
-                  height: 24,
+                  width: 26, // 24 → 26
+                  height: 26, // 24 → 26
                   decoration: BoxDecoration(
                     border: Border.all(color: const Color(0xFF666666), width: 2),
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(13), // 12 → 13
                   ),
                   child: Center(
                     child: Text(
                       '$groupNumber',
                       style: const TextStyle(
                         color: Color(0xFF999999),
-                        fontSize: 11,
+                        fontSize: 13, // 11 → 13
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -284,7 +284,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
                   noteGroupName,
                   style: const TextStyle(
                     color: Color(0xFF999999),
-                    fontSize: 14,
+                    fontSize: 16, // 14 → 16
                     fontWeight: FontWeight.w600,
                   ),
                 ),
