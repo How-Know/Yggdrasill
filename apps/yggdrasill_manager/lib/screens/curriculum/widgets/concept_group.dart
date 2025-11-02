@@ -59,12 +59,15 @@ class _ConceptGroupState extends State<ConceptGroup> {
     final groupId = widget.group['id'] as String;
     final groupName = widget.group['name'] as String? ?? '';
     
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
             // 왼쪽: 구분선 + 개념 칩
             Expanded(
               flex: widget.isNotesExpanded ? 1 : 1,
@@ -162,6 +165,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
             ),
           ],
         ],
+      ),
       ),
       ),
     );

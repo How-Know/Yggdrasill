@@ -79,8 +79,10 @@ class _SectionListState extends State<SectionList> {
     // 노트가 펼쳐진 개수 확인
     final hasExpandedNotes = widget.expandedGroupIds.isNotEmpty;
     
-    return Container(
+    return AnimatedContainer(
       key: _containerKey,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
       width: hasExpandedNotes ? 518 * 2 : 518, // 노트 펼칠 때 2배
       constraints: const BoxConstraints(
         minHeight: 200,

@@ -458,43 +458,71 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   void _expandChapterMore(String chapterId) async {
     final currentLevel = _chapterExpandLevels[chapterId] ?? 0;
     if (currentLevel < 3) {
-      setState(() {
-        _chapterExpandLevels[chapterId] = currentLevel + 1;
-      });
-      
-      // 레벨에 따라 필요한 데이터 로드
+      // 레벨에 따라 필요한 데이터 로드 및 체크
       if (currentLevel == 0) {
         // 0 → 1: 소단원 로드
         await _loadSections(chapterId);
+        
+        // 소단원이 있으면 레벨 증가
+        if (_sections.isNotEmpty) {
+          setState(() {
+            _chapterExpandLevels[chapterId] = 1;
+          });
+        }
       } else if (currentLevel == 1) {
         // 1 → 2: 모든 소단원 펼치고 각 소단원의 개념 그룹 로드
         if (_sections.isNotEmpty) {
           // 모든 소단원을 확장 상태로
           _allExpandedSections.clear();
+          bool hasAnyConcepts = false;
+          
           for (final section in _sections) {
             final sectionId = section['id'] as String;
             _allExpandedSections.add(sectionId);
             await _loadConceptGroups(sectionId);
+            
+            // 개념 그룹이 하나라도 있는지 확인
+            final groups = _conceptGroupsCache[sectionId] ?? [];
+            if (groups.isNotEmpty) {
+              hasAnyConcepts = true;
+            }
           }
           
-          // 첫 번째 소단원을 선택 상태로
-          final firstSectionId = _sections.first['id'] as String;
-          setState(() {
-            _expandedSectionId = firstSectionId;
-          });
+          // 개념이 하나라도 있으면 레벨 증가
+          if (hasAnyConcepts) {
+            final firstSectionId = _sections.first['id'] as String;
+            setState(() {
+              _chapterExpandLevels[chapterId] = 2;
+              _expandedSectionId = firstSectionId;
+            });
+          }
         }
       } else if (currentLevel == 2) {
-        // 2 → 3: 모든 개념 그룹의 노트 자동 확장
+        // 2 → 3: 모든 개념 그룹의 노트 자동 확장 (노트가 있는 것만)
         _expandedGroupIds.clear();
+        bool hasAnyNotes = false;
+        
         for (final section in _sections) {
           final sectionId = section['id'] as String;
           final groups = _conceptGroupsCache[sectionId] ?? [];
           for (final group in groups) {
             final groupId = group['id'] as String;
-            _expandedGroupIds.add(groupId);
+            final notes = group['notes'];
+            
+            // 노트가 있는 그룹만 확장
+            if (notes != null && notes is List && notes.isNotEmpty) {
+              _expandedGroupIds.add(groupId);
+              hasAnyNotes = true;
+            }
           }
         }
-        setState(() {});
+        
+        // 노트가 하나라도 있으면 레벨 증가
+        if (hasAnyNotes) {
+          setState(() {
+            _chapterExpandLevels[chapterId] = 3;
+          });
+        }
       }
     }
   }
