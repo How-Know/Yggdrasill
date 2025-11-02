@@ -67,7 +67,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
           children: [
             // 왼쪽: 구분선 + 개념 칩 (고정 너비 유지)
             SizedBox(
-              width: 450,
+              width: 380,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

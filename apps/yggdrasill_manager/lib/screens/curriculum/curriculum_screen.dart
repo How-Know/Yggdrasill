@@ -3,7 +3,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'widgets/section_list.dart';
-import 'widgets/note_area.dart';
 import 'widgets/chapter_card.dart';
 
 class CurriculumScreen extends StatefulWidget {
