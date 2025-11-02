@@ -59,18 +59,15 @@ class _ConceptGroupState extends State<ConceptGroup> {
     final groupId = widget.group['id'] as String;
     final groupName = widget.group['name'] as String? ?? '';
     
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-            // 왼쪽: 구분선 + 개념 칩
-            Expanded(
-              flex: widget.isNotesExpanded ? 1 : 1,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // 왼쪽: 구분선 + 개념 칩 (고정 너비)
+            SizedBox(
+              width: 450, // 고정 너비
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -156,16 +153,15 @@ class _ConceptGroupState extends State<ConceptGroup> {
             ),
           ),
           
-          // 오른쪽: 노트 영역
+          // 오른쪽: 노트 영역 (고정 너비)
           if (widget.isNotesExpanded && widget.onAddNote != null) ...[
             const SizedBox(width: 20),
-            Expanded(
-              flex: 1,
+            SizedBox(
+              width: 450, // 고정 너비
               child: _buildNoteArea(),
             ),
           ],
         ],
-      ),
       ),
       ),
     );

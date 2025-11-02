@@ -79,11 +79,9 @@ class _SectionListState extends State<SectionList> {
     // 노트가 펼쳐진 개수 확인
     final hasExpandedNotes = widget.expandedGroupIds.isNotEmpty;
     
-    return AnimatedContainer(
+    return Container(
       key: _containerKey,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-      width: hasExpandedNotes ? 518 * 2 : 518, // 노트 펼칠 때 2배
+      width: hasExpandedNotes ? 920 : 518, // 노트 펼칠 때: 450(개념)+20+450(노트)=920
       constraints: const BoxConstraints(
         minHeight: 200,
         maxHeight: 864,
@@ -168,11 +166,7 @@ class _SectionListState extends State<SectionList> {
                     ),
 
                     if (isSectionExpanded && widget.showConcepts)
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                        child: _buildConceptsArea(sectionId),
-                      ),
+                      _buildConceptsArea(sectionId),
                   ],
                 );
               },
