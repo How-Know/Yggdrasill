@@ -559,25 +559,23 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             SectionList(
               chapterId: chapterId,
               sections: _sections,
-              expandedSectionId: expandLevel >= 2 ? _expandedSectionId : null,
+              expandedSectionId: _expandedSectionId,
               allExpandedSections: expandLevel >= 2 ? _allExpandedSections : const {},
-              showConcepts: expandLevel >= 2,
+              showConcepts: expandLevel >= 1, // 레벨 1부터 개념 표시 가능
               conceptGroupsCache: _conceptGroupsCache,
               conceptsCache: _conceptsCache,
-              expandedGroupIds: expandLevel >= 3 ? _expandedGroupIds : const {},
+              expandedGroupIds: _expandedGroupIds, // 모든 레벨에서 노트 토글 가능
               onReorderSections: (oldIndex, newIndex) => _reorderSections(chapterId, oldIndex, newIndex),
               onTapSection: (sectionId) {
-                if (expandLevel >= 2) {
-                  setState(() {
-                    if (_expandedSectionId == sectionId) {
-                      _expandedSectionId = null;
-                      _conceptGroups = [];
-                    } else {
-                      _expandedSectionId = sectionId;
-                      _loadConceptGroups(sectionId);
-                    }
-                  });
-                }
+                setState(() {
+                  if (_expandedSectionId == sectionId) {
+                    _expandedSectionId = null;
+                    _conceptGroups = [];
+                  } else {
+                    _expandedSectionId = sectionId;
+                    _loadConceptGroups(sectionId);
+                  }
+                });
               },
               onAddConceptGroup: (sectionId) => _addConceptGroup(sectionId),
               onSectionContextMenu: (section, chapId) => _showSectionContextMenu(section, chapId),
@@ -586,15 +584,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               onReorderConcepts: (groupId, oldIndex, newIndex) => _reorderConcepts(groupId, oldIndex, newIndex),
               onConceptContextMenu: (concept, groupId) => _showConceptContextMenu(concept, groupId),
               onToggleNotes: (groupId) {
-                if (expandLevel >= 3) {
-                  setState(() {
-                    if (_expandedGroupIds.contains(groupId)) {
-                      _expandedGroupIds.remove(groupId);
-                    } else {
-                      _expandedGroupIds.add(groupId);
-                    }
-                  });
-                }
+                setState(() {
+                  if (_expandedGroupIds.contains(groupId)) {
+                    _expandedGroupIds.remove(groupId);
+                  } else {
+                    _expandedGroupIds.add(groupId);
+                  }
+                });
               },
               onArrowPositionMeasured: null, // 더 이상 사용하지 않음
               onAddNoteGroup: (group) => _addNoteGroup(group),

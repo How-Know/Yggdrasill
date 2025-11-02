@@ -38,3 +38,7 @@ create policy thought_card_delete on public.thought_card
 -- memberships 기반 정책으로 좁힐 것을 권장합니다.
 
 
+
+
+
+
