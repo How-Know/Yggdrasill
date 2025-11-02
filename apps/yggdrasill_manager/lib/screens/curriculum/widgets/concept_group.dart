@@ -65,8 +65,9 @@ class _ConceptGroupState extends State<ConceptGroup> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // 왼쪽: 구분선 + 개념 칩
-            Expanded(
+            // 왼쪽: 구분선 + 개념 칩 (고정 너비 유지)
+            SizedBox(
+              width: 450,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -152,10 +153,11 @@ class _ConceptGroupState extends State<ConceptGroup> {
             ),
           ),
           
-          // 오른쪽: 노트 영역
+          // 오른쪽: 노트 영역 (고정 너비)
           if (widget.isNotesExpanded && widget.onAddNote != null) ...[
             const SizedBox(width: 20),
-            Expanded(
+            SizedBox(
+              width: 500,
               child: _buildNoteArea(),
             ),
           ],
