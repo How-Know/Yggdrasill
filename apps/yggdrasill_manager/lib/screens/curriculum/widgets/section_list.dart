@@ -81,7 +81,7 @@ class _SectionListState extends State<SectionList> {
     
     return Container(
       key: _containerKey,
-      width: hasExpandedNotes ? 920 : 518, // 노트 펼칠 때: 450(개념)+20+450(노트)=920
+      width: hasExpandedNotes ? 1200 : 518, // 노트 펼칠 때 넉넉하게
       constraints: const BoxConstraints(
         minHeight: 200,
         maxHeight: 864,
