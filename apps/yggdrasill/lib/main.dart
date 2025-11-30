@@ -1,4 +1,4 @@
-import 'package:uuid/uuid.dart';
+﻿import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -35,6 +35,7 @@ import 'services/runtime_flags.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -614,7 +615,7 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
   await showDialog(
     context: context,
     builder: (ctx) {
-      final ctrlRange = TextEditingController();
+      final ctrlRange = ImeAwareTextEditingController();
       final List<String> candidates = _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value]..sort();
       String selectedName = candidates.first;
       return StatefulBuilder(builder: (ctxSB, setSB) {
@@ -838,7 +839,7 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(BuildContext c
           final text = await showDialog<String>(
             context: ctxSB,
             builder: (ctx2) {
-              final ctrl = TextEditingController();
+              final ctrl = ImeAwareTextEditingController();
               return AlertDialog(
                 backgroundColor: const Color(0xFF1F1F1F),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -960,7 +961,7 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context, String
               final names = savedNames[d] ?? [];
               final dateLabel = '${d.year}.${d.month}.${d.day}';
               final firstName = names.isNotEmpty ? names.first : '';
-              final ctrl = TextEditingController(text: localRanges[DateTime(d.year, d.month, d.day)] ?? '');
+              final ctrl = ImeAwareTextEditingController(text: localRanges[DateTime(d.year, d.month, d.day)] ?? '');
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
@@ -2160,7 +2161,7 @@ Future<String?> _openExamNameAddDialog(BuildContext context) async {
   return showDialog<String>(
     context: context,
     builder: (ctx) {
-      final ctrl = TextEditingController();
+      final ctrl = ImeAwareTextEditingController();
       return AlertDialog(
         backgroundColor: const Color(0xFF1F1F1F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2327,7 +2328,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   String? _selectedSchoolGrade;
   final Set<DateTime> _selectedDays = {};
   final Map<DateTime, List<String>> _titlesByDate = {};
-  final TextEditingController _titleCtrl = TextEditingController();
+  final TextEditingController _titleCtrl = ImeAwareTextEditingController();
   final Map<String, Map<DateTime, List<String>>> _savedBySchoolGrade = {};
   final Map<String, Set<DateTime>> _selectedDaysBySchoolGrade = {};
   // 날짜별 범위 메모: 학교/학년 → 날짜 → 범위 텍스트
@@ -2939,7 +2940,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
             final text = await showDialog<String>(
               context: context,
               builder: (ctx) {
-                final ctrl = TextEditingController();
+                final ctrl = ImeAwareTextEditingController();
                 return AlertDialog(
                   backgroundColor: const Color(0xFF1F1F1F),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2964,7 +2965,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
             final text = await showDialog<String>(
               context: context,
               builder: (ctx) {
-                final ctrl = TextEditingController();
+                final ctrl = ImeAwareTextEditingController();
                 return AlertDialog(
                   backgroundColor: const Color(0xFF1F1F1F),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2999,8 +3000,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                 final text = await showDialog<String>(
                   context: context,
                   builder: (ctx) {
-                    final ctrl = TextEditingController();
-                    final rangeCtrl = TextEditingController();
+                    final ctrl = ImeAwareTextEditingController();
+                    final rangeCtrl = ImeAwareTextEditingController();
                     return AlertDialog(
                       backgroundColor: const Color(0xFF1F1F1F),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -3459,7 +3460,7 @@ class _MemoInputDialog extends StatefulWidget {
 }
 
 class _MemoInputDialogState extends State<_MemoInputDialog> {
-  final TextEditingController _controller = TextEditingController();
+  final TextEditingController _controller = ImeAwareTextEditingController();
   bool _saving = false;
   @override
   void dispose() { _controller.dispose(); super.dispose(); }
@@ -3519,7 +3520,7 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initial);
+    _controller = ImeAwareTextEditingController(text: widget.initial);
     _scheduledAt = widget.initialScheduledAt;
   }
   @override
@@ -3682,3 +3683,4 @@ class _MemoBanner extends StatelessWidget {
 
  
  
+

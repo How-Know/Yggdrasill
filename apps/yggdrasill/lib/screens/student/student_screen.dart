@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../models/session_override.dart';
 import '../../models/attendance_record.dart';
 import '../../models/student.dart';
@@ -27,6 +27,7 @@ import '../../models/education_level.dart';
 import '../../models/student_payment_info.dart';
 import 'package:uuid/uuid.dart';
 import 'components/attendance_indicator.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -38,7 +39,7 @@ class StudentScreen extends StatefulWidget {
 class StudentScreenState extends State<StudentScreen> {
   StudentViewType get viewType => _viewType;
   StudentViewType _viewType = StudentViewType.all;
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   String _searchQuery = '';
   // 학생 탭 상단: 스플릿 버튼 및 검색 확장 상태
   String _studentAddSelection = '학생';
@@ -2536,7 +2537,7 @@ class StudentScreenState extends State<StudentScreen> {
     if (picked == null) return;
 
     // 3-1. 연기 사유 입력 다이얼로그 (선택)
-    final reasonController = TextEditingController();
+    final reasonController = ImeAwareTextEditingController();
     final String? reason = await showDialog<String?>(
       context: context,
       builder: (context) => AlertDialog(
@@ -3221,8 +3222,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
     if (existingPaymentInfo != null) {
       _registrationDate = existingPaymentInfo.registrationDate;
       _paymentMethod = existingPaymentInfo.paymentMethod;
-      _tuitionFeeController = TextEditingController(text: existingPaymentInfo.tuitionFee.toString());
-      _latenessThresholdController = TextEditingController(text: existingPaymentInfo.latenessThreshold.toString());
+      _tuitionFeeController = ImeAwareTextEditingController(text: existingPaymentInfo.tuitionFee.toString());
+      _latenessThresholdController = ImeAwareTextEditingController(text: existingPaymentInfo.latenessThreshold.toString());
       _scheduleNotification = existingPaymentInfo.scheduleNotification;
       _attendanceNotification = existingPaymentInfo.attendanceNotification;
       _departureNotification = existingPaymentInfo.departureNotification;
@@ -3231,8 +3232,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
       // 기본값 설정 (기존 학생 정보에서 가져오기)
       _registrationDate = DateTime.now();
       _paymentMethod = 'monthly';
-      _tuitionFeeController = TextEditingController();
-      _latenessThresholdController = TextEditingController(text: '10');
+      _tuitionFeeController = ImeAwareTextEditingController();
+      _latenessThresholdController = ImeAwareTextEditingController(text: '10');
       
       // 기존 student_basic_info 데이터가 있다면 student_payment_info로 자동 마이그레이션
       _migrateFromBasicInfo();
@@ -3652,7 +3653,7 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
     super.initState();
     // 각 수업명별로 컨트롤러 생성
     for (final className in widget.classGroups.keys) {
-      _controllers[className] = TextEditingController();
+      _controllers[className] = ImeAwareTextEditingController();
       _classFees[className] = 0;
     }
   }
@@ -3890,3 +3891,4 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
     );
   }
 } 
+

@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../../models/student.dart';
 import 'package:mneme_flutter/models/student_view_type.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentHeader extends StatefulWidget {
   final StudentViewType viewType;
@@ -26,7 +27,7 @@ class _StudentHeaderState extends State<StudentHeader> {
   @override
   void initState() {
     super.initState();
-    _searchController = TextEditingController();
+    _searchController = ImeAwareTextEditingController();
     _searchController.addListener(() {
       widget.onSearch(_searchController.text);
     });
@@ -90,3 +91,4 @@ class _StudentHeaderState extends State<StudentHeader> {
     );
   }
 } 
+

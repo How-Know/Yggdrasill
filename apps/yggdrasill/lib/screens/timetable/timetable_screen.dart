@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../models/group_info.dart';
 import '../../models/operating_hours.dart';
 import '../../models/student.dart';
@@ -30,6 +30,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/schedule_store.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 
 enum TimetableViewType {
@@ -1986,7 +1987,7 @@ class _MemoInputDialog extends StatefulWidget {
 }
 
 class _MemoInputDialogState extends State<_MemoInputDialog> {
-  final TextEditingController _controller = TextEditingController();
+  final TextEditingController _controller = ImeAwareTextEditingController();
   bool _saving = false;
 
   @override
@@ -2059,7 +2060,7 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initial);
+    _controller = ImeAwareTextEditingController(text: widget.initial);
   }
 
   @override
@@ -2123,7 +2124,7 @@ class SelfStudyRegistrationDialog extends StatefulWidget {
 
 class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialog> {
   String _searchQuery = '';
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   List<StudentWithInfo> get _eligibleStudents => DataManager.instance.getSelfStudyEligibleStudents();
   List<StudentWithInfo> get _searchResults {
     if (_searchQuery.isEmpty) return [];
@@ -2435,3 +2436,4 @@ class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with Singl
     );
   }
 }
+

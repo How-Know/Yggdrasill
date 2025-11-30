@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../services/data_manager.dart';
 import 'dart:async';
 import 'dart:math' as math;
@@ -10,6 +10,7 @@ import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
 import 'package:uuid/uuid.dart';
 import '../models/memo.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
 class ClassContentScreen extends StatefulWidget {
@@ -248,7 +249,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   }
 
   Future<String?> _openRecordNoteDialog(BuildContext context) async {
-    final controller = TextEditingController();
+    final controller = ImeAwareTextEditingController();
     return showDialog<String?>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -274,7 +275,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
 }
 
 Future<String?> _openRecordNoteDialogGlobal(BuildContext context) async {
-  final controller = TextEditingController();
+  final controller = ImeAwareTextEditingController();
   return showDialog<String?>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -816,6 +817,8 @@ class _NoteEntry {
   final String text;
   _NoteEntry(this.text);
 }
+
+
 
 
 

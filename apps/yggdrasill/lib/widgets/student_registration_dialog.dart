@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:mneme_flutter/models/student.dart';
 import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mneme_flutter/models/student_payment_info.dart';
 import 'package:mneme_flutter/models/session_override.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
   final Student? student;
@@ -29,8 +30,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _schoolController;
   late final TextEditingController _phoneController;
   late final TextEditingController _parentPhoneController;
-  final TextEditingController _memoController = TextEditingController();
-  final TextEditingController _weeklyClassCountController = TextEditingController(text: '1');
+  final TextEditingController _memoController = ImeAwareTextEditingController();
+  final TextEditingController _weeklyClassCountController = ImeAwareTextEditingController(text: '1');
 
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
@@ -38,7 +39,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   GroupInfo? _selectedGroup;
   // [지불 방식 관련 상태 변수 및 컨트롤러 추가]
   String _paymentType = 'monthly'; // 'monthly' 또는 'session'
-  final TextEditingController _paymentCycleController = TextEditingController();
+  final TextEditingController _paymentCycleController = ImeAwareTextEditingController();
 
   @override
   void initState() {
@@ -54,10 +55,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       );
       basicInfo = match.basicInfo;
     }
-    _nameController = TextEditingController(text: student?.name);
-    _schoolController = TextEditingController(text: student?.school);
-    _phoneController = TextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
-    _parentPhoneController = TextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
+    _nameController = ImeAwareTextEditingController(text: student?.name);
+    _schoolController = ImeAwareTextEditingController(text: student?.school);
+    _phoneController = ImeAwareTextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
+    _parentPhoneController = ImeAwareTextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
     _memoController.text = basicInfo?.memo ?? '';
     _registrationDate = DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
@@ -544,3 +545,4 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     );
   }
 } 
+

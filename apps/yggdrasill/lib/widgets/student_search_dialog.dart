@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../services/data_manager.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentSearchDialog extends StatefulWidget {
   final Set<String> excludedStudentIds;
@@ -17,7 +18,7 @@ class StudentSearchDialog extends StatefulWidget {
 }
 
 class _StudentSearchDialogState extends State<StudentSearchDialog> {
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   List<StudentWithInfo> _students = [];
   List<StudentWithInfo> _filteredStudents = [];
 
@@ -261,3 +262,4 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     super.dispose();
   }
 } 
+

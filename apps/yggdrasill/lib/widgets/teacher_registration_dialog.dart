@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/teacher.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class TeacherRegistrationDialog extends StatefulWidget {
   final Teacher? teacher;
@@ -27,10 +28,10 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.teacher?.name ?? '');
-    _contactController = TextEditingController(text: widget.teacher?.contact ?? '');
-    _emailController = TextEditingController(text: widget.teacher?.email ?? '');
-    _descriptionController = TextEditingController(text: widget.teacher?.description ?? '');
+    _nameController = ImeAwareTextEditingController(text: widget.teacher?.name ?? '');
+    _contactController = ImeAwareTextEditingController(text: widget.teacher?.contact ?? '');
+    _emailController = ImeAwareTextEditingController(text: widget.teacher?.email ?? '');
+    _descriptionController = ImeAwareTextEditingController(text: widget.teacher?.description ?? '');
     _role = widget.teacher?.role ?? TeacherRole.all;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
@@ -199,3 +200,4 @@ class _TeacherRegistrationDialogState extends State<TeacherRegistrationDialog> {
     );
   }
 } 
+

@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
@@ -16,8 +17,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
   @override
   void initState() {
     super.initState();
-    _title = TextEditingController(text: widget.initialTitle ?? '');
-    _body = TextEditingController(text: '');
+    _title = ImeAwareTextEditingController(text: widget.initialTitle ?? '');
+    _body = ImeAwareTextEditingController(text: '');
     _color = widget.initialColor ?? const Color(0xFF1976D2);
   }
   @override
@@ -110,7 +111,7 @@ class _HomeworkContinueDialogState extends State<HomeworkContinueDialog> {
   @override
   void initState() {
     super.initState();
-    _body = TextEditingController(text: '');
+    _body = ImeAwareTextEditingController(text: '');
   }
   @override
   void dispose() { _body.dispose(); super.dispose(); }
@@ -155,3 +156,5 @@ class _HomeworkContinueDialogState extends State<HomeworkContinueDialog> {
     );
   }
 }
+
+

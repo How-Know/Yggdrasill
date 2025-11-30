@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:flutter/gestures.dart';
@@ -14,6 +14,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:pdfrx/pdfrx.dart';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -339,7 +340,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           final result = await _showOneDialog<Map<String, dynamic>>(
                             barrierDismissible: true,
                             builder: (ctx) {
-                              final controller = TextEditingController();
+                              final controller = ImeAwareTextEditingController();
                               final icons = <IconData>[
                                 Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
                                 Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
@@ -564,7 +565,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                                       _closeInlineActionMenu();
                                                       await WidgetsBinding.instance.endOfFrame;
                                                       if (_isGradeMenuOpen) { _closeGradeMenu(); await WidgetsBinding.instance.endOfFrame; }
-                                                      final controller = TextEditingController(text: g);
+                                                      final controller = ImeAwareTextEditingController(text: g);
                                                     final icons = <IconData>[
                                                       Icons.school, Icons.menu_book, Icons.bookmark, Icons.star,
                                                       Icons.favorite, Icons.lightbulb, Icons.flag, Icons.language,
@@ -1825,9 +1826,9 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
     final rows = await DataManager.instance.getResourceGrades();
     final list = rows.map((e) => (e['name'] as String?) ?? '').where((e) => e.isNotEmpty).toList();
     _grades = list.isEmpty ? ['초1','초2','초3','초4','초5','초6','중1','중2','중3','고1','고2','고3'] : list;
-    _bodyCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#body'] ?? '') };
-    _solutionCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#sol'] ?? '') };
-    _answerCtrls = { for (final g in _grades) g: TextEditingController(text: widget.initialLinks?['$g#ans'] ?? '') };
+    _bodyCtrls = { for (final g in _grades) g: ImeAwareTextEditingController(text: widget.initialLinks?['$g#body'] ?? '') };
+    _solutionCtrls = { for (final g in _grades) g: ImeAwareTextEditingController(text: widget.initialLinks?['$g#sol'] ?? '') };
+    _answerCtrls = { for (final g in _grades) g: ImeAwareTextEditingController(text: widget.initialLinks?['$g#ans'] ?? '') };
     if (mounted) setState(() {});
   }
   @override
@@ -2929,8 +2930,8 @@ class _FolderEditDialogState extends State<_FolderEditDialog> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.initial.name);
-    _desc = TextEditingController(text: widget.initial.description);
+    _name = ImeAwareTextEditingController(text: widget.initial.name);
+    _desc = ImeAwareTextEditingController(text: widget.initial.description);
     _color = widget.initial.color;
     _shape = widget.initial.shape;
   }
@@ -3516,8 +3517,8 @@ class _FileMetaDialogState extends State<_FileMetaDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.initial.name);
-    _descController = TextEditingController(text: widget.initial.description ?? '');
+    _nameController = ImeAwareTextEditingController(text: widget.initial.name);
+    _descController = ImeAwareTextEditingController(text: widget.initial.description ?? '');
     _selectedColor = widget.initial.color;
     _selectedIcon = widget.initial.icon ?? Icons.insert_drive_file;
     _iconImagePath = widget.initial.iconImagePath;
@@ -3756,8 +3757,8 @@ class _FileCreateDialogState extends State<_FileCreateDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController();
-    _descController = TextEditingController();
+    _nameController = ImeAwareTextEditingController();
+    _descController = ImeAwareTextEditingController();
     _selectedIcon = Icons.insert_drive_file;
   }
 
@@ -3930,8 +3931,8 @@ class _FolderCreateDialogState extends State<_FolderCreateDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController();
-    _descController = TextEditingController();
+    _nameController = ImeAwareTextEditingController();
+    _descController = ImeAwareTextEditingController();
   }
 
   @override
@@ -4513,9 +4514,9 @@ class _BookmarkCreateDialog extends StatefulWidget {
 }
 
 class _BookmarkCreateDialogState extends State<_BookmarkCreateDialog> {
-  final TextEditingController _name = TextEditingController();
-  final TextEditingController _desc = TextEditingController();
-  final TextEditingController _path = TextEditingController();
+  final TextEditingController _name = ImeAwareTextEditingController();
+  final TextEditingController _desc = ImeAwareTextEditingController();
+  final TextEditingController _path = ImeAwareTextEditingController();
   @override
   void dispose() { _name.dispose(); _desc.dispose(); _path.dispose(); super.dispose(); }
   @override
@@ -4627,7 +4628,7 @@ class _BookmarkEditDialogState extends State<_BookmarkEditDialog> {
   late final TextEditingController _desc;
   late final TextEditingController _path;
   @override
-  void initState() { super.initState(); _name = TextEditingController(text: widget.initial['name'] ?? ''); _desc = TextEditingController(text: widget.initial['description'] ?? ''); _path = TextEditingController(text: widget.initial['path'] ?? ''); }
+  void initState() { super.initState(); _name = ImeAwareTextEditingController(text: widget.initial['name'] ?? ''); _desc = ImeAwareTextEditingController(text: widget.initial['description'] ?? ''); _path = ImeAwareTextEditingController(text: widget.initial['path'] ?? ''); }
   @override
   void dispose() { _name.dispose(); _desc.dispose(); _path.dispose(); super.dispose(); }
   @override
@@ -4814,9 +4815,9 @@ class _PdfEditorDialog extends StatefulWidget {
 }
 
 class _PdfEditorDialogState extends State<_PdfEditorDialog> with SingleTickerProviderStateMixin {
-  final TextEditingController _inputPath = TextEditingController();
-  final TextEditingController _ranges = TextEditingController();
-  final TextEditingController _fileName = TextEditingController();
+  final TextEditingController _inputPath = ImeAwareTextEditingController();
+  final TextEditingController _ranges = ImeAwareTextEditingController();
+  final TextEditingController _fileName = ImeAwareTextEditingController();
   String? _outputPath;
   bool _busy = false;
   final List<int> _selectedPages = [];
@@ -5394,4 +5395,6 @@ class _SelectedPageThumb extends StatelessWidget {
     );
   }
 }
+
+
 

@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../services/tag_preset_service.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class TagPresetScreen extends StatefulWidget {
   const TagPresetScreen({super.key});
@@ -18,7 +19,7 @@ class _TagPresetScreenState extends State<TagPresetScreen> {
   }
 
   Future<void> _addPreset() async {
-    final nameController = TextEditingController();
+    final nameController = ImeAwareTextEditingController();
     Color selected = const Color(0xFF1976D2);
     IconData icon = Icons.edit_note;
     final palette = [
@@ -181,5 +182,7 @@ class _TagPresetScreenState extends State<TagPresetScreen> {
     );
   }
 }
+
+
 
 

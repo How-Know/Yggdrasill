@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../services/tag_preset_service.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class TagPresetDialog extends StatefulWidget {
   const TagPresetDialog({super.key});
@@ -29,7 +30,7 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
   }
 
   Future<void> _addPreset() async {
-    final nameController = TextEditingController();
+    final nameController = ImeAwareTextEditingController();
     Color selected = const Color(0xFF1976D2);
     IconData icon = Icons.edit_note;
     final palette = [
@@ -239,7 +240,7 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
   }
 
   Future<TagPreset?> _editPreset(BuildContext context, TagPreset original) async {
-    final nameController = TextEditingController(text: original.name);
+    final nameController = ImeAwareTextEditingController(text: original.name);
     Color selected = original.color;
     IconData icon = original.icon;
     final palette = [
@@ -341,5 +342,7 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
     );
   }
 }
+
+
 
 

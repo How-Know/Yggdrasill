@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class HomeworkEditDialog extends StatefulWidget {
   final String initialTitle;
@@ -18,8 +19,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
   @override
   void initState() {
     super.initState();
-    _title = TextEditingController(text: widget.initialTitle);
-    _body = TextEditingController(text: widget.initialBody);
+    _title = ImeAwareTextEditingController(text: widget.initialTitle);
+    _body = ImeAwareTextEditingController(text: widget.initialBody);
     _color = widget.initialColor;
   }
 
@@ -116,6 +117,8 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     );
   }
 }
+
+
 
 
 

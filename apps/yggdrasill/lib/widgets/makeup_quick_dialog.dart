@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/education_level.dart';
 import '../models/attendance_record.dart';
@@ -10,6 +10,7 @@ import '../services/data_manager.dart';
 import '../models/session_override.dart';
 import '../models/operating_hours.dart';
 import '../screens/timetable/views/classes_view.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class MakeupQuickDialog extends StatefulWidget {
   const MakeupQuickDialog({super.key});
@@ -121,7 +122,7 @@ class _StudentScheduleListDialogState extends State<StudentScheduleListDialog> {
 }
 
 class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   List<StudentWithInfo> _allStudents = [];
   List<StudentWithInfo> _filtered = [];
   List<String> _recommendedStudentIds = [];
@@ -466,5 +467,7 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
 }
 
 // 학생 수업 선택 단계는 제거: 보강은 수업종류 지정 없이 진행
+
+
 
 

@@ -1,7 +1,8 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../models/group_info.dart';
 import 'package:uuid/uuid.dart';
 import 'app_snackbar.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class GroupRegistrationDialog extends StatefulWidget {
   final bool editMode;
@@ -55,9 +56,9 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
 
   void _initControllers() {
     print('[DEBUG] _initControllers: groupInfo=${widget.groupInfo}');
-    _nameController = TextEditingController(text: widget.groupInfo?.name ?? '');
-    _descriptionController = TextEditingController(text: widget.groupInfo?.description ?? '');
-    _capacityController = TextEditingController(text: widget.groupInfo?.capacity?.toString() ?? '');
+    _nameController = ImeAwareTextEditingController(text: widget.groupInfo?.name ?? '');
+    _descriptionController = ImeAwareTextEditingController(text: widget.groupInfo?.description ?? '');
+    _capacityController = ImeAwareTextEditingController(text: widget.groupInfo?.capacity?.toString() ?? '');
     _duration = widget.groupInfo?.duration ?? 60;
     _selectedColor = widget.groupInfo?.color ?? Colors.blue;
   }
@@ -337,3 +338,4 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     );
   }
 } 
+

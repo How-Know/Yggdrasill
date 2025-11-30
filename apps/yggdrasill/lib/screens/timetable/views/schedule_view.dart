@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:uuid/uuid.dart';
 import '../../../services/schedule_store.dart';
@@ -9,6 +9,7 @@ import '../../../models/memo.dart';
 import '../../../services/ai_summary.dart';
 import '../../../main.dart'; // rootNavigatorKey
 import '../../../services/exam_mode.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class ScheduleView extends StatefulWidget {
   final DateTime selectedDate;
@@ -509,11 +510,11 @@ List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
 }
 
 Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
-  final textCtrl = TextEditingController(text: initial ?? '');
+  final textCtrl = ImeAwareTextEditingController(text: initial ?? '');
   String recurrenceType = 'none'; // none/daily/weekly/monthly/selected_weekdays
   final Set<int> selectedWeekdays = {};
   DateTime? endDate;
-  final countCtrl = TextEditingController();
+  final countCtrl = ImeAwareTextEditingController();
 
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
@@ -670,7 +671,7 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
 }
 
 Future<String?> _showNoteDialog(BuildContext context) async {
-  final controller = TextEditingController();
+  final controller = ImeAwareTextEditingController();
   return showDialog<String>(
     context: context,
     builder: (context) {
@@ -719,7 +720,7 @@ class _MetaResult {
 Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
   String? iconKey;
   int? color;
-  final tagCtrl = TextEditingController();
+  final tagCtrl = ImeAwareTextEditingController();
   List<String> tags = [];
   return showDialog<_MetaResult>(
     context: context,
@@ -1057,8 +1058,8 @@ IconData _iconFromKey(String? key) {
 }
 
 Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event) async {
-  final titleCtrl = TextEditingController(text: event.title);
-  final noteCtrl = TextEditingController(text: event.note ?? '');
+  final titleCtrl = ImeAwareTextEditingController(text: event.title);
+  final noteCtrl = ImeAwareTextEditingController(text: event.note ?? '');
   TimeOfDay? start = (event.startHour != null && event.startMinute != null)
       ? TimeOfDay(hour: event.startHour!, minute: event.startMinute!)
       : null;
@@ -1066,7 +1067,7 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
       ? TimeOfDay(hour: event.endHour!, minute: event.endMinute!)
       : null;
   int? color = event.color;
-  final tagCtrl = TextEditingController();
+  final tagCtrl = ImeAwareTextEditingController();
   List<String> tags = List<String>.from(event.tags);
   String? iconKey = event.iconKey;
 
@@ -1323,12 +1324,12 @@ class _GroupEditResult {
 }
 
 Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEvent event) async {
-  final titleCtrl = TextEditingController(text: event.title);
-  final noteCtrl = TextEditingController(text: event.note ?? '');
+  final titleCtrl = ImeAwareTextEditingController(text: event.title);
+  final noteCtrl = ImeAwareTextEditingController(text: event.note ?? '');
   int? color = event.color;
   String? iconKey = event.iconKey;
   List<String> tags = List<String>.from(event.tags);
-  final tagCtrl = TextEditingController();
+  final tagCtrl = ImeAwareTextEditingController();
 
   return showDialog<_GroupEditResult>(
     context: context,
@@ -2168,5 +2169,7 @@ class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
     );
   }
 }
+
+
 
 

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
@@ -9,6 +9,7 @@ import '../../services/tag_store.dart';
 import 'tag_preset_dialog.dart';
 import '../../services/homework_store.dart';
 import 'problem_bank_view.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class LearningScreen extends StatefulWidget {
   const LearningScreen({super.key});
@@ -654,8 +655,8 @@ class _HomeworkCreateDialogState extends State<_HomeworkCreateDialog> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.initial?.title ?? '');
-    _desc = TextEditingController(text: widget.initial?.body ?? '');
+    _name = ImeAwareTextEditingController(text: widget.initial?.title ?? '');
+    _desc = ImeAwareTextEditingController(text: widget.initial?.body ?? '');
     _color = widget.initial?.color ?? const Color(0xFF1976D2);
     if (widget.bodyOnly) {
       // 제목/색상은 고정, 내용은 비움
@@ -770,5 +771,7 @@ class _LearningCurriculumView extends StatelessWidget {
     );
   }
 }
+
+
 
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'package:flutter_math_fork/flutter_math.dart';
 
 class ConceptGroup extends StatefulWidget {
   final Map<String, dynamic> group;
@@ -311,15 +312,7 @@ class _ConceptGroupState extends State<ConceptGroup> {
               ),
               child: Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      item,
-                      style: const TextStyle(
-                        color: Color(0xFFB3B3B3),
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
+                  Expanded(child: _renderNoteText(item)),
                   GestureDetector(
                     onTap: () {
                       if (widget.onDeleteNote != null) {
@@ -339,6 +332,81 @@ class _ConceptGroupState extends State<ConceptGroup> {
         ],
       ),
     );
+  }
+
+  // 수식 포함 텍스트 렌더링: $$ 블록, \( 인라인 \)
+  Widget _renderNoteText(String text) {
+    const baseStyle = TextStyle(color: Color(0xFFB3B3B3), fontSize: 13);
+
+    // 먼저 $$ ... $$ 블록 수식으로 분해
+    final blockRegex = RegExp(r"\$\$([\s\S]*?)\$\$", dotAll: true);
+    final blocks = blockRegex.allMatches(text).toList();
+    if (blocks.isEmpty) {
+      // 블록 수식이 없으면 인라인 렌더러 사용
+      return _renderInlineMath(text, baseStyle);
+    }
+
+    int lastIndex = 0;
+    final children = <Widget>[];
+    for (final m in blocks) {
+      final before = text.substring(lastIndex, m.start);
+      if (before.isNotEmpty) {
+        children.add(_renderInlineMath(before, baseStyle));
+      }
+      final formula = m.group(1) ?? '';
+      if (formula.trim().isNotEmpty) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Math.tex(
+                formula,
+                mathStyle: MathStyle.display,
+                textStyle: baseStyle.copyWith(color: Colors.white),
+              ),
+            ),
+          ),
+        );
+      }
+      lastIndex = m.end;
+    }
+    final tail = text.substring(lastIndex);
+    if (tail.isNotEmpty) {
+      children.add(_renderInlineMath(tail, baseStyle));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+
+  // \( ... \) 인라인 수식을 RichText + WidgetSpan으로 렌더링
+  Widget _renderInlineMath(String text, TextStyle baseStyle) {
+    final inlineRegex = RegExp(r"\\\(([\s\S]*?)\\\)", dotAll: true);
+    final spans = <InlineSpan>[];
+    int last = 0;
+    for (final m in inlineRegex.allMatches(text)) {
+      if (m.start > last) {
+        spans.add(TextSpan(text: text.substring(last, m.start)));
+      }
+      final formula = m.group(1) ?? '';
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.aboveBaseline,
+          baseline: TextBaseline.alphabetic,
+          child: Math.tex(
+            formula,
+            textStyle: baseStyle.copyWith(color: Colors.white),
+          ),
+        ),
+      );
+      last = m.end;
+    }
+    if (last < text.length) {
+      spans.add(TextSpan(text: text.substring(last)));
+    }
+    return RichText(text: TextSpan(style: baseStyle, children: spans));
   }
 
   Widget _buildDraggableConceptChip(Map<String, dynamic> concept, String groupId, int index) {

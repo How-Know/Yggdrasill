@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
@@ -12,6 +12,7 @@ import '../../../models/class_info.dart';
 import 'package:uuid/uuid.dart';
 import '../views/makeup_view.dart';
 import '../../../models/session_override.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -86,7 +87,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
   String _searchQuery = '';
   List<StudentWithInfo> _searchResults = [];
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchExpanded = false;
   bool isClassRegisterMode = false;
@@ -2152,9 +2153,9 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.editTarget?.name ?? '');
-    _descController = TextEditingController(text: widget.editTarget?.description ?? '');
-    _capacityController = TextEditingController(text: widget.editTarget?.capacity?.toString() ?? '');
+    _nameController = ImeAwareTextEditingController(text: widget.editTarget?.name ?? '');
+    _descController = ImeAwareTextEditingController(text: widget.editTarget?.description ?? '');
+    _capacityController = ImeAwareTextEditingController(text: widget.editTarget?.capacity?.toString() ?? '');
     _selectedColor = widget.editTarget?.color;
     _unlimitedCapacity = widget.editTarget?.capacity == null;
   }
@@ -2504,3 +2505,4 @@ class _ClassCardState extends State<_ClassCard> {
     );
   }
 } 
+

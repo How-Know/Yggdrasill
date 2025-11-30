@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/lib_secure_store.dart';
@@ -13,6 +13,7 @@ import '../services/data_manager.dart';
 import '../services/tenant_service.dart';
 import '../models/teacher.dart';
 import './teacher_registration_dialog.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 SupabaseClient? _safeClient() {
   try {
@@ -221,8 +222,8 @@ class _LoginDialog extends StatefulWidget {
 }
 
 class _LoginDialogState extends State<_LoginDialog> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+  final _emailController = ImeAwareTextEditingController();
+  final _passwordController = ImeAwareTextEditingController();
   bool _obscure = true;
   String? _error;
 
@@ -950,7 +951,7 @@ class _PinDialog extends StatefulWidget {
   @override State<_PinDialog> createState()=>_PinDialogState();
 }
 class _PinDialogState extends State<_PinDialog>{
-  final c = TextEditingController(); String? err;
+  final c = ImeAwareTextEditingController(); String? err;
   @override Widget build(BuildContext context){
     // 우선순위: 서버 pin_hash → 로컬 캐시
     String? saved;
@@ -1006,7 +1007,7 @@ class _PinSetupDialog extends StatefulWidget{
   @override State<_PinSetupDialog> createState()=>_PinSetupDialogState();
 }
 class _PinSetupDialogState extends State<_PinSetupDialog>{
-  final a=TextEditingController(); final b=TextEditingController(); String? err;
+  final a=ImeAwareTextEditingController(); final b=ImeAwareTextEditingController(); String? err;
   @override Widget build(BuildContext context){
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
@@ -1054,7 +1055,7 @@ class _EditProfileDialogState extends State<_EditProfileDialog>{
   @override void initState(){
     super.initState();
     final t=widget.existing;
-    nameC=TextEditingController(text:t?.name??''); contactC=TextEditingController(text:t?.contact??''); emailC=TextEditingController(text:t?.email??''); descC=TextEditingController(text:t?.description??''); role=t?.role??TeacherRole.all;
+    nameC=ImeAwareTextEditingController(text:t?.name??''); contactC=ImeAwareTextEditingController(text:t?.contact??''); emailC=ImeAwareTextEditingController(text:t?.email??''); descC=ImeAwareTextEditingController(text:t?.description??''); role=t?.role??TeacherRole.all;
   }
   @override void dispose(){ nameC.dispose(); contactC.dispose(); emailC.dispose(); descC.dispose(); super.dispose(); }
   @override Widget build(BuildContext context){
@@ -1121,7 +1122,7 @@ class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
       _useIcon = t.avatarUseIcon ?? false;
       if((t.avatarUrl??'').toString().isNotEmpty) _filePath = t.avatarUrl;
     }catch(_){}
-    _initialC = TextEditingController(text: _presetInitial ?? '');
+    _initialC = ImeAwareTextEditingController(text: _presetInitial ?? '');
   }
 
   @override void dispose(){ _initialC.dispose(); super.dispose(); }
@@ -1553,3 +1554,4 @@ class _SwitchProfileDialog extends StatelessWidget{
     );
   }
 }
+

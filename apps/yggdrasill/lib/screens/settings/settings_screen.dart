@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
@@ -22,6 +22,7 @@ import '../../services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../services/tenant_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 enum SettingType {
   academy,
@@ -85,12 +86,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final ScrollController _generalScrollController = ScrollController();
   
   // 학원 설정 컨트롤러들
-  final TextEditingController _academyNameController = TextEditingController();
-  final TextEditingController _sloganController = TextEditingController();
-  final TextEditingController _capacityController = TextEditingController(text: '30');
-  final TextEditingController _lessonDurationController = TextEditingController(text: '50');
+  final TextEditingController _academyNameController = ImeAwareTextEditingController();
+  final TextEditingController _sloganController = ImeAwareTextEditingController();
+  final TextEditingController _capacityController = ImeAwareTextEditingController(text: '30');
+  final TextEditingController _lessonDurationController = ImeAwareTextEditingController(text: '50');
   // [추가] 수강 횟수 컨트롤러
-  final TextEditingController _courseCountController = TextEditingController();
+  final TextEditingController _courseCountController = ImeAwareTextEditingController();
   
   final Map<DayOfWeek, TimeRange?> _operatingHours = {
     DayOfWeek.monday: null,
@@ -409,7 +410,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 FutureBuilder<String?>(
                   future: SharedPreferences.getInstance().then((p) => p.getString('kakao_api_base_url')),
                   builder: (context, snapshot) {
-                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    final controller = ImeAwareTextEditingController(text: snapshot.data ?? '');
                     return Row(
                       children: [
                         Expanded(
@@ -474,7 +475,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 FutureBuilder<String?>(
                   future: SharedPreferences.getInstance().then((p) => p.getString('survey_base_url')),
                   builder: (context, snapshot) {
-                    final controller = TextEditingController(text: snapshot.data ?? 'http://localhost:5173');
+                    final controller = ImeAwareTextEditingController(text: snapshot.data ?? 'http://localhost:5173');
                     return Row(
                       children: [
                         Expanded(
@@ -522,7 +523,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 FutureBuilder<String?>(
                   future: SharedPreferences.getInstance().then((p) => p.getString('kakao_api_token')),
                   builder: (context, snapshot) {
-                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    final controller = ImeAwareTextEditingController(text: snapshot.data ?? '');
                     return Row(
                       children: [
                         Expanded(
@@ -579,7 +580,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 FutureBuilder<String?>(
                   future: SharedPreferences.getInstance().then((p) => p.getString('kakao_internal_token')),
                   builder: (context, snapshot) {
-                    final controller = TextEditingController(text: snapshot.data ?? '');
+                    final controller = ImeAwareTextEditingController(text: snapshot.data ?? '');
                     return Row(
                       children: [
                         Expanded(
@@ -2691,3 +2692,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 } 
+

@@ -58,7 +58,7 @@ class AppNavigationBar extends StatelessWidget {
               children: [
                 _NavigationItem(
                   icon: Icons.school_outlined,
-                  label: '커리큘럼',
+                  label: '개념',
                   isSelected: selectedIndex == 0,
                   onTap: () => onDestinationSelected(0),
                 ),

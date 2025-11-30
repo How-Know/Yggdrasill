@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../widgets/navigation_rail.dart';
 import '../widgets/student_registration_dialog.dart';
@@ -30,6 +30,7 @@ import '../services/homework_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -61,7 +62,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   StudentViewType _viewType = StudentViewType.all;
   final List<GroupInfo> _groups = [];
   final List<Student> _students = [];
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchController = ImeAwareTextEditingController();
   String _searchQuery = '';
   final Set<GroupInfo> _expandedGroups = {};
   double _fabBottomPadding = 16.0;
@@ -1676,7 +1677,7 @@ extension on _MainScreenState {
   }
 
   Future<_ClassTag?> _createNewClassTag(BuildContext context) async {
-    final TextEditingController nameController = TextEditingController();
+    final TextEditingController nameController = ImeAwareTextEditingController();
     final List<Color> palette = const [
       Color(0xFFEF5350), Color(0xFFAB47BC), Color(0xFF7E57C2), Color(0xFF5C6BC0),
       Color(0xFF42A5F5), Color(0xFF26A69A), Color(0xFF66BB6A), Color(0xFFFFCA28),
@@ -1800,7 +1801,7 @@ extension on _MainScreenState {
   }
 
   Future<String?> _openRecordNoteDialog(BuildContext context) async {
-    final TextEditingController controller = TextEditingController();
+    final TextEditingController controller = ImeAwareTextEditingController();
     return showDialog<String?>(
       context: context,
       builder: (ctx) {
@@ -1877,3 +1878,4 @@ class _RotatingBorderPainter extends CustomPainter {
     return oldDelegate.tick != tick || oldDelegate.baseColor != baseColor || oldDelegate.strokeWidth != strokeWidth || oldDelegate.cornerRadius != cornerRadius;
   }
 }
+

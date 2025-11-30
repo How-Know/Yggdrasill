@@ -42,3 +42,22 @@ create policy thought_card_delete on public.thought_card
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
