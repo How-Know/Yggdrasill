@@ -134,69 +134,9 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
                           },
                           tooltip: '설정',
                         ),
-                        Padding(
+                        AccountButton(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: StreamBuilder<AuthState>(
-                            stream: _safeClient()?.auth.onAuthStateChange,
-                            builder: (ctx, _) {
-                              return InkWell(
-                                onTap: () async {
-                                  final client = _safeClient();
-                                  final user = client?.auth.currentUser;
-                                  if (user == null) {
-                                    showDialog(
-                                      context: context,
-                                      barrierDismissible: true,
-                                      builder: (ctx) => const _LoginDialog(),
-                                    );
-                                  } else {
-                                    try { await _ProfileStore.load(); } catch(_){ }
-                                    await showDialog(
-                                      context: context,
-                                      barrierDismissible: true,
-                                      builder: (ctx) => const _AccountDialog(),
-                                    );
-                                  }
-                                },
-                                child: ValueListenableBuilder<Map<String, dynamic>>(
-                                  valueListenable: _ProfileStore.profilesNotifier,
-                                  builder: (ctx, map, _) {
-                                    final user = _safeClient()?.auth.currentUser;
-                                    final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
-                                    return ValueListenableBuilder<List<Teacher>>(
-                                      valueListenable: DataManager.instance.teachersNotifier,
-                                      builder: (ctx, teachers, __) {
-                                        Teacher? t;
-                                        try { t = teachers.firstWhere((x)=>x.email==activeEmail); } catch(_){ t = null; }
-                                        final displayName = t?.name ?? ((activeEmail ?? '').split('@').first);
-                                        final googleUrl = (activeEmail == user?.email)
-                                            ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
-                                            : null;
-                                        ImageProvider? img;
-                                        if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
-                                          img = NetworkImage(t!.avatarUrl!);
-                                        } else if (googleUrl != null && googleUrl.isNotEmpty) {
-                                          img = NetworkImage(googleUrl);
-                                        }
-                                        final bg = _parseColor((t?.avatarPresetColor ?? '#2A2A2A'));
-                                        final label = (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
-                                            ? t!.avatarPresetInitial!
-                                            : _initials(displayName);
-                                        return CircleAvatar(
-                                          radius: 16,
-                                          backgroundColor: img == null ? bg : null,
-                                          backgroundImage: img,
-                                          child: (img == null && (t?.avatarUseIcon ?? false))
-                                              ? const Icon(Icons.person, color: Colors.white, size: 16)
-                                              : (img == null ? Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)) : null),
-                                        );
-                                      },
-                                    );
-                                  },
-                                ),
-                              );
-                            },
-                          ),
+                          radius: 16,
                         ),
                       ],
                     ),
@@ -213,6 +153,112 @@ class AppBarTitle extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Size get preferredSize => const Size.fromHeight(70);
+}
+
+class AccountButton extends StatelessWidget {
+  final double radius;
+  final EdgeInsetsGeometry? padding;
+  final String tooltip;
+
+  const AccountButton({
+    super.key,
+    this.radius = 16,
+    this.padding,
+    this.tooltip = '계정',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final double diameter = radius * 2;
+    Widget child = StreamBuilder<AuthState>(
+      stream: _safeClient()?.auth.onAuthStateChange,
+      builder: (ctx, _) {
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(radius),
+            customBorder: const CircleBorder(),
+            onTap: () async {
+              final client = _safeClient();
+              final user = client?.auth.currentUser;
+              if (user == null) {
+                showDialog(
+                  context: context,
+                  barrierDismissible: true,
+                  builder: (ctx) => const _LoginDialog(),
+                );
+              } else {
+                try { await _ProfileStore.load(); } catch(_) {}
+                await showDialog(
+                  context: context,
+                  barrierDismissible: true,
+                  builder: (ctx) => const _AccountDialog(),
+                );
+              }
+            },
+            child: SizedBox(
+              width: diameter,
+              height: diameter,
+              child: ValueListenableBuilder<Map<String, dynamic>>(
+                valueListenable: _ProfileStore.profilesNotifier,
+                builder: (ctx, map, _) {
+                  final user = _safeClient()?.auth.currentUser;
+                  final activeEmail = (map['activeEmail'] as String?) ?? user?.email;
+                  return ValueListenableBuilder<List<Teacher>>(
+                    valueListenable: DataManager.instance.teachersNotifier,
+                    builder: (ctx, teachers, __) {
+                      Teacher? t;
+                      try { t = teachers.firstWhere((x) => x.email == activeEmail); } catch (_) { t = null; }
+                      final displayName = t?.name ?? ((activeEmail ?? '').split('@').first);
+                      final googleUrl = (activeEmail == user?.email)
+                          ? (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?
+                          : null;
+                      ImageProvider? img;
+                      if ((t?.avatarUrl ?? '').toString().isNotEmpty) {
+                        img = NetworkImage(t!.avatarUrl!);
+                      } else if (googleUrl != null && googleUrl.isNotEmpty) {
+                        img = NetworkImage(googleUrl);
+                      }
+                      final bg = _parseColor((t?.avatarPresetColor ?? '#2A2A2A'));
+                      final label = (t?.avatarPresetInitial != null && t!.avatarPresetInitial!.isNotEmpty)
+                          ? t!.avatarPresetInitial!
+                          : _initials(displayName);
+                      final double labelFontSize = ((radius - 5).clamp(8.0, radius)).toDouble();
+                      return CircleAvatar(
+                        radius: radius,
+                        backgroundColor: img == null ? bg : null,
+                        backgroundImage: img,
+                        child: (img == null && (t?.avatarUseIcon ?? false))
+                            ? Icon(Icons.person, color: Colors.white, size: radius)
+                            : (img == null
+                                ? Text(
+                                    label,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: labelFontSize,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  )
+                                : null),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (tooltip.isNotEmpty) {
+      child = Tooltip(message: tooltip, child: child);
+    }
+    if (padding != null) {
+      child = Padding(padding: padding!, child: child);
+    }
+    return child;
+  }
 }
 
 class _LoginDialog extends StatefulWidget {

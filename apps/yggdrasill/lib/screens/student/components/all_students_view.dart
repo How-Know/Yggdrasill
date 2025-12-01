@@ -201,7 +201,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             child: Row(
                               children: [
                                 Text(
-                                  '학생 리스트',
+                                  '학생 현황',
                                   style: TextStyle(
                                     color: Colors.grey,
                                     fontSize: 28, // +1pt
@@ -760,8 +760,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     final students = groupedStudents[level]!;
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
 
-    final List<Widget> gradeWidgets = students.entries
+    final List<MapEntry<int, List<StudentWithInfo>>> sortedEntries = students.entries
         .where((entry) => entry.value.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    final List<Widget> gradeWidgets = sortedEntries
         .map<Widget>((entry) {
           final gradeStudents = entry.value;
           return Column(

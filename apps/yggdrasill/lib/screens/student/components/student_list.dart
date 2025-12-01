@@ -56,8 +56,12 @@ class StudentList extends StatelessWidget {
     final students = groupedStudents[level]!;
     final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
 
-    final List<Widget> gradeWidgets = students.entries
+    final List<MapEntry<int, List<Student>>> sortedEntries = students.entries
         .where((entry) => entry.value.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    final List<Widget> gradeWidgets = sortedEntries
         .map<Widget>((entry) {
           final gradeStudents = entry.value;
           return Column(

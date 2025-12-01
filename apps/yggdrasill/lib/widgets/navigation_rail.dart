@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
-import '../services/data_manager.dart';
+import 'app_bar_title.dart';
 
 class CustomNavigationRail extends StatelessWidget {
   final int selectedIndex;
@@ -18,14 +18,12 @@ class CustomNavigationRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final logoBytes = DataManager.instance.academySettings.logo;
-    final academyName = DataManager.instance.academySettings.name;
     return Column(
       children: [
         Expanded(
           child: NavigationRail(
             backgroundColor: const Color(0xFF1F1F1F),
-            selectedIndex: selectedIndex.clamp(0, 4),
+            selectedIndex: selectedIndex.clamp(0, 5),
             onDestinationSelected: onDestinationSelected,
             leading: Padding(
               padding: const EdgeInsets.only(top: 16, bottom: 8),
@@ -110,31 +108,24 @@ class CustomNavigationRail extends StatelessWidget {
                 ),
                 label: Text(''),
               ),
+              NavigationRailDestination(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                icon: Tooltip(
+                  message: '설정',
+                  child: Icon(Symbols.settings),
+                ),
+                selectedIcon: Tooltip(
+                  message: '설정',
+                  child: Icon(Symbols.settings, weight: 700),
+                ),
+                label: Text(''),
+              ),
             ],
           ),
         ),
-        Padding(
+        AccountButton(
           padding: const EdgeInsets.only(bottom: 16.0),
-          child: logoBytes != null && logoBytes.isNotEmpty
-              ? Tooltip(
-                  message: academyName.isNotEmpty ? academyName : '학원명',
-                  child: ClipOval(
-                    child: Image.memory(
-                      logoBytes,
-                      width: 48,
-                      height: 48,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                )
-              : Tooltip(
-                  message: academyName.isNotEmpty ? academyName : '학원명',
-                  child: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Colors.grey[700],
-                    child: const Icon(Icons.school, color: Colors.white, size: 28),
-                  ),
-                ),
+          radius: 20,
         ),
       ],
     );

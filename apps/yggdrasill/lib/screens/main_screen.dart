@@ -40,7 +40,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
-  int _selectedIndex = 0; // 0~5 (5는 수업 내용 관리)
+  int _selectedIndex = 0; // 0~6 (6은 수업 내용 관리)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;
   late Animation<double> _sideSheetAnimation;
@@ -473,7 +473,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 4:
         return const ResourcesScreen();
       case 5:
-          return const ClassContentScreen();
+        return const SettingsScreen();
+      case 6:
+        return const ClassContentScreen();
       default:
         return const SizedBox();
     }
@@ -495,7 +497,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     // print('[DEBUG] MainScreen build');
     // 안전 가드: 네비게이션 레일은 0~4까지만 허용하므로 표시 인덱스를 보정
-    final int _railSelectedIndex = (_selectedIndex >= 0 && _selectedIndex <= 4) ? _selectedIndex : 0;
+    final int _railSelectedIndex = (_selectedIndex >= 0 && _selectedIndex <= 5) ? _selectedIndex : 0;
     return Scaffold(
       body: Row(
         children: [
@@ -659,7 +661,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
                                                 padding: EdgeInsets.zero,
                                                 onPressed: () {
-                                                  setState(() { _selectedIndex = 5; });
+                                                  setState(() { _selectedIndex = 6; });
                                                   _rotationAnimation.reverse();
                                                 },
                                               ),

@@ -1067,10 +1067,44 @@ class DataManager {
       }
       
       _notifyListeners();
-      Future.wait([
-        saveGroups(),
-        saveStudents(),
-      ]);
+      unawaited(_persistGroupDeletion(groupInfo.id));
+    }
+  }
+
+  Future<void> _persistGroupDeletion(String groupId) async {
+    final List<Future<void>> futures = [];
+    final bool shouldSyncSupabase = TagPresetService.preferSupabaseRead || TagPresetService.dualWrite;
+
+    if (shouldSyncSupabase) {
+      futures.add(_deleteGroupFromSupabase(groupId));
+      if (TagPresetService.preferSupabaseRead && !RuntimeFlags.serverOnly) {
+        futures.add(AcademyDbService.instance.deleteGroup(groupId));
+      }
+    }
+
+    futures.add(saveGroups());
+    futures.add(saveStudents());
+
+    try {
+      await Future.wait(futures);
+    } catch (e, st) {
+      print('[ERROR][groups delete] 삭제 영속화 실패: $e\n$st');
+    }
+  }
+
+  Future<void> _deleteGroupFromSupabase(String groupId) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa
+          .from('groups')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('id', groupId);
+      print('[GROUPS][delete] Supabase 삭제 완료: $groupId');
+    } catch (e, st) {
+      print('[SUPA][groups delete] $e\n$st');
+      rethrow;
     }
   }
 
