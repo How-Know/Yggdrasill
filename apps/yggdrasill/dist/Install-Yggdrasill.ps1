@@ -23,6 +23,30 @@ try{
     Fail "App Installer 파일을 찾지 못했습니다: $AppInstaller"
   }
 
+  # Ensure ms-appinstaller protocol is enabled (Windows 10/11 security patch default = disabled)
+  $protocolPaths = @(
+    'HKLM:\SOFTWARE\Policies\Microsoft\AppInstaller',
+    'HKCU:\SOFTWARE\Policies\Microsoft\AppInstaller'
+  )
+  $protocolEnabled = $false
+  foreach($regPath in $protocolPaths){
+    try{
+      Info "ms-appinstaller 프로토콜 활성화 시도: $regPath"
+      if(!(Test-Path $regPath)){
+        New-Item -Path $regPath -Force | Out-Null
+      }
+      New-ItemProperty -Path $regPath -Name 'EnableMSAppInstallerProtocol' -PropertyType DWord -Value 1 -Force | Out-Null
+      Ok "EnableMSAppInstallerProtocol=1 적용 ($regPath)"
+      $protocolEnabled = $true
+      break
+    } catch {
+      Warn "프로토콜 활성화 실패($regPath): $($_.Exception.Message)"
+    }
+  }
+  if(-not $protocolEnabled){
+    Warn "ms-appinstaller 프로토콜 활성화에 실패했습니다. 관리자 PowerShell에서 `reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\AppInstaller /v EnableMSAppInstallerProtocol /t REG_DWORD /d 1 /f` 를 수동 실행해 주세요."
+  }
+
   # Try importing certificate to LocalMachine TrustedPeople first (requires admin)
   try{
     Info "인증서(LocalMachine\\TrustedPeople) 설치 시도"
