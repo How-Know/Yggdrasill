@@ -73,12 +73,12 @@ try{
   }
 
   # Optional: ensure Microsoft App Installer is present
-  try{
-    Info 'Microsoft App Installer 업데이트 확인(선택)'
-    if(Get-Command winget -ErrorAction SilentlyContinue){
-      winget list --id Microsoft.AppInstaller -e 2>$null | Out-Null
-    }
-  } catch { }
+  # try{
+  #   Info 'Microsoft App Installer 업데이트 확인(선택)'
+  #   if(Get-Command winget -ErrorAction SilentlyContinue){
+  #     winget list --id Microsoft.AppInstaller -e 2>$null | Out-Null
+  #   }
+  # } catch { }
 
   Info "App Installer 실행: $AppInstaller"
   try{
