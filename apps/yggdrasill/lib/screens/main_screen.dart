@@ -852,7 +852,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                               child: Text(
                                                 '출석',
                                                 style: TextStyle(
-                                                  color: Color(0xFF0F467D),
+                                                  color: Color(0xFF9FB3B3),
                                                   fontSize: 22,
                                                   fontWeight: FontWeight.bold,
                                                 ),

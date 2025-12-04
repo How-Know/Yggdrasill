@@ -114,6 +114,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   StudentWithInfo? _selectedSelfStudyStudent;
   bool _isIncreasingWeeklyCount = false; // weekly_class_count 초과 등록 모드 여부
   Set<String> _snapshotSetIds = {}; // 등록 시작 시점의 set_id 스냅샷 (취소 복구용)
+  final GlobalKey _registerDropdownKey = GlobalKey();
+  OverlayEntry? _registerDropdownOverlay;
 
   // 메모 슬라이드 상태
   final ValueNotifier<bool> _isMemoOpen = ValueNotifier(false);
@@ -415,6 +417,178 @@ class _TimetableScreenState extends State<TimetableScreen> {
     }
   }
 
+  void _showRegisterDropdownMenu() {
+    final renderBox = _registerDropdownKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+    _registerDropdownOverlay = OverlayEntry(
+      builder: (context) => Positioned(
+        left: offset.dx,
+        top: offset.dy + size.height + 4,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: 140,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF2A2A2A)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.18),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: ['학생', '수업'].map((label) {
+                final selected = _splitButtonSelected == label;
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      _splitButtonSelected = label;
+                      _isDropdownOpen = false;
+                    });
+                    _removeRegisterDropdownMenu(notify: false);
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: selected ? const Color(0xFF383838) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        color: selected ? Colors.white : Colors.white70,
+                        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_registerDropdownOverlay!);
+  }
+
+  void _removeRegisterDropdownMenu({bool notify = true}) {
+    _registerDropdownOverlay?.remove();
+    _registerDropdownOverlay = null;
+    if (notify) {
+      setState(() {
+        _isDropdownOpen = false;
+      });
+    }
+  }
+
+  Widget _buildHeaderRegisterControls() {
+    const double buttonHeight = 44;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        SizedBox(
+          width: 113,
+          height: buttonHeight,
+          child: Material(
+            color: const Color(0xFF1976D2),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(32),
+              bottomLeft: Radius.circular(32),
+              topRight: Radius.circular(6),
+              bottomRight: Radius.circular(6),
+            ),
+            child: InkWell(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(32),
+                bottomLeft: Radius.circular(32),
+                topRight: Radius.circular(6),
+                bottomRight: Radius.circular(6),
+              ),
+              onTap: _handleRegistrationButton,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.max,
+                children: const [
+                  Icon(Icons.add, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Container(
+          height: buttonHeight,
+          width: 3.0,
+          color: Colors.transparent,
+          child: Center(
+            child: Container(
+              width: 2,
+              height: 28,
+              color: Colors.white.withOpacity(0.1),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2.5),
+          child: GestureDetector(
+            key: _registerDropdownKey,
+            onTap: () {
+              if (_registerDropdownOverlay == null) {
+                setState(() {
+                  _isDropdownOpen = true;
+                });
+                _showRegisterDropdownMenu();
+              } else {
+                _removeRegisterDropdownMenu();
+              }
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 350),
+              width: 44,
+              height: buttonHeight,
+              decoration: ShapeDecoration(
+                color: const Color(0xFF1976D2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: _isDropdownOpen
+                      ? BorderRadius.circular(50)
+                      : const BorderRadius.only(
+                          topLeft: Radius.circular(6),
+                          bottomLeft: Radius.circular(6),
+                          topRight: Radius.circular(32),
+                          bottomRight: Radius.circular(32),
+                        ),
+                ),
+              ),
+              child: Center(
+                child: AnimatedRotation(
+                  turns: _isDropdownOpen ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 350),
+                  curve: Curves.easeInOut,
+                  child: const Icon(
+                    Icons.keyboard_arrow_down,
+                    color: Colors.white,
+                    size: 24,
+                    key: ValueKey('arrow'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   void _showGroupScheduleDialog() {
     showDialog(
       context: context,
@@ -706,6 +880,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   @override
   void dispose() {
+    _removeRegisterDropdownMenu(notify: false);
     _focusNode.dispose();
     super.dispose();
   }
@@ -800,21 +975,36 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 child: Column(
                   children: [
                     SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
-                    CustomTabBar(
-                      selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
-                      tabs: const ['수업', '일정'],
-                      onTabSelected: (i) {
-                        setState(() {
-                          _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
-                        });
-                        
-                        // 수업 탭 클릭 시에만 스크롤
-                        if ((i == 0) && 
-                            !_hasScrolledOnTabClick) {
-                          WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
-                          _hasScrolledOnTabClick = true;
-                        }
-                      },
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 200),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.center,
+                              child: CustomTabBar(
+                                selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
+                                tabs: const ['수업', '일정'],
+                                onTabSelected: (i) {
+                                  setState(() {
+                                    _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
+                                  });
+                                  
+                                  if ((i == 0) && !_hasScrolledOnTabClick) {
+                                    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+                                    _hasScrolledOnTabClick = true;
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 220,
+                            child: _buildHeaderRegisterControls(),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 24),
                     Expanded(
@@ -978,46 +1168,45 @@ class _TimetableScreenState extends State<TimetableScreen> {
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           timetableChild: Container(
             width: double.infinity,
-            // margin: EdgeInsets.zero, // margin 제거
             decoration: BoxDecoration(
               color: const Color(0xFF15171C),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(
               children: [
-                SizedBox(height: 20),
-                TimetableHeader(
-                  selectedDate: _selectedDate,
-                  onDateChanged: _handleDateChanged,
-                  selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
-                  onDaySelected: _onDayHeaderSelected,
-                  isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-                  onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
-                  isFilterActive: _activeFilter != null, // 추가
-                  onSelectModeChanged: (selecting) {
-                    setState(() {
-                      _isSelectMode = selecting;
-                      if (!selecting) _selectedStudentIds.clear();
-                      // print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
-                    });
-                  },
-                  isSelectMode: _isSelectMode, // 추가: 선택모드 상태 명시적으로 전달
-                  onSelectAllStudents: () {
-                    print('[DEBUG][onSelectAllStudents] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
-                    // studentTimeBlocks 전체 프린트
-                    // print('[DEBUG][전체 studentTimeBlocks]');
-                    for (final b in DataManager.instance.studentTimeBlocks) {
-                      // print('id=${b.id}, studentId=${b.studentId}, dayIndex=${b.dayIndex}, startHour=${b.startHour}, startMinute=${b.startMinute}');
-                    }
-                    if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
-                      // print('[DEBUG][onSelectAllStudents] 비교값: dayIndex=$_selectedCellDayIndex, startHour=$_selectedStartTimeHour, startMinute=$_selectedStartTimeMinute');
-                      final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
-                      // print('[DEBUG][onSelectAllStudents] cellStudents(모두버튼): ${cellStudents.map((s) => s.student.id).toList()}');
-                      setState(() {
-                        _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
-                      });
-                    }
-                  },
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TimetableHeader(
+                          selectedDate: _selectedDate,
+                          onDateChanged: _handleDateChanged,
+                          selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+                          onDaySelected: _onDayHeaderSelected,
+                          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                          onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
+                          isFilterActive: _activeFilter != null,
+                          onSelectModeChanged: (selecting) {
+                            setState(() {
+                              _isSelectMode = selecting;
+                              if (!selecting) _selectedStudentIds.clear();
+                            });
+                          },
+                          isSelectMode: _isSelectMode,
+                          onSelectAllStudents: () {
+                            if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
+                              final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
+                              setState(() {
+                                _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
                   Padding(
@@ -1030,8 +1219,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         final totalCount = DataManager.instance.getStudentWeeklyClassCount(studentId);
                         final nextLessonNumber = registeredCount + 1;
                         final text = _isIncreasingWeeklyCount
-                          ? '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${registeredCount} 수업 등록 (현재 ${registeredCount}개 등록됨)'
-                          : '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${totalCount} 수업 등록 (현재 ${registeredCount}개 등록됨)';
+                            ? '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${registeredCount} 수업 등록 (현재 ${registeredCount}개 등록됨)'
+                            : '${studentWithInfo.student.name} 학생: ${nextLessonNumber}/${totalCount} 수업 등록 (현재 ${registeredCount}개 등록됨)';
                         return Text(
                           text,
                           style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
@@ -1039,8 +1228,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       },
                     ),
                   ),
-                SizedBox(height: 0),
-                Flexible(
+                const SizedBox(height: 8),
+                Expanded(
                   child: ClassesView(
                     operatingHours: _operatingHours,
                     breakTimeColor: const Color(0xFF424242),
@@ -1048,12 +1237,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     registrationModeType: _isSelfStudyRegistrationMode ? 'selfStudy' : (_isStudentRegistrationMode ? 'student' : null),
                     selectedDayIndex: _selectedDayIndex,
                     onTimeSelected: (dayIdx, startTime) {
-                      print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedStartTimeHour = startTime.hour;
                         _selectedStartTimeMinute = startTime.minute;
-                        print('[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
                       });
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
@@ -1359,6 +1546,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
           },
           onExitSelectMode: exitSelectMode, // 콜백 전달
+          showRegisterControls: false,
         );
       // 보강 탭 제거됨
       case TimetableViewType.schedule:
