@@ -1,6 +1,5 @@
 ﻿import 'package:flutter/material.dart';
 import 'dart:async';
-import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
 import '../../widgets/student_grouped_list_panel.dart';
 import '../../services/data_manager.dart';
@@ -25,7 +24,6 @@ class _LearningScreenState extends State<LearningScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
-      appBar: const AppBarTitle(title: '학습'),
       body: Column(
         children: [
           const SizedBox(height: 5),

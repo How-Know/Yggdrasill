@@ -32,41 +32,34 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
   late Color _selectedColor;
 
   final List<Color> _colors = [
-    Colors.red,
-    Colors.pink,
-    Colors.purple,
-    Colors.deepPurple,
-    Colors.indigo,
-    Colors.blue,
-    Colors.lightBlue,
-    Colors.cyan,
-    Colors.teal,
-    Colors.green,
-    Colors.lightGreen,
-    Colors.lime,
-    Colors.yellow,
-    Colors.amber,
-    Colors.orange,
-    Colors.deepOrange,
-    Colors.brown,
-    Colors.grey,
-    Colors.blueGrey,
-    const Color(0xFF2196F3),
+    Colors.red, Colors.pink, Colors.purple, Colors.deepPurple,
+    Colors.indigo, Colors.blue, Colors.lightBlue, Colors.cyan,
+    Colors.teal, Colors.green, Colors.lightGreen, Colors.lime,
+    Colors.yellow, Colors.amber, Colors.orange, Colors.deepOrange,
+    Colors.brown, Colors.grey, Colors.blueGrey, const Color(0xFF2196F3),
   ];
 
+  // 입력 완료 상태 확인용
+  bool _isNameValid = false;
+
   void _initControllers() {
-    print('[DEBUG] _initControllers: groupInfo=${widget.groupInfo}');
     _nameController = ImeAwareTextEditingController(text: widget.groupInfo?.name ?? '');
     _descriptionController = ImeAwareTextEditingController(text: widget.groupInfo?.description ?? '');
     _capacityController = ImeAwareTextEditingController(text: widget.groupInfo?.capacity?.toString() ?? '');
     _duration = widget.groupInfo?.duration ?? 60;
     _selectedColor = widget.groupInfo?.color ?? Colors.blue;
+
+    _isNameValid = _nameController.text.isNotEmpty;
+    _nameController.addListener(() {
+      setState(() {
+        _isNameValid = _nameController.text.isNotEmpty;
+      });
+    });
   }
 
   @override
   void initState() {
     super.initState();
-    print('[DEBUG] initState: groupInfo=${widget.groupInfo}');
     _initControllers();
   }
 
@@ -74,7 +67,6 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
   void didUpdateWidget(covariant GroupRegistrationDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.groupInfo != oldWidget.groupInfo) {
-      print('[DEBUG] didUpdateWidget: groupInfo=${widget.groupInfo}');
       _nameController.dispose();
       _descriptionController.dispose();
       _capacityController.dispose();
@@ -98,26 +90,16 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     final duration = _duration;
     final color = _selectedColor;
 
-    print('[DEBUG] _handleSave: name=$name, description=$description, capacity=$capacity, duration=$duration, color=$color');
-    if (widget.editMode && widget.groupInfo != null) {
-      final old = widget.groupInfo!;
-      print('[DEBUG] _handleSave: old.name=[33m${old.name}[0m, old.description=[33m${old.description}[0m, old.capacity=[33m${old.capacity}[0m, old.duration=[33m${old.duration}[0m, old.color=$old.color');
-      print('[DEBUG] _handleSave: 비교 결과 name=${name == old.name}, description=${description == old.description}, capacity=${capacity == old.capacity}, duration=${duration == old.duration}, color=${color == old.color}');
-    }
-
     if (name.isEmpty) {
-      print('[DEBUG] _handleSave: 그룹명 미입력');
       showAppSnackBar(context, '그룹명을 입력해주세요', useRoot: true);
       return;
     }
 
-    print('[DEBUG] _handleSave: capacity=$capacity, currentMemberCount=${widget.currentMemberCount}');
     if (capacity < widget.currentMemberCount) {
-      print('[DEBUG] _handleSave: 정원 오류 다이얼로그 진입');
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF232326),
+          backgroundColor: const Color(0xFF1F1F1F),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('정원 오류', style: TextStyle(color: Colors.white)),
           content: Text('현재 그룹 인원(${widget.currentMemberCount}명)보다 적은 정원은 설정할 수 없습니다.', style: const TextStyle(color: Colors.white70)),
@@ -129,16 +111,14 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           ],
         ),
       );
-      print('[DEBUG] _handleSave: 정원 오류 다이얼로그 종료');
       return;
     }
 
     if (widget.editMode && widget.groupInfo == null) {
-      print('[DEBUG] _handleSave: editMode인데 groupInfo가 null');
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF232326),
+          backgroundColor: const Color(0xFF1F1F1F),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('오류', style: TextStyle(color: Colors.white)),
           content: const Text('수정할 그룹 정보가 없습니다.', style: TextStyle(color: Colors.white70)),
@@ -150,7 +130,6 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           ],
         ),
       );
-      print('[DEBUG] _handleSave: editMode 오류 다이얼로그 종료');
       return;
     }
 
@@ -161,11 +140,10 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
           capacity == old.capacity &&
           duration == old.duration &&
           color == old.color) {
-        print('[DEBUG] _handleSave: 변경된 내용 없음 다이얼로그 진입');
         await showDialog(
           context: context,
           builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFF232326),
+            backgroundColor: const Color(0xFF1F1F1F),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Text('수정할 내용이 없습니다.', style: TextStyle(color: Colors.white)),
             content: const Text('변경된 내용이 없습니다.', style: TextStyle(color: Colors.white70)),
@@ -177,7 +155,6 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
             ],
           ),
         );
-        print('[DEBUG] _handleSave: 변경된 내용 없음 다이얼로그 종료');
         return;
       }
       final updatedGroup = old.copyWith(
@@ -187,7 +164,6 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
         duration: duration,
         color: color,
       );
-      print('[DEBUG] _handleSave: updatedGroup 저장');
       widget.onSave(updatedGroup);
       if (mounted) Navigator.of(context).pop(updatedGroup);
     } else {
@@ -199,143 +175,185 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
         duration: duration,
         color: color,
       );
-      print('[DEBUG] _handleSave: newGroup 저장');
       widget.onSave(newGroup);
       if (mounted) Navigator.of(context).pop(newGroup);
     }
   }
 
+  InputDecoration _buildInputDecoration(String label, {bool required = false, bool isValid = false}) {
+    return InputDecoration(
+      labelText: required ? '$label *' : label,
+      labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFF33A373)),
+      ),
+      filled: true,
+      fillColor: const Color(0xFF15171C),
+      suffixIcon: (required && isValid) 
+          ? const Icon(Icons.check_circle, color: Color(0xFF33A373), size: 18) 
+          : null,
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, top: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 16,
+            decoration: BoxDecoration(
+              color: const Color(0xFF33A373),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: const Color(0xFF0B1112),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFF223131)),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       title: Text(
         widget.editMode ? '그룹 수정' : '그룹 등록',
-        style: const TextStyle(color: Colors.white),
+        style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.bold),
       ),
       content: SizedBox(
-        width: 500,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: TextField(
-                    controller: _nameController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: '그룹명',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
-                      ),
+        width: 580,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 20),
+
+              // 1. 기본 정보
+              _buildSectionHeader('기본 정보'),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextField(
+                      controller: _nameController,
+                      style: const TextStyle(color: Color(0xFFEAF2F2)),
+                      decoration: _buildInputDecoration('그룹명', required: true, isValid: _isNameValid),
                     ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  flex: 2,
-                  child: TextField(
-                    controller: _capacityController,
-                    style: const TextStyle(color: Colors.white),
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: '정원',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
-                      ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: TextField(
+                      controller: _capacityController,
+                      style: const TextStyle(color: Color(0xFFEAF2F2)),
+                      keyboardType: TextInputType.number,
+                      decoration: _buildInputDecoration('정원'),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _descriptionController,
-              style: const TextStyle(color: Colors.white),
-              maxLines: 2,
-              decoration: InputDecoration(
-                labelText: '설명',
-                labelStyle: const TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                ),
-                alignLabelWithHint: true,
+                ],
               ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              '색상',
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
+              const SizedBox(height: 12),
+              TextField(
+                controller: _descriptionController,
+                style: const TextStyle(color: Color(0xFFEAF2F2)),
+                maxLines: 2,
+                decoration: _buildInputDecoration('설명'),
               ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _colors.map((color) {
-                return Material(
-                  color: Colors.transparent,
-                  shape: const CircleBorder(),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () {
-                      setState(() {
-                        _selectedColor = color;
-                      });
-                    },
-                    customBorder: const CircleBorder(),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _selectedColor == color ? Colors.white : Colors.transparent,
-                          width: 2,
+
+              const SizedBox(height: 24),
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 20),
+
+              // 2. 색상 설정
+              _buildSectionHeader('색상 설정'),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _colors.map((color) {
+                  final isSelected = _selectedColor == color;
+                  return Material(
+                    color: Colors.transparent,
+                    shape: const CircleBorder(),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () {
+                        setState(() {
+                          _selectedColor = color;
+                        });
+                      },
+                      customBorder: const CircleBorder(),
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: isSelected 
+                              ? Border.all(color: Colors.white, width: 3)
+                              : null,
+                          boxShadow: isSelected 
+                              ? [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 4, spreadRadius: 1)]
+                              : null,
                         ),
+                        child: isSelected 
+                            ? const Icon(Icons.check, color: Colors.white, size: 24)
+                            : null,
                       ),
                     ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text(
-            '취소',
-            style: TextStyle(color: Colors.white70),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF9FB3B3),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           ),
+          child: const Text('취소'),
         ),
         FilledButton(
           onPressed: _handleSave,
           style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF1976D2),
+            backgroundColor: const Color(0xFF33A373), // Accent color
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
-          child: Text(widget.editMode ? '수정' : '등록'),
+          child: Text(
+            widget.editMode ? '수정' : '등록',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
         ),
       ],
     );
   }
-} 
-
+}

@@ -2,7 +2,6 @@
 import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:flutter/gestures.dart';
-import '../../widgets/app_bar_title.dart';
 import '../../widgets/custom_tab_bar.dart';
 import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
@@ -1020,7 +1019,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     print('[RES] ResourcesScreen build');
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
-      appBar: const AppBarTitle(title: '자료'),
       body: Stack(
         children: [
           Column(

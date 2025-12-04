@@ -5,9 +5,7 @@ import '../../services/data_manager.dart';
 import '../../models/payment_type.dart';
 import '../../services/academy_db.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import '../../widgets/app_bar_title.dart';
 import 'dart:convert';
-import '../../widgets/custom_tab_bar.dart';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import '../../models/teacher.dart';
@@ -2015,27 +2013,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
-      appBar: AppBarTitle(
-        title: '설정',
-        onBack: () {
-          if (Navigator.of(context).canPop()) {
-            Navigator.of(context).pop();
-          }
-        },
-        onForward: () {},
-        onRefresh: () => setState(() {}),
-      ),
       body: Column(
         children: [
           const SizedBox(height: 0),
-          SizedBox(height: 5),
           SizedBox(
             height: 48,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const tabWidth = 120.0;
                 final tabCount = 3; // 학원, 선생님, 일반
-                final tabGap = 21.0;
+                const tabGap = 21.0;
                 final totalWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
                 final leftPadding = (constraints.maxWidth - totalWidth) / 2;
                 return Stack(
@@ -2065,6 +2052,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               _customTabIndex = 0;
                               _selectedType = SettingType.academy;
                             }),
+                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
                             child: Text(
                               '학원',
                               style: TextStyle(
@@ -2075,7 +2063,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                         ),
-                        SizedBox(width: tabGap),
+                        const SizedBox(width: tabGap),
                         SizedBox(
                           width: tabWidth,
                           child: TextButton(
@@ -2084,6 +2072,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               _customTabIndex = 1;
                               _selectedType = SettingType.teachers;
                             }),
+                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
                             child: Text(
                               '선생님',
                               style: TextStyle(
@@ -2094,7 +2083,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ),
                         ),
-                        SizedBox(width: tabGap),
+                        const SizedBox(width: tabGap),
                         SizedBox(
                           width: tabWidth,
                           child: TextButton(
@@ -2103,6 +2092,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               _customTabIndex = 2;
                               _selectedType = SettingType.general;
                             }),
+                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
                             child: Text(
                               '일반',
                               style: TextStyle(

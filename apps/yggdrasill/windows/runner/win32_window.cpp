@@ -16,6 +16,11 @@ namespace {
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+/// Window attribute for caption color customization (Windows 11+).
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
 /// Registry key for app theme preference.
@@ -284,5 +289,10 @@ void Win32Window::UpdateTheme(HWND const window) {
     BOOL enable_dark_mode = light_mode == 0;
     DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
                           &enable_dark_mode, sizeof(enable_dark_mode));
+
+    // Force custom caption color (#0B1112) regardless of system accent.
+    const COLORREF caption_color = RGB(0x0B, 0x11, 0x12);
+    DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR, &caption_color,
+                          sizeof(caption_color));
   }
 }

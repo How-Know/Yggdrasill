@@ -14,7 +14,6 @@ import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
 import '../../widgets/custom_tab_bar.dart';
-import '../../widgets/app_bar_title.dart';
 import 'package:morphable_shape/morphable_shape.dart';
 import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
@@ -794,11 +793,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
         child: Stack(
           children: [
             Scaffold(
-              backgroundColor: const Color(0xFF1F1F1F),
-              appBar: const AppBarTitle(title: '시간'),
+              backgroundColor: const Color(0xFF0B1112),
               body: Container(
                 constraints: const BoxConstraints.expand(),
-                color: const Color(0xFF1F1F1F), // 프로그램 전체 배경색
+                color: const Color(0xFF0B1112), // 프로그램 전체 배경색
                 child: Column(
                   children: [
                     SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
@@ -982,7 +980,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             width: double.infinity,
             // margin: EdgeInsets.zero, // margin 제거
             decoration: BoxDecoration(
-              color: Color(0xFF18181A),
+              color: const Color(0xFF15171C),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(

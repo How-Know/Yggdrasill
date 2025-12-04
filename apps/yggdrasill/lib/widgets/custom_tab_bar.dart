@@ -28,6 +28,7 @@ class _CustomTabBarState extends State<CustomTabBar> {
         builder: (context, constraints) {
           final leftPadding = (constraints.maxWidth - totalWidth) / 2;
           return Stack(
+            clipBehavior: Clip.none,
             children: [
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 400),
@@ -38,15 +39,16 @@ class _CustomTabBarState extends State<CustomTabBar> {
                   width: tabWidth,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: Colors.blue,
+                    color: const Color(0xFF1B6B63),
                     borderRadius: BorderRadius.circular(3),
                   ),
                 ),
               ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(tabCount, (i) =>
-                  Padding(
+                children: List.generate(tabCount, (i) {
+                  final bool isSelected = widget.selectedIndex == i;
+                  return Padding(
                     padding: EdgeInsets.only(right: i < tabCount - 1 ? tabGap : 0),
                     child: SizedBox(
                       width: tabWidth,
@@ -58,15 +60,15 @@ class _CustomTabBarState extends State<CustomTabBar> {
                         child: Text(
                           widget.tabs[i],
                           style: TextStyle(
-                            color: widget.selectedIndex == i ? Colors.blue : Colors.white70,
+                            color: isSelected ? const Color(0xFF1B6B63) : const Color(0xFFEAF2F2),
                             fontWeight: FontWeight.bold,
-                            fontSize: 18,
+                            fontSize: 20,
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                }),
               ),
             ],
           );

@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
 import '../../models/session_override.dart';
 import '../../models/attendance_record.dart';
 import '../../models/student.dart';
@@ -8,11 +10,14 @@ import '../../models/education_level.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/student_registration_dialog.dart';
 import '../../widgets/group_registration_dialog.dart';
+import '../../widgets/student_filter_dialog.dart';
+import 'attendance_status_screen.dart';
+import 'class_status_screen.dart';
+import '../../widgets/dark_panel_route.dart';
 import 'components/all_students_view.dart';
-
 import 'components/school_view.dart';
 import 'components/date_view.dart';
-import '../../widgets/app_bar_title.dart';
+import 'student_course_detail_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../widgets/custom_tab_bar.dart';
 import 'package:flutter/foundation.dart';
@@ -28,6 +33,10 @@ import '../../models/student_payment_info.dart';
 import 'package:uuid/uuid.dart';
 import 'components/attendance_indicator.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+
+const Color _studentPrimaryTextColor = Color(0xFFEAF2F2);
+const Color _studentMutedTextColor = Color(0xFFD0DDDD);
+const Color _studentAccentColor = Color(0xFF1B6B63);
 
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
@@ -48,6 +57,9 @@ class StudentScreenState extends State<StudentScreen> {
   final FocusNode _searchFocusNode = FocusNode();
   final GlobalKey _studentDropdownKey = GlobalKey();
   OverlayEntry? _studentDropdownEntry;
+  final GlobalKey _toolsDropdownAnchorKey = GlobalKey();
+  OverlayEntry? _toolsDropdownEntry;
+  bool _toolsDropdownOpen = false;
   final Set<GroupInfo> _expandedGroups = {};
   int _customTabIndex = 0;
   Map<String, Set<String>>? _activeFilter;
@@ -112,6 +124,7 @@ class StudentScreenState extends State<StudentScreen> {
   void dispose() {
     _searchFocusNode.dispose();
     _removeStudentSplitDropdown();
+    _removeToolsDropdown();
     _searchController.dispose();
     super.dispose();
   }
@@ -155,6 +168,460 @@ class StudentScreenState extends State<StudentScreen> {
   void _removeStudentSplitDropdown() {
     _studentDropdownEntry?.remove();
     _studentDropdownEntry = null;
+  }
+
+  void _openStudentCourseDetail(StudentWithInfo studentWithInfo) {
+    setState(() {
+      _selectedStudent = studentWithInfo;
+    });
+    Navigator.of(context).push(
+      DarkPanelRoute(
+        child: StudentCourseDetailScreen(studentWithInfo: studentWithInfo),
+      ),
+    );
+  }
+
+  Widget _buildSearchButton({double? maxExpandedWidth}) {
+    const double controlHeight = 48;
+    final double expandedWidth = maxExpandedWidth != null
+        ? math.max(controlHeight, maxExpandedWidth)
+        : 160;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      height: controlHeight,
+      width: _isSearchExpanded ? expandedWidth : controlHeight,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(controlHeight / 2),
+        border: Border.all(color: Colors.transparent),
+      ),
+      child: Row(
+        mainAxisAlignment:
+            _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (_isSearchExpanded) const SizedBox(width: 5),
+          Transform.translate(
+            offset: _isSearchExpanded ? Offset.zero : const Offset(1, 0),
+            child: IconButton(
+              visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+              padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              icon: const Icon(Icons.search, color: Colors.white70, size: 22),
+              onPressed: () {
+                setState(() {
+                  _isSearchExpanded = !_isSearchExpanded;
+                });
+                if (_isSearchExpanded) {
+                  Future.delayed(const Duration(milliseconds: 50), () {
+                    _searchFocusNode.requestFocus();
+                  });
+                } else {
+                  setState(() {
+                    _searchController.clear();
+                    _searchQuery = '';
+                  });
+                  FocusScope.of(context).unfocus();
+                }
+              },
+            ),
+          ),
+          if (_isSearchExpanded) const SizedBox(width: 10),
+          if (_isSearchExpanded)
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+              child: TextField(
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  style: const TextStyle(color: _studentPrimaryTextColor, fontSize: 16.5),
+                  decoration: const InputDecoration(
+                    hintText: '검색',
+                    hintStyle: TextStyle(color: _studentMutedTextColor, fontSize: 16.5),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+            ),
+          if (_isSearchExpanded && _searchQuery.isNotEmpty)
+            IconButton(
+              visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+              padding: const EdgeInsets.only(right: 10),
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              tooltip: '지우기',
+              icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
+              onPressed: () {
+                setState(() {
+                  _searchController.clear();
+                  _searchQuery = '';
+                });
+                FocusScope.of(context).requestFocus(_searchFocusNode);
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterButton() {
+    const double controlHeight = 48;
+    final hasFilter = _activeFilter != null;
+    return GestureDetector(
+      onTap: () async {
+        if (hasFilter) {
+          setState(() {
+            _activeFilter = null;
+          });
+        } else {
+          final result = await showDialog<Map<String, Set<String>>>(
+            context: context,
+            builder: (context) => StudentFilterDialog(
+              initialFilter: _activeFilter,
+            ),
+          );
+          if (result != null) {
+            setState(() {
+              _activeFilter = result;
+            });
+          }
+        }
+      },
+      onLongPress: () async {
+        final result = await showDialog<Map<String, Set<String>>>(
+          context: context,
+          builder: (context) => StudentFilterDialog(
+            initialFilter: _activeFilter,
+          ),
+        );
+        if (result != null) {
+          setState(() => _activeFilter = result);
+        }
+      },
+      child: Container(
+        width: controlHeight,
+        height: controlHeight,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(controlHeight / 2),
+          border: Border.all(color: Colors.transparent),
+        ),
+        child: Stack(
+          children: [
+            Center(
+              child: Icon(
+                hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
+                color: hasFilter ? _studentPrimaryTextColor : _studentMutedTextColor,
+                size: 24,
+              ),
+            ),
+            if (hasFilter)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  width: 9,
+                  height: 9,
+                  decoration: const BoxDecoration(
+                    color: _studentPrimaryTextColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolsButton() {
+    const double controlHeight = 48;
+    return GestureDetector(
+      key: _toolsDropdownAnchorKey,
+      onTap: () {
+        if (_toolsDropdownOpen) {
+          _removeToolsDropdown();
+        } else {
+          _showToolsDropdown();
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: controlHeight,
+        height: controlHeight,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(controlHeight / 2),
+        ),
+          child: Icon(
+            Icons.menu,
+            color: _toolsDropdownOpen ? _studentPrimaryTextColor.withOpacity(0.8) : _studentPrimaryTextColor,
+          ),
+      ),
+    );
+  }
+
+  void _showToolsDropdown() {
+    final overlay = Overlay.of(context);
+    if (overlay == null) return;
+    final renderBox = _toolsDropdownAnchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final overlayBox = overlay.context.findRenderObject() as RenderBox;
+    final Offset origin = renderBox.localToGlobal(Offset.zero);
+    final Size buttonSize = renderBox.size;
+    const double menuWidth = 220;
+    const double menuHeight = 150;
+    double left = origin.dx + buttonSize.width - menuWidth;
+    double top = origin.dy;
+    left = left.clamp(8.0, overlayBox.size.width - menuWidth - 8);
+    top = top.clamp(8.0, overlayBox.size.height - menuHeight - 8);
+
+    _toolsDropdownEntry = OverlayEntry(
+      builder: (context) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _removeToolsDropdown,
+                child: const SizedBox.shrink(),
+              ),
+            ),
+            Positioned(
+              left: left,
+              top: top,
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.0, end: 1.0),
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, child) {
+                  return Transform.translate(
+                    offset: Offset(0, (1 - value) * -12),
+                    child: Opacity(
+                      opacity: value,
+                      child: child,
+                    ),
+                  );
+                },
+                child: _buildToolsDropdownPanel(),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    overlay.insert(_toolsDropdownEntry!);
+    setState(() => _toolsDropdownOpen = true);
+  }
+
+  void _removeToolsDropdown() {
+    _toolsDropdownEntry?.remove();
+    _toolsDropdownEntry = null;
+    if (_toolsDropdownOpen) {
+      setState(() => _toolsDropdownOpen = false);
+    }
+  }
+
+  Widget _buildToolsDropdownPanel() {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 220,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF3A3F44)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 24,
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildToolsMenuItem(
+              icon: Icons.dashboard_outlined,
+              label: '수강 현황',
+              onTap: () {
+                _removeToolsDropdown();
+                _openClassStatus();
+              },
+            ),
+            const Divider(height: 16, color: Color(0xFF3D4348)),
+            _buildToolsMenuItem(
+              icon: Icons.check_circle_outline,
+              label: '출석 현황',
+              onTap: () {
+                _removeToolsDropdown();
+                _openAttendanceStatus();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolsMenuItem({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
+        child: Row(
+          children: [
+            Icon(icon, color: _studentPrimaryTextColor, size: 22),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: _studentPrimaryTextColor,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openClassStatus() {
+    Navigator.of(context).push(
+      DarkPanelRoute(
+        child: const ClassStatusScreen(),
+      ),
+    );
+  }
+
+  void _openAttendanceStatus() {
+    Navigator.of(context).push(
+      DarkPanelRoute(
+        child: const AttendanceStatusScreen(),
+      ),
+    );
+  }
+
+  Widget _buildStudentAddSplitButton() {
+    const double controlHeight = 48;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 120,
+            height: controlHeight,
+            child: Material(
+              color: _studentAccentColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(32),
+                bottomLeft: Radius.circular(32),
+                topRight: Radius.circular(6),
+                bottomRight: Radius.circular(6),
+              ),
+              child: InkWell(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(32),
+                  bottomLeft: Radius.circular(32),
+                  topRight: Radius.circular(6),
+                  bottomRight: Radius.circular(6),
+                ),
+                onTap: () {
+                  if (_studentAddSelection == '학생') {
+                    showStudentRegistrationDialog();
+                  } else {
+                    showClassRegistrationDialog();
+                  }
+                },
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.add, color: _studentPrimaryTextColor, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      '추가',
+                      style: const TextStyle(
+                        color: _studentPrimaryTextColor,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Container(
+            height: controlHeight,
+            width: 4,
+            color: Colors.transparent,
+            child: Center(
+              child: Container(
+                width: 2,
+                height: 30,
+                color: Colors.white.withOpacity(0.1),
+              ),
+            ),
+          ),
+          GestureDetector(
+            key: _studentDropdownKey,
+            onTap: () {
+              setState(() {
+                _studentDropdownOpen = !_studentDropdownOpen;
+              });
+              if (_studentDropdownOpen) {
+                _showStudentSplitDropdown();
+              } else {
+                _removeStudentSplitDropdown();
+              }
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              width: controlHeight,
+              height: controlHeight,
+              decoration: ShapeDecoration(
+                color: _studentAccentColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: _studentDropdownOpen
+                      ? BorderRadius.circular(50)
+                      : const BorderRadius.only(
+                          topLeft: Radius.circular(6),
+                          bottomLeft: Radius.circular(6),
+                          topRight: Radius.circular(32),
+                          bottomRight: Radius.circular(32),
+                        ),
+                ),
+              ),
+              child: Center(
+                child: AnimatedRotation(
+                  turns: _studentDropdownOpen ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: const Icon(Icons.keyboard_arrow_down,
+                      color: Colors.white, size: 26),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // 시간표 드롭다운과 동일한 스타일의 항목을 생성 (호버 효과 포함)
@@ -220,6 +687,7 @@ class StudentScreenState extends State<StudentScreen> {
               return AllStudentsView(
                 students: filteredStudents,
                 onShowDetails: (studentWithInfo) {},
+                onRequestCourseView: _openStudentCourseDetail,
                 groups: groups,
                 expandedGroups: _expandedGroups,
                 onGroupAdded: (groupInfo) {
@@ -437,230 +905,78 @@ class StudentScreenState extends State<StudentScreen> {
   @override
   Widget build(BuildContext context) {
         return Scaffold(
-          backgroundColor: const Color(0xFF1F1F1F),
-      appBar: const AppBarTitle(title: '학생'),
+          backgroundColor: const Color(0xFF0B1112),
           body: Column(
             children: [
               const SizedBox(height: 0),
               SizedBox(height: 5),
-          CustomTabBar(
-            selectedIndex: _customTabIndex,
-            tabs: const ['학생', '수강', '성향'],
-            onTabSelected: (i) {
-              setState(() {
-                _customTabIndex = i;
-              });
-            },
-          ),
-          const SizedBox(height: 1),
-          if (_customTabIndex == 0)
-              Row(
-                children: [
-                  const SizedBox(width: 24),
-                  // 좌측: 추가 스플릿 버튼 (고정 너비, 왼쪽 정렬)
-                  SizedBox(
-                    width: 160, // 본 버튼 112 + 구분선 4 + 드롭다운 44
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Row(children: [
-                        // 좌: 본 버튼 (추가)
-                        SizedBox(
-                          width: 112,
-                          height: 44,
-                          child: Material(
-                            color: const Color(0xFF1976D2),
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(32),
-                              bottomLeft: Radius.circular(32),
-                              topRight: Radius.circular(6),
-                              bottomRight: Radius.circular(6),
-                            ),
-                            child: InkWell(
-                              borderRadius: const BorderRadius.only(
-                                topLeft: Radius.circular(32),
-                                bottomLeft: Radius.circular(32),
-                                topRight: Radius.circular(6),
-                                bottomRight: Radius.circular(6),
-                              ),
-                              onTap: () {
-                                if (_studentAddSelection == '학생') {
-                                  showStudentRegistrationDialog();
-                                } else {
-                                  showClassRegistrationDialog();
-                                }
-                              },
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.add, color: Colors.white, size: 20),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '추가',
-                                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        // 구분선
-                        Container(
-                          height: 44,
-                          width: 4,
-                          color: Colors.transparent,
-                          child: Center(
-                            child: Container(
-                              width: 2,
-                              height: 28,
-                              color: Colors.white.withOpacity(0.1),
-                            ),
-                          ),
-                        ),
-                        // 드롭다운 버튼
-                        GestureDetector(
-                          key: _studentDropdownKey,
-                          onTap: () {
-                            setState(() {
-                              _studentDropdownOpen = !_studentDropdownOpen;
-                            });
-                            if (_studentDropdownOpen) {
-                              _showStudentSplitDropdown();
-                            } else {
-                              _removeStudentSplitDropdown();
-                            }
-                          },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 250),
-                            width: 44,
-                            height: 44,
-                            decoration: ShapeDecoration(
-                              color: const Color(0xFF1976D2),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: _studentDropdownOpen
-                                  ? BorderRadius.circular(50)
-                                  : const BorderRadius.only(
-                                      topLeft: Radius.circular(6),
-                                      bottomLeft: Radius.circular(6),
-                                      topRight: Radius.circular(32),
-                                      bottomRight: Radius.circular(32),
-                                    ),
-                              ),
-                            ),
-                            child: Center(
-                              child: AnimatedRotation(
-                                turns: _studentDropdownOpen ? 0.5 : 0.0,
-                                duration: const Duration(milliseconds: 250),
-                                curve: Curves.easeInOut,
-                                child: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 26),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ]),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              children: [
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 200,
+                      child: _customTabIndex == 0
+                          ? Align(
+                              alignment: Alignment.centerLeft,
+                              child: _buildStudentAddSplitButton(),
+                            )
+                          : const SizedBox.shrink(),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  // 우측: 검색 (아이콘 → 확장 알약형 입력)
-                  SizedBox(
-                    width: 151,
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
-                        height: 44,
-                        width: _isSearchExpanded ? 151 : 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2A2A2A),
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: Colors.white.withOpacity(0.2)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Transform.translate(
-                              offset: _isSearchExpanded ? Offset.zero : const Offset(1, 0),
-                              child: IconButton(
-                                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
-                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                icon: const Icon(Icons.search, color: Colors.white70, size: 20),
-                                onPressed: () {
-                                  setState(() {
-                                    _isSearchExpanded = !_isSearchExpanded;
-                                  });
-                                  if (_isSearchExpanded) {
-                                    Future.delayed(const Duration(milliseconds: 50), () {
-                                      _searchFocusNode.requestFocus();
-                                    });
-                                  } else {
-                                    setState(() {
-                                      _searchController.clear();
-                                      _searchQuery = '';
-                                    });
-                                    FocusScope.of(context).unfocus();
-                                  }
-                                },
-                              ),
-                            ),
-                            if (_isSearchExpanded) const SizedBox(width: 10),
-                            if (_isSearchExpanded)
-                              Expanded(
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: TextField(
-                                    controller: _searchController,
-                                    focusNode: _searchFocusNode,
-                                    style: const TextStyle(color: Colors.white, fontSize: 16.5),
-                                    decoration: const InputDecoration(
-                                      hintText: '검색',
-                                      hintStyle: TextStyle(color: Colors.white54, fontSize: 16.5),
-                                      border: InputBorder.none,
-                                      isDense: true,
-                                      contentPadding: EdgeInsets.zero,
-                                    ),
-                                    onChanged: (value) {
-                                      setState(() { _searchQuery = value; });
-                                    },
-                                  ),
-                                ),
-                              ),
-                            if (_isSearchExpanded && _searchQuery.isNotEmpty)
-                              IconButton(
-                                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                padding: const EdgeInsets.only(right: 10),
-                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                tooltip: '지우기',
-                                icon: const Icon(Icons.clear, color: Colors.white70, size: 16),
-                                onPressed: () {
-                                  setState(() {
-                                    _searchController.clear();
-                                    _searchQuery = '';
-                                  });
-                                  FocusScope.of(context).requestFocus(_searchFocusNode);
-                                },
-                              ),
-                          ],
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: CustomTabBar(
+                          selectedIndex: _customTabIndex,
+                          tabs: const ['학생', '성향'],
+                          onTabSelected: (i) {
+                            setState(() {
+                              _customTabIndex = i;
+                            });
+                          },
                         ),
                       ),
                     ),
-                  ),
-                  const Spacer(),
-                  // 우측: 그룹 버튼 제거 (스플릿 버튼 드롭다운으로 통합)
-                  const SizedBox(width: 24),
-                ],
-              ),
+                SizedBox(
+                  width: 260,
+                  child: _customTabIndex == 0
+                      ? LayoutBuilder(
+                          builder: (context, constraints) {
+                            const double controlHeight = 48;
+                            const double spacing = 12;
+                            final double reservedWidth = (controlHeight * 2) + (spacing * 2);
+                            final double availableForSearch =
+                                (constraints.maxWidth - reservedWidth).clamp(controlHeight, constraints.maxWidth);
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                _buildToolsButton(),
+                                const SizedBox(width: spacing),
+                                _buildFilterButton(),
+                                const SizedBox(width: spacing),
+                                _buildSearchButton(maxExpandedWidth: availableForSearch),
+                              ],
+                            );
+                          },
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 1),
           if (_customTabIndex == 0)
             const SizedBox(height: 20),
           Expanded(
             child: Builder(
               builder: (context) {
                 if (_customTabIndex == 0) {
-                  // 학생
                   return _buildAllStudentsView();
-                } else if (_customTabIndex == 1) {
-                  // 수강
-                  return _buildGroupView();
                 } else {
                   // 성향 → 웹 설문 임베드
                   return Container(
@@ -692,6 +1008,7 @@ class StudentScreenState extends State<StudentScreen> {
             return AllStudentsView(
               students: filteredStudents,
               onShowDetails: (studentWithInfo) {},
+              onRequestCourseView: _openStudentCourseDetail,
               groups: groups,
               expandedGroups: _expandedGroups,
               onGroupAdded: (groupInfo) {
@@ -3092,6 +3409,7 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
 }
+
 
 class _AttendanceInfo {
   final DateTime? arrival;

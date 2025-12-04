@@ -1054,31 +1054,42 @@ class DataManager {
   }
 
   void deleteGroup(GroupInfo groupInfo) {
-    if (_groupsById.containsKey(groupInfo.id)) {
-      _groupsById.remove(groupInfo.id);
-      _groups = _groupsById.values.where((g) => g != null).toList();
-      
-      // Remove group from students
-      for (var i = 0; i < _studentsWithInfo.length; i++) {
-        if (_studentsWithInfo[i].student.groupInfo?.id == groupInfo.id) {
-          _studentsWithInfo.removeAt(i);
-          i--;
-        }
-      }
-      
-      _notifyListeners();
-      unawaited(_persistGroupDeletion(groupInfo.id));
+    if (!_groupsById.containsKey(groupInfo.id)) {
+      return;
     }
+
+    _groupsById.remove(groupInfo.id);
+    _groups = _groupsById.values.where((g) => g != null).toList();
+
+    final List<StudentWithInfo> affectedStudents = [];
+    for (var i = 0; i < _studentsWithInfo.length; i++) {
+      final studentWithInfo = _studentsWithInfo[i];
+      final String? currentGroupId = studentWithInfo.student.groupInfo?.id ?? studentWithInfo.basicInfo.groupId;
+      if (currentGroupId == groupInfo.id) {
+        final clearedStudent = studentWithInfo.student.copyWith(clearGroupInfo: true, clearGroupId: true);
+        final clearedBasic = studentWithInfo.basicInfo.copyWith(clearGroupId: true);
+        final updated = StudentWithInfo(student: clearedStudent, basicInfo: clearedBasic);
+        _studentsWithInfo[i] = updated;
+        affectedStudents.add(updated);
+      }
+    }
+
+    _notifyListeners();
+    unawaited(_persistGroupDeletion(groupInfo.id, affectedStudents));
   }
 
-  Future<void> _persistGroupDeletion(String groupId) async {
+  Future<void> _persistGroupDeletion(String groupId, List<StudentWithInfo> clearedStudents) async {
     final List<Future<void>> futures = [];
-    final bool shouldSyncSupabase = TagPresetService.preferSupabaseRead || TagPresetService.dualWrite;
 
-    if (shouldSyncSupabase) {
-      futures.add(_deleteGroupFromSupabase(groupId));
-      if (TagPresetService.preferSupabaseRead && !RuntimeFlags.serverOnly) {
-        futures.add(AcademyDbService.instance.deleteGroup(groupId));
+    futures.add(_deleteGroupFromSupabase(groupId));
+    if (clearedStudents.isNotEmpty) {
+      futures.add(_clearGroupAssignmentsInSupabase(clearedStudents));
+    }
+
+    if (!RuntimeFlags.serverOnly) {
+      futures.add(AcademyDbService.instance.deleteGroup(groupId));
+      if (clearedStudents.isNotEmpty) {
+        futures.add(_clearGroupAssignmentsInLocalDb(clearedStudents));
       }
     }
 
@@ -1089,6 +1100,42 @@ class DataManager {
       await Future.wait(futures);
     } catch (e, st) {
       print('[ERROR][groups delete] 삭제 영속화 실패: $e\n$st');
+    }
+  }
+
+  Future<void> _clearGroupAssignmentsInSupabase(List<StudentWithInfo> students) async {
+    if (students.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = students.map((s) {
+        return {
+          'student_id': s.student.id,
+          'academy_id': academyId,
+          'phone_number': s.basicInfo.phoneNumber,
+          'parent_phone_number': s.basicInfo.parentPhoneNumber,
+          'group_id': null,
+          'memo': s.basicInfo.memo,
+        };
+      }).toList();
+      await supa.from('student_basic_info').upsert(rows, onConflict: 'student_id');
+      print('[GROUPS][students] Cleared group assignments in Supabase: ${students.length}');
+    } catch (e, st) {
+      print('[SUPA][students clear group] $e\n$st');
+      rethrow;
+    }
+  }
+
+  Future<void> _clearGroupAssignmentsInLocalDb(List<StudentWithInfo> students) async {
+    if (students.isEmpty || RuntimeFlags.serverOnly) return;
+    for (final s in students) {
+      await AcademyDbService.instance.updateStudentBasicInfo(s.student.id, {
+        'student_id': s.student.id,
+        'phone_number': s.basicInfo.phoneNumber,
+        'parent_phone_number': s.basicInfo.parentPhoneNumber,
+        'group_id': null,
+        'memo': s.basicInfo.memo,
+      });
     }
   }
 

@@ -263,10 +263,12 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
     final cardCoreInner = Card(
-      color: const Color(0xFF1F1F1F),
-      margin: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 4.0),
+      color: const Color(0xFF15171C),
+      margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
+      elevation: 6,
+      shadowColor: Colors.black.withOpacity(0.4),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8.0),
+        borderRadius: BorderRadius.circular(10.0),
       ),
       child: AnimatedContainer(
           width: widget.showCheckbox ? 135 : 100,
@@ -298,7 +300,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                     student.name,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      color: Colors.white,
+                      color: Color(0xFFEAF2F2),
                       fontSize: 16,
                       fontWeight: FontWeight.w500,
                     ),
