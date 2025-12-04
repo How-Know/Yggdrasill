@@ -45,7 +45,7 @@ if([string]::IsNullOrWhiteSpace($pfxPath) -or -not (Test-Path $pfxPath)){
   Write-Host '[WARN] certificate_path를 찾지 못했거나 파일이 없습니다. .cer 내보내기를 생략합니다.' -ForegroundColor Yellow
 } else {
   try{
-    $cerOut = Join-Path $dist 'HowKnow_CodeSign.cer'
+    $cerOut = Join-Path $dist 'howknow_codesign_new.cer'
     $pfxCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxPath, $pfxPass)
     $bytes = $pfxCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     [System.IO.File]::WriteAllBytes($cerOut, $bytes)
@@ -71,7 +71,7 @@ Set-Content $howto @(
   '.\\Install-Yggdrasill.ps1 -AlsoImportToRoot'
 ) -Encoding UTF8
 
-if(Test-Path (Join-Path $dist 'HowKnow_CodeSign.cer')){ $bundleFiles += (Join-Path $dist 'HowKnow_CodeSign.cer') }
+if(Test-Path (Join-Path $dist 'howknow_codesign_new.cer')){ $bundleFiles += (Join-Path $dist 'howknow_codesign_new.cer') }
 if(Test-Path (Join-Path $dist 'Yggdrasill.appinstaller')){ $bundleFiles += (Join-Path $dist 'Yggdrasill.appinstaller') }
 if(Test-Path (Join-Path $dist 'Install-Yggdrasill.ps1')){ $bundleFiles += (Join-Path $dist 'Install-Yggdrasill.ps1') }
 if(Test-Path $howto){ $bundleFiles += $howto }
