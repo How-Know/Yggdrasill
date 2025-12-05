@@ -594,60 +594,150 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Widget _buildHeaderSearchField() {
     const double height = 48;
     const double baseWidth = 280;
-    const double width = baseWidth * 0.8;
+    const double width = baseWidth * 0.64;
     return SizedBox(
       width: width,
       height: height,
-      child: TextField(
-        controller: _headerSearchController,
-        onChanged: (value) {
-          setState(() => _headerSearchQuery = value);
-          _contentViewKey.currentState?.updateSearchQuery(value);
-        },
-        style: const TextStyle(color: Colors.white, fontSize: 16),
-        decoration: InputDecoration(
-          filled: true,
-          fillColor: const Color(0xFF2A2A2A),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-          hintText: '검색',
-          hintStyle: const TextStyle(color: Colors.white54),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(24),
-            borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(24),
-            borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(24),
-            borderSide: const BorderSide(color: Color(0xFF1B6B63)),
-          ),
-          prefixIcon: const Padding(
-            padding: EdgeInsets.only(left: 10, right: 4),
-            child: Icon(Icons.search, color: Colors.white70, size: 20),
-          ),
-          prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-          suffixIcon: _headerSearchQuery.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
-                  onPressed: () {
-                    _headerSearchController.clear();
-                    setState(() => _headerSearchQuery = '');
-                    _contentViewKey.currentState?.updateSearchQuery('');
-                  },
-                )
-              : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(height / 2),
+          border: Border.all(color: Colors.transparent),
+        ),
+        padding: const EdgeInsets.only(left: 12, right: 4),
+        child: Row(
+          children: [
+            const Icon(Icons.search, color: Colors.white70, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _headerSearchController,
+                onChanged: (value) {
+                  setState(() => _headerSearchQuery = value);
+                  _contentViewKey.currentState?.updateSearchQuery(value);
+                },
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                  hintText: '검색',
+                  hintStyle: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ),
+            if (_headerSearchQuery.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                splashRadius: 18,
+                padding: EdgeInsets.zero,
+                onPressed: () {
+                  _headerSearchController.clear();
+                  setState(() => _headerSearchQuery = '');
+                  _contentViewKey.currentState?.updateSearchQuery('');
+                },
+              ),
+          ],
         ),
       ),
     );
   }
 
+  Widget _buildHeaderActionRow() {
+    const double spacing = 12;
+    const double selectContainerWidth = 64.4 + 8 + 48; // expanded width (모두+취소)
+    return Row(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildHeaderFilterButton(),
+            const SizedBox(width: spacing),
+            SizedBox(
+              width: selectContainerWidth,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _HeaderSelectButton(
+                  isSelectMode: _isSelectMode,
+                  onModeChanged: (selecting) {
+                    setState(() {
+                      _isSelectMode = selecting;
+                      if (!selecting) {
+                        _selectedStudentIds.clear();
+                      }
+                    });
+                  },
+                  onSelectAll: _handleSelectAllStudents,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const Spacer(),
+        _buildHeaderSearchField(),
+      ],
+    );
+  }
+
+  Widget _buildHeaderFilterButton() {
+    const double controlHeight = 48;
+    final bool hasFilter = _activeFilter != null;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(controlHeight / 2),
+        onTap: _activeFilter == null ? _showFilterDialog : _clearFilter,
+        child: Container(
+          width: controlHeight,
+          height: controlHeight,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(controlHeight / 2),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Stack(
+            children: [
+              Center(
+                child: Icon(
+                  hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
+                  color: hasFilter ? const Color(0xFFEAF2F2) : Colors.white70,
+                  size: 22,
+                ),
+              ),
+              if (hasFilter)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFEAF2F2),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _handleSelectAllStudents() {
+    if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
+      final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
+      setState(() {
+        _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
+      });
+    }
+  }
+
   void _resetSearch() {
-    _resetSearch();
     if (_headerSearchQuery.isNotEmpty) {
       setState(() => _headerSearchQuery = '');
       _headerSearchController.clear();
+      _contentViewKey.currentState?.updateSearchQuery('');
     }
   }
 
@@ -674,7 +764,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
     final dayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: dayIndex));
     // 검색창 리셋
-                    _resetSearch();
+    _resetSearch();
     setState(() {
       _selectedDayIndex = dayIndex;
       _selectedCellDayIndex = dayIndex; // 내용 패널이 요일 기준으로 보이도록
@@ -1067,12 +1157,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               ),
                             ),
                           ),
-                          SizedBox(
-                            width: 260,
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: _buildHeaderSearchField(),
-                            ),
+                          Expanded(
+                            child: _buildHeaderActionRow(),
                           ),
                         ],
                       ),
@@ -1257,23 +1343,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
                           onDaySelected: _onDayHeaderSelected,
                           isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-                          onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
-                          isFilterActive: _activeFilter != null,
-                          onSelectModeChanged: (selecting) {
-                            setState(() {
-                              _isSelectMode = selecting;
-                              if (!selecting) _selectedStudentIds.clear();
-                            });
-                          },
-                          isSelectMode: _isSelectMode,
-                          onSelectAllStudents: () {
-                            if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
-                              final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
-                              setState(() {
-                                _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
-                              });
-                            }
-                          },
                         ),
                       ),
                     ],
@@ -1647,16 +1716,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
           selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
           onDaySelected: _onDayHeaderSelected,
           isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-          onFilterPressed: _activeFilter == null ? _showFilterDialog : _clearFilter,
-          isFilterActive: _activeFilter != null,
-          onSelectModeChanged: (selecting) {
-            setState(() {
-              _isSelectMode = selecting;
-              if (!selecting) _selectedStudentIds.clear();
-              print('[DEBUG][TimetableScreen] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
-            });
-          },
-          isSelectMode: _isSelectMode,
         ),
         // 등록 안내문구/카운트
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
@@ -2054,6 +2113,90 @@ class _TimetableScreenState extends State<TimetableScreen> {
         });
       }
     });
+  }
+}
+
+class _HeaderSelectButton extends StatefulWidget {
+  const _HeaderSelectButton({
+    Key? key,
+    required this.isSelectMode,
+    this.onModeChanged,
+    this.onSelectAll,
+  }) : super(key: key);
+
+  final bool isSelectMode;
+  final ValueChanged<bool>? onModeChanged;
+  final VoidCallback? onSelectAll;
+
+  @override
+  State<_HeaderSelectButton> createState() => _HeaderSelectButtonState();
+}
+
+class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
+  static const double _height = 48;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: widget.isSelectMode ? _buildExpanded() : _buildSelectButton(),
+    );
+  }
+
+  Widget _buildSelectButton() {
+    return _pillButton(
+      key: const ValueKey('select'),
+      width: 78,
+      child: const Text(
+        '선택',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+      ),
+      onTap: () => widget.onModeChanged?.call(true),
+    );
+  }
+
+  Widget _buildExpanded() {
+    return Row(
+      key: const ValueKey('expanded'),
+      children: [
+        _pillButton(
+          width: 64.4,
+          child: const Text(
+            '모두',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+          onTap: widget.onSelectAll ?? () {},
+        ),
+        const SizedBox(width: 8),
+        _pillButton(
+          width: 48,
+          child: const Icon(Icons.close, color: Colors.white, size: 20),
+          onTap: () => widget.onModeChanged?.call(false),
+        ),
+      ],
+    );
+  }
+
+  Widget _pillButton({
+    required Widget child,
+    required VoidCallback onTap,
+    required double width,
+    Key? key,
+  }) {
+    return SizedBox(
+      key: key,
+      height: _height,
+      width: width,
+      child: Material(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(_height / 2),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(_height / 2),
+          onTap: onTap,
+          child: Center(child: child),
+        ),
+      ),
+    );
   }
 }
 

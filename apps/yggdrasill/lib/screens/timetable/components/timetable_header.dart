@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../../models/group_info.dart';
-import '../../../models/student.dart';
-import '../../../widgets/student_registration_dialog.dart';
-import '../timetable_screen.dart';  // TimetableViewType enum을 가져오기 위한 import
 
 class TimetableHeader extends StatefulWidget {
   final Function(DateTime) onDateChanged;
@@ -11,11 +7,6 @@ class TimetableHeader extends StatefulWidget {
   final int? selectedDayIndex;
   final Function(int) onDaySelected;
   final bool isRegistrationMode;
-  final VoidCallback? onFilterPressed; // 추가
-  final bool isFilterActive; // 추가
-  final void Function(bool selecting)? onSelectModeChanged;
-  final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
-  final VoidCallback? onSelectAllStudents; // 추가: 모두 선택 콜백
 
   const TimetableHeader({
     Key? key,
@@ -24,11 +15,6 @@ class TimetableHeader extends StatefulWidget {
     this.selectedDayIndex,
     required this.onDaySelected,
     this.isRegistrationMode = false,
-    this.onFilterPressed, // 추가
-    this.isFilterActive = false, // 추가
-    this.onSelectModeChanged,
-    this.isSelectMode = false, // 추가
-    this.onSelectAllStudents, // 추가
   }) : super(key: key);
 
   @override
@@ -161,88 +147,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 ],
               ),
             ),
-            Expanded(
-              child: Center( // Align 대신 Center 사용으로 완전 중앙 고정
-                child: SizedBox(
-                  width: 220, // 기존 440에서 220으로 축소
-                  height: 35, // 선택 버튼과 동일 높이
-                  child: SegmentedButton<int>(
-                    segments: const [
-                      ButtonSegment(value: 0, label: Text('메인')),
-                      ButtonSegment(value: 1, label: Text('특강')),
-                    ],
-                    selected: {_selectedSegment},
-                    onSelectionChanged: (Set<int> newSelection) {
-                      setState(() {
-                        _selectedSegment = newSelection.first;
-                      });
-                    },
-                    style: ButtonStyle(
-                      backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                      foregroundColor: MaterialStateProperty.resolveWith<Color>(
-                        (Set<MaterialState> states) {
-                          if (states.contains(MaterialState.selected)) {
-                            return Colors.white;
-                          }
-                          return Colors.white70;
-                        },
-                      ),
-                      textStyle: MaterialStateProperty.all(
-                        const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // 오른쪽 영역 고정 크기로 세그먼트 버튼 중앙 정렬 유지
-            SizedBox(
-              width: 230, // 선택 버튼 + filter 버튼을 위한 고정 크기
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  // 선택 버튼 (filter 버튼 왼쪽)
-                  _SelectButtonAnimated(
-                    onSelectModeChanged: widget.onSelectModeChanged,
-                    isSelectMode: widget.isSelectMode,
-                    onSelectAllStudents: widget.onSelectAllStudents,
-                  ),
-                  SizedBox(width: 12),
-                  // filter 버튼 (오른쪽 정렬, 세그먼트 버튼 스타일)
-                  SizedBox(
-                    height: 40,
-                    width: 104, // 기존 80~90에서 30% 증가(80*1.3=104)
-                    child: OutlinedButton(
-                      style: ButtonStyle(
-                        backgroundColor: MaterialStateProperty.all(Colors.transparent),
-                        shape: MaterialStateProperty.all(RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(24),
-                        )),
-                        side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
-                        padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
-                        foregroundColor: MaterialStateProperty.all(Colors.white70),
-                        textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                        overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
-                      ),
-                      onPressed: widget.onFilterPressed,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.max,
-                        children: [
-                          const Icon(Icons.filter_alt_outlined, size: 20),
-                          const SizedBox(width: 6),
-                          const Text('filter'),
-                          if (widget.isFilterActive) ...[
-                            const SizedBox(width: 6),
-                            Icon(Icons.close, size: 18, color: Colors.white70),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            const Spacer(),
           ],
         ),
         const SizedBox(height: 20), // 세그먼트 버튼과 요일 row 사이 여백 추가
@@ -321,145 +226,3 @@ class _TimetableHeaderState extends State<TimetableHeader> {
     );
   }
 }
-
-// 선택 버튼 애니메이션 위젯
-class _SelectButtonAnimated extends StatefulWidget {
-  final void Function(bool selecting)? onSelectModeChanged;
-  final bool isSelectMode; // 추가: 선택모드 상태 명시적으로 전달
-  final VoidCallback? onSelectAllStudents; // 추가: 모두 선택 콜백
-  const _SelectButtonAnimated({this.onSelectModeChanged, this.isSelectMode = false, this.onSelectAllStudents});
-  @override
-  State<_SelectButtonAnimated> createState() => _SelectButtonAnimatedState();
-}
-
-class _SelectButtonAnimatedState extends State<_SelectButtonAnimated> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _splitAnim;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 280),
-    );
-    _splitAnim = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
-    if (widget.isSelectMode) {
-      _controller.value = 1.0;
-    } else {
-      _controller.value = 0.0;
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _SelectButtonAnimated oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isSelectMode != oldWidget.isSelectMode) {
-      if (widget.isSelectMode) {
-        _controller.forward();
-      } else {
-        _controller.reverse();
-      }
-    }
-  }
-
-  void _onSelectPressed() {
-    widget.onSelectModeChanged?.call(true);
-  }
-
-  void _onCancelPressed() {
-    widget.onSelectModeChanged?.call(false);
-  }
-
-  void _onSelectAllPressed() {
-    // 모두 선택 콜백 호출
-    widget.onSelectAllStudents?.call();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final buttonStyle = ButtonStyle(
-      backgroundColor: MaterialStateProperty.all(Colors.transparent),
-      shape: MaterialStateProperty.all(RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(24),
-      )),
-      side: MaterialStateProperty.all(BorderSide(color: Colors.grey.shade600, width: 1.2)),
-      padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 0)),
-      foregroundColor: MaterialStateProperty.all(Colors.white70),
-      textStyle: MaterialStateProperty.all(const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-      overlayColor: MaterialStateProperty.all(Colors.white.withOpacity(0.07)),
-    );
-    return AnimatedBuilder(
-      animation: _splitAnim,
-      builder: (context, child) {
-        final split = _splitAnim.value;
-        if (!widget.isSelectMode && split == 0) {
-          // 선택 버튼
-          return SizedBox(
-            height: 40,
-            width: 104,
-            child: OutlinedButton(
-              style: buttonStyle,
-              onPressed: _onSelectPressed,
-              child: const Center(
-                child: Text('선택'),
-              ),
-            ),
-          );
-        } else {
-          // 분리된 버튼 (모두, 취소)
-          return Row(
-            children: [
-              SizedBox(
-                height: 40,
-                width: 60 + 44 * (1 - split), // 애니메이션으로 자연스럽게 넓이 변화
-                child: OutlinedButton(
-                  style: buttonStyle.copyWith(
-                    shape: MaterialStateProperty.all(RoundedRectangleBorder(
-                      borderRadius: BorderRadius.horizontal(
-                        left: const Radius.circular(24),
-                        right: Radius.circular(24 * (1 - split) + 24 * split),
-                      ),
-                    )),
-                  ),
-                  onPressed: _onSelectAllPressed,
-                  child: const Center(
-                    child: Text('모두'),
-                  ),
-                ),
-              ),
-              SizedBox(width: 4 * split),
-              Opacity(
-                opacity: split,
-                child: SizedBox(
-                  height: 40,
-                  width: 44 * split,
-                  child: OutlinedButton(
-                    style: buttonStyle.copyWith(
-                      shape: MaterialStateProperty.all(RoundedRectangleBorder(
-                        borderRadius: BorderRadius.horizontal(
-                          left: Radius.circular(24 * split),
-                          right: const Radius.circular(24),
-                        ),
-                      )),
-                    ),
-                    onPressed: _onCancelPressed,
-                    child: const Center(
-                      child: Icon(Icons.close, color: Colors.white, size: 20),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        }
-      },
-    );
-  }
-} 

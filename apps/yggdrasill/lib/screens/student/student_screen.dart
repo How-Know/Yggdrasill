@@ -342,31 +342,37 @@ class StudentScreenState extends State<StudentScreen> {
 
   Widget _buildToolsButton() {
     const double controlHeight = 48;
-    return GestureDetector(
-      key: _toolsDropdownAnchorKey,
-      onTap: () {
-        if (_toolsDropdownOpen) {
-          _removeToolsDropdown();
-        } else {
-          _showToolsDropdown();
-        }
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: controlHeight,
-        height: controlHeight,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(controlHeight / 2),
-        ),
-          child: Icon(
-            Icons.menu,
-            color: _toolsDropdownOpen ? _studentPrimaryTextColor.withOpacity(0.8) : _studentPrimaryTextColor,
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: _toolsDropdownOpen ? 0 : 1,
+      child: IgnorePointer(
+        ignoring: _toolsDropdownOpen,
+        child: GestureDetector(
+          key: _toolsDropdownAnchorKey,
+          onTap: () {
+            if (_toolsDropdownOpen) {
+              _removeToolsDropdown();
+            } else {
+              _showToolsDropdown();
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: controlHeight,
+            height: controlHeight,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(controlHeight / 2),
+            ),
+            child: Icon(
+              Icons.menu,
+              color: _toolsDropdownOpen ? _studentPrimaryTextColor.withOpacity(0.8) : _studentPrimaryTextColor,
+            ),
           ),
+        ),
       ),
     );
   }
-
   void _showToolsDropdown() {
     final overlay = Overlay.of(context);
     if (overlay == null) return;
@@ -378,7 +384,8 @@ class StudentScreenState extends State<StudentScreen> {
     const double menuWidth = 220;
     const double menuHeight = 150;
     double left = origin.dx + buttonSize.width - menuWidth;
-    double top = origin.dy;
+    const double dropdownTopOffset = 6;
+    double top = origin.dy - dropdownTopOffset;
     left = left.clamp(8.0, overlayBox.size.width - menuWidth - 8);
     top = top.clamp(8.0, overlayBox.size.height - menuHeight - 8);
 

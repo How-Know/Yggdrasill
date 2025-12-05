@@ -425,11 +425,6 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
                     selectedDayIndex: null,
                     onDaySelected: (_) {},
                     isRegistrationMode: false,
-                    onFilterPressed: null,
-                    isFilterActive: false,
-                    onSelectModeChanged: null,
-                    isSelectMode: false,
-                    onSelectAllStudents: null,
                   ),
                   const SizedBox(height: 12),
                   Expanded(
