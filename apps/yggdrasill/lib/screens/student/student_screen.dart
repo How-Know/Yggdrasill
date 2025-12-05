@@ -914,7 +914,7 @@ class StudentScreenState extends State<StudentScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-                const SizedBox(height: 10),
+              const SizedBox(height: 0),
                 Row(
                   children: [
                     SizedBox(

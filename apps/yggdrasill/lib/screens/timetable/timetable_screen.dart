@@ -116,6 +116,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   Set<String> _snapshotSetIds = {}; // 등록 시작 시점의 set_id 스냅샷 (취소 복구용)
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
+  final TextEditingController _headerSearchController = TextEditingController();
+  String _headerSearchQuery = '';
 
   // 메모 슬라이드 상태
   final ValueNotifier<bool> _isMemoOpen = ValueNotifier(false);
@@ -491,15 +493,17 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildHeaderRegisterControls() {
-    const double buttonHeight = 44;
+    const double controlHeight = 48;
+    const double mainButtonWidth = 120;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
+      mainAxisAlignment: MainAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
-          width: 113,
-          height: buttonHeight,
+          width: mainButtonWidth,
+          height: controlHeight,
           child: Material(
-            color: const Color(0xFF1976D2),
+            color: const Color(0xFF1B6B63),
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(32),
               bottomLeft: Radius.circular(32),
@@ -520,66 +524,64 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 children: const [
                   Icon(Icons.add, color: Colors.white, size: 20),
                   SizedBox(width: 8),
-                  Text('등록', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text('추가', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
           ),
         ),
         Container(
-          height: buttonHeight,
+          height: controlHeight,
           width: 3.0,
           color: Colors.transparent,
           child: Center(
             child: Container(
               width: 2,
-              height: 28,
+              height: 30,
               color: Colors.white.withOpacity(0.1),
             ),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2.5),
-          child: GestureDetector(
-            key: _registerDropdownKey,
-            onTap: () {
-              if (_registerDropdownOverlay == null) {
-                setState(() {
-                  _isDropdownOpen = true;
-                });
-                _showRegisterDropdownMenu();
-              } else {
-                _removeRegisterDropdownMenu();
-              }
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 350),
-              width: 44,
-              height: buttonHeight,
-              decoration: ShapeDecoration(
-                color: const Color(0xFF1976D2),
-                shape: RoundedRectangleBorder(
-                  borderRadius: _isDropdownOpen
-                      ? BorderRadius.circular(50)
-                      : const BorderRadius.only(
-                          topLeft: Radius.circular(6),
-                          bottomLeft: Radius.circular(6),
-                          topRight: Radius.circular(32),
-                          bottomRight: Radius.circular(32),
-                        ),
-                ),
+        const SizedBox(width: 1),
+        GestureDetector(
+          key: _registerDropdownKey,
+          onTap: () {
+            if (_registerDropdownOverlay == null) {
+              setState(() {
+                _isDropdownOpen = true;
+              });
+              _showRegisterDropdownMenu();
+            } else {
+              _removeRegisterDropdownMenu();
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 350),
+            width: controlHeight,
+            height: controlHeight,
+            decoration: ShapeDecoration(
+              color: const Color(0xFF1B6B63),
+              shape: RoundedRectangleBorder(
+                borderRadius: _isDropdownOpen
+                    ? BorderRadius.circular(50)
+                    : const BorderRadius.only(
+                        topLeft: Radius.circular(6),
+                        bottomLeft: Radius.circular(6),
+                        topRight: Radius.circular(32),
+                        bottomRight: Radius.circular(32),
+                      ),
               ),
-              child: Center(
-                child: AnimatedRotation(
-                  turns: _isDropdownOpen ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 350),
-                  curve: Curves.easeInOut,
-                  child: const Icon(
-                    Icons.keyboard_arrow_down,
-                    color: Colors.white,
-                    size: 24,
-                    key: ValueKey('arrow'),
-                  ),
+            ),
+            child: Center(
+              child: AnimatedRotation(
+                turns: _isDropdownOpen ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeInOut,
+                child: const Icon(
+                  Icons.keyboard_arrow_down,
+                  color: Colors.white,
+                  size: 26,
+                  key: ValueKey('arrow'),
                 ),
               ),
             ),
@@ -587,6 +589,66 @@ class _TimetableScreenState extends State<TimetableScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildHeaderSearchField() {
+    const double height = 48;
+    const double baseWidth = 280;
+    const double width = baseWidth * 0.8;
+    return SizedBox(
+      width: width,
+      height: height,
+      child: TextField(
+        controller: _headerSearchController,
+        onChanged: (value) {
+          setState(() => _headerSearchQuery = value);
+          _contentViewKey.currentState?.updateSearchQuery(value);
+        },
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+        decoration: InputDecoration(
+          filled: true,
+          fillColor: const Color(0xFF2A2A2A),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+          hintText: '검색',
+          hintStyle: const TextStyle(color: Colors.white54),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: const BorderSide(color: Color(0xFF1B6B63)),
+          ),
+          prefixIcon: const Padding(
+            padding: EdgeInsets.only(left: 10, right: 4),
+            child: Icon(Icons.search, color: Colors.white70, size: 20),
+          ),
+          prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          suffixIcon: _headerSearchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                  onPressed: () {
+                    _headerSearchController.clear();
+                    setState(() => _headerSearchQuery = '');
+                    _contentViewKey.currentState?.updateSearchQuery('');
+                  },
+                )
+              : null,
+        ),
+      ),
+    );
+  }
+
+  void _resetSearch() {
+    _resetSearch();
+    if (_headerSearchQuery.isNotEmpty) {
+      setState(() => _headerSearchQuery = '');
+      _headerSearchController.clear();
+    }
   }
 
   void _showGroupScheduleDialog() {
@@ -612,7 +674,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
     final dayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: dayIndex));
     // 검색창 리셋
-    _contentViewKey.currentState?.clearSearch();
+                    _resetSearch();
     setState(() {
       _selectedDayIndex = dayIndex;
       _selectedCellDayIndex = dayIndex; // 내용 패널이 요일 기준으로 보이도록
@@ -881,6 +943,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   void dispose() {
     _removeRegisterDropdownMenu(notify: false);
+    _headerSearchController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -904,7 +967,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       autofocus: !kDisableTimetableKbAutofocus,
       onKey: (event) {
         if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
-            if (_isStudentRegistrationMode || _isClassRegistrationMode) {
+          if (_isStudentRegistrationMode || _isClassRegistrationMode) {
             final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
               if (_selectedStudentWithInfo != null) {
                 final sid = _selectedStudentWithInfo!.student.id;
@@ -947,8 +1010,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () {
-          // 검색 내역이 있으면 리셋
-          _contentViewKey.currentState?.clearSearch();
+          _resetSearch();
           if (_isStudentRegistrationMode || _isClassRegistrationMode) {
             setState(() {
               _isStudentRegistrationMode = false;
@@ -979,7 +1041,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Row(
                         children: [
-                          const SizedBox(width: 200),
+                          SizedBox(
+                            width: 200,
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: _buildHeaderRegisterControls(),
+                            ),
+                          ),
                           Expanded(
                             child: Align(
                               alignment: Alignment.center,
@@ -1000,8 +1068,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             ),
                           ),
                           SizedBox(
-                            width: 220,
-                            child: _buildHeaderRegisterControls(),
+                            width: 260,
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: _buildHeaderSearchField(),
+                            ),
                           ),
                         ],
                       ),
@@ -1246,7 +1317,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
                       print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
                       // 셀 클릭 시 검색 리셋
-                      _contentViewKey.currentState?.clearSearch();
+                      _resetSearch();
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
@@ -1532,7 +1603,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
               // 자습 학생 리스트는 timetable_content_view.dart에서 계산
             });
           },
-          clearSearch: () => _contentViewKey.currentState?.clearSearch(), // 추가: 검색 리셋 콜백 전달
+          clearSearch: _resetSearch, // 추가: 검색 리셋 콜백 전달
           isSelectMode: _isSelectMode,
           selectedStudentIds: _selectedStudentIds,
           onStudentSelectChanged: (id, selected) {
@@ -1627,7 +1698,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
               print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
               // 셀 클릭 시 검색 리셋
-              _contentViewKey.currentState?.clearSearch();
+              _resetSearch();
               setState(() {
                 _selectedCellDayIndex = dayIdx;
                 _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
