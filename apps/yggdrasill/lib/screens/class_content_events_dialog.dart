@@ -17,10 +17,14 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
   List<_TimelineEvent> _allEvents = const [];
   List<_StudentBrief> _attending = const [];
   String? _filterStudentId;
+  late DateTime _selectedDayStart;
+  _EventType? _filterType;
 
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
+    _selectedDayStart = DateTime(now.year, now.month, now.day);
     _load();
   }
 
@@ -37,7 +41,7 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
           .order('at', ascending: false)
           .limit(200);
 
-      final List<_TimelineEvent> evs = [];
+    final List<_TimelineEvent> evs = [];
       final List<String> itemIds = [];
       for (final r in (hwRows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final String itemId = (r['item_id'] as String?) ?? '';
@@ -100,6 +104,35 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
         ));
       }
 
+      // Attendance (등원/하원) 추가
+      for (final rec in DataManager.instance.attendanceRecords) {
+        final studentId = rec.studentId;
+        if (rec.arrivalTime != null) {
+          evs.add(_TimelineEvent(
+            type: _EventType.attendance,
+            timestamp: rec.arrivalTime!.toLocal(),
+            title: '등원',
+            subtitle: '',
+            color: const Color(0xFF4CAF50),
+            icon: Icons.login,
+            relatedId: studentId,
+            studentId: studentId,
+          ));
+        }
+        if (rec.departureTime != null) {
+          evs.add(_TimelineEvent(
+            type: _EventType.attendance,
+            timestamp: rec.departureTime!.toLocal(),
+            title: '하원',
+            subtitle: '',
+            color: const Color(0xFFE57373),
+            icon: Icons.logout,
+            relatedId: studentId,
+            studentId: studentId,
+          ));
+        }
+      }
+
       evs.sort((a,b) => b.timestamp.compareTo(a.timestamp));
 
       // Hydrate subtitles with student name where possible
@@ -142,124 +175,257 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
       }).toList()
         ..sort((a,b)=>a.name.compareTo(b.name));
 
-      setState(() { _allEvents = evs; _attending = attending; _applyFilter(); _loading = false; });
+      setState(() { _allEvents = evs; _attending = attending; _loading = false; });
+      _applyFilter();
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
   void _applyFilter() {
-    if (_filterStudentId == null || _filterStudentId!.isEmpty) {
-      _events = _allEvents;
-    } else {
-      _events = _allEvents.where((e) => (e.studentId ?? '').isNotEmpty && e.studentId == _filterStudentId).toList();
-    }
+    final start = _selectedDayStart;
+    final end = start.add(const Duration(days: 1));
+    final List<_TimelineEvent> filtered = _allEvents.where((e) {
+      if (e.timestamp.isBefore(start) || !e.timestamp.isBefore(end)) return false;
+      if (_filterType != null && e.type != _filterType) return false;
+      if (_filterStudentId != null && _filterStudentId!.isNotEmpty && e.studentId != _filterStudentId) return false;
+      return true;
+    }).toList();
+    setState(() {
+      _events = filtered;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+    return Dialog(
+      backgroundColor: const Color(0xFF0B1112),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: Row(
-        children: [
-          const Text('이벤트 타임라인', style: TextStyle(color: Colors.white, fontSize: 20)),
-          const Spacer(),
-          IconButton(
-            tooltip: '새로 고침',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh, color: Colors.white70),
-          )
-        ],
-      ),
-      content: SizedBox(
-        width: 648,
-        height: 570,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : (_error != null
-                ? Center(child: Text(_error!, style: const TextStyle(color: Colors.redAccent)))
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildFilterChips(),
-                      const SizedBox(height: 8),
-                      Expanded(child: _buildList()),
-                    ],
-                  )),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+      insetPadding: const EdgeInsets.all(24),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
+        width: 770,
+        height: 640,
+        color: const Color(0xFF0B1112),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildHeader(context),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _TimelineDayToolbar(
+                dayStart: _selectedDayStart,
+                onPrev: () => setState(() {
+                  _selectedDayStart = _selectedDayStart.subtract(const Duration(days: 1));
+                  _applyFilter();
+                }),
+                onNext: () => setState(() {
+                  _selectedDayStart = _selectedDayStart.add(const Duration(days: 1));
+                  _applyFilter();
+                }),
+                onPickDay: (picked) {
+                  setState(() {
+                    _selectedDayStart = DateTime(picked.year, picked.month, picked.day);
+                  });
+                  _applyFilter();
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _buildFilterChips(),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : (_error != null
+                        ? Center(child: Text(_error!, style: const TextStyle(color: Colors.redAccent)))
+                        : _buildList()),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+      child: SizedBox(
+        height: 48,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    tooltip: '닫기',
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+                const Text(
+                  '수업 타임라인',
+                  style: TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            Positioned(
+              right: 0,
+              child: IconButton(
+                tooltip: '새로 고침',
+                onPressed: _load,
+                icon: const Icon(Icons.refresh, color: Colors.white70),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildList() {
+    String nameOf(String? id) {
+      if (id == null || id.isEmpty) return '';
+      final students = DataManager.instance.students.map((s) => s.student).toList();
+      if (students.isEmpty) return '';
+      final idx = students.indexWhere((x) => x.id == id);
+      return (idx == -1 ? students.first.name : students[idx].name);
+    }
+
     return ListView.separated(
       itemCount: _events.length,
       separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x22FFFFFF)),
       itemBuilder: (ctx, i) {
         final e = _events[i];
+        final studentName = nameOf(e.studentId);
+        final displayTitle = studentName.isNotEmpty ? '$studentName · ${e.title}' : e.title;
+        final subtitle = '${_format(e.timestamp)}${e.subtitle.isNotEmpty ? ' · ${e.subtitle}' : ''}';
         return ListTile(
           dense: true,
           leading: CircleAvatar(radius: 14, backgroundColor: e.color.withOpacity(0.2), child: Icon(e.icon, color: e.color, size: 16)),
-          title: Text(e.title, style: const TextStyle(color: Colors.white)),
-          subtitle: Text('${_format(e.timestamp)}${e.subtitle.isNotEmpty ? ' · ' + e.subtitle : ''}', style: const TextStyle(color: Colors.white60)),
+          title: Text(displayTitle, style: const TextStyle(color: Colors.white)),
+          subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
         );
       },
     );
   }
 
   Widget _buildFilterChips() {
-    Color bg(bool sel) => sel ? const Color(0xFF2A323C) : const Color(0xFF22262C);
-    Color txt(bool sel) => sel ? Colors.white : Colors.white70;
-    Color brd(bool sel) => sel ? const Color(0xFF1976D2).withOpacity(0.7) : Colors.white24;
-    final List<Widget> chips = [];
-    final bool allSel = _filterStudentId == null;
-    chips.add(Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: ChoiceChip(
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.all_inclusive, size: 14, color: Colors.white70),
-            const SizedBox(width: 6),
-            Text('전체', style: TextStyle(color: txt(allSel))),
-          ],
+    Widget chip({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+      Widget? leading,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              height: 36,
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFF1B6B63) : const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (leading != null) ...[leading, const SizedBox(width: 6)],
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: selected ? Colors.white : const Color(0xFFCDD5D5),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
-        selected: allSel,
-        backgroundColor: bg(false),
-        selectedColor: bg(true),
-        shape: StadiumBorder(side: BorderSide(color: brd(allSel), width: 1)),
-        labelPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        onSelected: (_) => setState(() { _filterStudentId = null; _applyFilter(); }),
-      ),
+      );
+    }
+
+    final List<Widget> chips = [];
+    final bool allSel = _filterType == null && _filterStudentId == null;
+    chips.add(chip(
+      label: '전체',
+      selected: allSel,
+      leading: const Icon(Icons.all_inclusive, size: 14, color: Colors.white70),
+      onTap: () {
+        setState(() {
+          _filterStudentId = null;
+          _filterType = null;
+        });
+        _applyFilter();
+      },
+    ));
+
+    final bool attSel = _filterType == _EventType.attendance && (_filterStudentId == null || _filterStudentId!.isEmpty);
+    chips.add(chip(
+      label: '등하원',
+      selected: attSel,
+      onTap: () {
+        setState(() {
+          _filterType = _EventType.attendance;
+          _filterStudentId = null;
+        });
+        _applyFilter();
+      },
+    ));
+
+    final bool tagSel = _filterType == _EventType.tag && (_filterStudentId == null || _filterStudentId!.isEmpty);
+    chips.add(chip(
+      label: '활동(태그)',
+      selected: tagSel,
+      onTap: () {
+        setState(() {
+          _filterType = _EventType.tag;
+          _filterStudentId = null;
+        });
+        _applyFilter();
+      },
     ));
     for (final s in _attending) {
       final bool sel = _filterStudentId == s.id;
-      chips.add(Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: ChoiceChip(
-          label: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.person, size: 14, color: Colors.white70),
-              const SizedBox(width: 6),
-              Text(s.name, style: TextStyle(color: txt(sel))),
-            ],
-          ),
-          selected: sel,
-          backgroundColor: bg(false),
-          selectedColor: bg(true),
-          shape: StadiumBorder(side: BorderSide(color: brd(sel), width: 1)),
-          labelPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          onSelected: (_) => setState(() { _filterStudentId = s.id; _applyFilter(); }),
-        ),
+      chips.add(chip(
+        label: s.name,
+        selected: sel,
+        leading: const Icon(Icons.person, size: 14, color: Colors.white70),
+        onTap: () {
+          setState(() {
+            _filterStudentId = s.id;
+            _filterType = null; // 학생 선택 시 유형 필터 해제
+          });
+          _applyFilter();
+        },
       ));
     }
     return SingleChildScrollView(
@@ -274,7 +440,88 @@ class _ClassContentEventsDialogState extends State<ClassContentEventsDialog> {
   }
 }
 
-enum _EventType { homework, tag }
+class _TimelineDayToolbar extends StatelessWidget {
+  final DateTime dayStart;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final ValueChanged<DateTime>? onPickDay;
+  final bool compact;
+
+  const _TimelineDayToolbar({
+    required this.dayStart,
+    required this.onPrev,
+    required this.onNext,
+    this.onPickDay,
+    this.compact = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = '${dayStart.year}.${dayStart.month.toString().padLeft(2, '0')}.${dayStart.day.toString().padLeft(2, '0')}';
+    final baseTextStyle = TextStyle(
+      color: const Color(0xFFEAF2F2),
+      fontSize: compact ? 18 : 24,
+      fontWeight: FontWeight.bold,
+    );
+
+    return Row(
+      mainAxisSize: MainAxisSize.max,
+      children: [
+        IconButton(
+          onPressed: onPrev,
+          icon: const Icon(Icons.chevron_left, color: Colors.white70),
+          tooltip: '이전 날',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        ),
+        const SizedBox(width: 10),
+        GestureDetector(
+          onTap: () {
+            final now = DateTime.now();
+            onPickDay?.call(DateTime(now.year, now.month, now.day));
+          },
+          child: SizedBox(
+            width: 120,
+            child: Center(child: Text(label, style: baseTextStyle)),
+          ),
+        ),
+        const SizedBox(width: 10),
+        IconButton(
+          onPressed: onNext,
+          icon: const Icon(Icons.chevron_right, color: Colors.white70),
+          tooltip: '다음 날',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          onPressed: () async {
+            final picked = await showDatePicker(
+              context: context,
+              initialDate: dayStart,
+              firstDate: DateTime(2000),
+              lastDate: DateTime(2100),
+              builder: (context, child) => Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                  dialogBackgroundColor: const Color(0xFF1F1F1F),
+                ),
+                child: child!,
+              ),
+            );
+            if (picked != null) onPickDay?.call(picked);
+          },
+          icon: const Icon(Icons.date_range, size: 20, color: Colors.white54),
+          padding: EdgeInsets.zero,
+          tooltip: '달력',
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        ),
+      ],
+    );
+  }
+}
+
+enum _EventType { homework, tag, attendance }
 
 class _TimelineEvent {
   final _EventType type;

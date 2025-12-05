@@ -18,6 +18,7 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
+import '../widgets/makeup_quick_dialog.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -30,6 +31,7 @@ import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'timetable/views/makeup_view.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -604,6 +606,25 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  Future<void> _showMakeupManagementDialog() async {
+    await showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: const SizedBox(
+            width: 770,
+            height: 760,
+            child: MakeupView(),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildContent() {
     
     switch (_selectedIndex) {
@@ -768,55 +789,50 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         Column(
                             children: [
                               Padding(
-                                padding: const EdgeInsets.only(top: 20.0, bottom: 12.0),
+                                padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
                                 child: SizedBox(
                                   height: 44,
-                                  child: Stack(
+                                  child: Row(
                                     children: [
-                                      const Positioned.fill(
-                                        child: Center(
-                                          child: Text(
-                                            '',
+                                      const _TodayDateLabel(),
+                                      const Spacer(),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Tooltip(
+                                            message: '보강 관리',
+                                            child: IconButton(
+                                              icon: const Icon(Icons.event_repeat, color: Colors.white70, size: 22),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                                              onPressed: _showMakeupManagementDialog,
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                      const Positioned.fill(
-                                        child: Center(
-                                          child: _TodayDateLabel(),
-                                        ),
-                                      ),
-                                      Positioned(
-                                        right: 24,
-                                        top: 0,
-                                        bottom: 0,
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Tooltip(
-                                              message: '이벤트 타임라인',
-                                              child: IconButton(
-                                                icon: const Icon(Icons.timeline, color: Colors.white70, size: 22),
-                                                padding: EdgeInsets.zero,
-                                                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                                                onPressed: () async {
-                                                  await showDialog(context: context, builder: (_) => const ClassContentEventsDialog());
-                                                },
-                                              ),
+                                          const SizedBox(width: 10),
+                                          Tooltip(
+                                            message: '수업 타임라인',
+                                            child: IconButton(
+                                              icon: const Icon(Icons.timeline, color: Colors.white70, size: 22),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                                              onPressed: () async {
+                                                await showDialog(context: context, builder: (_) => const ClassContentEventsDialog());
+                                              },
                                             ),
-                                            const SizedBox(width: 6),
-                                            Tooltip(
-                                              message: '하원 리스트',
-                                              child: IconButton(
-                                                icon: const Icon(Icons.featured_play_list, color: Colors.white70, size: 22),
-                                                padding: EdgeInsets.zero,
-                                                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                                                onPressed: () async {
-                                                  await _showLeavedStudentsDialog(leaved, arrivalBySet, departureBySet);
-                                                },
-                                              ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Tooltip(
+                                            message: '하원 리스트',
+                                            child: IconButton(
+                                              icon: const Icon(Icons.featured_play_list, color: Colors.white70, size: 22),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                                              onPressed: () async {
+                                                await _showLeavedStudentsDialog(leaved, arrivalBySet, departureBySet);
+                                              },
                                             ),
-                                          ],
-                                        ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
