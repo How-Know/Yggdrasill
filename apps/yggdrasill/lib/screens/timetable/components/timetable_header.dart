@@ -87,12 +87,11 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               ),
               const Spacer(),
               Container(
-                height: 56,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  borderRadius: BorderRadius.circular(24),
                 ),
                 child: Tooltip(
                   message: _formatWeekRange(widget.selectedDate),

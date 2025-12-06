@@ -1144,7 +1144,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     Expanded(
                       child: _buildContent(),
                     ),
-                    const SizedBox(height: 50), // 하단 여백은 Expanded 바깥에서!
+                    const SizedBox(height: 0),
                   ],
                 ),
               ),
@@ -1301,7 +1301,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           header: Padding(
-            padding: const EdgeInsets.only(left: 30, right: 0, top: 20, bottom: 0),
+            padding: const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1320,7 +1320,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           timetableChild: Container(
             width: double.infinity,
             decoration: BoxDecoration(
-              color: const Color(0xFF15171C),
+              color: const Color(0xFF0B1112),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(
