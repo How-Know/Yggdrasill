@@ -13,6 +13,9 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final void Function(String studentId, bool selected)? onStudentSelectChanged;
   final void Function(StudentWithInfo student)? onOpenStudentPage;
 
+  // 그룹핑 캐시 (학생 ID 목록 기준)
+  static final Map<String, _GroupedCache> _groupCache = {};
+
   const TimetableGroupedStudentPanel({
     super.key,
     required this.students,
@@ -37,20 +40,35 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Map<EducationLevel, Map<int, List<StudentWithInfo>>> byLevel = {};
-    for (final s in students) {
-      final level = s.student.educationLevel;
-      final grade = s.student.grade;
-      byLevel.putIfAbsent(level, () => {});
-      byLevel[level]!.putIfAbsent(grade, () => []);
-      byLevel[level]![grade]!.add(s);
-    }
+    final key = students.map((s) => s.student.id).toList()..sort();
+    final cacheKey = key.join('|');
+    final grouped = _groupCache.putIfAbsent(cacheKey, () {
+      final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedMap = {};
+      for (final s in students) {
+        final level = s.student.educationLevel;
+        final grade = s.student.grade;
+        groupedMap.putIfAbsent(level, () => {});
+        groupedMap[level]!.putIfAbsent(grade, () => []);
+        groupedMap[level]![grade]!.add(s);
+      }
+      final levels = [
+        EducationLevel.elementary,
+        EducationLevel.middle,
+        EducationLevel.high,
+      ].where((l) => groupedMap.containsKey(l)).toList();
+      // 깊은 복사로 캐시 안전성 확보
+      final copied = <EducationLevel, Map<int, List<StudentWithInfo>>>{};
+      groupedMap.forEach((level, grades) {
+        copied[level] = {};
+        grades.forEach((g, list) {
+          copied[level]![g] = List<StudentWithInfo>.from(list);
+        });
+      });
+      return _GroupedCache(levels, copied);
+    });
 
-    List<EducationLevel> sortedLevels = [
-      EducationLevel.elementary,
-      EducationLevel.middle,
-      EducationLevel.high,
-    ].where((l) => byLevel.containsKey(l)).toList();
+    final byLevel = grouped.byLevel;
+    final sortedLevels = grouped.sortedLevels;
 
     const accent = Color(0xFF1B6B63);
     const levelBarColor = Color(0xFF223131);
@@ -92,7 +110,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
               alignment: Alignment.center,
               child: Text(
                 dayTimeLabel,
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -132,18 +150,18 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       children: [
         if (dayTimeLabel.isNotEmpty)
           Container(
-            height: 48, // 주차 버튼 높이와 일치
+            height: 48,
             width: double.infinity,
-            margin: const EdgeInsets.only(right: 0, bottom: 10),
+            margin: const EdgeInsets.only(bottom: 10),
             padding: const EdgeInsets.symmetric(horizontal: 15),
             decoration: BoxDecoration(
-              color: const Color(0xFF223131), // 배경색 변경
+              color: const Color(0xFF223131),
               borderRadius: BorderRadius.circular(8),
             ),
             alignment: Alignment.center,
             child: Text(
               dayTimeLabel,
-              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+              style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
           ),
@@ -245,6 +263,12 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       ],
     );
   }
+}
+
+class _GroupedCache {
+  final List<EducationLevel> sortedLevels;
+  final Map<EducationLevel, Map<int, List<StudentWithInfo>>> byLevel;
+  _GroupedCache(this.sortedLevels, this.byLevel);
 }
 
 class _PanelStudentCard extends StatelessWidget {

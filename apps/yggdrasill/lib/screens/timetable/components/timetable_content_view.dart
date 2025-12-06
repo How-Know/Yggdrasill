@@ -95,6 +95,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
   final TextEditingController _searchController = ImeAwareTextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchExpanded = false;
+  String? _cachedSearchGroupedKey;
+  Widget? _cachedSearchGroupedWidget;
+  String? _cachedCellPanelKey;
+  Widget? _cachedCellPanelWidget;
   bool isClassRegisterMode = false;
 
   String _weekdayLabel(int dayIdx) {
@@ -913,9 +917,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       // 학생카드 리스트 위에 요일+시간 출력
                       Expanded(
                         child: _searchQuery.isNotEmpty && _searchResults.isNotEmpty
-                          ? SingleChildScrollView(
-                              child: _buildGroupedStudentCardsByDayTime(_searchResults),
-                            )
+                          ? _buildSearchResultPanel()
                           : (
                               // 1) 셀 선택 시: 해당 시간 학생카드
                               (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
@@ -1071,13 +1073,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                             height: containerHeight,
                                             padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                                             color: Colors.transparent,
-                                            child: TimetableGroupedStudentPanel(
+                                            child: _buildCellPanelCached(
                                               students: cellStudents,
-                                              dayTimeLabel: _getDayTimeString(widget.selectedCellDayIndex, widget.selectedCellStartTime),
+                                              dayIdx: widget.selectedCellDayIndex,
+                                              startTime: widget.selectedCellStartTime,
                                               maxHeight: containerHeight,
                                               isSelectMode: widget.isSelectMode,
-                                              selectedStudentIds: widget.selectedStudentIds.toSet(),
-                                              onStudentSelectChanged: widget.onStudentSelectChanged,
+                                              selectedIds: widget.selectedStudentIds,
+                                              onSelectChanged: widget.onStudentSelectChanged,
                                             ),
                                           ),
                                         ],
@@ -1123,72 +1126,119 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         }
                                         final sortedKeys = groups.keys.toList()
                                           ..sort((a, b) => toMinutes(a).compareTo(toMinutes(b)));
+                                        final totalCount = groups.values.fold<int>(0, (p, c) => p + c.length);
                                         return LayoutBuilder(
                                           builder: (context, constraints) {
                                             final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
                                             return Column(
                                               crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
-                                                Container(
-                                                  margin: const EdgeInsets.only(top: 24),
+                                                SizedBox(
                                                   height: containerHeight,
-                                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFF18181A),
-                                                    borderRadius: BorderRadius.circular(18),
-                                                  ),
-                                                  alignment: Alignment.topLeft,
-                                                  child: SingleChildScrollView(
-                                                    child: Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                                      children: [
-                                                        // 상단 라벨: 요일명 + 날짜 (사이즈 업)
-                                                        Padding(
-                                                          padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
-                                                          child: Text(
-                                                            '${_weekdayLabel(dayIdx)} ${dayDate.month}/${dayDate.day}',
-                                                            style: const TextStyle(color: Colors.white70, fontSize: 22, fontWeight: FontWeight.w600),
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      // 상단 요일/날짜/총원수 라벨 (셀 선택 패널과 동일한 48px 스타일)
+                                                      Container(
+                                                        height: 48,
+                                                        width: double.infinity,
+                                                        margin: const EdgeInsets.only(top: 24, bottom: 10),
+                                                        padding: const EdgeInsets.symmetric(horizontal: 15),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(0xFF223131),
+                                                          borderRadius: BorderRadius.circular(8),
+                                                        ),
+                                                        alignment: Alignment.center,
+                                                        child: Row(
+                                                          mainAxisAlignment: MainAxisAlignment.center,
+                                                          mainAxisSize: MainAxisSize.max,
+                                                          children: [
+                                                            Text(
+                                                              '${dayDate.month}/${dayDate.day} ${_weekdayLabel(dayIdx)}',
+                                                              style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+                                                            ),
+                                                            const SizedBox(width: 10),
+                                                            Text(
+                                                              '총 $totalCount명',
+                                                              style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      // 본문 컨테이너 (셀 선택 패널 스타일과 동일)
+                                                      Expanded(
+                                                        child: Container(
+                                                          padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
+                                                          decoration: BoxDecoration(
+                                                            color: const Color(0xFF0B1112),
+                                                            borderRadius: BorderRadius.circular(14),
+                                                            border: Border.all(color: const Color(0xFF223131), width: 1),
+                                                          ),
+                                                          child: Scrollbar(
+                                                            child: SingleChildScrollView(
+                                                              child: Column(
+                                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                                children: [
+                                                                  ...sortedKeys.map((k) {
+                                                                    final list = groups[k]!;
+                                                                    list.sort((a, b) => a.student.name.compareTo(b.student.name));
+                                                                    final parts = k.split(':');
+                                                                    final int hour = int.tryParse(parts[0]) ?? 0;
+                                                                    final int minute = int.tryParse(parts[1]) ?? 0;
+                                                                    return Padding(
+                                                                      padding: const EdgeInsets.only(bottom: 16.0),
+                                                                      child: Column(
+                                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                                        children: [
+                                                                          Row(
+                                                                            children: [
+                                                                              Container(
+                                                                                width: 5,
+                                                                                height: 22,
+                                                                                margin: const EdgeInsets.only(right: 8),
+                                                                                decoration: BoxDecoration(
+                                                                                  color: const Color(0xFF223131),
+                                                                                  borderRadius: BorderRadius.circular(4),
+                                                                                ),
+                                                                              ),
+                                                                              Text(
+                                                                                k,
+                                                                                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                          const SizedBox(height: 10),
+                                                                          Padding(
+                                                                            padding: const EdgeInsets.only(left: 14),
+                                                                            child: Wrap(
+                                                                              spacing: 6.4,
+                                                                              runSpacing: 6.4,
+                                                                              children: list
+                                                                                  .map((info) => _buildDraggableStudentCard(
+                                                                                        info,
+                                                                                        dayIndex: dayIdx,
+                                                                                        startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
+                                                                                        cellStudents: list,
+                                                                                      ))
+                                                                                  .toList(),
+                                                                            ),
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    );
+                                                                  }),
+                                                                  if (sortedKeys.isEmpty)
+                                                                    Padding(
+                                                                      padding: const EdgeInsets.all(4.0),
+                                                                      child: Text(widget.placeholderText ?? '해당 요일에 등록된 학생이 없습니다.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
+                                                                    ),
+                                                                ],
+                                                              ),
+                                                            ),
                                                           ),
                                                         ),
-                                                        ...sortedKeys.map((k) {
-                                                          final list = groups[k]!;
-                                                          list.sort((a, b) => a.student.name.compareTo(b.student.name));
-                                                          // 파싱하여 시작시간 전달
-                                                          final parts = k.split(':');
-                                                          final int hour = int.tryParse(parts[0]) ?? 0;
-                                                          final int minute = int.tryParse(parts[1]) ?? 0;
-                                                          return Padding(
-                                                            padding: const EdgeInsets.only(bottom: 16.0),
-                                                            child: Column(
-                                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                                              children: [
-                                                                Padding(
-                                                                  padding: const EdgeInsets.only(left: 8.0, bottom: 6.0),
-                                                                  child: Text(
-                                                                    k, // 시간표상 시작 시간만 표시 (사이즈 업)
-                                                                    style: const TextStyle(color: Colors.white70, fontSize: 16.5, fontWeight: FontWeight.w700),
-                                                                  ),
-                                                                ),
-                                                                Wrap(
-                                                                  spacing: 6.4,
-                                                                  runSpacing: 6.4,
-                                                                  children: list.map((info) => _buildDraggableStudentCard(
-                                                                    info,
-                                                                    dayIndex: dayIdx,
-                                                                    startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
-                                                                  )).toList(),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                          );
-                                                        }),
-                                                        if (sortedKeys.isEmpty)
-                                                          Padding(
-                                                            padding: const EdgeInsets.all(4.0),
-                                                            child: Text(widget.placeholderText ?? '해당 요일에 등록된 학생이 없습니다.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
-                                                          ),
-                                                      ],
-                                                    ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 ),
                                               ],
@@ -1197,22 +1247,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         );
                                       },
                                     )
-                                  : LayoutBuilder(
-                                    builder: (context, constraints) {
-                            final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
-                            return Container(
-                              margin: const EdgeInsets.only(top: 24),
-                              height: containerHeight,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF18181A),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(widget.placeholderText ?? '셀을 선택하세요.', style: const TextStyle(color: Colors.white38, fontSize: 17)),
-                            );
-                                    },
-                                  )
+                                  : const SizedBox.shrink()
                             ),
                       ),
                   // 삭제 드롭존
@@ -1576,13 +1611,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
   Widget _buildDragFeedback(List<StudentWithInfo> selectedStudents, StudentWithInfo mainInfo) {
     final count = selectedStudents.length;
     if (count <= 1) {
-      return Material(
-        color: Colors.transparent,
-        child: Opacity(
-          opacity: 0.85,
-          child: _buildSelectableStudentCard(mainInfo, selected: true),
-        ),
-      );
+            return Material(
+              color: Colors.transparent,
+              child: Opacity(
+                opacity: 0.85,
+                child: SizedBox(
+                  width: 160,
+                  child: _buildSelectableStudentCard(mainInfo, selected: true),
+                ),
+              ),
+            );
     } else if (count <= 3) {
       // 2~3개: 카드 쌓임, 맨 위만 내용, 나머지는 빈 카드
       return Material(
@@ -1845,7 +1883,24 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   // --- 검색 결과를 요일/시간별로 그룹핑해서 보여주는 함수 ---
-  Widget _buildGroupedStudentCardsByDayTime(List<StudentWithInfo> students) {
+  Widget _buildGroupedStudentCardsByDayTime(List<StudentWithInfo> students, {bool showWeekdayInTimeLabel = false}) {
+    // 검색 결과용 캐시: 요일선택 리스트와 동일한 UI이지만 매번 그룹핑/정렬을 방지
+    if (showWeekdayInTimeLabel) {
+      final rev = DataManager.instance.studentTimeBlocksRevision.value;
+      final ids = students.map((s) => s.student.id).toList()..sort();
+      final key = '$rev|${ids.join(',')}';
+      if (_cachedSearchGroupedKey == key && _cachedSearchGroupedWidget != null) {
+        return _cachedSearchGroupedWidget!;
+      }
+      final built = _buildGroupedStudentCardsByDayTimeInternal(students, showWeekdayInTimeLabel: showWeekdayInTimeLabel);
+      _cachedSearchGroupedKey = key;
+      _cachedSearchGroupedWidget = built;
+      return built;
+    }
+    return _buildGroupedStudentCardsByDayTimeInternal(students, showWeekdayInTimeLabel: showWeekdayInTimeLabel);
+  }
+
+  Widget _buildGroupedStudentCardsByDayTimeInternal(List<StudentWithInfo> students, {bool showWeekdayInTimeLabel = false}) {
     // 학생이 속한 모든 시간블록을 (요일, 시간)별로 그룹핑
     final blocks = DataManager.instance.studentTimeBlocks;
     // Map<(dayIdx, startTime), List<StudentWithInfo>>
@@ -1880,13 +1935,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 24), // 검색 결과 상단 여백
+        const SizedBox(height: 0), // 셀선택 리스트와 동일하게 여백 제거
         ...sortedKeys.map((key) {
           final dayIdx = int.parse(key.split('-')[0]);
           final timeStr = key.split('-')[1];
           final hour = int.parse(timeStr.split(':')[0]);
           final min = int.parse(timeStr.split(':')[1]);
-          final dayTimeLabel = _getDayTimeString(dayIdx, DateTime(0, 1, 1, hour, min));
+                      final dayTimeLabel = '${_weekdayLabel(dayIdx)} ${hour.toString().padLeft(2, '0')}:${min.toString().padLeft(2, '0')}';
           final students = grouped[key]!;
           // 검색 결과는 모두 같은 student_id만 포함하므로 첫 학생 기준으로 수업명 추출
           String className = '';
@@ -1905,53 +1960,87 @@ class TimetableContentViewState extends State<TimetableContentView> {
             }
           }
           return Padding(
-            padding: const EdgeInsets.only(bottom: 12.0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+            padding: const EdgeInsets.only(bottom: 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 90,
-                  padding: const EdgeInsets.only(right: 8.0),
-                  child: Text(
-                    dayTimeLabel,
-                    style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // 학생카드
-                      Wrap(
-                        spacing: 0,
-                        runSpacing: 4,
-                        children: students.map((info) =>
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
-                            child: _buildDraggableStudentCard(info, dayIndex: dayIdx, startTime: DateTime(0, 1, 1, hour, min)),
-                          )
-                        ).toList(),
+                Row(
+                  children: [
+                    Container(
+                      width: 5,
+                      height: 22,
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF223131),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      // 수업명: 학생카드 끝~Row 끝까지의 영역에서 가로 가운데 정렬
-                      if (className.isNotEmpty)
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.center,
-                            child: Text(
-                              className,
-                              style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ),
-                    ],
+                    ),
+                    Text(
+                      dayTimeLabel,
+                      style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.only(left: 14),
+                  child: Wrap(
+                    spacing: 6.4,
+                    runSpacing: 6.4,
+                    children: students.map((info) =>
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: _buildDraggableStudentCard(info, dayIndex: dayIdx, startTime: DateTime(0, 1, 1, hour, min)),
+                      )
+                    ).toList(),
                   ),
                 ),
+                if (className.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 14),
+                    child: Text(
+                      className,
+                      style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ],
             ),
           );
         }).toList(),
       ],
     );
+  }
+
+  Widget _buildCellPanelCached({
+    required List<StudentWithInfo> students,
+    required int? dayIdx,
+    required DateTime? startTime,
+    required double maxHeight,
+    required bool isSelectMode,
+    required Set<String> selectedIds,
+    required void Function(String, bool)? onSelectChanged,
+  }) {
+    final rev = DataManager.instance.studentTimeBlocksRevision.value;
+    final ids = students.map((s) => s.student.id).toList()..sort();
+    final key = '$rev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|${ids.join(",")}|${selectedIds.join(",")}';
+    if (_cachedCellPanelKey == key && _cachedCellPanelWidget != null) {
+      return _cachedCellPanelWidget!;
+    }
+    final built = TimetableGroupedStudentPanel(
+      students: students,
+      dayTimeLabel: _getDayTimeString(dayIdx, startTime),
+      maxHeight: maxHeight,
+      isSelectMode: isSelectMode,
+      selectedStudentIds: selectedIds,
+      onStudentSelectChanged: onSelectChanged,
+    );
+    _cachedCellPanelKey = key;
+    _cachedCellPanelWidget = built;
+    return built;
   }
 
   void _onSearchChanged(String value) {
@@ -1973,6 +2062,75 @@ class TimetableContentViewState extends State<TimetableContentView> {
       selection: TextSelection.collapsed(offset: value.length),
     );
     _onSearchChanged(value);
+  }
+
+  Widget _buildSearchResultPanel() {
+    final titleName = _searchResults.isNotEmpty ? _searchResults.first.student.name : '검색 결과';
+    // 학교/과정/학년 요약
+    String schoolLevelLabel = '';
+    if (_searchResults.isNotEmpty) {
+      final first = _searchResults.first;
+      schoolLevelLabel = '${first.student.school} · ${_gradeLabelForStudent(first.student.educationLevel, first.student.grade)}';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 48,
+          width: double.infinity,
+          margin: const EdgeInsets.only(top: 24, bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 15),
+          decoration: BoxDecoration(
+            color: const Color(0xFF223131),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                fit: FlexFit.loose,
+                child: Text(
+                  titleName,
+                  style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              if (schoolLevelLabel.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: Text(
+                    schoolLevelLabel,
+                    style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B1112),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF223131), width: 1),
+            ),
+            child: Scrollbar(
+              child: SingleChildScrollView(
+                child: _buildGroupedStudentCardsByDayTime(_searchResults, showWeekdayInTimeLabel: true),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   // --- 셀 클릭 시 검색 내역 초기화 ---

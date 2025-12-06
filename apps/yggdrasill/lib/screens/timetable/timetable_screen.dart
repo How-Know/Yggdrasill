@@ -30,6 +30,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/schedule_store.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'components/timetable_top_bar.dart';
+import 'components/timetable_search_field.dart';
 
 
 enum TimetableViewType {
@@ -592,54 +593,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildHeaderSearchField() {
-    const double height = 48;
-    const double baseWidth = 280;
-    const double width = baseWidth * 0.64;
-    return SizedBox(
-      width: width,
-      height: height,
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(height / 2),
-          border: Border.all(color: Colors.transparent),
-        ),
-        padding: const EdgeInsets.only(left: 12, right: 4),
-        child: Row(
-          children: [
-            const Icon(Icons.search, color: Colors.white70, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _headerSearchController,
-                onChanged: (value) {
-                  setState(() => _headerSearchQuery = value);
-                  _contentViewKey.currentState?.updateSearchQuery(value);
-                },
-                style: const TextStyle(color: Colors.white, fontSize: 16),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  isDense: true,
-                  contentPadding: EdgeInsets.zero,
-                  hintText: '검색',
-                  hintStyle: TextStyle(color: Colors.white54),
-                ),
-              ),
-            ),
-            if (_headerSearchQuery.isNotEmpty)
-              IconButton(
-                icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
-                splashRadius: 18,
-                padding: EdgeInsets.zero,
-                onPressed: () {
-                  _headerSearchController.clear();
-                  setState(() => _headerSearchQuery = '');
-                  _contentViewKey.currentState?.updateSearchQuery('');
-                },
-              ),
-          ],
-        ),
-      ),
+    return TimetableSearchField(
+      controller: _headerSearchController,
+      hasText: _headerSearchQuery.isNotEmpty,
+      onChanged: (value) {
+        setState(() => _headerSearchQuery = value);
+        _contentViewKey.currentState?.updateSearchQuery(value);
+      },
+      onClear: () {
+        _headerSearchController.clear();
+        setState(() => _headerSearchQuery = '');
+        _contentViewKey.currentState?.updateSearchQuery('');
+      },
     );
   }
 
