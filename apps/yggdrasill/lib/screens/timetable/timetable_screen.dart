@@ -1140,7 +1140,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         actionRow: _buildHeaderActionRow(),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 12),
                     Expanded(
                       child: _buildContent(),
                     ),
@@ -1300,6 +1300,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
+          header: Padding(
+            padding: const EdgeInsets.only(left: 30, right: 0, top: 20, bottom: 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TimetableHeader(
+                    selectedDate: _selectedDate,
+                    onDateChanged: _handleDateChanged,
+                    selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+                    onDaySelected: _onDayHeaderSelected,
+                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                  ),
+                ),
+              ],
+            ),
+          ),
           timetableChild: Container(
             width: double.infinity,
             decoration: BoxDecoration(
@@ -1308,26 +1325,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
             ),
             child: Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: TimetableHeader(
-                          selectedDate: _selectedDate,
-                          onDateChanged: _handleDateChanged,
-                          selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
-                          onDaySelected: _onDayHeaderSelected,
-                          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
+                    padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
                     child: Builder(
                       builder: (context) {
                         final studentWithInfo = _selectedStudentWithInfo!;
@@ -1345,7 +1345,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       },
                     ),
                   ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 0),
                 Expanded(
                   child: ClassesView(
                     operatingHours: _operatingHours,

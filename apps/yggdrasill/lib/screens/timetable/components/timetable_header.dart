@@ -72,85 +72,106 @@ class _TimetableHeaderState extends State<TimetableHeader> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const SizedBox(height: 0), // 세그먼트 버튼 상단 여백을 0으로 변경
-        Row(
-          children: [
-            Padding(
-              padding: EdgeInsets.only(left: 30), // 월 정보 및 주차/이동 컨트롤
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    '${widget.selectedDate.month}',
-                    style: TextStyle(
-                      color: Colors.grey.shade400,
-                      fontSize: 60,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Tooltip(
-                    message: _formatWeekRange(widget.selectedDate),
-                    waitDuration: const Duration(milliseconds: 200),
-                    child: SizedBox(
-                      height: 60, // 월정보 텍스트 높이에 맞춰 수직 중앙 정렬
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 5), // 살짝 아래로 내림
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                        IconButton(
-                          tooltip: '이전 주',
-                          onPressed: () {
-                            final newDate = widget.selectedDate.subtract(const Duration(days: 7));
-                            widget.onDateChanged(newDate);
-                          },
-                          icon: const Icon(Icons.chevron_left, color: Colors.white70),
-                          splashRadius: 18,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                        ),
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: () {
-                            // 이번주로 이동 (오늘 날짜 기준)
-                            widget.onDateChanged(DateTime.now());
-                          },
-                          borderRadius: BorderRadius.circular(6),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
-                            child: Text(
-                              '${_getWeekOfMonth(widget.selectedDate)}주차',
-                              style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w600),
-                            ),
+        Padding(
+          padding: const EdgeInsets.only(left: 0, right: 0, top: 0, bottom: 0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                '${widget.selectedDate.month}월',
+                style: TextStyle(
+                  color: Colors.grey.shade300,
+                  fontSize: 54 * 0.9,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                height: 56,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: Tooltip(
+                  message: _formatWeekRange(widget.selectedDate),
+                  waitDuration: const Duration(milliseconds: 200),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '이전 주',
+                        onPressed: () {
+                          final newDate = widget.selectedDate.subtract(const Duration(days: 7));
+                          widget.onDateChanged(newDate);
+                        },
+                        icon: const Icon(Icons.chevron_left, color: Colors.white70, size: 22),
+                        splashRadius: 18,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                      const SizedBox(width: 4),
+                      InkWell(
+                        onTap: () {
+                          widget.onDateChanged(DateTime.now());
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+                          child: Text(
+                            '${_getWeekOfMonth(widget.selectedDate)}주차',
+                            style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700),
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          tooltip: '다음 주',
-                          onPressed: () {
-                            final newDate = widget.selectedDate.add(const Duration(days: 7));
-                            widget.onDateChanged(newDate);
-                          },
-                          icon: const Icon(Icons.chevron_right, color: Colors.white70),
-                          splashRadius: 18,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                        ),
-                          ],
-                        ),
                       ),
-                    ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: '다음 주',
+                        onPressed: () {
+                          final newDate = widget.selectedDate.add(const Duration(days: 7));
+                          widget.onDateChanged(newDate);
+                        },
+                        icon: const Icon(Icons.chevron_right, color: Colors.white70, size: 22),
+                        splashRadius: 18,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: '날짜 선택',
+                        onPressed: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: widget.selectedDate,
+                            firstDate: DateTime(2020, 1, 1),
+                            lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+                            builder: (context, child) {
+                              return Theme(
+                                data: Theme.of(context).copyWith(
+                                  colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (picked != null) {
+                            widget.onDateChanged(picked);
+                          }
+                        },
+                        icon: const Icon(Icons.calendar_today, color: Colors.white70, size: 22),
+                        splashRadius: 18,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-            const Spacer(),
-          ],
+            ],
+          ),
         ),
-        const SizedBox(height: 20), // 세그먼트 버튼과 요일 row 사이 여백 추가
+        const SizedBox(height: 24),
         // 요일 row는 Row 바깥에 별도 배치
         Container(
           padding: EdgeInsets.symmetric(horizontal: 0), // 좌우 여백을 0으로 변경

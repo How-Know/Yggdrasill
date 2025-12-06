@@ -35,6 +35,7 @@ class TimetableContentView extends StatefulWidget {
   final Set<String>? filteredStudentIds; // 추가: 필터링된 학생 ID 목록
   final String? placeholderText; // 빈 셀 안내 문구 대체용
   final bool showRegisterControls;
+  final Widget? header;
 
   const TimetableContentView({
     Key? key,
@@ -58,6 +59,7 @@ class TimetableContentView extends StatefulWidget {
     this.filteredStudentIds, // 추가
     this.placeholderText,
     this.showRegisterControls = true,
+    this.header,
   }) : super(key: key);
 
   @override
@@ -402,21 +404,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const SizedBox(width: 24),
         Expanded(
           flex: 3,
           child: LayoutBuilder(
             builder: (context, constraints) {
               return SizedBox(
                 height: constraints.maxHeight,
-                child: Container(
-                  margin: const EdgeInsets.only(top: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0), // vertical 32 -> 16으로 조정
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: widget.timetableChild,
+                child: Column(
+                  children: [
+                    if (widget.header != null) widget.header!,
+                    Expanded(child: widget.timetableChild),
+                  ],
                 ),
               );
             },
@@ -833,25 +831,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               ),
                               const SizedBox(width: 6),
                             ],
-                            // 보강 버튼 (아이콘만, 강조 색상, 툴팁)
-                          Tooltip(
-                            message: '보강',
-                            child: SizedBox(
-                              height: 44,
-                              child: Material(
-                                color: const Color(0xFF1565C0), // 기존보다 약간 진하게
-                                borderRadius: BorderRadius.circular(8),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(8),
-                                  onTap: _showMakeupListDialog,
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 12.0),
-                                    child: Icon(Symbols.push_pin_rounded, color: Colors.white, size: 22, weight: 600, opticalSize: 48),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
                           if (widget.showRegisterControls) ...[
                             const SizedBox(width: 8),
                             AnimatedContainer(
