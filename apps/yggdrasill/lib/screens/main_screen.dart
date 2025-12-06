@@ -479,13 +479,46 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
     await showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
+      barrierColor: Colors.black.withOpacity(0.55),
       builder: (dialogContext) {
+        Widget buildHeader() {
+          return SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: IconButton(
+                    tooltip: '닫기',
+                    icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                    padding: EdgeInsets.zero,
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                  ),
+                ),
+                const Text(
+                  '하원 리스트',
+                  style: TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
         Widget buildTimeBadge(String label, String value) {
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF26343A),
+              color: const Color(0xFF1B6B63).withOpacity(0.18),
               borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
@@ -500,37 +533,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         }
 
         return Dialog(
-          backgroundColor: const Color(0xFF0F1619),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          backgroundColor: const Color(0xFF0B1112),
+          insetPadding: const EdgeInsets.all(24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(26, 26, 26, 22),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0B1112),
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Text(
-                        '하원 리스트',
-                        style: TextStyle(
-                          color: Color(0xFFEAF2F2),
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white60, size: 20),
-                        padding: EdgeInsets.zero,
-                        splashRadius: 20,
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
+                  buildHeader(),
+                  const SizedBox(height: 14),
                   SizedBox(
                     height: listHeight,
                     child: entries.isEmpty
@@ -538,7 +558,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             child: Text(
                               '하원한 학생이 아직 없어요.',
                               style: TextStyle(
-                                color: Color(0xFFD0DDDD),
+                                color: Color(0xFF9FB3B3),
                                 fontSize: 15,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -556,9 +576,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 return Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF1A2429),
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(color: const Color(0xFF1B6B63).withOpacity(0.3)),
+                                    color: const Color(0xFF10171A),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: const Color(0xFF1B6B63).withOpacity(0.25)),
                                   ),
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -568,7 +588,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         style: const TextStyle(
                                           color: Color(0xFFEAF2F2),
                                           fontSize: 17,
-                                          fontWeight: FontWeight.w600,
+                                          fontWeight: FontWeight.w700,
                                         ),
                                       ),
                                       if (entry.target.classInfo != null) ...[

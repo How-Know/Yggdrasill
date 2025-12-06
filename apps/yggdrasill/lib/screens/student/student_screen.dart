@@ -924,16 +924,20 @@ class StudentScreenState extends State<StudentScreen> {
               const SizedBox(height: 0),
                 Row(
                   children: [
-                    SizedBox(
-                      width: 200,
-                      child: _customTabIndex == 0
-                          ? Align(
-                              alignment: Alignment.centerLeft,
-                              child: _buildStudentAddSplitButton(),
-                            )
-                          : const SizedBox.shrink(),
+                    Expanded(
+                      flex: 1,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 200),
+                          child: _customTabIndex == 0
+                              ? _buildStudentAddSplitButton()
+                              : const SizedBox.shrink(),
+                        ),
+                      ),
                     ),
                     Expanded(
+                      flex: 2,
                       child: Align(
                         alignment: Alignment.center,
                         child: CustomTabBar(
@@ -947,30 +951,37 @@ class StudentScreenState extends State<StudentScreen> {
                         ),
                       ),
                     ),
-                SizedBox(
-                  width: 260,
-                  child: _customTabIndex == 0
-                      ? LayoutBuilder(
-                          builder: (context, constraints) {
-                            const double controlHeight = 48;
-                            const double spacing = 12;
-                            final double reservedWidth = (controlHeight * 2) + (spacing * 2);
-                            final double availableForSearch =
-                                (constraints.maxWidth - reservedWidth).clamp(controlHeight, constraints.maxWidth);
-                            return Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                _buildToolsButton(),
-                                const SizedBox(width: spacing),
-                                _buildFilterButton(),
-                                const SizedBox(width: spacing),
-                                _buildSearchButton(maxExpandedWidth: availableForSearch),
-                              ],
-                            );
-                          },
-                        )
-                      : const SizedBox.shrink(),
-                ),
+                    Expanded(
+                      flex: 1,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _customTabIndex == 0
+                            ? ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 260),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    const double controlHeight = 48;
+                                    const double spacing = 12;
+                                    final double reservedWidth = (controlHeight * 2) + (spacing * 2);
+                                    final double availableForSearch =
+                                        (constraints.maxWidth - reservedWidth).clamp(controlHeight, constraints.maxWidth);
+                                    return Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _buildToolsButton(),
+                                        const SizedBox(width: spacing),
+                                        _buildFilterButton(),
+                                        const SizedBox(width: spacing),
+                                        _buildSearchButton(maxExpandedWidth: availableForSearch),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
                   ],
                 ),
               ],

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
-import 'app_bar_title.dart';
+import 'app_bar_title.dart'; // for AccountButton
 
 const double _navIconSize = 26.0;
 const Color _navAccentColor = Color(0xFF1B6B63);

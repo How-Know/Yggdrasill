@@ -13,7 +13,6 @@ import 'views/schedule_view.dart';
 import '../../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
-import '../../widgets/custom_tab_bar.dart';
 import 'package:morphable_shape/morphable_shape.dart';
 import 'package:dimension/dimension.dart';
 import 'components/timetable_content_view.dart';
@@ -30,6 +29,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/schedule_store.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'components/timetable_top_bar.dart';
 
 
 enum TimetableViewType {
@@ -645,35 +645,30 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Widget _buildHeaderActionRow() {
     const double spacing = 12;
-    const double selectContainerWidth = 64.4 + 8 + 48; // expanded width (모두+취소)
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildHeaderFilterButton(),
-            const SizedBox(width: spacing),
-            SizedBox(
-              width: selectContainerWidth,
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: _HeaderSelectButton(
-                  isSelectMode: _isSelectMode,
-                  onModeChanged: (selecting) {
-                    setState(() {
-                      _isSelectMode = selecting;
-                      if (!selecting) {
-                        _selectedStudentIds.clear();
-                      }
-                    });
-                  },
-                  onSelectAll: _handleSelectAllStudents,
-                ),
-              ),
+        _buildHeaderFilterButton(),
+        const SizedBox(width: spacing),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          child: IntrinsicWidth(
+            child: _HeaderSelectButton(
+              isSelectMode: _isSelectMode,
+              onModeChanged: (selecting) {
+                setState(() {
+                  _isSelectMode = selecting;
+                  if (!selecting) {
+                    _selectedStudentIds.clear();
+                  }
+                });
+              },
+              onSelectAll: _handleSelectAllStudents,
             ),
-          ],
+          ),
         ),
-        const Spacer(),
+        const SizedBox(width: spacing),
         _buildHeaderSearchField(),
       ],
     );
@@ -1129,38 +1124,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 200,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: _buildHeaderRegisterControls(),
-                            ),
-                          ),
-                          Expanded(
-                            child: Align(
-                              alignment: Alignment.center,
-                              child: CustomTabBar(
-                                selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
-                                tabs: const ['수업', '일정'],
-                                onTabSelected: (i) {
-                                  setState(() {
-                                    _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
-                                  });
-                                  
-                                  if ((i == 0) && !_hasScrolledOnTabClick) {
-                                    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
-                                    _hasScrolledOnTabClick = true;
-                                  }
-                                },
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildHeaderActionRow(),
-                          ),
-                        ],
+                      child: TimetableTopBar(
+                        registerControls: _buildHeaderRegisterControls(),
+                        selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
+                        onTabSelected: (i) {
+                          setState(() {
+                            _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
+                          });
+
+                          if ((i == 0) && !_hasScrolledOnTabClick) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+                            _hasScrolledOnTabClick = true;
+                          }
+                        },
+                        actionRow: _buildHeaderActionRow(),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -2139,6 +2116,9 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 200),
+      layoutBuilder: (currentChild, previousChildren) => currentChild ?? const SizedBox.shrink(),
+      transitionBuilder: (child, animation) =>
+          FadeTransition(opacity: animation, child: child),
       child: widget.isSelectMode ? _buildExpanded() : _buildSelectButton(),
     );
   }
@@ -2149,7 +2129,7 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
       width: 78,
       child: const Text(
         '선택',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
       ),
       onTap: () => widget.onModeChanged?.call(true),
     );
@@ -2158,12 +2138,13 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
   Widget _buildExpanded() {
     return Row(
       key: const ValueKey('expanded'),
+      mainAxisSize: MainAxisSize.min,
       children: [
         _pillButton(
           width: 64.4,
           child: const Text(
             '모두',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
           ),
           onTap: widget.onSelectAll ?? () {},
         ),
