@@ -179,80 +179,132 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG] StudentSearchDialog build - 수정된 버전');
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text(
-        '학생 검색',
-        style: TextStyle(color: Colors.white),
-      ),
-      content: SizedBox(
-        width: 500,
-        height: 400,
-        child: Column(
-          children: [
-            TextField(
-              controller: _searchController,
-              style: const TextStyle(color: Colors.white),
-              onChanged: _filterStudents,
-              decoration: InputDecoration(
-                labelText: '학생 이름 또는 학교 검색',
-                labelStyle: const TextStyle(color: Colors.white70),
-                prefixIcon: const Icon(Icons.search, color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+    return Dialog(
+      backgroundColor: const Color(0xFF0B1112),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '학생 검색',
+                style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _searchController,
+                style: const TextStyle(color: Color(0xFFEAF2F2)),
+                onChanged: _filterStudents,
+                decoration: _searchDecoration(),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF111418),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF223131)),
+                  ),
+                  child: _filteredStudents.isEmpty
+                      ? const Center(
+                          child: Text('검색 결과가 없습니다.', style: TextStyle(color: Colors.white54, fontSize: 15)),
+                        )
+                      : ListView.separated(
+                          itemCount: _filteredStudents.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+                          itemBuilder: (context, index) {
+                            final studentWithInfo = _filteredStudents[index];
+                            final student = studentWithInfo.student;
+                            final hasClasses = _hasRegisteredClasses(student.id);
+                            return InkWell(
+                              onTap: () => Navigator.of(context).pop(student),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 32,
+                                      decoration: BoxDecoration(
+                                        color: hasClasses ? const Color(0xFF1B6B63) : Colors.white24,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            student.name,
+                                            style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${student.school ?? ''} ${student.grade != null ? '${student.grade}학년' : ''}',
+                                            style: TextStyle(color: Colors.white70, fontSize: 13),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (hasClasses) ...[
+                                      const SizedBox(width: 12),
+                                      ConstrainedBox(
+                                        constraints: const BoxConstraints(maxWidth: 180),
+                                        child: _buildClassInfoWidget(student.id),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _filteredStudents.length,
-                itemBuilder: (context, index) {
-                  final studentWithInfo = _filteredStudents[index];
-                  final student = studentWithInfo.student;
-                  
-                  // 학생의 수업 정보 확인
-                  final hasClasses = _hasRegisteredClasses(student.id);
-                  print('[DEBUG] 학생 ${student.name} 수업 있나요: $hasClasses');
-                  
-                  return ListTile(
-                    title: Text(
-                      student.name,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    subtitle: Text(
-                      '${student.school ?? ''} ${student.grade != null ? '${student.grade}학년' : ''}',
-                      style: TextStyle(color: Colors.white.withOpacity(0.7)),
-                    ),
-                    trailing: hasClasses 
-                        ? Container(
-                            constraints: const BoxConstraints(maxWidth: 200),
-                            child: _buildClassInfoWidget(student.id),
-                          )
-                        : null,
-                    onTap: () {
-                      Navigator.of(context).pop(student);
-                    },
-                  );
-                },
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text(
-            '취소',
-            style: TextStyle(color: Colors.white70),
+            ],
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  InputDecoration _searchDecoration() {
+    return InputDecoration(
+      hintText: '학생 이름 또는 학교 검색',
+      hintStyle: const TextStyle(color: Colors.white38),
+      prefixIcon: const Icon(Icons.search, color: Colors.white70),
+      filled: true,
+      fillColor: const Color(0xFF111418),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      enabledBorder: OutlineInputBorder(
+        borderSide: const BorderSide(color: Color(0xFF223131)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 1.4),
+        borderRadius: BorderRadius.circular(10),
+      ),
     );
   }
 

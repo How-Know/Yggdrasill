@@ -2073,6 +2073,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       dayIndex: canDrag ? dayIdx : null,
       startTime: canDrag ? startTime : null,
       isClassRegisterMode: isClassRegisterMode,
+      onDragStart: () => setState(() => _showDeleteZone = true),
+      onDragEnd: () => setState(() => _showDeleteZone = false),
     );
     _cachedCellPanelKey = key;
     _cachedCellPanelWidget = built;
@@ -2484,122 +2486,173 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: Text(widget.editTarget == null ? '수업 등록' : '수업 수정', style: const TextStyle(color: Colors.white)),
-      content: SizedBox(
-        width: 400,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: '수업명',
-                labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+    return Dialog(
+      backgroundColor: const Color(0xFF0B1112),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.editTarget == null ? '수업 등록' : '수업 수정',
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 14),
+              _LabeledField(
+                label: '수업명',
+                child: TextField(
+                  controller: _nameController,
+                  style: const TextStyle(color: Color(0xFFEAF2F2)),
+                  decoration: _inputDecoration(hint: '예) 수학 A'),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _capacityController,
-                    enabled: !_unlimitedCapacity,
-                    style: const TextStyle(color: Colors.white),
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '정원',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white24),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
-                      ),
+              const SizedBox(height: 14),
+              _LabeledField(
+                label: '정원',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Checkbox(
+                      value: _unlimitedCapacity,
+                      onChanged: (v) => setState(() => _unlimitedCapacity = v ?? false),
+                      checkColor: Colors.white,
+                      activeColor: const Color(0xFF1B6B63),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
                     ),
-                  ),
+                    const Text('제한없음', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Checkbox(
-                  value: _unlimitedCapacity,
-                  onChanged: (v) => setState(() => _unlimitedCapacity = v ?? false),
-                  checkColor: Colors.white,
-                  activeColor: const Color(0xFF1976D2),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                child: TextField(
+                  controller: _capacityController,
+                  enabled: !_unlimitedCapacity,
+                  style: const TextStyle(color: Color(0xFFEAF2F2)),
+                  keyboardType: TextInputType.number,
+                  decoration: _inputDecoration(hint: '숫자 입력', disabled: _unlimitedCapacity),
                 ),
-                const Text('제한없음', style: TextStyle(color: Colors.white70)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _descController,
-              style: const TextStyle(color: Colors.white),
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: '설명',
-                labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2)),
-                ),
-                alignLabelWithHint: true,
               ),
-            ),
-            const SizedBox(height: 18),
-            const Text('수업 색상', style: TextStyle(color: Colors.white70, fontSize: 15)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _colors.map((color) {
-                final isSelected = _selectedColor == color;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedColor = color),
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: color ?? Colors.transparent,
-                      border: Border.all(
-                        color: isSelected ? Colors.white : Colors.white24,
-                        width: isSelected ? 2.5 : 1.2,
+              const SizedBox(height: 14),
+              _LabeledField(
+                label: '설명',
+                child: TextField(
+                  controller: _descController,
+                  style: const TextStyle(color: Color(0xFFEAF2F2)),
+                  maxLines: 2,
+                  decoration: _inputDecoration(hint: '예) 주 2회 / 개인'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('수업 색상', style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _colors.map((color) {
+                  final isSelected = _selectedColor == color;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedColor = color),
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: color ?? Colors.transparent,
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFFEAF2F2) : const Color(0xFF223131),
+                          width: isSelected ? 2.5 : 1.4,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      borderRadius: BorderRadius.circular(16),
+                      child: color == null
+                          ? const Center(child: Icon(Icons.close_rounded, color: Colors.white54, size: 18))
+                          : null,
                     ),
-                    child: color == null
-                        ? const Center(child: Icon(Icons.close_rounded, color: Colors.white54, size: 18))
-                        : null,
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('취소', style: TextStyle(color: Colors.white70)),
                   ),
-                );
-              }).toList(),
-            ),
-          ],
+                  const SizedBox(width: 12),
+                  FilledButton(
+                    onPressed: _handleSave,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B6B63),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: Text(widget.editTarget == null ? '등록' : '수정'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+    );
+  }
+}
+
+// 공통 라벨 + 필드 래퍼 (학생 등록 다이얼로그 느낌으로 정렬)
+class _LabeledField extends StatelessWidget {
+  final String label;
+  final Widget child;
+  final Widget? trailing;
+  const _LabeledField({required this.label, required this.child, this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+            if (trailing != null) ...[
+              const Spacer(),
+              trailing!,
+            ],
+          ],
         ),
-        FilledButton(
-          onPressed: _handleSave,
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-          child: Text(widget.editTarget == null ? '등록' : '수정'),
-        ),
+        const SizedBox(height: 8),
+        child,
       ],
     );
   }
+}
+
+InputDecoration _inputDecoration({String? hint, bool disabled = false}) {
+  return InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
+    filled: true,
+    fillColor: disabled ? const Color(0xFF111418).withOpacity(0.35) : const Color(0xFF111418),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    enabledBorder: OutlineInputBorder(
+      borderSide: BorderSide(color: disabled ? const Color(0xFF223131).withOpacity(0.6) : const Color(0xFF223131)),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 1.4),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    disabledBorder: OutlineInputBorder(
+      borderSide: BorderSide(color: const Color(0xFF223131).withOpacity(0.6)),
+      borderRadius: BorderRadius.circular(10),
+    ),
+  );
 }
 
 // 수업카드 위젯 (그룹카드 스타일 참고)

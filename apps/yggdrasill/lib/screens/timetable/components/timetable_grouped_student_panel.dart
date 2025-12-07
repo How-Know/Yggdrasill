@@ -17,6 +17,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final int? dayIndex;
   final DateTime? startTime;
   final bool isClassRegisterMode;
+  final VoidCallback? onDragStart;
+  final VoidCallback? onDragEnd;
 
   // 그룹핑 캐시 (학생 ID 목록 기준)
   static final Map<String, _GroupedCache> _groupCache = {};
@@ -34,6 +36,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.dayIndex,
     this.startTime,
     this.isClassRegisterMode = false,
+    this.onDragStart,
+    this.onDragEnd,
   });
 
   String _levelLabel(EducationLevel level) {
@@ -268,6 +272,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               dayIndex: dayIndex!,
                               startTime: startTime!,
                               isClassRegisterMode: isClassRegisterMode,
+                          onDragStart: onDragStart,
+                          onDragEnd: onDragEnd,
                             );
                           }).toList(),
                         ),
@@ -378,6 +384,8 @@ class _DraggablePanelCard extends StatelessWidget {
   final int dayIndex;
   final DateTime startTime;
   final bool isClassRegisterMode;
+  final VoidCallback? onDragStart;
+  final VoidCallback? onDragEnd;
 
   const _DraggablePanelCard({
     required this.card,
@@ -387,6 +395,8 @@ class _DraggablePanelCard extends StatelessWidget {
     required this.dayIndex,
     required this.startTime,
     required this.isClassRegisterMode,
+    this.onDragStart,
+    this.onDragEnd,
   });
 
   String? _findSetId(StudentWithInfo s) {
@@ -429,10 +439,12 @@ class _DraggablePanelCard extends StatelessWidget {
         // 이동/소실 진단용 로그
         // ignore: avoid_print
         print('[DRAG][cell-panel] start ids=$ids setIds=$setIds day=$dayIndex time=${startTime.hour}:${startTime.minute}');
+        onDragStart?.call();
       },
       onDragEnd: (details) {
         // ignore: avoid_print
         print('[DRAG][cell-panel] end wasAccepted=${details.wasAccepted} offset=${details.offset}');
+        onDragEnd?.call();
       },
       feedback: _PanelDragFeedback(
         students: dragStudents.map((e) => e['student'] as StudentWithInfo).toList(),
