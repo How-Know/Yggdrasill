@@ -1057,14 +1057,10 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
         valueListenable: DataManager.instance.memosNotifier,
         builder: (context, memos, _) {
           // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
-          // 디버그: 전체/필터 단계별 카운트
-          print('[FLOAT][DEBUG] total memos=${memos.length}');
+          // 디버그 로그 제거
           final withSchedule = memos.where((m) => m.scheduledAt != null).toList();
-          print('[FLOAT][DEBUG] with scheduledAt != null: ${withSchedule.length}');
           final notDismissedFlag = withSchedule.where((m) => !m.dismissed).toList();
-          print('[FLOAT][DEBUG] !dismissed (scheduled): ${notDismissedFlag.length}');
           final notSessionDismissed = notDismissedFlag.where((m) => !_sessionDismissed.contains(m.id)).toList();
-          print('[FLOAT][DEBUG] !sessionDismissed (scheduled): ${notSessionDismissed.length}');
           // 일정 있는 메모: 미래 포함, 세션 해제/영구 해제 제외
           final scheduledCandidates = notSessionDismissed
               .toList()
@@ -1073,15 +1069,10 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
           final unscheduledCandidates = memos
               .where((m) => m.scheduledAt == null)
               .toList();
-          print('[FLOAT][DEBUG] unscheduled candidates: ${unscheduledCandidates.length}');
           // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
           DateTime sortKey(m) => (m.scheduledAt ?? m.createdAt);
           final combined = [...scheduledCandidates, ...unscheduledCandidates]
             ..sort((a, b) => sortKey(a).compareTo(sortKey(b)));
-          print('[FLOAT][DEBUG] combined after sort: ${combined.length}');
-          for (final m in combined) {
-            print('[FLOAT][DEBUG] show memo id=${m.id}, when=${m.scheduledAt}, createdAt=${m.createdAt}');
-          }
           if (combined.isEmpty) return const SizedBox.shrink();
           // 아래에서 위로 쌓기
           return Material(

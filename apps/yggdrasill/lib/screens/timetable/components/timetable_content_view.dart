@@ -1559,15 +1559,23 @@ class TimetableContentViewState extends State<TimetableContentView> {
     Color? indicatorOverride;
     if (dayIndex != null && startTime != null) {
       final blockWithClass = DataManager.instance.studentTimeBlocks.firstWhere(
-        (b) => b.studentId == info.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute && b.sessionTypeId != null,
+        (b) =>
+            b.studentId == info.student.id &&
+            b.dayIndex == dayIndex &&
+            b.startHour == startTime.hour &&
+            b.startMinute == startTime.minute &&
+            b.sessionTypeId != null,
         orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), sessionTypeId: null),
       );
-      if (blockWithClass.sessionTypeId != null) {
+      final sessionId = blockWithClass.sessionTypeId;
+      if (sessionId != null && sessionId != '__default_class__') {
         final cls = DataManager.instance.classes.firstWhere(
-          (c) => c.id == blockWithClass.sessionTypeId,
+          (c) => c.id == sessionId,
           orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
         );
         indicatorOverride = cls.id.isEmpty ? null : cls.color;
+      } else {
+        indicatorOverride = Colors.transparent;
       }
     }
     // 다중 선택 시 각 학생의 setId도 포함해서 넘김
@@ -1859,7 +1867,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
     final schoolStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
     final schoolLabel = info.student.school.isNotEmpty ? info.student.school : '';
-    final Color? classColor = indicatorColorOverride ?? DataManager.instance.getStudentClassColor(info.student.id);
+    // 주어진 override(요일/시간/SET 기준 색상)만 사용, 없으면 투명 처리해 다른 SET 색상 퍼짐을 방지
+    final Color? classColor = indicatorColorOverride;
     final Color indicatorColor = classColor ?? Colors.transparent;
     return AnimatedContainer(
       key: key,
@@ -1918,8 +1927,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 검색 결과용 캐시: 요일선택 리스트와 동일한 UI이지만 매번 그룹핑/정렬을 방지
     if (showWeekdayInTimeLabel) {
       final rev = DataManager.instance.studentTimeBlocksRevision.value;
+      final classRev = DataManager.instance.classesRevision.value;
+      final classAssignRev = DataManager.instance.classAssignmentsRevision.value;
       final ids = students.map((s) => s.student.id).toList()..sort();
-      final key = '$rev|${ids.join(',')}';
+      final key = '$rev|$classRev|$classAssignRev|${ids.join(',')}';
       if (_cachedSearchGroupedKey == key && _cachedSearchGroupedWidget != null) {
         return _cachedSearchGroupedWidget!;
       }
@@ -2056,8 +2067,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required void Function(String, bool)? onSelectChanged,
   }) {
     final rev = DataManager.instance.studentTimeBlocksRevision.value;
+    final classRev = DataManager.instance.classesRevision.value;
+    final classAssignRev = DataManager.instance.classAssignmentsRevision.value;
     final ids = students.map((s) => s.student.id).toList()..sort();
-    final key = '$rev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|${ids.join(",")}|${selectedIds.join(",")}';
+    final key = '$rev|$classRev|$classAssignRev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|${ids.join(",")}|${selectedIds.join(",")}';
     if (_cachedCellPanelKey == key && _cachedCellPanelWidget != null) {
       return _cachedCellPanelWidget!;
     }
@@ -2687,15 +2700,14 @@ class _ClassCardState extends State<_ClassCard> {
     // 다중이동: students 리스트가 있으면 병렬 처리
     final students = data['students'] as List<dynamic>?;
     if (students != null && students.isNotEmpty) {
-      // print('[DEBUG][_handleStudentDrop] 다중 등록 시도: [36m${students.map((e) => (e['student'] as StudentWithInfo).student.id + '|' + (e['setId'] ?? 'null')).toList()}[0m');
-      await Future.wait(students.map((entry) {
+      final tasks = <Future>[];
+      for (final entry in students) {
         final studentWithInfo = entry['student'] as StudentWithInfo?;
         final setId = entry['setId'] as String?;
-        // print('[DEBUG][_handleStudentDrop] 처리: studentId=${studentWithInfo?.student.id}, setId=$setId');
-        return studentWithInfo != null ? _registerSingleStudent(studentWithInfo, setId: setId) : Future.value();
-      }));
-      // await DataManager.instance.loadStudentTimeBlocks(); // 전체 reload 제거
-      // print('[DEBUG][_handleStudentDrop] 다중 등록 완료(병렬): ${students.map((e) => (e['student'] as StudentWithInfo).student.name + '|' + (e['setId'] ?? 'null')).toList()}');
+        if (studentWithInfo == null || setId == null) continue; // setId 없으면 스킵
+        tasks.add(_registerSingleStudent(studentWithInfo, setId: setId));
+      }
+      await Future.wait(tasks);
       return;
     }
     // 기존 단일 등록 로직 (아래 함수로 분리)
@@ -2712,22 +2724,16 @@ class _ClassCardState extends State<_ClassCard> {
 
   // 단일 학생 등록 로직 분리
   Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
-    // print('[DEBUG][_registerSingleStudent] 호출: studentId=${studentWithInfo.student.id}, setId=$setId');
-    setId ??= DataManager.instance.studentTimeBlocks.firstWhere(
-      (b) => b.studentId == studentWithInfo.student.id,
-      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
-    ).setId;
-    if (setId == null) {
-      // print('[DEBUG][_registerSingleStudent] setId가 null, 등록 스킵');
-      return;
-    }
+    // setId가 확정되지 않은 경우 다른 블록까지 퍼질 수 있으므로 스킵
+    if (setId == null) return;
     final blocks = DataManager.instance.studentTimeBlocks
         .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
         .toList();
-    // print('[DEBUG][_registerSingleStudent] setId=$setId, studentId=${studentWithInfo.student.id}, 변경 대상 블록 개수=${blocks.length}');
+    // 재현 로그: 수업 등록 대상 블록 요약
+    // ignore: avoid_print
+    print('[REPRO][class-assign] classId=${widget.classInfo.id} studentId=${studentWithInfo.student.id} setId=$setId blocks=${blocks.map((b) => '${b.id}:${b.dayIndex}@${b.startHour}:${b.startMinute}').join(',')}');
     for (final block in blocks) {
       final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
-      // print('[DEBUG][_registerSingleStudent] update block: id=${block.id}, setId=${block.setId}, dayIndex=${block.dayIndex}, startTime=${block.startHour}:${block.startMinute}, sessionTypeId=${widget.classInfo.id}');
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
   }
@@ -2739,7 +2745,6 @@ class _ClassCardState extends State<_ClassCard> {
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
-        print('[DEBUG][_ClassCard.onWillAccept] data=$data');
         // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
         if (data == null) return false;
         final isMulti = data['students'] is List;

@@ -22,6 +22,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
   // 그룹핑 캐시 (학생 ID 목록 기준)
   static final Map<String, _GroupedCache> _groupCache = {};
+  static int _lastStudentTimeBlocksRev = -1;
+  static int _lastClassAssignRev = -1;
 
   const TimetableGroupedStudentPanel({
     super.key,
@@ -53,6 +55,15 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stbRev = DataManager.instance.studentTimeBlocksRevision.value;
+    final assignRev = DataManager.instance.classAssignmentsRevision.value;
+
+    if (_lastStudentTimeBlocksRev != stbRev || _lastClassAssignRev != assignRev) {
+      _groupCache.clear();
+      _lastStudentTimeBlocksRev = stbRev;
+      _lastClassAssignRev = assignRev;
+    }
+
     final key = students.map((s) => s.student.id).toList()..sort();
     final cacheKey = key.join('|');
     final grouped = _groupCache.putIfAbsent(cacheKey, () {
@@ -251,6 +262,41 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                           runSpacing: 10,
                           children: gradeStudents.map<Widget>((s) {
                             final isSelected = selectedStudentIds.contains(s.student.id);
+                            Color? indicatorOverride;
+                            final int? dIdx = dayIndex;
+                            final DateTime? st = startTime;
+                            if (dIdx != null && st != null) {
+                              final block = DataManager.instance.studentTimeBlocks.firstWhere(
+                                (b) =>
+                                    b.studentId == s.student.id &&
+                                    b.dayIndex == dIdx &&
+                                    b.startHour == st.hour &&
+                                    b.startMinute == st.minute,
+                                orElse: () => StudentTimeBlock(
+                                  id: '',
+                                  studentId: '',
+                                  dayIndex: 0,
+                                  startHour: 0,
+                                  startMinute: 0,
+                                  duration: Duration.zero,
+                                  createdAt: DateTime(0),
+                                  sessionTypeId: null,
+                                  setId: null,
+                                ),
+                              );
+                              final sessionId = block.sessionTypeId;
+                              if (sessionId != null && sessionId != '__default_class__') {
+                                indicatorOverride = DataManager.instance.getStudentClassColorAt(
+                                  s.student.id,
+                                  dIdx,
+                                  DateTime(0, 1, 1, st.hour, st.minute),
+                                  setId: block.setId,
+                                );
+                              } else {
+                                // sessionTypeId 없거나 기본수업이면 색상 표시하지 않음 (fallback 방지)
+                                indicatorOverride = Colors.transparent;
+                              }
+                            }
                             final card = Padding(
                               padding: const EdgeInsets.only(left: 14),
                               child: _PanelStudentCard(
@@ -261,6 +307,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                     ? null
                                     : (next) => onStudentSelectChanged!(s.student.id, next),
                                 onOpenStudentPage: onOpenStudentPage,
+                                indicatorColorOverride: indicatorOverride,
                               ),
                             );
                             if (!enableDrag || dayIndex == null || startTime == null) return card;
@@ -302,6 +349,7 @@ class _PanelStudentCard extends StatelessWidget {
   final bool isSelectMode;
   final void Function(bool next)? onToggleSelect;
   final void Function(StudentWithInfo student)? onOpenStudentPage;
+  final Color? indicatorColorOverride;
 
   const _PanelStudentCard({
     required this.student,
@@ -309,6 +357,7 @@ class _PanelStudentCard extends StatelessWidget {
     this.isSelectMode = false,
     this.onToggleSelect,
     this.onOpenStudentPage,
+    this.indicatorColorOverride,
   });
 
   @override
@@ -316,7 +365,9 @@ class _PanelStudentCard extends StatelessWidget {
     final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
     final schoolStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
     final schoolLabel = student.student.school.isNotEmpty ? student.student.school : '';
-    final classColor = DataManager.instance.getStudentClassColor(student.student.id);
+    // 요일/셀 선택 리스트에서는 setId/시간 기준으로 받은 색상만 사용하고,
+    // override가 없으면 투명 처리하여 다른 set의 색상이 퍼지지 않게 한다.
+    final Color? classColor = indicatorColorOverride;
     final Color indicatorColor = classColor ?? Colors.transparent;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -433,17 +484,8 @@ class _DraggablePanelCard extends StatelessWidget {
       data: dragData,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       maxSimultaneousDrags: 1,
-      onDragStarted: () {
-        final ids = dragStudents.map((e) => (e['student'] as StudentWithInfo).student.id).join(',');
-        final setIds = dragStudents.map((e) => e['setId']).join(',');
-        // 이동/소실 진단용 로그
-        // ignore: avoid_print
-        print('[DRAG][cell-panel] start ids=$ids setIds=$setIds day=$dayIndex time=${startTime.hour}:${startTime.minute}');
-        onDragStart?.call();
-      },
+      onDragStarted: onDragStart,
       onDragEnd: (details) {
-        // ignore: avoid_print
-        print('[DRAG][cell-panel] end wasAccepted=${details.wasAccepted} offset=${details.offset}');
         onDragEnd?.call();
       },
       feedback: _PanelDragFeedback(

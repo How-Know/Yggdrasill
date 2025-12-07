@@ -96,8 +96,11 @@ class DataManager {
   List<StudentTimeBlock> _studentTimeBlocks = [];
   final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
   final ValueNotifier<int> studentTimeBlocksRevision = ValueNotifier<int>(0);
+  final ValueNotifier<int> classesRevision = ValueNotifier<int>(0);
+  final ValueNotifier<int> classAssignmentsRevision = ValueNotifier<int>(0);
   void _bumpStudentTimeBlocksRevision() {
     studentTimeBlocksRevision.value++;
+    classAssignmentsRevision.value++;
   }
   
   List<GroupSchedule> _groupSchedules = [];
@@ -1524,6 +1527,7 @@ class DataManager {
   }
 
   Future<void> loadStudentTimeBlocks() async {
+    final tsStart = DateTime.now();
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
@@ -1551,7 +1555,7 @@ class DataManager {
           );
         }).toList();
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-        print('[DEBUG] student_time_blocks 로드 완료(Supabase): ${_studentTimeBlocks.length}개');
+        print('[REPRO][stb][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
         return;
       } catch (e) {
         print('[DEBUG] student_time_blocks Supabase 로드 실패, 로컬로 폴백: $e');
@@ -1561,6 +1565,7 @@ class DataManager {
     final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
     _studentTimeBlocks = rawBlocks;
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    print('[REPRO][stb][load] source=local count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
   }
 
   Future<void> saveStudentTimeBlocks() async {
@@ -1645,21 +1650,21 @@ class DataManager {
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
+          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
+          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { studentTimeBlocksRevision.value++; _debouncedReload(loadStudentTimeBlocks); },
+          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
         )
         ..subscribe();
     } catch (_) {}
@@ -1908,6 +1913,14 @@ class DataManager {
   }
 
   Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+    final prevIndex = _studentTimeBlocks.indexWhere((b) => b.id == id);
+    final prev = prevIndex != -1 ? _studentTimeBlocks[prevIndex] : null;
+    final prevSession = prev?.sessionTypeId;
+    final newSession = newBlock.sessionTypeId;
+    if (prevSession != newSession) {
+      // ignore: avoid_print
+      print('[REPRO][stb][update] id=$id setId=${newBlock.setId} day=${newBlock.dayIndex} time=${newBlock.startHour}:${newBlock.startMinute} session:$prevSession -> $newSession');
+    }
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
@@ -2492,14 +2505,15 @@ class DataManager {
     return cls.id.isEmpty ? null : cls.color;
   }
 
-  /// 특정 요일/시간 블록 기준 학생의 수업 색상 반환 (없으면 null)
-  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime) {
+  /// 특정 요일/시간(+선택적 setId) 블록 기준 학생의 수업 색상 반환 (없으면 null)
+  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId}) {
     final block = _studentTimeBlocks.firstWhere(
       (b) =>
           b.studentId == studentId &&
           b.dayIndex == dayIdx &&
           b.startHour == startTime.hour &&
           b.startMinute == startTime.minute &&
+          (setId == null || b.setId == setId) &&
           b.sessionTypeId != null,
       orElse: () => StudentTimeBlock(
         id: '',
@@ -2532,9 +2546,9 @@ class DataManager {
     }
   }
 
-  List<ClassInfo> _classes = [];
-  final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
-  List<ClassInfo> get classes => List.unmodifiable(_classes);
+List<ClassInfo> _classes = [];
+final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
+List<ClassInfo> get classes => List.unmodifiable(_classes);
 
   Future<void> loadClasses() async {
     if (TagPresetService.preferSupabaseRead) {
@@ -2575,11 +2589,15 @@ class DataManager {
           }
         }
         classesNotifier.value = List.unmodifiable(_classes);
+        classesRevision.value++;
+        classAssignmentsRevision.value++;
         return;
       } catch (e, st) { print('[SUPA][classes reorder insert] $e\n$st'); }
     }
     _classes = await AcademyDbService.instance.getClasses();
     classesNotifier.value = List.unmodifiable(_classes);
+    classesRevision.value++;
+    classAssignmentsRevision.value++;
   }
   Future<void> saveClasses() async {
     if (TagPresetService.preferSupabaseRead) {
@@ -2621,6 +2639,7 @@ class DataManager {
         // 서버 반영 후 메모리 반영 및 UI 업데이트
         _classes.add(c);
         classesNotifier.value = List.unmodifiable(_classes);
+        classesRevision.value++;
         return;
       } catch (e, st) {
         print('[SUPA][classes upsert(add)] $e\n$st');
@@ -2630,6 +2649,7 @@ class DataManager {
     _classes.add(c);
     await AcademyDbService.instance.addClass(c);
     classesNotifier.value = List.unmodifiable(_classes);
+    classesRevision.value++;
   }
   Future<void> updateClass(ClassInfo c) async {
     if (TagPresetService.preferSupabaseRead) {
@@ -2646,6 +2666,8 @@ class DataManager {
     final idx = _classes.indexWhere((e) => e.id == c.id);
         if (idx != -1) _classes[idx] = c; else _classes.add(c);
         classesNotifier.value = List.unmodifiable(_classes);
+        classesRevision.value++;
+        classAssignmentsRevision.value++;
         return;
       } catch (e, st) {
         print('[SUPA][classes upsert(update)] $e\n$st');
@@ -2656,6 +2678,8 @@ class DataManager {
     if (idx != -1) _classes[idx] = c; else _classes.add(c);
     await AcademyDbService.instance.updateClass(c);
     classesNotifier.value = List.unmodifiable(_classes);
+    classesRevision.value++;
+    classAssignmentsRevision.value++;
   }
   Future<void> deleteClass(String id) async {
     if (TagPresetService.preferSupabaseRead) {
@@ -2672,6 +2696,8 @@ class DataManager {
     _classes.removeWhere((c) => c.id == id);
     await AcademyDbService.instance.deleteClass(id);
     classesNotifier.value = List.unmodifiable(_classes);
+    classesRevision.value++;
+    classAssignmentsRevision.value++;
   }
 
   Future<void> saveClassesOrder(List<ClassInfo> newOrder) async {
