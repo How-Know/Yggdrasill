@@ -414,9 +414,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
     } else if (_splitButtonSelected == '자습') {
       // 자습 등록 모드 진입 막기: 아무 동작도 하지 않음
       return;
-    } else if (_selectedGroup != null) {
-      // 클래스 등록 모드
-      _showGroupScheduleDialog();
+    } else if (_splitButtonSelected == '수업') {
+      // 새 수업 등록 다이얼로그 오픈 (TimetableContentViewState 메서드 사용)
+      _contentViewKey.currentState?.openClassRegistrationDialog();
     }
   }
 

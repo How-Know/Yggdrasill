@@ -310,8 +310,8 @@ class _PanelStudentCard extends StatelessWidget {
     final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
     final schoolStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
     final schoolLabel = student.student.school.isNotEmpty ? student.student.school : '';
-    final groupColor = student.student.groupInfo?.color;
-    final hasGroupColor = groupColor != null;
+    final classColor = DataManager.instance.getStudentClassColor(student.student.id);
+    final Color indicatorColor = classColor ?? Colors.transparent;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeInOut,
@@ -339,7 +339,7 @@ class _PanelStudentCard extends StatelessWidget {
                   width: 6,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: hasGroupColor ? groupColor : Colors.transparent,
+                    color: indicatorColor,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -436,6 +436,8 @@ class _DraggablePanelCard extends StatelessWidget {
       },
       feedback: _PanelDragFeedback(
         students: dragStudents.map((e) => e['student'] as StudentWithInfo).toList(),
+        dayIndex: dayIndex,
+        startTime: startTime,
       ),
       childWhenDragging: Opacity(
         opacity: 0.3,
@@ -448,7 +450,13 @@ class _DraggablePanelCard extends StatelessWidget {
 
 class _PanelDragFeedback extends StatelessWidget {
   final List<StudentWithInfo> students;
-  const _PanelDragFeedback({required this.students});
+  final int dayIndex;
+  final DateTime startTime;
+  const _PanelDragFeedback({
+    required this.students,
+    required this.dayIndex,
+    required this.startTime,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -515,7 +523,10 @@ class _PanelDragFeedback extends StatelessWidget {
 
   Widget _feedbackCard(StudentWithInfo s) {
     final groupColor = s.student.groupInfo?.color;
-    final hasGroupColor = groupColor != null;
+    Color? classColor;
+    classColor = DataManager.instance.getStudentClassColorAt(s.student.id, dayIndex, startTime);
+    classColor ??= DataManager.instance.getStudentClassColor(s.student.id);
+    final Color indicatorColor = classColor ?? Colors.transparent;
     return Material(
       color: Colors.transparent,
       child: Container(
@@ -532,7 +543,7 @@ class _PanelDragFeedback extends StatelessWidget {
               width: 5,
               height: 22,
               decoration: BoxDecoration(
-                color: hasGroupColor ? groupColor : Colors.transparent,
+                color: indicatorColor,
                 borderRadius: BorderRadius.circular(3),
               ),
             ),

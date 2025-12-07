@@ -96,6 +96,9 @@ class DataManager {
   List<StudentTimeBlock> _studentTimeBlocks = [];
   final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
   final ValueNotifier<int> studentTimeBlocksRevision = ValueNotifier<int>(0);
+  void _bumpStudentTimeBlocksRevision() {
+    studentTimeBlocksRevision.value++;
+  }
   
   List<GroupSchedule> _groupSchedules = [];
   final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
@@ -1846,11 +1849,13 @@ class DataManager {
     if (immediate || blocks.length == 1) {
       // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      _bumpStudentTimeBlocksRevision();
     } else {
       // 다중 블록은 debouncing으로 지연 (150ms 후 한 번에 반영)
       _uiUpdateTimer?.cancel();
       _uiUpdateTimer = Timer(const Duration(milliseconds: 150), () {
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _bumpStudentTimeBlocksRevision();
       });
     }
     // 블록 추가 후 주간 순번 재계산 (대상 학생들만)
@@ -1880,11 +1885,13 @@ class DataManager {
     if (immediate || blockIds.length == 1) {
       // 단일 삭제나 즉시 반영 요청 시 바로 업데이트
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      _bumpStudentTimeBlocksRevision();
     } else {
       // 다중 삭제는 debouncing으로 지연 (100ms 후 한 번에 반영)
       _uiUpdateTimer?.cancel();
       _uiUpdateTimer = Timer(const Duration(milliseconds: 100), () {
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _bumpStudentTimeBlocksRevision();
       });
     }
     if (!TagPresetService.preferSupabaseRead) {
@@ -1922,6 +1929,7 @@ class DataManager {
         final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
         if (index != -1) _studentTimeBlocks[index] = newBlock; else _studentTimeBlocks.add(newBlock);
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _bumpStudentTimeBlocksRevision();
         if (newBlock.setId != null) {
           await _recalculateWeeklyOrderForStudent(newBlock.studentId);
         }
@@ -1935,6 +1943,7 @@ class DataManager {
     if (index != -1) {
       _studentTimeBlocks[index] = newBlock;
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      _bumpStudentTimeBlocksRevision();
       await AcademyDbService.instance.updateStudentTimeBlock(id, newBlock);
       await loadStudentTimeBlocks();
       if (newBlock.setId != null) {
@@ -2458,6 +2467,57 @@ class DataManager {
     final studentIds = blocks.map((b) => b.studentId).toSet();
     //print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
     return studentIds.length;
+  }
+
+  /// 학생이 속한 수업 색상 반환 (없으면 null)
+  Color? getStudentClassColor(String studentId) {
+    final block = _studentTimeBlocks.firstWhere(
+      (b) => b.studentId == studentId && b.sessionTypeId != null,
+      orElse: () => StudentTimeBlock(
+        id: '',
+        studentId: '',
+        dayIndex: 0,
+        startHour: 0,
+        startMinute: 0,
+        duration: Duration.zero,
+        createdAt: DateTime(0),
+        sessionTypeId: null,
+      ),
+    );
+    if (block.sessionTypeId == null) return null;
+    final cls = _classes.firstWhere(
+      (c) => c.id == block.sessionTypeId,
+      orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
+    );
+    return cls.id.isEmpty ? null : cls.color;
+  }
+
+  /// 특정 요일/시간 블록 기준 학생의 수업 색상 반환 (없으면 null)
+  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime) {
+    final block = _studentTimeBlocks.firstWhere(
+      (b) =>
+          b.studentId == studentId &&
+          b.dayIndex == dayIdx &&
+          b.startHour == startTime.hour &&
+          b.startMinute == startTime.minute &&
+          b.sessionTypeId != null,
+      orElse: () => StudentTimeBlock(
+        id: '',
+        studentId: '',
+        dayIndex: 0,
+        startHour: 0,
+        startMinute: 0,
+        duration: Duration.zero,
+        createdAt: DateTime(0),
+        sessionTypeId: null,
+      ),
+    );
+    if (block.sessionTypeId == null) return null;
+    final cls = _classes.firstWhere(
+      (c) => c.id == block.sessionTypeId,
+      orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
+    );
+    return cls.id.isEmpty ? null : cls.color;
   }
 
   // 자습 블록을 DB에서 불러오는 메서드 추가
