@@ -1650,112 +1650,102 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   Widget _buildDragFeedback(List<StudentWithInfo> selectedStudents, StudentWithInfo mainInfo) {
     final count = selectedStudents.length;
-    if (count <= 1) {
-            return Material(
-              color: Colors.transparent,
-              child: Opacity(
-                opacity: 0.85,
-                child: SizedBox(
-                  width: 160,
-                  child: _buildSelectableStudentCard(mainInfo, selected: true),
-                ),
+    Widget buildCard(StudentWithInfo s) {
+      final classColor = DataManager.instance.getStudentClassColor(s.student.id);
+      final indicator = classColor ?? Colors.transparent;
+      return Container(
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF223131), width: 1),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 5,
+              height: 22,
+              decoration: BoxDecoration(
+                color: indicator,
+                borderRadius: BorderRadius.circular(3),
               ),
-            );
-    } else if (count <= 3) {
-      // 2~3개: 카드 쌓임, 맨 위만 내용, 나머지는 빈 카드
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                s.student.name,
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 14, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (count <= 1) {
       return Material(
         color: Colors.transparent,
         child: SizedBox(
-          width: 120 + 16.0 * (count - 1),
-          height: 50,
-          child: Stack(
+          width: 150,
+          height: 56,
+          child: Align(
             alignment: Alignment.centerLeft,
-            children: List.generate(count, (i) =>
-              Positioned(
-                left: i * 16.0,
-                child: Opacity(
-                  opacity: 0.85 - i * 0.18,
-                  child: SizedBox(
-                    width: 120,
-                    child: i == count - 1
-                      ? _buildSelectableStudentCard(selectedStudents[i], selected: true)
-                      : _buildEmptyCard(),
-                  ),
-                ),
-              ),
-            ),
+            child: SizedBox(width: 140, child: buildCard(mainInfo)),
           ),
         ),
       );
-    } else {
-      // 4개 이상: 카드 쌓임 + 개수 표시(중앙, 원형, 투명 배경, 흰색 아웃라인)
-      return Material(
-        color: Colors.transparent,
-        child: SizedBox(
-          width: 120 + 16.0 * 2, // 3장 겹침 + 개수
-          height: 50,
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              ...List.generate(3, (i) =>
-                Positioned(
-                  left: i * 16.0,
-                  child: Opacity(
-                    opacity: 0.85 - i * 0.18,
-                    child: SizedBox(
-                      width: 120,
-                      child: i == 2
-                        ? _buildSelectableStudentCard(selectedStudents[i], selected: true)
-                        : _buildEmptyCard(),
-                    ),
-                  ),
-                ),
-              ),
-              // 숫자 원형 배지
+    }
+
+    final showCount = count >= 4 ? 3 : count;
+    final cards = List.generate(showCount, (i) {
+      final s = selectedStudents[i];
+      final opacity = (0.85 - i * 0.18).clamp(0.3, 1.0);
+      return Positioned(
+        left: i * 12.0,
+        child: Opacity(
+          opacity: opacity,
+          child: SizedBox(width: 140, child: buildCard(s)),
+        ),
+      );
+    }).toList();
+
+    return Material(
+      color: Colors.transparent,
+      child: SizedBox(
+        width: 150,
+        height: 56,
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            ...cards,
+            if (count >= 4)
               Positioned(
-                left: 48.0 + 25, // 카드 오른쪽에 겹치게
-                top: 8,
+                right: 6,
+                top: 6,
                 child: Container(
-                  width: 34,
-                  height: 34,
+                  width: 28,
+                  height: 28,
                   decoration: BoxDecoration(
-                    color: Colors.transparent,
+                    color: const Color(0xFF15171C),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.transparent, width: 2.2),
+                    border: Border.all(color: const Color(0xFF223131), width: 1),
                   ),
                   alignment: Alignment.center,
                   child: Text(
                     '+$count',
                     style: const TextStyle(
-                      color: Colors.grey,
+                      color: Color(0xFFEAF2F2),
                       fontWeight: FontWeight.bold,
-                      fontSize: 22,
+                      fontSize: 12,
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+          ],
         ),
-      );
-    }
-  }
-
-  Widget _buildEmptyCard() {
-    return Container(
-      width: 120,
-      height: 50,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1F1F1F),
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.13),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(color: Colors.black26, width: 1.2),
       ),
     );
   }
@@ -2743,7 +2733,8 @@ class _ClassCardState extends State<_ClassCard> {
             ? (c.color ?? const Color(0xFF223131))
             : Colors.transparent;
         final Color indicatorColor = c.color ?? const Color(0xFF223131);
-        return Container(
+        final classBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == c.id).toList();
+        final cardBody = Container(
           key: widget.key,
           decoration: BoxDecoration(
             color: const Color(0xFF15171C),
@@ -2755,87 +2746,174 @@ class _ClassCardState extends State<_ClassCard> {
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 10,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: indicatorColor,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(width: 18),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          c.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFFEAF2F2),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: indicatorColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              c.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFFEAF2F2),
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            if (c.description.isNotEmpty)
+                              Text(
+                                c.description,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        c.capacity == null
+                            ? '학생 $studentCount명'
+                            : '학생 $studentCount/${c.capacity}명',
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (widget.enableActions) ...[
+                        const SizedBox(width: 12),
+                        IconButton(
+                          icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
+                          onPressed: widget.onEdit,
+                          tooltip: '수정',
+                          splashRadius: 22,
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_rounded, color: Colors.white70, size: 20),
+                          onPressed: widget.onDelete,
+                          tooltip: '삭제',
+                          splashRadius: 22,
+                        ),
+                      ],
+                      if (widget.showDragHandle)
+                        ReorderableDragStartListener(
+                          index: widget.reorderIndex,
+                          child: IconButton(
+                            onPressed: () {},
+                            icon: const Icon(Icons.drag_handle_rounded),
+                            color: Colors.white54,
+                            splashRadius: 22,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        if (c.description.isNotEmpty)
-                          Text(
-                            c.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    c.capacity == null
-                        ? '학생 $studentCount명'
-                        : '학생 $studentCount/${c.capacity}명',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  if (widget.enableActions) ...[
-                    IconButton(
-                      icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
-                      onPressed: widget.onEdit,
-                      tooltip: '수정',
-                      splashRadius: 22,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_rounded, color: Colors.white70, size: 20),
-                      onPressed: widget.onDelete,
-                      tooltip: '삭제',
-                      splashRadius: 22,
-                    ),
-                  ],
-                  if (widget.showDragHandle)
-                    ReorderableDragStartListener(
-                      index: widget.reorderIndex,
-                      child: IconButton(
-                        onPressed: () {},
-                        icon: const Icon(Icons.drag_handle_rounded),
-                        color: Colors.white54,
-                        splashRadius: 22,
-                      ),
-                    ),
-                ],
+                    ],
+                  );
+                },
               ),
             ),
           ),
+        );
+        if (classBlocks.isEmpty) {
+          return cardBody;
+        }
+        final dataPayload = {
+          'type': 'class-move',
+          'classId': c.id,
+          'blocks': classBlocks
+              .map((b) => {
+                    'id': b.id,
+                    'studentId': b.studentId,
+                    'dayIndex': b.dayIndex,
+                    'startHour': b.startHour,
+                    'startMinute': b.startMinute,
+                    'duration': b.duration.inMinutes,
+                    'setId': b.setId,
+                    'number': b.number,
+                    'sessionTypeId': b.sessionTypeId,
+                  })
+              .toList(),
+        };
+        return Draggable<Map<String, dynamic>>(
+          data: dataPayload,
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          feedback: Material(
+            color: Colors.transparent,
+            child: Opacity(
+              opacity: 0.9,
+              child: SizedBox(
+                width: 220,
+                child: Container(
+                  decoration: cardBody.decoration,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: indicatorColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              c.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFFEAF2F2),
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              c.capacity == null
+                                  ? '학생 ${studentCount}명'
+                                  : '학생 ${studentCount}/${c.capacity}명',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(opacity: 0.35, child: cardBody),
+          child: cardBody,
         );
       },
     );

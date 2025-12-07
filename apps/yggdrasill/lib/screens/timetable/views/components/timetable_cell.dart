@@ -100,153 +100,205 @@ class TimetableCell extends StatelessWidget {
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
         print('[DRAG][drop:onWillAccept] data=$data');
-        if (data == null || data['type'] != 'move') return false;
-        // 학생카드만 허용 (students, oldDayIndex, oldStartTime이 있어야 함)
-        return data != null && data.containsKey('students') && data.containsKey('oldDayIndex') && data.containsKey('oldStartTime');
+        if (data == null) return false;
+        if (data['type'] == 'move') {
+          return data.containsKey('students') && data.containsKey('oldDayIndex') && data.containsKey('oldStartTime');
+        }
+        if (data['type'] == 'class-move') {
+          return data.containsKey('classId') && data.containsKey('blocks');
+        }
+        return false;
       },
       onAccept: (data) async {
-        final studentsRaw = (data['students'] as List);
-        final students = studentsRaw
-            .map((e) => e is StudentWithInfo ? e : e['student'] as StudentWithInfo)
-            .toList();
-        final oldDayIndex = data['oldDayIndex'] as int?;
-        final oldStartTime = data['oldStartTime'] as DateTime?;
-        final ids = students.map((s) => s.student.id).join(',');
-        final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
-        print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
-        List<StudentTimeBlock> toRemove = [];
-        List<StudentTimeBlock> toAdd = [];
-        List<StudentWithInfo> failedStudents = [];
-        for (final studentWithInfo in students) {
-          if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
-          final studentId = studentWithInfo.student.id;
-          final allBlocks = DataManager.instance.studentTimeBlocks;
-          final targetBlock = allBlocks.firstWhere(
-            (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
-            orElse: () => StudentTimeBlock(
-              id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
-            ),
-          );
-          bool studentHasConflict = false;
-          if (targetBlock.setId == null || targetBlock.number == null) {
-            final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
-            if (block != null) {
-              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
-              if (conflictBlock != null) {
-                if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
-                  studentHasConflict = true;
+        if (data['type'] == 'move') {
+          // 학생 이동 기존 로직
+          final studentsRaw = (data['students'] as List);
+          final students = studentsRaw
+              .map((e) => e is StudentWithInfo ? e : e['student'] as StudentWithInfo)
+              .toList();
+          final oldDayIndex = data['oldDayIndex'] as int?;
+          final oldStartTime = data['oldStartTime'] as DateTime?;
+          final ids = students.map((s) => s.student.id).join(',');
+          final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
+          print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
+          List<StudentTimeBlock> toRemove = [];
+          List<StudentTimeBlock> toAdd = [];
+          List<StudentWithInfo> failedStudents = [];
+          for (final studentWithInfo in students) {
+            if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
+            final studentId = studentWithInfo.student.id;
+            final allBlocks = DataManager.instance.studentTimeBlocks;
+            final targetBlock = allBlocks.firstWhere(
+              (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
+              orElse: () => StudentTimeBlock(
+                id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
+              ),
+            );
+            bool studentHasConflict = false;
+            if (targetBlock.setId == null || targetBlock.number == null) {
+              final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
+              if (block != null) {
+                final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+                if (conflictBlock != null) {
+                  if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
+                    studentHasConflict = true;
+                  }
+                }
+                if (!studentHasConflict) {
+                  final newBlock = block.copyWith(dayIndex: dayIdx, startHour: startTime.hour, startMinute: startTime.minute);
+                  toRemove.add(block);
+                  toAdd.add(newBlock);
+                }
+              } else {
+                studentHasConflict = true;
+              }
+            } else {
+              final setId = targetBlock.setId;
+              final baseNumber = targetBlock.number!;
+              final toMove = allBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
+              toMove.sort((a, b) => a.number!.compareTo(b.number!));
+              final baseTime = startTime;
+              final duration = targetBlock.duration;
+              final newBlocks = <StudentTimeBlock>[];
+              for (final block in toMove) {
+                final diff = block.number! - baseNumber;
+                final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
+                final newBlock = block.copyWith(dayIndex: dayIdx, startHour: newTime.hour, startMinute: newTime.minute);
+                newBlocks.add(newBlock);
+              }
+              for (final newBlock in newBlocks) {
+                final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
+                if (conflictBlock != null) {
+                  if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
+                    studentHasConflict = true;
+                    break;
+                  }
                 }
               }
               if (!studentHasConflict) {
-                final newBlock = block.copyWith(dayIndex: dayIdx, startHour: startTime.hour, startMinute: startTime.minute);
-                toRemove.add(block);
-                toAdd.add(newBlock);
-              }
-            } else {
-              studentHasConflict = true;
-            }
-          } else {
-            final setId = targetBlock.setId;
-            final baseNumber = targetBlock.number!;
-            final toMove = allBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
-            toMove.sort((a, b) => a.number!.compareTo(b.number!));
-            final baseTime = startTime;
-            final duration = targetBlock.duration;
-            final newBlocks = <StudentTimeBlock>[];
-            for (final block in toMove) {
-              final diff = block.number! - baseNumber;
-              final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
-              final newBlock = block.copyWith(dayIndex: dayIdx, startHour: newTime.hour, startMinute: newTime.minute);
-              newBlocks.add(newBlock);
-            }
-            for (final newBlock in newBlocks) {
-              final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
-              if (conflictBlock != null) {
-                if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
-                  studentHasConflict = true;
-                  break;
-                }
+                toRemove.addAll(toMove);
+                toAdd.addAll(newBlocks);
               }
             }
-            if (!studentHasConflict) {
-              toRemove.addAll(toMove);
-              toAdd.addAll(newBlocks);
+            if (studentHasConflict) {
+              failedStudents.add(studentWithInfo);
             }
           }
-          if (studentHasConflict) {
-            failedStudents.add(studentWithInfo);
-          }
-        }
-        // 1. 운영시간/휴식시간 방어: toAdd의 모든 블록이 운영시간/휴식시간과 겹치는지 체크
-        bool hasInvalidTime = false;
-        for (final block in toAdd) {
-          final blockStart = DateTime(0, 1, 1, block.startHour, block.startMinute);
-          final blockEnd = blockStart.add(block.duration);
-          for (var t = blockStart; t.isBefore(blockEnd); t = t.add(const Duration(minutes: 30))) {
-            if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [t])) {
-              hasInvalidTime = true;
-              break;
+          bool hasInvalidTime = false;
+          for (final block in toAdd) {
+            final blockStart = DateTime(0, 1, 1, block.startHour, block.startMinute);
+            final blockEnd = blockStart.add(block.duration);
+            for (var t = blockStart; t.isBefore(blockEnd); t = t.add(const Duration(minutes: 30))) {
+              if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [t])) {
+                hasInvalidTime = true;
+                break;
+              }
             }
+            if (hasInvalidTime) break;
           }
-          if (hasInvalidTime) break;
-        }
-        if (hasInvalidTime) {
-          Future.microtask(() {
-            try {
-              showAppSnackBar(context, '운영시간 외 또는 휴식시간에는 수업을 등록할 수 없습니다.', useRoot: true);
-            } catch (e, st) {
-              print('[DEBUG][showAppSnackBar 예외] $e\n$st');
-            }
-          });
+          if (hasInvalidTime) {
+            Future.microtask(() {
+              try {
+                showAppSnackBar(context, '운영시간 외 또는 휴식시간에는 수업을 등록할 수 없습니다.', useRoot: true);
+              } catch (e, st) {
+                print('[DEBUG][showAppSnackBar 예외] $e\n$st');
+              }
+            });
+            return;
+          }
+          if (toAdd.isEmpty) {
+            showAppSnackBar(context, '이미 등록된 시간입니다.');
+            return;
+          }
+          print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
+          await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
+          await DataManager.instance.loadStudents();
+          if (failedStudents.isNotEmpty) {
+            await showDialog(
+              context: context,
+              builder: (context) {
+                return AlertDialog(
+                  backgroundColor: const Color(0xFF1F1F1F),
+                  title: const Text('이동 실패 학생', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                  content: SizedBox(
+                    width: 320,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('다음 학생은 이미 등록된 시간과 겹쳐 이동할 수 없습니다.', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 15)),
+                        const SizedBox(height: 12),
+                        ...failedStudents.map((s) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text(s.student.name, style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 16)),
+                        )),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('확인', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                );
+              },
+            );
+          }
+          final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
+          print('[DEBUG][TimetableCell] timetableContentViewState != null: ${timetableContentViewState != null}');
+          if (timetableContentViewState != null) {
+            timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
+            print('[DEBUG][TimetableCell] exitSelectModeIfNeeded 호출 시도');
+            timetableContentViewState.exitSelectModeIfNeeded();
+          }
           return;
         }
-        if (toAdd.isEmpty) {
-          showAppSnackBar(context, '이미 등록된 시간입니다.');
-          return;
-        }
-        print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
-        // 백엔드 처리 및 UI 업데이트를 DataManager를 통해 일관되게 처리
-        await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
-        await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
-        await DataManager.instance.loadStudents();
-        if (failedStudents.isNotEmpty) {
-          await showDialog(
-            context: context,
-            builder: (context) {
-              return AlertDialog(
-                backgroundColor: const Color(0xFF1F1F1F),
-                title: const Text('이동 실패 학생', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                content: SizedBox(
-                  width: 320,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('다음 학생은 이미 등록된 시간과 겹쳐 이동할 수 없습니다.', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 15)),
-                      const SizedBox(height: 12),
-                      ...failedStudents.map((s) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Text(s.student.name, style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 16)),
-                      )),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('확인', style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              );
-            },
-          );
-        }
-        final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
-        print('[DEBUG][TimetableCell] timetableContentViewState != null: ${timetableContentViewState != null}');
-        if (timetableContentViewState != null) {
-          timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
-          print('[DEBUG][TimetableCell] exitSelectModeIfNeeded 호출 시도');
-          timetableContentViewState.exitSelectModeIfNeeded();
+
+        if (data['type'] == 'class-move') {
+          final blocksRaw = (data['blocks'] as List).cast<Map>();
+          if (blocksRaw.isEmpty) return;
+          // 기준점 계산
+          int minTotal = 1 << 30;
+          for (final b in blocksRaw) {
+            final total = (b['dayIndex'] as int) * 24 * 60 + (b['startHour'] as int) * 60 + (b['startMinute'] as int);
+            if (total < minTotal) minTotal = total;
+          }
+          final targetTotal = dayIdx * 24 * 60 + startTime.hour * 60 + startTime.minute;
+          final delta = targetTotal - minTotal;
+          List<StudentTimeBlock> newBlocks = [];
+          List<String> oldIds = [];
+          for (final b in blocksRaw) {
+            final oldTotal = (b['dayIndex'] as int) * 24 * 60 + (b['startHour'] as int) * 60 + (b['startMinute'] as int);
+            final newTotal = oldTotal + delta;
+            final newDay = newTotal ~/ (24 * 60);
+            final newMinuteTotal = newTotal % (24 * 60);
+            final newHour = newMinuteTotal ~/ 60;
+            final newMinute = newMinuteTotal % 60;
+            final duration = Duration(minutes: b['duration'] as int);
+            oldIds.add(b['id'] as String);
+            newBlocks.add(StudentTimeBlock(
+              id: b['id'] as String,
+              studentId: b['studentId'] as String,
+              dayIndex: newDay,
+              startHour: newHour,
+              startMinute: newMinute,
+              duration: duration,
+              createdAt: DateTime.now(),
+              setId: b['setId'] as String?,
+              number: b['number'] as int?,
+              sessionTypeId: b['sessionTypeId'] as String?,
+            ));
+          }
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(oldIds, immediate: true);
+          await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
+          await DataManager.instance.loadStudents();
+          final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
+          if (timetableContentViewState != null) {
+            timetableContentViewState.updateCellStudentsAfterMove(dayIdx, startTime);
+            timetableContentViewState.exitSelectModeIfNeeded();
+          }
         }
       },
       builder: (context, candidateData, rejectedData) {
