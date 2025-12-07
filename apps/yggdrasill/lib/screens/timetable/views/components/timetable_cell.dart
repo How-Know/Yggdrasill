@@ -39,6 +39,7 @@ class TimetableCell extends StatelessWidget {
   final bool isBreakTime;
   final bool isExpanded;
   final bool isDragHighlight;
+  final bool isSelected;
   final VoidCallback? onTap;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
@@ -62,6 +63,7 @@ class TimetableCell extends StatelessWidget {
     required this.isBreakTime,
     required this.isExpanded,
     required this.isDragHighlight,
+    this.isSelected = false,
     this.onTap,
     this.onDragStart,
     this.onDragEnd,
@@ -252,20 +254,28 @@ class TimetableCell extends StatelessWidget {
           onTap: onTap,
           child: Stack(
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: isBreakTime
-                      ? const Color(0xFF1F1F1F)
-                      : isDragHighlight
-                          ? const Color(0xFF1976D2).withOpacity(0.18)
-                          : Colors.transparent,
-                  border: Border(
-                    left: BorderSide(
-                      color: Colors.white.withOpacity(0.1),
-                    ),
+              // 배경 및 선택/드래그 하이라이트
+              Builder(builder: (_) {
+                final bool showSelected = isSelected && !isBreakTime;
+                final Color backgroundColor = isBreakTime
+                    ? const Color(0xFF1F1F1F)
+                    : isDragHighlight
+                        ? const Color(0xFF1976D2).withOpacity(0.18)
+                        : showSelected
+                            ? const Color(0xFF33A373).withOpacity(0.12)
+                            : Colors.transparent;
+                final Border border = Border(
+                  left: BorderSide(
+                    color: Colors.white.withOpacity(0.1),
                   ),
-                ),
-              ),
+                );
+                return Container(
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    border: border,
+                  ),
+                );
+              }),
               if (isBreakTime)
                 Center(
                   child: Text(
@@ -283,25 +293,31 @@ class TimetableCell extends StatelessWidget {
                   left: 0,
                   bottom: 0,
                   child: Container(
-                    width: 23,
+                    width: 18, // 요청에 따라 19로 조정
                     height: double.infinity,
-                    margin: const EdgeInsets.symmetric(vertical: 0.5), // 셀 높이보다 1px 작게
+                    margin: const EdgeInsets.symmetric(vertical: 0.5), // 음수 margin 제거
                     decoration: BoxDecoration(
                       color: countColor ?? Colors.green,
-                      borderRadius: BorderRadius.circular(9),
+                      borderRadius: BorderRadius.circular(50), // 알약 형태
                     ),
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 4.0),
-                        child: Text(
-                          '$activeStudentCount',
-                          style: TextStyle(
-                            color: Colors.black45, // 상단앱바 타이틀 색상(회색)
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                    child: Center(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final text = '$activeStudentCount';
+                          final bool isTwoDigits = text.length >= 2;
+                          final double fontSize = isTwoDigits ? 12 : 14.5;
+                          return Text(
+                            text,
+                            style: TextStyle(
+                              color: Colors.black45, // 상단앱바 타이틀 색상(회색)
+                              fontSize: fontSize,
+                              fontWeight: FontWeight.bold,
+                              height: 1.0,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.visible,
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -323,16 +339,15 @@ class TimetableCell extends StatelessWidget {
                 ),
               if (makeupOverlays.isNotEmpty)
                 Positioned(
-                  left: 26, // 좌측 카운트 바를 피해서 표시
+                  left: 21, // 좌측 카운트 바를 피해서 표시 (5px 더 확장)
                   top: 4,
                   right: 4,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: makeupOverlays.map((item) {
                       final bool isReplace = item.type == OverrideType.replace;
-                      // 완료된 보강/추가수업은 회색으로 구분
                       final Color bg = item.isCompleted
-                          ? Colors.grey.withOpacity(0.22)
+                          ? const Color(0xFF212A31).withOpacity(0.6)
                           : (isReplace
                               ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
                               : const Color(0xFF4CAF50).withOpacity(0.18)); // 초록 형광펜 (추가수업)
@@ -344,15 +359,18 @@ class TimetableCell extends StatelessWidget {
                           color: bg,
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(
-                          item.text,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
+                        child: Center(
+                          child: Text(
+                            item.text,
+                            style: TextStyle(
+                              color: item.isCompleted ? Colors.white70 : const Color(0xFFEAF2F2),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              height: 1.1,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                         ),
                       );
                     }).toList(),

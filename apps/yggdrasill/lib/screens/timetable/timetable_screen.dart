@@ -1315,6 +1315,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode || _isSelfStudyRegistrationMode,
                     registrationModeType: _isSelfStudyRegistrationMode ? 'selfStudy' : (_isStudentRegistrationMode ? 'student' : null),
                     selectedDayIndex: _selectedDayIndex,
+                    selectedCellDayIndex: _selectedCellDayIndex,
+                    selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
+                        ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
+                        : null,
                     onTimeSelected: (dayIdx, startTime) {
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
@@ -1684,6 +1688,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
             isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
             weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
             selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+            selectedCellDayIndex: _selectedCellDayIndex,
+            selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
+                ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
+                : null,
             onTimeSelected: (int dayIdx, DateTime startTime) {
               print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
               setState(() {

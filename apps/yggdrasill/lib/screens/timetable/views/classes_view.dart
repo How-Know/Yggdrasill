@@ -23,6 +23,8 @@ class ClassesView extends StatefulWidget {
   final bool isRegistrationMode; // deprecated
   final RegistrationModeType registrationModeType;
   final int? selectedDayIndex;
+  final int? selectedCellDayIndex;
+  final DateTime? selectedCellStartTime;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
@@ -40,6 +42,8 @@ class ClassesView extends StatefulWidget {
     this.isRegistrationMode = false, // deprecated
     this.registrationModeType,
     this.selectedDayIndex,
+    this.selectedCellDayIndex,
+    this.selectedCellStartTime,
     this.onTimeSelected,
     this.onCellStudentsSelected,
     this.onCellSelfStudyStudentsChanged,
@@ -425,7 +429,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       height: blockHeight - 10,
                                       margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 0),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF1976D2),
+                                        color: const Color(0xFF33A373),
                                         borderRadius: BorderRadius.circular(3),
                                       ),
                                     ),
@@ -579,6 +583,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
+                              final bool isSelectedCell = widget.selectedCellDayIndex == dayIdx &&
+                                  widget.selectedCellStartTime != null &&
+                                  widget.selectedCellStartTime!.hour == timeBlocks[blockIdx].startTime.hour &&
+                                  widget.selectedCellStartTime!.minute == timeBlocks[blockIdx].startTime.minute;
                               bool isBreakTime = false;
                               // 휴식시간 표시 로직 (dayIdx == dayOfWeek로 정확히 매핑)
                               final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
@@ -649,14 +657,18 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                               Color? countColor;
                               if (activeStudentCount > 0) {
                                 if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.7) {
-                                  countColor = const Color(0xFF0C3A69);
+                                  // 쾌적
+                                  countColor = const Color(0xFF1B6B63);
                                 } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
-                                  countColor = const Color(0xFFFB8C00);
+                                  // 혼잡
+                                  countColor = const Color(0xFFF2B45B);
                                 } else {
+                                  // 보통
                                   countColor = const Color(0xFF212A31);
                                 }
                               } else {
-                                countColor = const Color(0xFF0C3A69);
+                                // 인원 0일 때도 쾌적 색상 사용
+                                countColor = const Color(0xFF223131);
                               }
                               if (isDragHighlight) {
                                 print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
@@ -755,6 +767,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       isBreakTime: isBreakTime,
                                       isExpanded: isExpanded,
                                       isDragHighlight: isDragHighlight,
+                                      isSelected: isSelectedCell,
                                       onTap: null,
                                       countColor: countColor,
                                       activeStudentCount: activeStudentCount,
