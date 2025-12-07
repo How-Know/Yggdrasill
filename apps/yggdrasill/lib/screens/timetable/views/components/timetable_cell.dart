@@ -97,19 +97,21 @@ class TimetableCell extends StatelessWidget {
   Widget build(BuildContext context) {
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
-        print('[DEBUG][TimetableCell][onWillAccept] data=$data');
+        print('[DRAG][drop:onWillAccept] data=$data');
         if (data == null || data['type'] != 'move') return false;
         // 학생카드만 허용 (students, oldDayIndex, oldStartTime이 있어야 함)
         return data != null && data.containsKey('students') && data.containsKey('oldDayIndex') && data.containsKey('oldStartTime');
       },
       onAccept: (data) async {
-        print('[DEBUG][TimetableCell][onAccept] 호출: data= [32m$data [0m');
-        final students = (data['students'] as List)
+        final studentsRaw = (data['students'] as List);
+        final students = studentsRaw
             .map((e) => e is StudentWithInfo ? e : e['student'] as StudentWithInfo)
             .toList();
         final oldDayIndex = data['oldDayIndex'] as int?;
         final oldStartTime = data['oldStartTime'] as DateTime?;
-        print('[DEBUG][TimetableCell][onAccept] students= [36m${students.map((s) => s.student.name).toList()} [0m, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+        final ids = students.map((s) => s.student.id).join(',');
+        final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
+        print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
         List<StudentTimeBlock> toRemove = [];
         List<StudentTimeBlock> toAdd = [];
         List<StudentWithInfo> failedStudents = [];
@@ -200,12 +202,11 @@ class TimetableCell extends StatelessWidget {
           showAppSnackBar(context, '이미 등록된 시간입니다.');
           return;
         }
-        print('[DEBUG][TimetableCell][onAccept] toRemove=${toRemove.map((b) => b.toJson()).toList()}');
-        print('[DEBUG][TimetableCell][onAccept] toAdd=${toAdd.map((b) => b.toJson()).toList()}');
+        print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
         // 백엔드 처리 및 UI 업데이트를 DataManager를 통해 일관되게 처리
-        DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
-        DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
-        DataManager.instance.loadStudents();
+        await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
+        await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
+        await DataManager.instance.loadStudents();
         if (failedStudents.isNotEmpty) {
           await showDialog(
             context: context,

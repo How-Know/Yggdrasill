@@ -999,17 +999,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void exitSelectMode() {
-    print('[DEBUG][TimetableScreen][exitSelectMode] 호출됨 - 선택 모드 종료, _isSelectMode: $_isSelectMode -> false, _selectedStudentIds: $_selectedStudentIds');
     setState(() {
       _isSelectMode = false;
       _selectedStudentIds.clear();
     });
-    print('[DEBUG][TimetableScreen][exitSelectMode] 완료 - _isSelectMode: $_isSelectMode, _selectedStudentIds: $_selectedStudentIds');
   }
 
   @override
   Widget build(BuildContext context) {
-    print('[DEBUG][TimetableScreen][${DateTime.now().toIso8601String()}] build: _isStudentRegistrationMode=$_isStudentRegistrationMode, _isClassRegistrationMode=$_isClassRegistrationMode, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isSelectMode=$_isSelectMode, _selectedStudentIds=$_selectedStudentIds');
     // 테스트 전용 플래그로 autofocus를 제어 (기본 동작은 유지)
     const bool kDisableTimetableKbAutofocus = bool.fromEnvironment('DISABLE_TIMETABLE_KB_AUTOFOCUS', defaultValue: false);
     return RawKeyboardListener(

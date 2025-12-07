@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/education_level.dart';
 import '../../../models/student.dart';
+import '../../../models/student_time_block.dart';
 import '../../../services/data_manager.dart';
 
 class TimetableGroupedStudentPanel extends StatelessWidget {
@@ -12,6 +13,10 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final Set<String> selectedStudentIds;
   final void Function(String studentId, bool selected)? onStudentSelectChanged;
   final void Function(StudentWithInfo student)? onOpenStudentPage;
+  final bool enableDrag;
+  final int? dayIndex;
+  final DateTime? startTime;
+  final bool isClassRegisterMode;
 
   // 그룹핑 캐시 (학생 ID 목록 기준)
   static final Map<String, _GroupedCache> _groupCache = {};
@@ -25,6 +30,10 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.selectedStudentIds = const {},
     this.onStudentSelectChanged,
     this.onOpenStudentPage,
+    this.enableDrag = false,
+    this.dayIndex,
+    this.startTime,
+    this.isClassRegisterMode = false,
   });
 
   String _levelLabel(EducationLevel level) {
@@ -238,7 +247,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                           runSpacing: 10,
                           children: gradeStudents.map<Widget>((s) {
                             final isSelected = selectedStudentIds.contains(s.student.id);
-                            return Padding(
+                            final card = Padding(
                               padding: const EdgeInsets.only(left: 14),
                               child: _PanelStudentCard(
                                 student: s,
@@ -249,6 +258,16 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                     : (next) => onStudentSelectChanged!(s.student.id, next),
                                 onOpenStudentPage: onOpenStudentPage,
                               ),
+                            );
+                            if (!enableDrag || dayIndex == null || startTime == null) return card;
+                            return _DraggablePanelCard(
+                              card: card,
+                              student: s,
+                              allStudents: students,
+                              selectedStudentIds: selectedStudentIds,
+                              dayIndex: dayIndex!,
+                              startTime: startTime!,
+                              isClassRegisterMode: isClassRegisterMode,
                             );
                           }).toList(),
                         ),
@@ -345,6 +364,188 @@ class _PanelStudentCard extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DraggablePanelCard extends StatelessWidget {
+  final Widget card;
+  final StudentWithInfo student;
+  final List<StudentWithInfo> allStudents;
+  final Set<String> selectedStudentIds;
+  final int dayIndex;
+  final DateTime startTime;
+  final bool isClassRegisterMode;
+
+  const _DraggablePanelCard({
+    required this.card,
+    required this.student,
+    required this.allStudents,
+    required this.selectedStudentIds,
+    required this.dayIndex,
+    required this.startTime,
+    required this.isClassRegisterMode,
+  });
+
+  String? _findSetId(StudentWithInfo s) {
+    final block = DataManager.instance.studentTimeBlocks.firstWhere(
+      (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
+      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+    );
+    return block.id.isEmpty ? null : block.setId;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = selectedStudentIds.contains(student.student.id);
+    final selectedStudents = allStudents.where((s) => selectedStudentIds.contains(s.student.id)).toList();
+    final dragStudents = (isSelected && selectedStudents.length > 1)
+        ? selectedStudents.map((s) => {'student': s, 'setId': _findSetId(s)}).toList()
+        : [
+            {'student': student, 'setId': _findSetId(student)}
+          ];
+
+    final dragData = {
+      'type': isClassRegisterMode ? 'register' : 'move',
+      'students': dragStudents,
+      'student': student,
+      'setId': dragStudents.first['setId'],
+      'oldDayIndex': dayIndex,
+      'oldStartTime': startTime,
+      'dayIndex': dayIndex,
+      'startTime': startTime,
+      'isSelfStudy': false,
+    };
+
+    return Draggable<Map<String, dynamic>>(
+      data: dragData,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      maxSimultaneousDrags: 1,
+      onDragStarted: () {
+        final ids = dragStudents.map((e) => (e['student'] as StudentWithInfo).student.id).join(',');
+        final setIds = dragStudents.map((e) => e['setId']).join(',');
+        // 이동/소실 진단용 로그
+        // ignore: avoid_print
+        print('[DRAG][cell-panel] start ids=$ids setIds=$setIds day=$dayIndex time=${startTime.hour}:${startTime.minute}');
+      },
+      onDragEnd: (details) {
+        // ignore: avoid_print
+        print('[DRAG][cell-panel] end wasAccepted=${details.wasAccepted} offset=${details.offset}');
+      },
+      feedback: _PanelDragFeedback(
+        students: dragStudents.map((e) => e['student'] as StudentWithInfo).toList(),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: card,
+      ),
+      child: card,
+    );
+  }
+}
+
+class _PanelDragFeedback extends StatelessWidget {
+  final List<StudentWithInfo> students;
+  const _PanelDragFeedback({required this.students});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = students.length;
+    if (count <= 1) {
+      return _feedbackFrame(child: _feedbackCard(students.first));
+    }
+    final showCount = count >= 4 ? 3 : count;
+    final cards = List.generate(showCount, (i) {
+      final s = students[i];
+      final opacity = (0.85 - i * 0.18).clamp(0.3, 1.0);
+      return Positioned(
+        left: i * 12.0,
+        child: Opacity(
+          opacity: opacity,
+          child: SizedBox(width: 140, child: _feedbackCard(s)),
+        ),
+      );
+    }).toList();
+
+    return _feedbackFrame(
+      child: Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          ...cards,
+          if (count >= 4)
+            Positioned(
+              right: 6,
+              top: 6,
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15171C),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF223131), width: 1),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '+$count',
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _feedbackFrame({required Widget child}) {
+    return Material(
+      color: Colors.transparent,
+      child: SizedBox(
+        width: 150,
+        height: 56,
+        child: child,
+      ),
+    );
+  }
+
+  Widget _feedbackCard(StudentWithInfo s) {
+    final groupColor = s.student.groupInfo?.color;
+    final hasGroupColor = groupColor != null;
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF223131), width: 1),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 5,
+              height: 22,
+              decoration: BoxDecoration(
+                color: hasGroupColor ? groupColor : Colors.transparent,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                s.student.name,
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 14, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          ],
         ),
       ),
     );
