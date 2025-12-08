@@ -2030,7 +2030,8 @@ class AcademyDbService {
   }
   Future<List<ClassInfo>> getClasses() async {
     final dbClient = await db;
-    final result = await dbClient.query('classes');
+    // reorderable 순서 유지: 저장 시 삽입 순서를 rowid로 보존하므로 rowid ASC로 조회
+    final result = await dbClient.query('classes', orderBy: 'rowid');
     return result.map((row) => ClassInfo.fromJson(row)).toList();
   }
   Future<void> deleteAllClasses() async {

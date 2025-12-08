@@ -212,6 +212,48 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
   }
 
+  // 시간 미선택 시 기본 스켈레톤
+  Widget _buildTimeIdleSkeleton() {
+    const levelBarColor = Color(0xFF223131);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 48,
+          width: double.infinity,
+          margin: const EdgeInsets.only(top: 24, bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 15),
+          decoration: BoxDecoration(
+            color: levelBarColor,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.center,
+          child: const Text(
+            '시간',
+            style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B1112),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: levelBarColor, width: 1),
+            ),
+            alignment: Alignment.center,
+            child: const Text(
+              '시간을 선택하면 상세 정보가 여기에 표시됩니다.',
+              style: TextStyle(color: Colors.white38, fontSize: 15, fontWeight: FontWeight.w500),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   // timetable_content_view.dart에 아래 메서드 추가(클래스 내부)
   void updateCellStudentsAfterMove(int dayIdx, DateTime startTime) {
     final updatedBlocks = DataManager.instance.studentTimeBlocks.where((b) =>
@@ -377,18 +419,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
     classes.insert(newIndex, item);
     // print('[DEBUG][_onReorder] 변경 후 순서: ${classes.map((c) => c.name).toList()}');
     
-    // 즉시 UI 업데이트 (깜빡임 방지)
+    // 즉시 UI 반영
     DataManager.instance.classesNotifier.value = List.unmodifiable(classes);
-    // print('[DEBUG][_onReorder] 즉시 UI 업데이트 완료');
-    
-    // 백그라운드에서 DB 저장
-    DataManager.instance.saveClassesOrder(classes).then((_) {
-      // print('[DEBUG][_onReorder] 백그라운드 DB 저장 완료');
-    }).catchError((error) {
+
+    // 저장 시 실패하면 이전 상태 복구
+    try {
+      await DataManager.instance.saveClassesOrder(classes);
+    } catch (error) {
       // print('[ERROR][_onReorder] DB 저장 실패: $error');
-      // DB 저장 실패 시 원래 순서로 복구
-      DataManager.instance.loadClasses();
-    });
+      await DataManager.instance.loadClasses();
+    }
   }
 
   void _deleteClass(int idx) async {
@@ -1262,7 +1302,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         );
                                       },
                                     )
-                                  : const SizedBox.shrink()
+                                  : _buildTimeIdleSkeleton()
                             ),
                       ),
                   // 삭제 드롭존
@@ -1506,6 +1546,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                 child: classes.isEmpty
                                     ? const SizedBox.shrink()
                                     : ReorderableListView.builder(
+                                        padding: EdgeInsets.zero,
                                         itemCount: classes.length,
                                         buildDefaultDragHandles: false,
                                         onReorder: _onReorder,
@@ -1520,13 +1561,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         },
                                         itemBuilder: (context, idx) {
                                           final c = classes[idx];
-                                          return _ClassCard(
+                                          return Padding(
                                             key: ValueKey(c.id),
-                                            classInfo: c,
-                                            onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
-                                            onDelete: () => _deleteClass(idx),
-                                            reorderIndex: idx,
-                                            registrationModeType: widget.registrationModeType,
+                                            padding: const EdgeInsets.only(bottom: 12.0),
+                                            child: _ClassCard(
+                                              classInfo: c,
+                                              onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
+                                              onDelete: () => _deleteClass(idx),
+                                              reorderIndex: idx,
+                                              registrationModeType: widget.registrationModeType,
+                                            ),
                                           );
                                         },
                                       ),
@@ -2820,7 +2864,7 @@ class _ClassCardState extends State<_ClassCard> {
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(12),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   return Row(
@@ -2834,7 +2878,7 @@ class _ClassCardState extends State<_ClassCard> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
-                      const SizedBox(width: 18),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2864,11 +2908,11 @@ class _ClassCardState extends State<_ClassCard> {
                           ],
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Text(
                         c.capacity == null
-                            ? '학생 $studentCount명'
-                            : '학생 $studentCount/${c.capacity}명',
+                            ? '$studentCount명'
+                            : '$studentCount/${c.capacity}명',
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 14,
@@ -2876,18 +2920,24 @@ class _ClassCardState extends State<_ClassCard> {
                         ),
                       ),
                       if (widget.enableActions) ...[
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
                         IconButton(
                           icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
                           onPressed: widget.onEdit,
                           tooltip: '수정',
-                          splashRadius: 22,
+                          visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                          splashRadius: 18,
                         ),
                         IconButton(
                           icon: const Icon(Icons.delete_rounded, color: Colors.white70, size: 20),
                           onPressed: widget.onDelete,
                           tooltip: '삭제',
-                          splashRadius: 22,
+                          visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                          splashRadius: 18,
                         ),
                       ],
                       if (widget.showDragHandle)
@@ -2897,7 +2947,10 @@ class _ClassCardState extends State<_ClassCard> {
                             onPressed: () {},
                             icon: const Icon(Icons.drag_handle_rounded),
                             color: Colors.white54,
-                            splashRadius: 22,
+                            visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                            splashRadius: 18,
                           ),
                         ),
                     ],

@@ -2552,12 +2552,15 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
 
   Future<void> loadClasses() async {
     if (TagPresetService.preferSupabaseRead) {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      print('[SUPA][classes load] academyId=$academyId preferSupabaseRead=true');
+      // 1차: order_index 지원 스키마
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final data = await Supabase.instance.client
             .from('classes')
-            .select('id,name,capacity,description,color')
+            .select('id,name,capacity,description,color,order_index')
             .eq('academy_id', academyId)
+            .order('order_index', ascending: true)
             .order('name');
         _classes = (data as List).map((m) => ClassInfo(
           id: (m['id'] as String),
@@ -2566,33 +2569,36 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
           description: (m['description'] as String? ?? ''),
           color: (m['color'] == null) ? null : Color(m['color'] as int),
         )).toList();
-        // Fallback/backfill: dualWrite가 켜진 경우에만 로컬을 참고
-        if (_classes.isEmpty && TagPresetService.dualWrite) {
-          final local = await AcademyDbService.instance.getClasses();
-          if (local.isNotEmpty) {
-            _classes = local;
-            if (TagPresetService.dualWrite) {
-              try {
-                final rows = _classes.map((c) => {
-                  'id': c.id,
-                  'academy_id': academyId,
-                  'name': c.name,
-                  'capacity': c.capacity,
-                  'description': c.description,
-                  'color': c.color?.value.toSigned(32),
-                }).toList();
-                if (rows.isNotEmpty) {
-                  await Supabase.instance.client.from('classes').insert(rows);
-                }
-              } catch (_) {}
-            }
-          }
+        print('[SUPA][classes load] order_index schema 로드: ${_classes.map((c) => c.name).toList()}');
+      } catch (e, st) {
+        print('[SUPA][classes load order_index] $e\n$st');
+        // 2차: 구 스키마( order_index 없음 ) fallback
+        try {
+          final data = await Supabase.instance.client
+              .from('classes')
+              .select('id,name,capacity,description,color')
+              .eq('academy_id', academyId)
+              .order('name');
+          _classes = (data as List).map((m) => ClassInfo(
+            id: (m['id'] as String),
+            name: (m['name'] as String? ?? ''),
+            capacity: (m['capacity'] as int?),
+            description: (m['description'] as String? ?? ''),
+            color: (m['color'] == null) ? null : Color(m['color'] as int),
+          )).toList();
+          print('[SUPA][classes load] fallback name order 로드: ${_classes.map((c) => c.name).toList()}');
+        } catch (e2, st2) {
+          print('[SUPA][classes load fallback name order] $e2\n$st2');
         }
+      }
+
+      if (_classes.isNotEmpty) {
+        print('[SUPA][classes load] 최종 _classes=${_classes.map((c) => c.name).toList()}');
         classesNotifier.value = List.unmodifiable(_classes);
         classesRevision.value++;
         classAssignmentsRevision.value++;
         return;
-      } catch (e, st) { print('[SUPA][classes reorder insert] $e\n$st'); }
+      }
     }
     _classes = await AcademyDbService.instance.getClasses();
     classesNotifier.value = List.unmodifiable(_classes);
@@ -2709,17 +2715,37 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        await supa.from('classes').delete().eq('academy_id', academyId);
         if (_classes.isNotEmpty) {
-          final rows = _classes.map((c) => {
-            'id': c.id,
-            'academy_id': academyId,
-            'name': c.name,
-            'capacity': c.capacity,
-            'description': c.description,
-            'color': c.color?.value.toSigned(32),
+          final rows = _classes.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final c = entry.value;
+            return {
+              'id': c.id,
+              'academy_id': academyId,
+              'name': c.name,
+              'capacity': c.capacity,
+              'description': c.description,
+              'color': c.color?.value.toSigned(32),
+              'order_index': idx,
+            };
           }).toList();
-          await supa.from('classes').insert(rows);
+          try {
+            await supa.from('classes').upsert(rows, onConflict: 'id');
+            print('[SUPA][classes reorder upsert] order_index 사용 rows=${rows.length}');
+          } catch (e, st) {
+            print('[SUPA][classes reorder upsert order_index] $e\n$st');
+            // order_index가 없는 구스키마 대비: order_index를 제외하고 upsert 재시도
+            final fallbackRows = _classes.map((c) => {
+              'id': c.id,
+              'academy_id': academyId,
+              'name': c.name,
+              'capacity': c.capacity,
+              'description': c.description,
+              'color': c.color?.value.toSigned(32),
+            }).toList();
+            await supa.from('classes').upsert(fallbackRows, onConflict: 'id');
+            print('[SUPA][classes reorder upsert] fallback rows=${fallbackRows.length}');
+          }
         }
       } catch (e, st) { print('[SUPA][classes reorder] $e\n$st'); }
     } else {
@@ -2733,6 +2759,8 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
     
     classesNotifier.value = List.unmodifiable(_classes);
     print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
+    classesRevision.value++;
+    classAssignmentsRevision.value++;
   }
 
   // Payment Records 관련 메소드들
