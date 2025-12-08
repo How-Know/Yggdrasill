@@ -100,6 +100,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   String? _cachedCellPanelKey;
   Widget? _cachedCellPanelWidget;
   bool isClassRegisterMode = false;
+  // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
+  late final VoidCallback _revListener;
 
   String _weekdayLabel(int dayIdx) {
     const labels = ['월', '화', '수', '목', '금', '토', '일'];
@@ -110,12 +112,35 @@ class TimetableContentViewState extends State<TimetableContentView> {
   void initState() {
     super.initState();
     DataManager.instance.loadClasses();
+    // 수업/시간 블록 변경 시 검색 결과/캐시를 즉시 무효화하고 재빌드
+    _revListener = () {
+      setState(() {
+        _cachedSearchGroupedKey = null;
+        _cachedSearchGroupedWidget = null;
+        _cachedCellPanelKey = null;
+        _cachedCellPanelWidget = null;
+      });
+    };
+    DataManager.instance.studentTimeBlocksRevision.addListener(_revListener);
+    DataManager.instance.classAssignmentsRevision.addListener(_revListener);
+    DataManager.instance.classesRevision.addListener(_revListener);
     // 🧹 앱 시작 시 삭제된 수업의 sessionTypeId를 가진 블록들 정리
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _diagnoseOrphanedSessionTypeIds(); // 진단 먼저
       await cleanupOrphanedSessionTypeIds();
       await _diagnoseOrphanedSessionTypeIds(); // 정리 후 다시 확인
     });
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.studentTimeBlocksRevision.removeListener(_revListener);
+    DataManager.instance.classAssignmentsRevision.removeListener(_revListener);
+    DataManager.instance.classesRevision.removeListener(_revListener);
+    // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
+    _removeDropdownMenu(false);
+    _searchFocusNode.dispose();
+    super.dispose();
   }
 
   void _showDropdownMenu() {
@@ -174,14 +199,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
   // 외부에서 수업 등록 다이얼로그를 열 수 있도록 공개 메서드
   void openClassRegistrationDialog() {
     _showClassRegistrationDialog();
-  }
-
-  @override
-  void dispose() {
-    // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
-    _removeDropdownMenu(false);
-    _searchFocusNode.dispose();
-    super.dispose();
   }
 
   // 외부에서 검색 상태를 리셋할 수 있도록 public 메서드 제공
@@ -1985,9 +2002,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
           final min = int.parse(timeStr.split(':')[1]);
                       final dayTimeLabel = '${_weekdayLabel(dayIdx)} ${hour.toString().padLeft(2, '0')}:${min.toString().padLeft(2, '0')}';
           final students = grouped[key]!;
-          // 검색 결과는 모두 같은 student_id만 포함하므로 첫 학생 기준으로 수업명 추출
+          // 검색 결과(showWeekdayInTimeLabel=true)에서는 수업명 라벨을 숨기기 위해 조건부 계산
           String className = '';
-          if (students.isNotEmpty) {
+          if (!showWeekdayInTimeLabel && students.isNotEmpty) {
             final studentId = students.first.student.id;
             final block = blocks.firstWhere(
               (b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == hour && b.startMinute == min,
