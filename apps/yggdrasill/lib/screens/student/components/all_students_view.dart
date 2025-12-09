@@ -7,7 +7,7 @@ import '../../../models/payment_record.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
-import '../student_profile_page.dart';
+import '../student_course_detail_screen.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
@@ -720,7 +720,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           onOpenStudentPage: (s) {
                             Navigator.of(context).push(
                               DarkPanelRoute(
-                                child: StudentProfilePage(studentWithInfo: s),
+                                child: StudentCourseDetailScreen(studentWithInfo: s),
                               ),
                             );
                           },
@@ -739,7 +739,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onOpenStudentPage: (s) {
                           Navigator.of(context).push(
                             DarkPanelRoute(
-                              child: StudentProfilePage(studentWithInfo: s),
+                              child: StudentCourseDetailScreen(studentWithInfo: s),
                             ),
                           );
                         },
@@ -755,7 +755,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       onOpenStudentPage: (s) {
                         Navigator.of(context).push(
                           DarkPanelRoute(
-                            child: StudentProfilePage(studentWithInfo: s),
+                            child: StudentCourseDetailScreen(studentWithInfo: s),
                           ),
                         );
                       },
@@ -875,14 +875,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                 onUpdate: widget.onStudentUpdated,
                 onOpenStudentPage: (s) {
-                            Navigator.of(context).push(
-                              DarkPanelRoute(
-                                child: StudentProfilePage(studentWithInfo: s),
-                              ),
-                            );
                   Navigator.of(context).push(
                     DarkPanelRoute(
-                      child: StudentProfilePage(studentWithInfo: s),
+                      child: StudentCourseDetailScreen(studentWithInfo: s),
                     ),
                   );
                 },

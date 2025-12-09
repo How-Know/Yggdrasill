@@ -5,6 +5,9 @@ import '../models/group_info.dart';
 import 'student_registration_dialog.dart';
 import '../services/data_manager.dart';
 import '../main.dart';
+import '../screens/student/student_profile_page.dart';
+import '../screens/student/student_course_detail_screen.dart';
+import 'dark_panel_route.dart';
 
 class StudentCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
@@ -363,9 +366,14 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         );
         final selected = await showMenu<String>(
           context: context,
-          color: const Color(0xFF2A2A2A),
+          color: const Color(0xFF2A2A2A), // 학생 추가 버튼 드롭다운 톤
           position: position,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          constraints: const BoxConstraints(minWidth: 132), // 절반 너비로 축소
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: const BorderSide(color: Color(0xFF3A3F44)),
+          ),
+          elevation: 10,
           items: const [
             PopupMenuItem(
               value: 'details',
@@ -393,7 +401,15 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         print('[DEBUG][StudentCard] context menu selected=' + (selected ?? 'null') + ', id=' + s.id + ');');
         switch (selected) {
           case 'details':
-            widget.onShowDetails(widget.studentWithInfo);
+            if (widget.onOpenStudentPage != null) {
+              widget.onOpenStudentPage!(widget.studentWithInfo);
+            } else {
+              Navigator.of(context).push(
+                DarkPanelRoute(
+                  child: StudentCourseDetailScreen(studentWithInfo: widget.studentWithInfo),
+                ),
+              );
+            }
             break;
           case 'edit':
             if (widget.onUpdate != null) {
@@ -515,3 +531,58 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
     );
   }
 } 
+
+class _ArrowPopupShape extends ShapeBorder {
+  final double radius;
+  final double arrowSize;
+  final double arrowOffset;
+  final Color borderColor;
+
+  const _ArrowPopupShape({
+    this.radius = 10,
+    this.arrowSize = 10,
+    this.arrowOffset = 24,
+    this.borderColor = const Color(0xFF3A3F44),
+  });
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => getOuterPath(rect, textDirection: textDirection);
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    final r = Radius.circular(radius);
+    final arrowHeight = arrowSize;
+    final arrowWidth = arrowSize * 1.2;
+    final double arrowX = (rect.width / 2).clamp(arrowOffset, rect.width - arrowOffset);
+    final Path path = Path()
+      ..moveTo(rect.left + r.x, rect.top + arrowHeight)
+      ..lineTo(rect.left + arrowX - arrowWidth / 2, rect.top + arrowHeight)
+      ..lineTo(rect.left + arrowX, rect.top)
+      ..lineTo(rect.left + arrowX + arrowWidth / 2, rect.top + arrowHeight)
+      ..lineTo(rect.right - r.x, rect.top + arrowHeight)
+      ..arcToPoint(Offset(rect.right, rect.top + arrowHeight + r.y), radius: r)
+      ..lineTo(rect.right, rect.bottom - r.y)
+      ..arcToPoint(Offset(rect.right - r.x, rect.bottom), radius: r)
+      ..lineTo(rect.left + r.x, rect.bottom)
+      ..arcToPoint(Offset(rect.left, rect.bottom - r.y), radius: r)
+      ..lineTo(rect.left, rect.top + arrowHeight + r.y)
+      ..arcToPoint(Offset(rect.left + r.x, rect.top + arrowHeight), radius: r)
+      ..close();
+    return path;
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = borderColor;
+    canvas.drawPath(getOuterPath(rect), paint);
+  }
+
+  @override
+  ShapeBorder scale(double t) => this;
+}
