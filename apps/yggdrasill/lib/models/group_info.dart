@@ -5,7 +5,7 @@ class GroupInfo {
   final String id;
   final String name;
   final String description;
-  final int capacity;
+  final int? capacity; // null이면 제한 없음
   final int duration; // 그룹의 기본 수업 시간(분)
   final Color color;
   // 표시 순서(영구 저장)
@@ -26,7 +26,7 @@ class GroupInfo {
       id: json['id'] as String,
       name: json['name'] as String,
       description: json['description'] as String,
-      capacity: json['capacity'] as int,
+      capacity: json['capacity'] as int?,
       duration: json['duration'] as int,
       color: Color(json['color'] as int),
       displayOrder: json['display_order'] as int?,

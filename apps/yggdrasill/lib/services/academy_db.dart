@@ -1643,7 +1643,7 @@ class AcademyDbService {
       id: row['id'] as String,
       name: row['name'] as String,
       description: row['description'] as String,
-      capacity: row['capacity'] as int,
+      capacity: row['capacity'] as int?, // null 허용
       duration: row['duration'] as int,
       color: Color(row['color'] as int),
       displayOrder: row['display_order'] as int?,

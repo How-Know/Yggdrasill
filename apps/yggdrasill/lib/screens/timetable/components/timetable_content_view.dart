@@ -424,7 +424,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
     // 저장 시 실패하면 이전 상태 복구
     try {
-      await DataManager.instance.saveClassesOrder(classes);
+      await DataManager.instance.saveClassesOrder(classes, skipNotifierUpdate: false);
     } catch (error) {
       // print('[ERROR][_onReorder] DB 저장 실패: $error');
       await DataManager.instance.loadClasses();
@@ -1504,78 +1504,84 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     const SizedBox(height: 8),
                     // 수업 카드 리스트
                     Expanded(
-                      child: ValueListenableBuilder<List<StudentTimeBlock>>(
-                        valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-                        builder: (context, _blocks, _) {
-                          final classes = DataManager.instance.classesNotifier.value;
-                          final int unassignedCount = _blocks
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: DataManager.instance.studentTimeBlocksRevision,
+                        builder: (context, __, ___) {
+                          // 항상 최신 블록을 참조하여 기본 수업 인원 계산
+                          final blocks = DataManager.instance.studentTimeBlocks;
+                          final int unassignedCount = blocks
                               .where((b) => b.sessionTypeId == null)
                               .map((b) => b.studentId)
                               .toSet()
                               .length;
 
-                          if (classes.isEmpty && unassignedCount == 0) {
-                            return const Center(
-                              child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
-                            );
-                          }
+                          return ValueListenableBuilder<List<ClassInfo>>(
+                            valueListenable: DataManager.instance.classesNotifier,
+                            builder: (context, classes, ____) {
+                              if (classes.isEmpty && unassignedCount == 0) {
+                                return const Center(
+                                  child: Text('등록된 수업이 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                                );
+                              }
 
-                          return Column(
-                            children: [
-                              if (unassignedCount > 0) ...[
-                                _ClassCard(
-                                  key: const ValueKey('__default_class__'),
-                                  classInfo: ClassInfo(
-                                    id: '__default_class__',
-                                    name: '수업',
-                                    description: '기본 수업',
-                                    capacity: null,
-                                    color: const Color(0xFF223131),
-                                  ),
-                                  onEdit: () {},
-                                  onDelete: () {},
-                                  reorderIndex: -1,
-                                  registrationModeType: widget.registrationModeType,
-                                  studentCountOverride: unassignedCount,
-                                  enableActions: false,
-                                  showDragHandle: false,
-                                ),
-                                const SizedBox(height: 12),
-                              ],
-                              Expanded(
-                                child: classes.isEmpty
-                                    ? const SizedBox.shrink()
-                                    : ReorderableListView.builder(
-                                        padding: EdgeInsets.zero,
-                                        itemCount: classes.length,
-                                        buildDefaultDragHandles: false,
-                                        onReorder: _onReorder,
-                                        proxyDecorator: (child, index, animation) {
-                                          return Material(
-                                            color: Colors.transparent,
-                                            child: Container(
-                                              margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
-                                              child: child,
-                                            ),
-                                          );
-                                        },
-                                        itemBuilder: (context, idx) {
-                                          final c = classes[idx];
-                                          return Padding(
-                                            key: ValueKey(c.id),
-                                            padding: const EdgeInsets.only(bottom: 12.0),
-                                            child: _ClassCard(
-                                              classInfo: c,
-                                              onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
-                                              onDelete: () => _deleteClass(idx),
-                                              reorderIndex: idx,
-                                              registrationModeType: widget.registrationModeType,
-                                            ),
-                                          );
-                                        },
+                              return Column(
+                                children: [
+                                  if (unassignedCount > 0) ...[
+                                    _ClassCard(
+                                      key: const ValueKey('__default_class__'),
+                                      classInfo: ClassInfo(
+                                        id: '__default_class__',
+                                        name: '수업',
+                                        description: '기본 수업',
+                                        capacity: null,
+                                        color: const Color(0xFF223131),
                                       ),
-                              ),
-                            ],
+                                      onEdit: () {},
+                                      onDelete: () {},
+                                      reorderIndex: -1,
+                                      registrationModeType: widget.registrationModeType,
+                                      studentCountOverride: unassignedCount,
+                                      enableActions: false,
+                                      showDragHandle: false,
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  Expanded(
+                                    child: classes.isEmpty
+                                        ? const SizedBox.shrink()
+                                        : ReorderableListView.builder(
+                                            padding: EdgeInsets.zero,
+                                            itemCount: classes.length,
+                                            buildDefaultDragHandles: false,
+                                            onReorder: _onReorder,
+                                            proxyDecorator: (child, index, animation) {
+                                              return Material(
+                                                color: Colors.transparent,
+                                                child: Container(
+                                                  margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 0),
+                                                  child: child,
+                                                ),
+                                              );
+                                            },
+                                            itemBuilder: (context, idx) {
+                                              final c = classes[idx];
+                                              return Padding(
+                                                key: ValueKey(c.id),
+                                                padding: const EdgeInsets.only(bottom: 12.0),
+                                                child: _ClassCard(
+                                                  classInfo: c,
+                                                  onEdit: () => _showClassRegistrationDialog(editTarget: c, editIndex: idx),
+                                                  onDelete: () => _deleteClass(idx),
+                                                  reorderIndex: idx,
+                                                  registrationModeType: widget.registrationModeType,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                ],
+                              );
+                            },
                           );
                         },
                       ),
@@ -2521,7 +2527,16 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   late final TextEditingController _capacityController;
   Color? _selectedColor;
   bool _unlimitedCapacity = false;
-  final List<Color?> _colors = [null, ...Colors.primaries];
+  // 없음 포함 총 24개 색상 (null + 기본 18 + 추가 5, 마지막은 짙은 네이비)
+  final List<Color?> _colors = [
+    null,
+    ...Colors.primaries,
+    const Color(0xFF33A373),
+    const Color(0xFF9FB3B3),
+    const Color(0xFF6B4EFF),
+    const Color(0xFFD1A054),
+    const Color(0xFF0F1A2D), // 짙은 네이비로 none과 구분
+  ];
 
   @override
   void initState() {
@@ -2562,12 +2577,15 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: const Color(0xFF0B1112),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)).borderRadius,
+        side: const BorderSide(color: Color(0xFF223131)),
+      ),
       insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 580),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2578,57 +2596,66 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
               ),
               const SizedBox(height: 12),
               const Divider(color: Color(0xFF223131), height: 1),
-              const SizedBox(height: 14),
-              _LabeledField(
-                label: '수업명',
-                child: TextField(
-                  controller: _nameController,
-                  style: const TextStyle(color: Color(0xFFEAF2F2)),
-                  decoration: _inputDecoration(hint: '예) 수학 A'),
-                ),
+              const SizedBox(height: 20),
+
+              // 기본 정보
+              _buildSectionHeader('기본 정보'),
+              TextField(
+                controller: _nameController,
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15),
+                decoration: _inputDecoration(label: '수업명', required: true, hint: '예) 수학 A'),
               ),
-              const SizedBox(height: 14),
-              _LabeledField(
-                label: '정원',
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Checkbox(
-                      value: _unlimitedCapacity,
-                      onChanged: (v) => setState(() => _unlimitedCapacity = v ?? false),
-                      checkColor: Colors.white,
-                      activeColor: const Color(0xFF1B6B63),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _capacityController,
+                      enabled: !_unlimitedCapacity,
+                      style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15),
+                      keyboardType: TextInputType.number,
+                      decoration: _inputDecoration(
+                        label: '정원',
+                        hint: '숫자 입력',
+                        disabled: _unlimitedCapacity,
+                      ),
                     ),
-                    const Text('제한없음', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                  ],
-                ),
-                child: TextField(
-                  controller: _capacityController,
-                  enabled: !_unlimitedCapacity,
-                  style: const TextStyle(color: Color(0xFFEAF2F2)),
-                  keyboardType: TextInputType.number,
-                  decoration: _inputDecoration(hint: '숫자 입력', disabled: _unlimitedCapacity),
-                ),
+                  ),
+                  const SizedBox(width: 12),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Checkbox(
+                        value: _unlimitedCapacity,
+                        onChanged: (v) => setState(() => _unlimitedCapacity = v ?? false),
+                        checkColor: Colors.white,
+                        activeColor: const Color(0xFF33A373),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      const Text('제한없음', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 14),
-              _LabeledField(
-                label: '설명',
-                child: TextField(
-                  controller: _descController,
-                  style: const TextStyle(color: Color(0xFFEAF2F2)),
-                  maxLines: 2,
-                  decoration: _inputDecoration(hint: '예) 주 2회 / 개인'),
-                ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _descController,
+                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15),
+                maxLines: 2,
+                decoration: _inputDecoration(label: '설명', hint: '예) 주 2회 / 개인'),
               ),
-              const SizedBox(height: 16),
-              const Text('수업 색상', style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 10),
+
+              const SizedBox(height: 24),
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 20),
+
+              // 색상 설정
+              _buildSectionHeader('색상 설정'),
               Wrap(
-                spacing: 8,
-                runSpacing: 8,
+                spacing: 10,
+                runSpacing: 10,
                 children: _colors.map((color) {
                   final isSelected = _selectedColor == color;
                   return GestureDetector(
@@ -2651,23 +2678,30 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
                   );
                 }).toList(),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF9FB3B3),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    ),
+                    child: const Text('취소'),
                   ),
                   const SizedBox(width: 12),
                   FilledButton(
                     onPressed: _handleSave,
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF1B6B63),
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      backgroundColor: const Color(0xFF33A373),
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    child: Text(widget.editTarget == null ? '등록' : '수정'),
+                    child: Text(
+                      widget.editTarget == null ? '등록' : '수정',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
                   ),
                 ],
               ),
@@ -2679,52 +2713,53 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   }
 }
 
-// 공통 라벨 + 필드 래퍼 (학생 등록 다이얼로그 느낌으로 정렬)
-class _LabeledField extends StatelessWidget {
-  final String label;
-  final Widget child;
-  final Widget? trailing;
-  const _LabeledField({required this.label, required this.child, this.trailing});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+Widget _buildSectionHeader(String title) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 12, top: 4),
+    child: Row(
       children: [
-        Row(
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
-            if (trailing != null) ...[
-              const Spacer(),
-              trailing!,
-            ],
-          ],
+        Container(
+          width: 4,
+          height: 16,
+          decoration: BoxDecoration(
+            color: const Color(0xFF33A373),
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
-        const SizedBox(height: 8),
-        child,
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFFEAF2F2),
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ],
-    );
-  }
+    ),
+  );
 }
 
-InputDecoration _inputDecoration({String? hint, bool disabled = false}) {
+InputDecoration _inputDecoration({required String label, String? hint, bool disabled = false, bool required = false}) {
   return InputDecoration(
+    labelText: required ? '$label *' : label,
+    labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
     hintText: hint,
     hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
     filled: true,
-    fillColor: disabled ? const Color(0xFF111418).withOpacity(0.35) : const Color(0xFF111418),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    fillColor: disabled ? const Color(0xFF15171C).withOpacity(0.6) : const Color(0xFF15171C),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     enabledBorder: OutlineInputBorder(
-      borderSide: BorderSide(color: disabled ? const Color(0xFF223131).withOpacity(0.6) : const Color(0xFF223131)),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
+      borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
     ),
     focusedBorder: OutlineInputBorder(
-      borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 1.4),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: Color(0xFF33A373)),
     ),
     disabledBorder: OutlineInputBorder(
-      borderSide: BorderSide(color: const Color(0xFF223131).withOpacity(0.6)),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
+      borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
     ),
   );
 }
@@ -2787,6 +2822,7 @@ class _ClassCardState extends State<_ClassCard> {
   Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
     // setId가 확정되지 않은 경우 다른 블록까지 퍼질 수 있으므로 스킵
     if (setId == null) return;
+    final bool isDefaultClass = widget.classInfo.id == '__default_class__';
     final blocks = DataManager.instance.studentTimeBlocks
         .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
         .toList();
@@ -2794,7 +2830,22 @@ class _ClassCardState extends State<_ClassCard> {
     // ignore: avoid_print
     print('[REPRO][class-assign] classId=${widget.classInfo.id} studentId=${studentWithInfo.student.id} setId=$setId blocks=${blocks.map((b) => '${b.id}:${b.dayIndex}@${b.startHour}:${b.startMinute}').join(',')}');
     for (final block in blocks) {
-      final updated = block.copyWith(sessionTypeId: widget.classInfo.id);
+      // 기본 수업 카드로 드롭하는 경우 sessionTypeId를 null로 되돌려야 함
+      final updated = isDefaultClass
+          ? StudentTimeBlock(
+              id: block.id,
+              studentId: block.studentId,
+              dayIndex: block.dayIndex,
+              startHour: block.startHour,
+              startMinute: block.startMinute,
+              duration: block.duration,
+              createdAt: block.createdAt,
+              setId: block.setId,
+              number: block.number,
+              sessionTypeId: null,
+              weeklyOrder: block.weeklyOrder,
+            )
+          : block.copyWith(sessionTypeId: widget.classInfo.id);
       await DataManager.instance.updateStudentTimeBlock(block.id, updated);
     }
   }
@@ -2802,6 +2853,7 @@ class _ClassCardState extends State<_ClassCard> {
   @override
   Widget build(BuildContext context) {
     final c = widget.classInfo;
+    final bool isDefaultClass = c.id == '__default_class__';
     final int studentCount = widget.studentCountOverride ?? DataManager.instance.getStudentCountForClass(widget.classInfo.id);
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
     return DragTarget<Map<String, dynamic>>(
@@ -2816,7 +2868,9 @@ class _ClassCardState extends State<_ClassCard> {
             final student = entry['student'] as StudentWithInfo?;
             final setId = entry['setId'] as String?;
             if (student == null || setId == null) return false;
-            final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+            final blocks = isDefaultClass
+                ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()
+                : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
             final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
             // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
             if (alreadyRegistered) return false;
@@ -2826,7 +2880,9 @@ class _ClassCardState extends State<_ClassCard> {
           final student = data['student'] as StudentWithInfo?;
           final setId = data['setId'] as String?;
           if (student == null || setId == null) return false;
-          final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+          final blocks = isDefaultClass
+              ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()
+              : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
           final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
           // print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
           if (alreadyRegistered) return false;

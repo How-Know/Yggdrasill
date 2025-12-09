@@ -440,7 +440,7 @@ class DataManager {
             id: (m['id'] as String),
             name: (m['name'] as String? ?? ''),
             description: (m['description'] as String? ?? ''),
-            capacity: (m['capacity'] as int?) ?? 0,
+            capacity: m['capacity'] as int?, // null이면 제한 없음
             duration: (m['duration'] as int?) ?? 0,
             color: Color((((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
             displayOrder: (m['display_order'] as int?),
@@ -1167,9 +1167,9 @@ class DataManager {
     // 그룹 정원 초과 이중 방어
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
-      if (group != null) {
+      if (group != null && group.capacity != null) {
         final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id).length;
-        if (currentCount >= group.capacity) {
+        if (currentCount >= group.capacity!) {
           throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
         }
       }
@@ -1261,9 +1261,9 @@ class DataManager {
     // 그룹 정원 초과 이중 방어
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
-      if (group != null) {
+      if (group != null && group.capacity != null) {
         final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id && s.student.id != student.id).length;
-        if (currentCount >= group.capacity) {
+        if (currentCount >= group.capacity!) {
           throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
         }
       }
@@ -2549,8 +2549,22 @@ class DataManager {
 List<ClassInfo> _classes = [];
 final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
 List<ClassInfo> get classes => List.unmodifiable(_classes);
+bool _isSavingClassesOrder = false;
+DateTime? _lastClassesOrderSaveEnd;
+DateTime? _lastClassesOrderSaveStart;
 
   Future<void> loadClasses() async {
+    final now = DateTime.now();
+    final loadStartedAt = now;
+    if (_isSavingClassesOrder) {
+      print('[SUPA][classes load] skip because _isSavingClassesOrder=true');
+      return;
+    }
+    if (_lastClassesOrderSaveEnd != null &&
+        now.difference(_lastClassesOrderSaveEnd!) < const Duration(seconds: 1)) {
+      print('[SUPA][classes load] skip because recent order save completed <1s ago');
+      return;
+    }
     if (TagPresetService.preferSupabaseRead) {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       print('[SUPA][classes load] academyId=$academyId preferSupabaseRead=true');
@@ -2570,6 +2584,12 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
           color: (m['color'] == null) ? null : Color(m['color'] as int),
         )).toList();
         print('[SUPA][classes load] order_index schema 로드: ${_classes.map((c) => c.name).toList()}');
+
+          // 저장이 더 최근에 시작되었으면 이 로드 결과는 폐기
+          if (_lastClassesOrderSaveStart != null && loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
+            print('[SUPA][classes load] skip apply because newer save started after load began');
+            return;
+          }
       } catch (e, st) {
         print('[SUPA][classes load order_index] $e\n$st');
         // 2차: 구 스키마( order_index 없음 ) fallback
@@ -2587,19 +2607,29 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
             color: (m['color'] == null) ? null : Color(m['color'] as int),
           )).toList();
           print('[SUPA][classes load] fallback name order 로드: ${_classes.map((c) => c.name).toList()}');
+
+          // 저장이 더 최근에 시작되었으면 이 로드 결과는 폐기
+          if (_lastClassesOrderSaveStart != null && loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
+            print('[SUPA][classes load] skip apply (fallback) because newer save started after load began');
+            return;
+          }
         } catch (e2, st2) {
           print('[SUPA][classes load fallback name order] $e2\n$st2');
         }
       }
 
+      // Supabase 모드에서는 로컬 DB와 섞이지 않도록, 로컬 fallback 중단
       if (_classes.isNotEmpty) {
         print('[SUPA][classes load] 최종 _classes=${_classes.map((c) => c.name).toList()}');
-        classesNotifier.value = List.unmodifiable(_classes);
-        classesRevision.value++;
-        classAssignmentsRevision.value++;
-        return;
+      } else {
+        print('[SUPA][classes load] Supabase 결과 없음(비어 있음), 로컬 fallback 생략');
       }
+      classesNotifier.value = List.unmodifiable(_classes);
+      classesRevision.value++;
+      classAssignmentsRevision.value++;
+      return;
     }
+    // Supabase 미사용 모드에서만 로컬 DB 사용
     _classes = await AcademyDbService.instance.getClasses();
     classesNotifier.value = List.unmodifiable(_classes);
     classesRevision.value++;
@@ -2706,15 +2736,23 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
     classAssignmentsRevision.value++;
   }
 
-  Future<void> saveClassesOrder(List<ClassInfo> newOrder) async {
+  Future<void> saveClassesOrder(List<ClassInfo> newOrder, {bool skipNotifierUpdate = false}) async {
     print('[DEBUG][DataManager.saveClassesOrder] 시작: ${newOrder.map((c) => c.name).toList()}');
     _classes = List<ClassInfo>.from(newOrder);
     print('[DEBUG][DataManager.saveClassesOrder] _classes 업데이트: ${_classes.map((c) => c.name).toList()}');
     
+    if (_isSavingClassesOrder) {
+      print('[SUPA][classes reorder] 이미 저장 중이라 중복 호출 무시');
+      return;
+    }
+    _lastClassesOrderSaveStart = DateTime.now();
+    _isSavingClassesOrder = true;
+    try {
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
+        print('[SUPA][classes reorder] academyId=$academyId rows=${_classes.length}');
         if (_classes.isNotEmpty) {
           final rows = _classes.asMap().entries.map((entry) {
             final idx = entry.key;
@@ -2730,6 +2768,7 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
             };
           }).toList();
           try {
+            print('[SUPA][classes reorder upsert] rows(detail)=${rows.map((r) => '${r['name']}|${r['order_index']}').toList()}');
             await supa.from('classes').upsert(rows, onConflict: 'id');
             print('[SUPA][classes reorder upsert] order_index 사용 rows=${rows.length}');
           } catch (e, st) {
@@ -2743,6 +2782,7 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
               'description': c.description,
               'color': c.color?.value.toSigned(32),
             }).toList();
+            print('[SUPA][classes reorder fallback upsert] rows(detail)=${fallbackRows.map((r) => '${r['name']}').toList()}');
             await supa.from('classes').upsert(fallbackRows, onConflict: 'id');
             print('[SUPA][classes reorder upsert] fallback rows=${fallbackRows.length}');
           }
@@ -2757,10 +2797,19 @@ List<ClassInfo> get classes => List.unmodifiable(_classes);
     print('[DEBUG][DataManager.saveClassesOrder] 모든 클래스 재저장 완료');
     }
     
-    classesNotifier.value = List.unmodifiable(_classes);
-    print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
-    classesRevision.value++;
-    classAssignmentsRevision.value++;
+    if (!skipNotifierUpdate) {
+      classesNotifier.value = List.unmodifiable(_classes);
+      print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
+      classesRevision.value++;
+      classAssignmentsRevision.value++;
+    } else {
+      // 로컬 UI만 업데이트한 경우, 불필요한 리비전 bump를 생략해 불필요한 재빌드/리셋을 방지
+      print('[DEBUG][DataManager.saveClassesOrder] skipNotifierUpdate=true → revision bump 생략');
+    }
+    } finally {
+      _isSavingClassesOrder = false;
+      _lastClassesOrderSaveEnd = DateTime.now();
+    }
   }
 
   // Payment Records 관련 메소드들
