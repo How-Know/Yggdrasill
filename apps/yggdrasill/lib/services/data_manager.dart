@@ -953,7 +953,6 @@ class DataManager {
         _sessionOverrides.add(merged);
       }
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 업데이트(Supabase): id=${newData.id}, status=${newData.status}');
     } catch (e) {
       print('[ERROR] updateSessionOverride 실패: $e');
       rethrow;
@@ -1020,7 +1019,6 @@ class DataManager {
       if (idx == -1) return;
       final canceled = _sessionOverrides[idx].copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
       await updateSessionOverride(canceled);
-      print('[DEBUG] session_override 취소(Supabase): id=$id');
     } catch (e) {
       print('[ERROR] cancelSessionOverride 실패: $e');
       rethrow;
@@ -1033,7 +1031,6 @@ class DataManager {
       await supa.from('session_overrides').delete().eq('id', id);
       _sessionOverrides.removeWhere((o) => o.id == id);
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 삭제(Supabase): id=$id');
     } catch (e) {
       print('[ERROR] deleteSessionOverride 실패: $e');
       rethrow;
@@ -1606,6 +1603,7 @@ class DataManager {
         if (block.setId != null) {
           await _recalculateWeeklyOrderForStudent(block.studentId);
         }
+        await syncWeeklyClassCount(block.studentId, onAdd: true);
         return;
       } catch (e, st) {
         print('[SUPA][stb add] $e\n$st');
@@ -1618,24 +1616,42 @@ class DataManager {
     if (block.setId != null) {
       await _recalculateWeeklyOrderForStudent(block.studentId);
     }
+    await syncWeeklyClassCount(block.studentId, onAdd: true);
   }
 
   Future<void> removeStudentTimeBlock(String id) async {
+    String? sidForSync;
     if (TagPresetService.preferSupabaseRead) {
       try {
+        final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
+        sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
         await Supabase.instance.client.from('student_time_blocks').delete().eq('id', id);
         _studentTimeBlocks.removeWhere((b) => b.id == id);
         studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        if (sidForSync != null) {
+          final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
+          final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
+          print('[SYNC][remove] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
+          await syncWeeklyClassCount(sidForSync, onAdd: false);
+        }
         return;
       } catch (e, st) {
         print('[SUPA][stb delete] $e\n$st');
         rethrow;
       }
     }
+    final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
+    sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
     _studentTimeBlocks.removeWhere((b) => b.id == id);
     studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
     await AcademyDbService.instance.deleteStudentTimeBlock(id);
     await loadStudentTimeBlocks();
+    if (sidForSync != null) {
+      final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
+      final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
+      print('[SYNC][remove-local] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
+      await syncWeeklyClassCount(sidForSync, onAdd: false);
+    }
   }
 
   Timer? _uiUpdateTimer;
@@ -1826,6 +1842,8 @@ class DataManager {
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final sessionTypes = blocks.map((b) => b.sessionTypeId).toSet();
+        print('[SYNC][bulkAdd] count=${blocks.length}, sessionTypes=$sessionTypes, sample=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
         final rows = blocks.map((b) => <String, dynamic>{
           'id': b.id,
           'academy_id': academyId,
@@ -1848,9 +1866,11 @@ class DataManager {
       }
     } else {
     _studentTimeBlocks.addAll(blocks);
+    print('[SYNC][bulkAdd-local] count=${blocks.length}, sessionTypes=${blocks.map((b)=>b.sessionTypeId).toSet()}, sample=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
     await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
     }
     
+    final affectedStudents = blocks.map((b) => b.studentId).toSet();
     if (immediate || blocks.length == 1) {
       // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
       studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
@@ -1864,27 +1884,45 @@ class DataManager {
       });
     }
     // 블록 추가 후 주간 순번 재계산 (대상 학생들만)
-    final affectedStudentIds = blocks.map((b) => b.studentId).toSet();
-    for (final studentId in affectedStudentIds) {
+    for (final studentId in affectedStudents) {
       await _recalculateWeeklyOrderForStudent(studentId);
+    }
+    for (final studentId in affectedStudents) {
+      await syncWeeklyClassCount(studentId, onAdd: true);
     }
   }
 
   Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
+        final removed = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
+        final affectedStudents = removed.map((b) => b.studentId).toSet();
         await Supabase.instance.client
             .from('student_time_blocks')
             .delete()
             .filter('id', 'in', '(${blockIds.map((e) => '"$e"').join(',')})');
         _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
+        for (final sid in affectedStudents) {
+          final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
+          final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
+          print('[SYNC][bulkRemove] studentId=$sid blocks=${remain.length} setIds=$remainSets');
+          await syncWeeklyClassCount(sid, onAdd: false);
+        }
       } catch (e, st) {
         print('[SUPA][stb bulk delete] $e\n$st');
         rethrow;
       }
     } else {
+    final removed = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
+    final affectedStudents = removed.map((b) => b.studentId).toSet();
     _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
     await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(blockIds);
+    for (final sid in affectedStudents) {
+      final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
+      final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
+      print('[SYNC][bulkRemove-local] studentId=$sid blocks=${remain.length} setIds=$remainSets');
+      await syncWeeklyClassCount(sid, onAdd: false);
+    }
     }
     
     if (immediate || blockIds.length == 1) {
@@ -2424,29 +2462,14 @@ class DataManager {
     }
   }
 
-  /// 학생별 수업블록(setId 기준) 개수 반환
+  /// 학생별 수업블록(setId 기준) 개수 반환 (수업명 무관, setId 고유 개수)
   int getStudentLessonSetCount(String studentId) {
-    // 수업에 실제로 배정된 블록만 카운트 (sessionTypeId != null)
-    final blocks = _studentTimeBlocks.where((b) =>
-      b.studentId == studentId &&
-      b.sessionTypeId != null
-    );
-    // 수업별로 setId를 모아서, setId가 없는 경우에도 해당 수업에 최소 1세트로 간주
-    final Map<String, Set<String?>> setsByClass = {};
-    for (final b in blocks) {
-      final classId = b.sessionTypeId!;
-      setsByClass.putIfAbsent(classId, () => <String?>{});
-      setsByClass[classId]!.add(b.setId);
-    }
-    int totalSets = 0;
-    setsByClass.forEach((_, setIds) {
-      final nonNull = setIds.whereType<String>().toSet();
-      final hasNull = setIds.any((v) => v == null || (v is String && v.isEmpty));
-      final count = nonNull.length + (hasNull ? 1 : 0);
-      totalSets += count;
-    });
-    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = $totalSets');
-    return totalSets;
+    // sessionTypeId가 null(기본수업)이어도 setId가 있으면 카운트 대상
+    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null && b.setId!.isNotEmpty).toList();
+    final setIds = blocks.map((b) => b.setId!).toSet();
+    final detail = blocks.take(20).map((b) => '${b.sessionTypeId}|set:${b.setId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}').toList();
+    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = ${setIds.length}, blocks=${blocks.length}, setIds=$setIds, detail=$detail');
+    return setIds.length;
   }
 
   /// 수업 등록 가능 학생 리스트 반환 (수업이 등록되지 않은 학생들)
@@ -2458,6 +2481,42 @@ class DataManager {
   int getStudentWeeklyClassCount(String studentId) {
     final info = getStudentPaymentInfo(studentId);
     return info?.weeklyClassCount ?? 1;
+  }
+
+  /// 학생별 고유 세트 개수 반환 (setId 고유 개수, sessionTypeId 여부 무관)
+  int getStudentSetCount(String studentId) {
+    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final assigned = blocks.where((b) => b.sessionTypeId != null).toList();
+    final setIds = blocks
+        .where((b) => b.setId != null && b.setId!.isNotEmpty)
+        .map((b) => b.setId!)
+        .toSet();
+    final cnt = setIds.length;
+    print('[SYNC][setCount] studentId=$studentId blocks=${blocks.length}, assigned=${assigned.length}, setIds=$setIds setCount=$cnt');
+    return cnt;
+  }
+
+  /// weekly_class_count를 set 개수와 조건부 동기화
+  /// - onAdd: setCount가 weekly보다 크면 올려준다(최대값 유지), 작으면 그대로 둠
+  /// - onRemove: setCount가 weekly보다 작으면 내려준다(최소값 유지), 크거나 같으면 그대로 둠
+  Future<void> syncWeeklyClassCount(String studentId, {required bool onAdd}) async {
+    final blocksForStudent = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final detail = blocksForStudent
+        .take(50)
+        .map((b) => '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}')
+        .toList();
+    final actual = getStudentSetCount(studentId);
+    final current = getStudentWeeklyClassCount(studentId);
+    int next = current;
+    if (onAdd) {
+      if (actual > current) next = actual;
+    } else {
+      if (actual < current) next = actual;
+    }
+    print('[SYNC][weekly] onAdd=$onAdd studentId=$studentId actual=$actual current=$current next=$next blocks=${blocksForStudent.length} detail=$detail');
+    if (next != current) {
+      await setStudentWeeklyClassCount(studentId, next);
+    }
   }
 
   // 추천 학생: weekly_class_count 대비 현재 set_id 개수가 미만인 학생 목록

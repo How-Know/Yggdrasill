@@ -122,8 +122,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
   String _headerSearchQuery = '';
 
   List<StudentTimeBlock> _applySelectedClassId(List<StudentTimeBlock> blocks) {
-    if (_selectedClassId == null || _selectedClassId!.isEmpty) return blocks;
-    return blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
+    if (_selectedClassId == null || _selectedClassId!.isEmpty) {
+      print('[DEBUG][_applySelectedClassId] skip (selectedClassId is null/empty), blocks=${blocks.length}');
+      return blocks;
+    }
+    final mapped = blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
+    print('[DEBUG][_applySelectedClassId] selectedClassId=$_selectedClassId, before=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}, after=${mapped.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+    return mapped;
   }
 
   // 메모 슬라이드 상태
@@ -417,6 +422,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
           if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
             _selectedClassId = preselectedClassId;
+            print('[DEBUG][학생선택] preselectedClassId 적용: $_selectedClassId');
           }
           print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
         });
@@ -1445,9 +1451,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           await DataManager.instance.loadStudentTimeBlocks();
                           final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
                           print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
-                          final setIds = allBlocksAfter.map((b) => b.setId).toSet();
-                          int usedCount = setIds.length;
-                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                          final usedCount = DataManager.instance.getStudentSetCount(student.id);
+                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
                           // weekly_class_count는 StudentPaymentInfo 기준으로 조회
                           final maxCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
                           print('[DEBUG][onCellStudentsSelected] weeklyClassCount(DataManager): $maxCount');
@@ -1528,9 +1533,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           await DataManager.instance.loadStudentTimeBlocks();
                           final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
                           print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
-                          final setIds = allBlocksAfter.map((b) => b.setId).toSet();
-                          int usedCount = setIds.length;
-                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감): $usedCount');
+                          final usedCount = DataManager.instance.getStudentSetCount(student.id);
+                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
                           // weekly_class_count는 StudentPaymentInfo 기준으로 조회
                           final maxCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
                           print('[DEBUG][onCellStudentsSelected] weeklyClassCount(DataManager): $maxCount');

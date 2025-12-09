@@ -48,11 +48,12 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     } else {
       _students = _getRecommendedStudentsByActualClassCount();
-      print('[DEBUG][StudentSearchDialog] 추천 학생(weekly_class_count 기준, actual class count): ' +
-          _students
-              .map((s) => '${s.student.name}(classes=${_getActualClassCount(s.student.id)}, weekly=${DataManager.instance.getStudentWeeklyClassCount(s.student.id)})')
-              .toList()
-              .toString());
+      // weekly_class_count 값 확인용 로그 (0으로 표시되는지 추적)
+      for (final s in _students) {
+        final weekly = DataManager.instance.getStudentWeeklyClassCount(s.student.id);
+        final actual = _getActualClassCount(s.student.id);
+        print('[DEBUG][StudentSearchDialog] 추천: ${s.student.name}, weekly=$weekly, actual=$actual');
+      }
     }
     _filteredStudents = _students;
     setState(() {});
@@ -105,28 +106,26 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   void _filterStudents(String query) {
     setState(() {
-      // 검색은 현재 추천/자습 대상(_students)에서만 필터
-      final allStudents = _students;
-      if (query.trim().isEmpty) {
-        _filteredStudents = allStudents;
-      } else {
-        _filteredStudents = allStudents.where((studentWithInfo) {
-          final name = studentWithInfo.student.name.toLowerCase();
-          final school = studentWithInfo.student.school.toLowerCase();
-          final searchQuery = query.toLowerCase();
-          return name.contains(searchQuery) || school.contains(searchQuery);
-        }).toList();
+      final searchQuery = query.trim().toLowerCase();
+      if (searchQuery.isEmpty) {
+        // 빈 검색어면 추천/자습 대상(_students) 그대로
+        _filteredStudents = _students;
+        return;
       }
+      // 검색 시에는 전체 학생 대상으로 필터 (weekly_class_count 충족 여부 무시)
+      final all = DataManager.instance.students;
+      _filteredStudents = all.where((studentWithInfo) {
+        final name = studentWithInfo.student.name.toLowerCase();
+        final school = (studentWithInfo.student.school ?? '').toLowerCase();
+        return name.contains(searchQuery) || school.contains(searchQuery);
+      }).toList();
     });
   }
 
-  /// 학생이 등록된 수업이 있는지 확인
+  /// 학생이 등록된 수업이 있는지 확인 (setId 기준, 수업명 없음 포함)
   bool _hasRegisteredClasses(String studentId) {
-    final allTimeBlocks = DataManager.instance.studentTimeBlocks
-        .where((block) => block.studentId == studentId)
-        .toList();
-    final timeBlocksWithSessionType = allTimeBlocks.where((block) => block.sessionTypeId != null).toList();
-    return timeBlocksWithSessionType.isNotEmpty;
+    final setCount = _getActualClassCount(studentId);
+    return setCount > 0;
   }
 
   /// 수업 정보를 색상이 적용된 위젯으로 반환
@@ -209,7 +208,10 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     return DropdownButtonFormField<String?>(
       value: _selectedClassId,
       items: items,
-      onChanged: (v) => setState(() => _selectedClassId = v),
+      onChanged: (v) {
+        setState(() => _selectedClassId = v);
+        print('[DEBUG][StudentSearchDialog] dropdown changed -> $_selectedClassId');
+      },
       decoration: InputDecoration(
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         filled: true,
@@ -285,14 +287,17 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                           itemBuilder: (context, index) {
                             final studentWithInfo = _filteredStudents[index];
                             final student = studentWithInfo.student;
-                            final hasClasses = _hasRegisteredClasses(student.id);
                             final int setCount = _getActualClassCount(student.id);
+                            final bool hasClasses = setCount > 0;
                             final int weeklyCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
                             return InkWell(
-                              onTap: () => Navigator.of(context).pop({
-                                'student': student,
-                                'classId': _selectedClassId,
-                              }),
+                              onTap: () {
+                                print('[DEBUG][StudentSearchDialog] confirm -> student=${student.id}, classId=$_selectedClassId');
+                                Navigator.of(context).pop({
+                                  'student': student,
+                                  'classId': _selectedClassId,
+                                });
+                              },
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                                 child: Row(
