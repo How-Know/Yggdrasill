@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import '../models/student.dart';
+import '../models/group_info.dart';
 import '../services/data_manager.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
@@ -21,6 +22,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   final TextEditingController _searchController = ImeAwareTextEditingController();
   List<StudentWithInfo> _students = [];
   List<StudentWithInfo> _filteredStudents = [];
+  String? _selectedClassId;
 
   @override
   void initState() {
@@ -45,12 +47,54 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       _students = DataManager.instance.getSelfStudyEligibleStudents();
       print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     } else {
-      // 추천 학생: weekly_class_count > set_id 개수(미만)인 학생들
-      _students = DataManager.instance.getRecommendedStudentsForWeeklyClassCount();
-      print('[DEBUG][StudentSearchDialog] 추천 학생(weekly_class_count 기준): ' + _students.map((s) => s.student.name).toList().toString());
+      _students = _getRecommendedStudentsByActualClassCount();
+      print('[DEBUG][StudentSearchDialog] 추천 학생(weekly_class_count 기준, actual class count): ' +
+          _students
+              .map((s) => '${s.student.name}(classes=${_getActualClassCount(s.student.id)}, weekly=${DataManager.instance.getStudentWeeklyClassCount(s.student.id)})')
+              .toList()
+              .toString());
     }
     _filteredStudents = _students;
     setState(() {});
+  }
+
+  /// 실제 수업 개수(수업별 고유 setId) + setId 없는 수업은 1로 카운트
+  int _getActualClassCount(String studentId) {
+    final dm = DataManager.instance;
+    final allBlocks = dm.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final Map<String, Set<String?>> setsByClass = {};
+    for (final b in allBlocks) {
+      final cls = b.sessionTypeId ?? 'default_class';
+      setsByClass.putIfAbsent(cls, () => <String?>{});
+      setsByClass[cls]!.add(b.setId);
+    }
+    int total = 0;
+    for (final entry in setsByClass.entries) {
+      final setIds = entry.value;
+      final nonNull = setIds.whereType<String>().toSet();
+      final hasNull = setIds.any((v) => v == null || (v is String && v.isEmpty));
+      final count = nonNull.length + (hasNull ? 1 : 0);
+      total += count;
+    }
+    return total;
+  }
+
+  /// 추천 학생: weekly_class_count > 실제 수업 개수 인 학생들
+  List<StudentWithInfo> _getRecommendedStudentsByActualClassCount() {
+    final dm = DataManager.instance;
+    final list = dm.students.where((s) {
+      final actual = _getActualClassCount(s.student.id);
+      final weekly = dm.getStudentWeeklyClassCount(s.student.id);
+      return actual < weekly;
+    }).toList();
+    // remaining 내림차순 → 이름순
+    list.sort((a, b) {
+      final ra = dm.getStudentWeeklyClassCount(a.student.id) - _getActualClassCount(a.student.id);
+      final rb = dm.getStudentWeeklyClassCount(b.student.id) - _getActualClassCount(b.student.id);
+      if (rb != ra) return rb.compareTo(ra);
+      return a.student.name.compareTo(b.student.name);
+    });
+    return list;
   }
 
   @override
@@ -61,8 +105,8 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   void _filterStudents(String query) {
     setState(() {
-      // 검색은 필터 없이 전체 학생 대상
-      final allStudents = DataManager.instance.students;
+      // 검색은 현재 추천/자습 대상(_students)에서만 필터
+      final allStudents = _students;
       if (query.trim().isEmpty) {
         _filteredStudents = allStudents;
       } else {
@@ -81,18 +125,12 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     final allTimeBlocks = DataManager.instance.studentTimeBlocks
         .where((block) => block.studentId == studentId)
         .toList();
-    
-    final timeBlocksWithSessionType = allTimeBlocks
-        .where((block) => block.sessionTypeId != null)
-        .toList();
-    
-    print('[DEBUG] _hasRegisteredClasses: 학생 $studentId의 전체 블록: ${allTimeBlocks.length}개, sessionTypeId 있는 블록: ${timeBlocksWithSessionType.length}개');
-    
-    return allTimeBlocks.isNotEmpty; // sessionTypeId가 없어도 시간블록이 있으면 수업으로 간주
+    final timeBlocksWithSessionType = allTimeBlocks.where((block) => block.sessionTypeId != null).toList();
+    return timeBlocksWithSessionType.isNotEmpty;
   }
 
   /// 수업 정보를 색상이 적용된 위젯으로 반환
-  Widget _buildClassInfoWidget(String studentId) {
+  Widget _buildClassInfoWidget(String studentId, {required int setCount, required int weeklyCount}) {
     final allTimeBlocks = DataManager.instance.studentTimeBlocks
         .where((block) => block.studentId == studentId)
         .toList();
@@ -121,59 +159,73 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       print('[DEBUG] 수업 ${entry.key}: ${entry.value.length}개 세트 (setIds: ${entry.value})');
     }
     
-    // 수업 정보를 위젯으로 변환
-    final classWidgets = classCounts.entries.map((entry) {
-      final classId = entry.key;
-      final count = entry.value;
-      
-      // ClassInfo에서 수업명과 색상 찾기
-      String className;
-      Color classColor;
-      
-      if (classId == 'default_class') {
-        // sessionTypeId가 없는 경우
-        className = '수업';
-        classColor = Colors.white.withOpacity(0.7);
-        print('[DEBUG] 기본 수업 처리: $className');
-      } else {
-        // sessionTypeId가 있는 경우
-        print('[DEBUG] 찾는 classId: $classId, 전체 수업 수: ${DataManager.instance.classes.length}');
-        final classInfo = DataManager.instance.classes
-            .where((c) => c.id == classId)
-            .firstOrNull;
-        
-        className = classInfo?.name ?? '알 수 없는 수업';
-        classColor = classInfo?.color ?? Colors.white.withOpacity(0.7);
-        print('[DEBUG] 찾은 수업: $className (색상: $classColor)');
-      }
-      
-      return RichText(
-        text: TextSpan(
-          children: [
-            TextSpan(
-              text: className,
-              style: TextStyle(
-                color: classColor,
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            TextSpan(
-              text: ' ($count개)',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.7),
-                fontSize: 15,
-              ),
-            ),
-          ],
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Text(
+        '등록 $setCount개 / 총 수업 $weeklyCount개',
+        style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  Widget _buildGroupIndicator(StudentWithInfo s) {
+    final groupId = s.basicInfo.groupId ?? s.student.groupInfo?.id;
+    final group = DataManager.instance.groups.firstWhere(
+      (g) => g.id == groupId,
+      orElse: () => GroupInfo(
+        id: '',
+        name: '',
+        description: '',
+        capacity: null,
+        duration: 0,
+        color: const Color(0xFF1B6B63),
+      ),
+    );
+    final color = groupId == null || groupId.isEmpty ? Colors.white24 : group.color;
+    return Container(
+      width: 8,
+      height: 32,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+    );
+  }
+
+  Widget _buildClassDropdown() {
+    final classes = DataManager.instance.classes;
+    final items = [
+      const DropdownMenuItem<String?>(
+        value: null,
+        child: Text('수업 선택 없음'),
+      ),
+      ...classes.map((c) => DropdownMenuItem<String?>(
+            value: c.id,
+            child: Text(c.name, overflow: TextOverflow.ellipsis),
+          )),
+    ];
+    return DropdownButtonFormField<String?>(
+      value: _selectedClassId,
+      items: items,
+      onChanged: (v) => setState(() => _selectedClassId = v),
+      decoration: InputDecoration(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        filled: true,
+        fillColor: const Color(0xFF111418),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFF223131)),
         ),
-      );
-    }).toList();
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisSize: MainAxisSize.min,
-      children: classWidgets,
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 1.4),
+        ),
+      ),
+      dropdownColor: const Color(0xFF111418),
+      iconEnabledColor: Colors.white70,
+      style: const TextStyle(color: Color(0xFFEAF2F2)),
     );
   }
 
@@ -198,11 +250,22 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
               const SizedBox(height: 12),
               const Divider(color: Color(0xFF223131), height: 1),
               const SizedBox(height: 14),
-              TextField(
-                controller: _searchController,
-                style: const TextStyle(color: Color(0xFFEAF2F2)),
-                onChanged: _filterStudents,
-                decoration: _searchDecoration(),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      style: const TextStyle(color: Color(0xFFEAF2F2)),
+                      onChanged: _filterStudents,
+                      decoration: _searchDecoration(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 180,
+                    child: _buildClassDropdown(),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
               Expanded(
@@ -223,21 +286,19 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                             final studentWithInfo = _filteredStudents[index];
                             final student = studentWithInfo.student;
                             final hasClasses = _hasRegisteredClasses(student.id);
+                            final int setCount = _getActualClassCount(student.id);
+                            final int weeklyCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
                             return InkWell(
-                              onTap: () => Navigator.of(context).pop(student),
+                              onTap: () => Navigator.of(context).pop({
+                                'student': student,
+                                'classId': _selectedClassId,
+                              }),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Container(
-                                      width: 8,
-                                      height: 32,
-                                      decoration: BoxDecoration(
-                                        color: hasClasses ? const Color(0xFF1B6B63) : Colors.white24,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                    ),
+                                    _buildGroupIndicator(studentWithInfo),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
@@ -261,7 +322,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                                       const SizedBox(width: 12),
                                       ConstrainedBox(
                                         constraints: const BoxConstraints(maxWidth: 180),
-                                        child: _buildClassInfoWidget(student.id),
+                                        child: _buildClassInfoWidget(student.id, setCount: setCount, weeklyCount: weeklyCount),
                                       ),
                                     ],
                                   ],

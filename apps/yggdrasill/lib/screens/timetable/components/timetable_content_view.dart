@@ -2937,8 +2937,9 @@ class _ClassCardState extends State<_ClassCard> {
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: c.description.isNotEmpty ? MainAxisAlignment.start : MainAxisAlignment.center,
                           children: [
                             Text(
                               c.name,
@@ -2951,16 +2952,17 @@ class _ClassCardState extends State<_ClassCard> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            if (c.description.isNotEmpty)
-                              Text(
-                                c.description,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            c.description.isNotEmpty
+                                ? Text(
+                                    c.description,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
                           ],
                         ),
                       ),

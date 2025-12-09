@@ -468,11 +468,13 @@ class _GroupViewState extends State<GroupView> {
                                       ],
                                     );
 
+                                    final bool hasDesc = groupInfo.description.isNotEmpty;
                                     final Widget content = Expanded(
                                       child: compact
                                           ? Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
                                               mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: hasDesc ? MainAxisAlignment.start : MainAxisAlignment.center,
                                               children: [
                                                 Text(
                                                   groupInfo.name,
@@ -484,8 +486,8 @@ class _GroupViewState extends State<GroupView> {
                                                     fontWeight: FontWeight.w500,
                                                   ),
                                                 ),
-                                                if (groupInfo.description.isNotEmpty) ...[
-                                                  SizedBox(height: gapSmall),
+                                                SizedBox(height: gapSmall),
+                                                if (hasDesc)
                                                   Text(
                                                     groupInfo.description,
                                                     maxLines: 1,
@@ -495,10 +497,10 @@ class _GroupViewState extends State<GroupView> {
                                                       fontSize: descSize,
                                                     ),
                                                   ),
-                                                ],
                                               ],
                                             )
                                           : Row(
+                                              crossAxisAlignment: CrossAxisAlignment.center,
                                               children: [
                                                 Text(
                                                   groupInfo.name,
@@ -508,19 +510,19 @@ class _GroupViewState extends State<GroupView> {
                                                     fontWeight: FontWeight.w500,
                                                   ),
                                                 ),
-                                                if (groupInfo.description.isNotEmpty) ...[
-                                                  SizedBox(width: gap),
-                                                  Expanded(
-                                                    child: Text(
-                                                      groupInfo.description,
-                                                      style: TextStyle(
-                                                        color: Colors.white70,
-                                                        fontSize: descSize,
-                                                      ),
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                  ),
-                                                ],
+                                                SizedBox(width: gap),
+                                                Expanded(
+                                                  child: hasDesc
+                                                      ? Text(
+                                                          groupInfo.description,
+                                                          style: TextStyle(
+                                                            color: Colors.white70,
+                                                            fontSize: descSize,
+                                                          ),
+                                                          overflow: TextOverflow.ellipsis,
+                                                        )
+                                                      : const SizedBox.shrink(),
+                                                ),
                                               ],
                                             ),
                                     );

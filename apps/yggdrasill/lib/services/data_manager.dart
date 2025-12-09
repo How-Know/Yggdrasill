@@ -2426,10 +2426,27 @@ class DataManager {
 
   /// 학생별 수업블록(setId 기준) 개수 반환
   int getStudentLessonSetCount(String studentId) {
-    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null).toList();
-    final setCount = blocks.map((b) => b.setId).toSet().length;
-    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = $setCount');
-    return setCount;
+    // 수업에 실제로 배정된 블록만 카운트 (sessionTypeId != null)
+    final blocks = _studentTimeBlocks.where((b) =>
+      b.studentId == studentId &&
+      b.sessionTypeId != null
+    );
+    // 수업별로 setId를 모아서, setId가 없는 경우에도 해당 수업에 최소 1세트로 간주
+    final Map<String, Set<String?>> setsByClass = {};
+    for (final b in blocks) {
+      final classId = b.sessionTypeId!;
+      setsByClass.putIfAbsent(classId, () => <String?>{});
+      setsByClass[classId]!.add(b.setId);
+    }
+    int totalSets = 0;
+    setsByClass.forEach((_, setIds) {
+      final nonNull = setIds.whereType<String>().toSet();
+      final hasNull = setIds.any((v) => v == null || (v is String && v.isEmpty));
+      final count = nonNull.length + (hasNull ? 1 : 0);
+      totalSets += count;
+    });
+    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = $totalSets');
+    return totalSets;
   }
 
   /// 수업 등록 가능 학생 리스트 반환 (수업이 등록되지 않은 학생들)

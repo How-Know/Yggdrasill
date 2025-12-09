@@ -118,7 +118,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+  String? _selectedClassId; // 학생 검색 다이얼로그에서 선택된 수업(session_type_id)
   String _headerSearchQuery = '';
+
+  List<StudentTimeBlock> _applySelectedClassId(List<StudentTimeBlock> blocks) {
+    if (_selectedClassId == null || _selectedClassId!.isEmpty) return blocks;
+    return blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
+  }
 
   // 메모 슬라이드 상태
   final ValueNotifier<bool> _isMemoOpen = ValueNotifier(false);
@@ -366,39 +372,53 @@ class _TimetableScreenState extends State<TimetableScreen> {
     await DataManager.instance.loadStudentTimeBlocks();
     await DataManager.instance.loadStudents();
     if (_splitButtonSelected == '학생') {
-      final selectedStudent = await showDialog<Student>(
+      final selectedStudent = await showDialog<dynamic>(
         context: context,
         barrierDismissible: true,
         builder: (context) => StudentSearchDialog(isSelfStudyMode: false),
       );
       StudentWithInfo? studentWithInfo;
+      String? preselectedClassId;
       if (selectedStudent != null) {
-        // 항상 students에서 StudentWithInfo를 찾아서 사용
-        studentWithInfo = DataManager.instance.students.firstWhere(
-          (s) => s.student.id == selectedStudent.id,
-          orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id)),
-        );
-        // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
-        if (studentWithInfo.student.id != selectedStudent.id) {
-          await DataManager.instance.loadStudents();
-          studentWithInfo = DataManager.instance.students.firstWhere(
-            (s) => s.student.id == selectedStudent.id,
-            orElse: () => StudentWithInfo(student: selectedStudent, basicInfo: StudentBasicInfo(studentId: selectedStudent.id)),
-          );
+        Student? selected;
+        if (selectedStudent is Map && selectedStudent['student'] is Student) {
+          selected = selectedStudent['student'] as Student;
+          preselectedClassId = selectedStudent['classId'] as String?;
+        } else if (selectedStudent is Student) {
+          selected = selectedStudent;
         }
-        final studentId = selectedStudent.id;
+        if (selected != null) {
+          // 항상 students에서 StudentWithInfo를 찾아서 사용
+          studentWithInfo = DataManager.instance.students.firstWhere(
+            (s) => s.student.id == selected!.id,
+            orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
+          );
+          // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
+          if (studentWithInfo.student.id != selected!.id) {
+            await DataManager.instance.loadStudents();
+            studentWithInfo = DataManager.instance.students.firstWhere(
+              (s) => s.student.id == selected!.id,
+              orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
+            );
+          }
+        }
+        final studentId = studentWithInfo?.student.id;
         // 시작 스냅샷 저장(취소 시 복구용)
         final startBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null).toList();
         _snapshotSetIds = startBlocks.map((b) => b.setId!).toSet();
         final registeredCount = _snapshotSetIds.length;
-        final classCount = DataManager.instance.getStudentWeeklyClassCount(studentId);
+        final classCount = DataManager.instance.getStudentWeeklyClassCount(studentId!);
         // weekly_class_count를 이미 채운 경우 = 증가 모드
         _isIncreasingWeeklyCount = registeredCount >= classCount;
         setState(() {
           _isStudentRegistrationMode = true;
           _isClassRegistrationMode = false;
           _selectedStudentWithInfo = studentWithInfo != null ? studentWithInfo : null;
-          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+          // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
+          if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
+            _selectedClassId = preselectedClassId;
+          }
+          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
         });
         print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       } else {
@@ -1494,12 +1514,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             return;
                           }
                           // --- 기존 로직 ---
-                          final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                          var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                             studentIds: [student.id],
                             dayIndex: dayIdx,
                             startTimes: actualStartTimes,
                             duration: Duration(minutes: blockMinutes),
                           );
+                          blocks = _applySelectedClassId(blocks);
                           print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
                           // 한번에 추가하여 UI가 동시에 갱신되도록 처리
                           await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
@@ -1770,12 +1791,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
                     return;
                   }
-                  final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                  var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                     studentIds: [student.id],
                     dayIndex: dayIdx,
                     startTimes: actualStartTimes,
                     duration: Duration(minutes: blockMinutes),
                   );
+                  blocks = _applySelectedClassId(blocks);
                   print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
                   // 한번에 추가하여 UI가 동시에 갱신되도록 처리
                   await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
@@ -1868,12 +1890,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
           return;
         }
         // 2. 시간블록 추가 (팩토리 사용, 단일 등록도 일관성 있게)
-        final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+        var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
           studentIds: [studentWithInfo.student.id],
           dayIndex: dayIdx,
           startTimes: [startTime],
           duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
         );
+        blocks = _applySelectedClassId(blocks);
         await DataManager.instance.addStudentTimeBlock(blocks.first);
         print('[DEBUG] StudentTimeBlock 등록 완료: ${blocks.first}');
         // 스낵바 출력
