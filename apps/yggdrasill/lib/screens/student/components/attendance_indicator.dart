@@ -7,13 +7,13 @@ import '../../../models/session_override.dart';
 /// 달력에 출석 상태를 표시하는 인디케이터 컴포넌트
 /// 
 /// 표시 규칙:
-/// 1. 정상 등하원: 파란색 밑줄 (Color(0xFF0C3A69))
+/// 1. 정상 등하원: 초록색 밑줄 (Color(0xFF33A373))
 /// 2. 지각 등원: 주황색 밑줄 (Color(0xFFFB8C00))
-/// 3. 무단 결석: 빨간색 밑줄 (Colors.red)
+/// 3. 무단 결석: 빨간색 밑줄 (Color(0xFFE57373))
 class AttendanceIndicator extends StatelessWidget {
-  static const Color _colorPresent = Color(0xFF0C3A69);
-  static const Color _colorLate = Color(0xFFFB8C00);
-  static const Color _colorAbsent = Colors.red;
+  static const Color _colorPresent = Color(0xFF33A373);
+  static const Color _colorLate = Color(0xFFF2B45B);
+  static const Color _colorAbsent = Color(0xFFE57373);
 
   final String studentId;
   final DateTime date;

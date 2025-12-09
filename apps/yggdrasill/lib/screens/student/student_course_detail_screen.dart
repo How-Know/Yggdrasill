@@ -27,6 +27,92 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     super.initState();
   }
 
+  Future<void> _openAttendanceEditDialog(AttendanceRecord record) async {
+    final TextEditingController arrivalController = TextEditingController(text: _hhmm(record.arrivalTime));
+    final TextEditingController departureController = TextEditingController(text: _hhmm(record.departureTime));
+
+    TimeOfDay? _parse(String? text) {
+      if (text == null || text.isEmpty || text == '--:--') return null;
+      final parts = text.split(':');
+      if (parts.length != 2) return null;
+      final h = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      if (h == null || m == null) return null;
+      return TimeOfDay(hour: h, minute: m);
+    }
+
+    DateTime _combine(DateTime base, TimeOfDay tod) =>
+        DateTime(base.year, base.month, base.day, tod.hour, tod.minute);
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0B1112),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF223131)),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          title: const Text(
+            '출석 수정',
+            style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Divider(color: Color(0xFF223131), height: 1),
+              const SizedBox(height: 16),
+              _TimeField(label: '등원 시간', controller: arrivalController),
+              const SizedBox(height: 12),
+              _TimeField(label: '하원 시간', controller: departureController),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await DataManager.instance.deleteAttendanceRecord(record.id!);
+                Navigator.of(context).pop(true);
+              },
+              child: const Text('삭제', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B6B63),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                final arr = _parse(arrivalController.text);
+                final dep = _parse(departureController.text);
+                DateTime? newArrival = arr != null ? _combine(record.classDateTime, arr) : null;
+                DateTime? newDeparture = dep != null ? _combine(record.classDateTime, dep) : null;
+                await DataManager.instance.updateAttendanceRecord(
+                  record.copyWith(
+                    arrivalTime: newArrival,
+                    departureTime: newDeparture,
+                    updatedAt: DateTime.now(),
+                  ),
+                );
+                if (mounted) setState(() {});
+                if (context.mounted) Navigator.of(context).pop(true);
+              },
+              child: const Text('저장', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == true && mounted) setState(() {});
+  }
+
   void _updateMonth(int delta) {
     setState(() {
       _currentDate = DateTime(_currentDate.year, _currentDate.month + delta);
@@ -419,15 +505,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   }
 
   Widget _buildCalendarLegend() {
-    const Color _colorPresent = Color(0xFF0C3A69); // 정상
-    const Color _colorLate = Color(0xFFFB8C00);    // 지각
-    const Color _colorAbsent = Colors.red;         // 결석
+    const Color _colorPresent = Color(0xFF33A373); // 정상
+    const Color _colorLate = Color(0xFFF2B45B);    // 지각
+    const Color _colorAbsent = Color(0xFFE57373);  // 결석
+    const Color _colorOverride = Color(0xFF5DD6FF); // 보강/추가수업
 
     final List<_LegendEntry> legends = [
       const _LegendEntry('출석', _colorPresent),
       const _LegendEntry('지각', _colorLate),
       const _LegendEntry('결석', _colorAbsent),
-      const _LegendEntry('추가수업', _colorPresent),
+      const _LegendEntry('보강, 추가수업', _colorOverride),
     ];
 
     return Align(
@@ -542,7 +629,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                 controller: _attendanceScrollController,
                 padding: EdgeInsets.zero,
                 itemCount: uniqueRecords.length,
-                itemExtent: 78.0,
+                itemExtent: 82.0,
                 itemBuilder: (context, index) {
                   final record = uniqueRecords[index];
                   final dateLabel = DateFormat('MM.dd (E)', 'ko').format(record.classDateTime);
@@ -560,8 +647,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   }
 
                   // 수업명 및 보강/추가수업 배지
-                  // 수업명: 기록에 없으면 '정규 수업'
-                  String className = (record.className?.trim().isNotEmpty == true) ? record.className!.trim() : '정규 수업';
+                  String className = '';
                   String? overrideBadge;
                   final overrides = DataManager.instance.sessionOverrides;
                   bool sameMinute(DateTime a, DateTime b) =>
@@ -577,6 +663,12 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       break;
                     }
                   }
+                  className = _resolveDisplayClassName(record, matchedOverride);
+
+                  final String? tooltipMessage = (matchedOverride?.originalClassDateTime != null)
+                      ? '원본 : ${DateFormat('MM.dd (E)', 'ko').format(matchedOverride!.originalClassDateTime!)} '
+                          '${_hhmm(matchedOverride!.originalClassDateTime)} ~ ${_hhmm(matchedOverride!.originalClassDateTime!.add(Duration(minutes: matchedOverride!.durationMinutes ?? 60)))}'
+                      : null;
 
                   String statusText;
                   Color statusColor;
@@ -594,7 +686,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                     }
                   }
 
-                  return Container(
+                  Widget card = Container(
                     decoration: const BoxDecoration(
                       border: Border(bottom: BorderSide(color: Color(0xFF223131), width: 1)),
                     ),
@@ -626,22 +718,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                                         ),
                                         if (overrideBadge != null) ...[
                                           const SizedBox(width: 6),
-                                          Tooltip(
-                                            message: (matchedOverride?.originalClassDateTime != null)
-                                                ? '원본 수업: ${_hhmm(matchedOverride!.originalClassDateTime)} ~ ${_hhmm(matchedOverride!.originalClassDateTime!.add(Duration(minutes: matchedOverride!.durationMinutes ?? 60)))}'
-                                                : '보강/추가수업',
-                                            waitDuration: const Duration(milliseconds: 200),
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF5DD6FF).withOpacity(0.18),
-                                                borderRadius: BorderRadius.circular(999),
-                                                border: Border.all(color: const Color(0xFF5DD6FF).withOpacity(0.6)),
-                                              ),
-                                              child: Text(
-                                                overrideBadge!,
-                                                style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 12, fontWeight: FontWeight.w800),
-                                              ),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF5DD6FF).withOpacity(0.22),
+                                              borderRadius: BorderRadius.circular(999),
+                                              border: Border.all(color: const Color(0xFF5DD6FF).withOpacity(0.65)),
+                                            ),
+                                            child: Text(
+                                              overrideBadge!,
+                                              style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 11.5, fontWeight: FontWeight.w800),
                                             ),
                                           ),
                                         ],
@@ -655,7 +741,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                             Text(
                               '${_hhmm(record.classDateTime)} ~ ${_hhmm(record.classEndTime)}',
                               textAlign: TextAlign.right,
-                              style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w700),
+                              style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w700),
                             ),
                           ],
                         ),
@@ -690,6 +776,25 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         ),
                       ],
                     ),
+                  );
+
+                  if (tooltipMessage != null && tooltipMessage.isNotEmpty) {
+                    card = Tooltip(
+                      message: tooltipMessage,
+                      waitDuration: const Duration(milliseconds: 150),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF11181C),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF2B3A42)),
+                      ),
+                      textStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      child: card,
+                    );
+                  }
+
+                  return InkWell(
+                    onTap: () => _openAttendanceEditDialog(record),
+                    child: card,
                   );
                 },
               ),
@@ -1064,61 +1169,34 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
 
   Widget _AddOverrideDot({required String studentId, required DateTime date}) {
     final overrides = DataManager.instance.sessionOverrides;
-    final records = DataManager.instance.attendanceRecords;
     final dateStart = DateTime(date.year, date.month, date.day);
     final dateEnd = dateStart.add(const Duration(days: 1));
     bool sameMinute(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
 
-    final addOnDate = overrides.where((o) =>
+    final overrideOnDate = overrides.where((o) =>
         o.studentId == studentId &&
-        o.overrideType == OverrideType.add &&
+        (o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace) &&
         o.status != OverrideStatus.canceled &&
         o.replacementClassDateTime != null &&
         o.replacementClassDateTime!.isAfter(dateStart) &&
         o.replacementClassDateTime!.isBefore(dateEnd)).toList();
 
-    if (addOnDate.isEmpty) return const SizedBox.shrink();
+    if (overrideOnDate.isEmpty) return const SizedBox.shrink();
 
-    Color dotColor = Colors.white30;
-    for (final o in addOnDate) {
-      final rec = records.firstWhere(
-        (r) => r.studentId == studentId && sameMinute(r.classDateTime, o.replacementClassDateTime!),
-        orElse: () => AttendanceRecord(
-          id: null,
-          studentId: studentId,
-          classDateTime: dateStart,
-          classEndTime: dateStart,
-          className: '',
-          isPresent: false,
-          arrivalTime: null,
-          departureTime: null,
-          notes: null,
-          createdAt: dateStart,
-          updatedAt: dateStart,
-        ),
-      );
-      if (rec.id == null) continue;
-      if (!rec.isPresent) {
-        dotColor = Colors.red;
-        break;
-      }
-      if (rec.arrivalTime != null) {
-        final lateThreshold = rec.classDateTime.add(const Duration(minutes: 10));
-        if (rec.arrivalTime!.isAfter(lateThreshold)) {
-          dotColor = const Color(0xFFFFB74D);
-        } else {
-          dotColor = const Color(0xFF0C3A69);
-        }
-      } else {
-        dotColor = const Color(0xFF0C3A69);
-      }
-    }
+    final hasReplace = overrideOnDate.any((o) => o.overrideType == OverrideType.replace);
+    final hasAdd = overrideOnDate.any((o) => o.overrideType == OverrideType.add);
+    final labels = [
+      if (hasReplace) '보강',
+      if (hasAdd) '추가',
+    ].join(' · ');
 
-    return Container(
-      width: 10,
-      height: 10,
-      decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        labels,
+        style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 11, fontWeight: FontWeight.w700),
+      ),
     );
   }
 
@@ -1233,3 +1311,55 @@ bool _isLate(AttendanceRecord record) {
 }
 
 bool _isAbsent(AttendanceRecord record) => !record.isPresent;
+
+class _TimeField extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+
+  const _TimeField({required this.label, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF11181C),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF2B3A42)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: TextField(
+            controller: controller,
+            style: const TextStyle(color: Colors.white, fontSize: 15, letterSpacing: 0.2),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              hintText: 'HH:MM',
+              hintStyle: TextStyle(color: Colors.white38),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _resolveDisplayClassName(AttendanceRecord record, SessionOverride? matchedOverride) {
+  // 우선: record.className이 있고 '수업'이 아니면 그대로 사용
+  final raw = record.className?.trim();
+  if (raw != null && raw.isNotEmpty && raw != '수업') return raw;
+
+  // 보강/추가수업에서 sessionTypeId로 클래스명 찾기
+  if (matchedOverride?.sessionTypeId != null) {
+    try {
+      final cls = DataManager.instance.classes.firstWhere((c) => c.id == matchedOverride!.sessionTypeId);
+      if (cls.name.trim().isNotEmpty) return cls.name.trim();
+    } catch (_) {}
+  }
+
+  // 기본값
+  return '정규 수업';
+}
