@@ -11,6 +11,10 @@ import '../../../models/session_override.dart';
 /// 2. 지각 등원: 주황색 밑줄 (Color(0xFFFB8C00))
 /// 3. 무단 결석: 빨간색 밑줄 (Colors.red)
 class AttendanceIndicator extends StatelessWidget {
+  static const Color _colorPresent = Color(0xFF0C3A69);
+  static const Color _colorLate = Color(0xFFFB8C00);
+  static const Color _colorAbsent = Colors.red;
+
   final String studentId;
   final DateTime date;
   final double width;
@@ -20,7 +24,7 @@ class AttendanceIndicator extends StatelessWidget {
     Key? key,
     required this.studentId,
     required this.date,
-    this.width = 20.0,
+    this.width = 10.0, // 기존보다 절반 너비로 축소
     this.thickness = 3.0,
   }) : super(key: key);
 
@@ -123,11 +127,11 @@ class AttendanceIndicator extends StatelessWidget {
 
     // 우선순위: 무단 결석 > 지각 > 정상 출석
     if (hasAbsent) {
-      return Colors.red; // 무단 결석
+      return _colorAbsent; // 무단 결석
     } else if (hasLate) {
-      return const Color(0xFFFB8C00); // 지각 (시간표 정원표시와 동일한 주황색)
+      return _colorLate; // 지각
     } else if (hasPresent) {
-      return const Color(0xFF0C3A69); // 정상 출석 (시간표 정원표시와 동일한 파란색)
+      return _colorPresent; // 정상 출석
     }
 
     return null; // 표시할 상태 없음
@@ -151,7 +155,7 @@ class MultiStudentAttendanceIndicator extends StatelessWidget {
     Key? key,
     required this.studentIds,
     required this.date,
-    this.width = 16.0,
+    this.width = 8.0,
     this.thickness = 2.5,
     this.spacing = 2.0,
   }) : super(key: key);
@@ -214,21 +218,21 @@ class AttendanceLegend extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _LegendItem(
-              color: const Color(0xFF0C3A69),
+              color: AttendanceIndicator._colorPresent,
               label: '정상',
               iconSize: iconSize,
               fontSize: fontSize,
             ),
             const SizedBox(width: 12),
             _LegendItem(
-              color: const Color(0xFFFB8C00),
+              color: AttendanceIndicator._colorLate,
               label: '지각',
               iconSize: iconSize,
               fontSize: fontSize,
             ),
             const SizedBox(width: 12),
             _LegendItem(
-              color: Colors.red,
+              color: AttendanceIndicator._colorAbsent,
               label: '결석',
               iconSize: iconSize,
               fontSize: fontSize,

@@ -2408,8 +2408,15 @@ class DataManager {
   }
 
   void setGroupsOrder(List<GroupInfo> newOrder) {
-    _groups = newOrder.where((g) => g != null).toList();
+    // displayOrder를 재계산하여 서버에 일관되게 저장
+    final recalculated = <GroupInfo>[];
+    for (int i = 0; i < newOrder.length; i++) {
+      final g = newOrder[i];
+      recalculated.add(g.copyWith(displayOrder: i));
+    }
+    _groups = recalculated.where((g) => g != null).toList();
     _groupsById = {for (var g in _groups) g.id: g};
+    print('[GROUPS][order] setGroupsOrder -> ' + _groups.map((g) => '${g.displayOrder}:${g.name}').toList().toString());
     _notifyListeners();
     saveGroups();
   }

@@ -329,8 +329,10 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
       ),
     );
 
-    // 우클릭 컨텍스트 메뉴: 카드 래퍼에 GestureDetector 부여
-    Widget cardCore = GestureDetector(
+    // 우클릭 컨텍스트 메뉴: 카드 래퍼에 GestureDetector 부여 + 호버 시 손가락 커서
+    Widget cardCore = MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
       behavior: HitTestBehavior.deferToChild,
       onTap: widget.disableTapInteractions ? null : () {
         final s = widget.studentWithInfo.student;
@@ -436,6 +438,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         }
       },
       child: cardCoreInner,
+    ),
     );
 
     if (!widget.enableLongPressDrag) {

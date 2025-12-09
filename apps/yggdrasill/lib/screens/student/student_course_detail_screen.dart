@@ -307,8 +307,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        _buildCalendarLegend(),
+                        const SizedBox(height: 12),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildCalendarLegend(),
+                        ),
                       ],
                     ),
                   ),
@@ -363,6 +366,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
               final isToday = DateUtils.isSameDay(date, today);
               final studentId = widget.studentWithInfo.student.id;
 
+              const double indicatorWidth = 45.0; // 고정 너비로 축소
               return Container(
                 margin: const EdgeInsets.all(6),
                 decoration: isToday
@@ -387,11 +391,13 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       bottom: 8,
                       left: 0,
                       right: 0,
-                      child: AttendanceIndicator(
-                        studentId: studentId,
-                        date: date,
-                        width: 10,
-                        thickness: 6,
+                      child: Center(
+                        child: AttendanceIndicator(
+                          studentId: studentId,
+                          date: date,
+                          width: indicatorWidth,
+                          thickness: 6,
+                        ),
                       ),
                     ),
                     Positioned(
@@ -413,11 +419,15 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   }
 
   Widget _buildCalendarLegend() {
+    const Color _colorPresent = Color(0xFF0C3A69); // 정상
+    const Color _colorLate = Color(0xFFFB8C00);    // 지각
+    const Color _colorAbsent = Colors.red;         // 결석
+
     final List<_LegendEntry> legends = [
-      const _LegendEntry('출석', Color(0xFF33A373)),
-      const _LegendEntry('지각', Color(0xFFF2B45B)),
-      const _LegendEntry('결석', Color(0xFFE57373)),
-      const _LegendEntry('추가수업', Color(0xFF0C3A69)),
+      const _LegendEntry('출석', _colorPresent),
+      const _LegendEntry('지각', _colorLate),
+      const _LegendEntry('결석', _colorAbsent),
+      const _LegendEntry('추가수업', _colorPresent),
     ];
 
     return Align(
@@ -532,10 +542,41 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                 controller: _attendanceScrollController,
                 padding: EdgeInsets.zero,
                 itemCount: uniqueRecords.length,
-                itemExtent: 56.0,
+                itemExtent: 78.0,
                 itemBuilder: (context, index) {
                   final record = uniqueRecords[index];
                   final dateLabel = DateFormat('MM.dd (E)', 'ko').format(record.classDateTime);
+                  final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
+                  int? cycle;
+                  int? sessionOrder;
+                  if (registrationDate != null) {
+                    final regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
+                    cycle = _calculateCycleNumber(regDate, record.classDateTime);
+                    final sameCycle = uniqueRecords
+                        .where((r) => _calculateCycleNumber(regDate, r.classDateTime) == cycle)
+                        .toList()
+                      ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+                    sessionOrder = sameCycle.indexOf(record) + 1;
+                  }
+
+                  // 수업명 및 보강/추가수업 배지
+                  // 수업명: 기록에 없으면 '정규 수업'
+                  String className = (record.className?.trim().isNotEmpty == true) ? record.className!.trim() : '정규 수업';
+                  String? overrideBadge;
+                  final overrides = DataManager.instance.sessionOverrides;
+                  bool sameMinute(DateTime a, DateTime b) =>
+                      a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+                  SessionOverride? matchedOverride;
+                  for (final ov in overrides) {
+                    final repl = ov.replacementClassDateTime;
+                    if (repl == null) continue;
+                    if (ov.studentId != record.studentId) continue;
+                    if (sameMinute(repl, record.classDateTime)) {
+                      overrideBadge = ov.overrideType == OverrideType.add ? '추가수업' : '보강';
+                      matchedOverride = ov;
+                      break;
+                    }
+                  }
 
                   String statusText;
                   Color statusColor;
@@ -557,32 +598,95 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                     decoration: const BoxDecoration(
                       border: Border(bottom: BorderSide(color: Color(0xFF223131), width: 1)),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 20),
-                    child: Row(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          dateLabel,
-                          style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  Text(
+                                    cycle != null && sessionOrder != null ? '${cycle}회차 ${sessionOrder}회' : '',
+                                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            className,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                                          ),
+                                        ),
+                                        if (overrideBadge != null) ...[
+                                          const SizedBox(width: 6),
+                                          Tooltip(
+                                            message: (matchedOverride?.originalClassDateTime != null)
+                                                ? '원본 수업: ${_hhmm(matchedOverride!.originalClassDateTime)} ~ ${_hhmm(matchedOverride!.originalClassDateTime!.add(Duration(minutes: matchedOverride!.durationMinutes ?? 60)))}'
+                                                : '보강/추가수업',
+                                            waitDuration: const Duration(milliseconds: 200),
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF5DD6FF).withOpacity(0.18),
+                                                borderRadius: BorderRadius.circular(999),
+                                                border: Border.all(color: const Color(0xFF5DD6FF).withOpacity(0.6)),
+                                              ),
+                                              child: Text(
+                                                overrideBadge!,
+                                                style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 12, fontWeight: FontWeight.w800),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${_hhmm(record.classDateTime)} ~ ${_hhmm(record.classEndTime)}',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w700),
+                            ),
+                          ],
                         ),
-                        const Spacer(),
-                        if (record.isPresent) ...[
-                          Text(
-                            '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 16),
-                          ),
-                          const SizedBox(width: 12),
-                        ],
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: statusColor.withOpacity(0.5)),
-                          ),
-                          child: Text(
-                            statusText,
-                            style: TextStyle(color: statusColor, fontSize: 14, fontWeight: FontWeight.w700),
-                          ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Text(
+                              dateLabel,
+                              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                            ),
+                            const Spacer(),
+                            if (record.isPresent) ...[
+                              Text(
+                                '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                              ),
+                              const SizedBox(width: 10),
+                            ],
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: statusColor.withOpacity(0.18),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: statusColor.withOpacity(0.5)),
+                              ),
+                              child: Text(
+                                statusText,
+                                style: TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -690,7 +794,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
-              onPressed: () => _showPaymentDatePicker(upcoming),
+              onPressed: () => _showPaymentDatePicker(upcoming, markAsPaid: false),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF9FB3B3),
                 side: const BorderSide(color: Color(0xFF4D5A5A)),
@@ -876,6 +980,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           onTap: () => _showPaymentDatePicker(
             entry.record ??
                 PaymentRecord(studentId: studentId, cycle: entry.cycle, dueDate: entry.dueDate),
+            markAsPaid: true,
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -937,11 +1042,12 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   }
 
   _MonthlyDotInfo _resolveMonthlyStatus(String studentId, DateTime registrationDate, DateTime month) {
-    final DateTime dueDate = _getActualPaymentDateForMonth(studentId, registrationDate, month);
-    if (dueDate.isBefore(registrationDate)) {
+    final DateTime regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
+    final DateTime dueDate = _getActualPaymentDateForMonth(studentId, regDate, month);
+    if (dueDate.isBefore(regDate)) {
       return const _MonthlyDotInfo(color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
-    final int cycle = _calculateCycleNumber(registrationDate, dueDate);
+    final int cycle = _calculateCycleNumber(regDate, dueDate);
     if (cycle <= 0) {
       return const _MonthlyDotInfo(color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
@@ -1022,10 +1128,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     return DateFormat('HH:mm').format(dt);
   }
 
-  Future<void> _showPaymentDatePicker(PaymentRecord record) async {
+  Future<void> _showPaymentDatePicker(PaymentRecord record, {required bool markAsPaid}) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: record.dueDate,
+      initialDate: markAsPaid ? (record.paidDate ?? DateTime.now()) : record.dueDate,
       firstDate: DateTime(record.dueDate.year - 1, 1, 1),
       lastDate: DateTime(record.dueDate.year + 2, 12, 31),
       builder: (context, child) {
@@ -1044,33 +1150,35 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       },
     );
     if (picked != null) {
-      final updated = PaymentRecord(
-        id: record.id,
-        studentId: record.studentId,
-        cycle: record.cycle,
-        dueDate: picked,
-        paidDate: record.paidDate,
-      );
-      if (record.id == null) {
-        await DataManager.instance.addPaymentRecord(updated);
+      if (markAsPaid) {
+        // 미납/예정 항목 터치 시 실제 납부일을 기록
+        await DataManager.instance.recordPayment(record.studentId, record.cycle, picked);
       } else {
-        await DataManager.instance.updatePaymentRecord(updated);
+        // 예정일 카드에서 수정 시 납부 처리 없이 예정일만 변경
+        await DataManager.instance.postponeDueDate(
+          record.studentId,
+          record.cycle,
+          picked,
+          'manual_due_edit',
+        );
       }
       if (mounted) setState(() {});
     }
   }
   
   DateTime _getActualPaymentDateForMonth(String studentId, DateTime registrationDate, DateTime targetMonth) {
-    final defaultDate = DateTime(targetMonth.year, targetMonth.month, registrationDate.day);
-    final cycle = _calculateCycleNumber(registrationDate, defaultDate);
+    // registrationDate는 날짜만 사용 (시간 비교 오차 방지)
+    final regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
+    final defaultDate = DateTime(targetMonth.year, targetMonth.month, regDate.day);
+    final cycle = _calculateCycleNumber(regDate, defaultDate);
     final record = DataManager.instance.getPaymentRecord(studentId, cycle);
     if (record != null) return record.dueDate;
     return defaultDate;
   }
 
   int _calculateCycleNumber(DateTime registrationDate, DateTime paymentDate) {
-    final regMonth = DateTime(registrationDate.year, registrationDate.month);
-    final payMonth = DateTime(paymentDate.year, paymentDate.month);
+    final regMonth = DateTime(registrationDate.year, registrationDate.month, 1);
+    final payMonth = DateTime(paymentDate.year, paymentDate.month, 1);
     return (payMonth.year - regMonth.year) * 12 + (payMonth.month - regMonth.month) + 1;
   }
 }

@@ -2083,57 +2083,62 @@ class StudentScreenState extends State<StudentScreen> {
               final date = DateTime(_currentDate.year, _currentDate.month, dayNumber);
               final isToday = DateUtils.isSameDay(date, today);
 
-              return Container(
-                margin: const EdgeInsets.all(5),
-                decoration: isToday
-                    ? BoxDecoration(
-                        border: Border.all(color: const Color(0xFF1976D2), width: 3),
-                        borderRadius: BorderRadius.circular(7),
-                      )
-                    : null,
-                child: Stack(
-                  children: [
-                    // 날짜 숫자는 중앙에 고정
-                    Center(
-                      child: Text(
-                        '$dayNumber',
-                        style: TextStyle(
-                          color: isToday ? Colors.white : Colors.white, 
-                          fontSize: 17,
-                          fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final indicatorWidth = constraints.maxWidth * 0.5; // 셀 너비의 절반으로 고정
+                  return Container(
+                    margin: const EdgeInsets.all(5),
+                    decoration: isToday
+                        ? BoxDecoration(
+                            border: Border.all(color: const Color(0xFF1976D2), width: 3),
+                            borderRadius: BorderRadius.circular(7),
+                          )
+                        : null,
+                    child: Stack(
+                      children: [
+                        // 날짜 숫자는 중앙에 고정
+                        Center(
+                          child: Text(
+                            '$dayNumber',
+                            style: TextStyle(
+                              color: isToday ? Colors.white : Colors.white, 
+                              fontSize: 17,
+                              fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
                         ),
-                      ),
+                        // 하단 밑줄: 예정 수업 출결 상태 (추가수업 제외)
+                        if (_selectedStudent != null)
+                          Positioned(
+                            bottom: 6,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: AttendanceIndicator(
+                                studentId: _selectedStudent!.student.id,
+                                date: date,
+                                width: indicatorWidth,
+                                thickness: 8.0,
+                              ),
+                            ),
+                          ),
+                        // 상단 점: 추가수업 출결 상태
+                        if (_selectedStudent != null)
+                          Positioned(
+                            top: 6,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: _AddOverrideDot(
+                                studentId: _selectedStudent!.student.id,
+                                date: date,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    // 하단 밑줄: 예정 수업 출결 상태 (추가수업 제외)
-                    if (_selectedStudent != null)
-                      Positioned(
-                        bottom: 6,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: AttendanceIndicator(
-                            studentId: _selectedStudent!.student.id,
-                            date: date,
-                            width: 40,
-                            thickness: 8.0,
-                          ),
-                        ),
-                      ),
-                    // 상단 점: 추가수업 출결 상태
-                    if (_selectedStudent != null)
-                      Positioned(
-                        top: 6,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: _AddOverrideDot(
-                            studentId: _selectedStudent!.student.id,
-                            date: date,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           ),
