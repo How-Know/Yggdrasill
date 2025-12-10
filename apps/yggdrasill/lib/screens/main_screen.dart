@@ -83,143 +83,43 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 오늘 등원해야 하는 학생(setId별) 리스트 추출
   List<_AttendanceTarget> getTodayAttendanceTargets() {
     final now = DateTime.now();
-    final todayIdx = now.weekday - 1; // 0:월~6:일
-    final blocks = DataManager.instance.studentTimeBlocks
-        .where((b) => b.dayIndex == todayIdx)
-        .toList();
-
-    // [BLIND] replace 보강이 있는 경우 원본 블록을 시간표와 동일 규칙으로 숨김 처리
-    // - 기준: OverrideReason.makeup && overrideType==replace && status!=canceled
-    // - setId 우선 매칭, 없으면 해당 학생의 오늘 블록들 중 원본 시각과 가장 근접한 블록으로 setId 추정
-    // - 최후 수단: 원본 시각과 정확히 동일(시:분)이고 아직 원래 수업 종료 전이면 studentId 단위로 임시 블라인드
-    final Set<String> _hiddenStudentSetPairs = <String>{}; // 'studentId|setId'
-    final Set<String> _hiddenStudentIdsTemp = <String>{};  // setId 매칭 실패 시 시간 일치 기반 임시 블라인드
-    final int _defaultLessonMinutes = DataManager.instance.academySettings.lessonDuration;
-    bool _sameYmd(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
-    for (final ov in DataManager.instance.sessionOverrides) {
-      if (ov.reason != OverrideReason.makeup) continue;
-      if (ov.overrideType != OverrideType.replace) continue;
-      if (ov.status == OverrideStatus.canceled) continue;
-      final DateTime? orig = ov.originalClassDateTime;
-      if (orig == null) continue;
-      if (!_sameYmd(orig, now)) continue; // 오늘 원본만 블라인드 대상
-      // setId 우선 매칭
-      String? setId = ov.setId;
-      if (setId == null || setId.isEmpty) {
-        // 해당 학생의 오늘 블록들 중에서 원본 시각과 가장 근접한 블록을 선택
-        final studentBlocksToday = blocks.where((b) => b.studentId == ov.studentId).toList();
-        if (studentBlocksToday.isNotEmpty) {
-          final int origMin = orig.hour * 60 + orig.minute;
-          int bestDiff = 1 << 30;
-          for (final b in studentBlocksToday) {
-            if (b.setId == null) continue;
-            final int bm = b.startHour * 60 + b.startMinute;
-            final int diff = (bm - origMin).abs();
-            if (diff < bestDiff) {
-              bestDiff = diff;
-              setId = b.setId;
-            }
-          }
-        }
-      }
-      if (setId != null && setId.isNotEmpty) {
-        _hiddenStudentSetPairs.add('${ov.studentId}|$setId');
-      } else {
-        // 최후 수단: 시:분이 동일하고 아직 원래 수업 종료 전이면 임시 블라인드
-        if (orig.hour == now.hour && orig.minute == now.minute) {
-          final int minutes = ov.durationMinutes ?? _defaultLessonMinutes;
-          final DateTime origEnd = DateTime(orig.year, orig.month, orig.day, orig.hour, orig.minute)
-              .add(Duration(minutes: minutes));
-          if (DateTime.now().isBefore(origEnd)) {
-            _hiddenStudentIdsTemp.add(ov.studentId);
-          }
-        }
-      }
-    }
-    // BLIND 필터 적용 후 setId별로 묶기
-    final filteredBlocks = blocks.where((b) {
-      final sid = b.studentId;
-      final setId = b.setId ?? '';
-      if (_hiddenStudentIdsTemp.contains(sid)) return false;
-      if (_hiddenStudentSetPairs.contains('$sid|$setId')) return false;
-      return true;
-    }).toList();
-    final setMap = <String, List<StudentTimeBlock>>{};
-    for (final b in filteredBlocks) {
-      if (b.setId != null) {
-        setMap.putIfAbsent(b.setId!, () => []).add(b);
-      }
-    }
-    final Map<String, _AttendanceTarget> byKey = {}; // key -> target
-    for (final entry in setMap.entries) {
-      final blocks = entry.value;
-      // number==1을 우선 대표 블록으로 사용, 없으면 시작시각 오름차순의 첫 블록으로 대체
-      StudentTimeBlock block;
-      try {
-        block = blocks.firstWhere((b) => b.number == 1);
-      } catch (_) {
-        blocks.sort((a, b) => (a.startHour * 60 + a.startMinute) - (b.startHour * 60 + b.startMinute));
-        block = blocks.first;
-      }
-      final studentList = DataManager.instance.students
-          .where((s) => s.student.id == block.studentId)
-          .toList();
-      final StudentWithInfo? student = studentList.isNotEmpty ? studentList.first : null;
-      final classList = block.sessionTypeId != null
-          ? DataManager.instance.classes
-              .where((c) => c.id == block.sessionTypeId)
-              .toList()
-          : [];
-      final ClassInfo? classInfo = classList.isNotEmpty ? classList.first : null;
-      if (student != null) {
-        final key = '${student.student.id}@${now.year}-${now.month}-${now.day} ${block.startHour}:${block.startMinute}';
-        byKey[key] = _AttendanceTarget(
-          setId: entry.key,
-          student: student.student,
-          classInfo: classInfo,
-          startHour: block.startHour,
-          startMinute: block.startMinute,
-          duration: block.duration,
-          overrideType: null,
-        );
+    final anchor = DateTime(now.year, now.month, now.day);
+    // setId별로 "가장 이른 수업 시간" 하나만 대표로 사용
+    final Map<String, AttendanceRecord> earliestBySet = {};
+    for (final r in DataManager.instance.attendanceRecords) {
+      final dt = r.classDateTime;
+      if (dt.year != anchor.year || dt.month != anchor.month || dt.day != anchor.day) continue;
+      final setId = r.setId;
+      if (setId == null || setId.isEmpty) continue;
+      final prev = earliestBySet[setId];
+      if (prev == null || dt.isBefore(prev.classDateTime)) {
+        earliestBySet[setId] = r;
       }
     }
 
-    // 보강/추가수업(오버라이드)도 대상에 포함: 오늘 날짜의 replacementClassDateTime 기준
-    final overrides = DataManager.instance.sessionOverridesNotifier.value;
-    for (final ov in overrides) {
-      if (ov.status == OverrideStatus.canceled) continue;
-      if (ov.reason != OverrideReason.makeup) continue; // 보강만 대상
-      if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
-      final repl = ov.replacementClassDateTime;
-      if (repl == null) continue;
-      if (!(repl.year == now.year && repl.month == now.month && repl.day == now.day)) continue;
-
-      // 학생/수업 조회
-      final student = DataManager.instance.students.firstWhereOrNull((s) => s.student.id == ov.studentId);
-      if (student == null) continue;
-      final ClassInfo? classInfo = ov.sessionTypeId != null
-          ? DataManager.instance.classes.firstWhereOrNull((c) => c.id == ov.sessionTypeId)
-          : null;
-
-      final startHour = repl.hour;
-      final startMinute = repl.minute;
-      final duration = Duration(minutes: ov.durationMinutes ?? DataManager.instance.academySettings.lessonDuration);
-      final key = '${ov.studentId}@${repl.year}-${repl.month}-${repl.day} ${startHour}:${startMinute}';
-      // 보강/추가수업이 같은 학생/시간이면 override로 대체하여 언더라인 표시
-      byKey[key] = _AttendanceTarget(
-        setId: ov.id, // 고유 식별자로 사용
-        student: student.student,
+    final List<_AttendanceTarget> targets = [];
+    for (final entry in earliestBySet.entries) {
+      final r = entry.value;
+      final dt = r.classDateTime;
+      final studentInfo = DataManager.instance.students.firstWhereOrNull((s) => s.student.id == r.studentId);
+      if (studentInfo == null) continue;
+      ClassInfo? classInfo;
+      if (r.sessionTypeId != null) {
+        classInfo = DataManager.instance.classes.firstWhereOrNull((c) => c.id == r.sessionTypeId);
+      }
+      final duration = r.classEndTime.difference(r.classDateTime);
+      targets.add(_AttendanceTarget(
+        setId: entry.key,
+        student: studentInfo.student,
         classInfo: classInfo,
-        startHour: startHour,
-        startMinute: startMinute,
+        startHour: dt.hour,
+        startMinute: dt.minute,
         duration: duration,
-        overrideType: ov.overrideType,
-      );
+        overrideType: null,
+      ));
     }
-    // 시작시간 기준 정렬
-    final result = byKey.values.toList()..sort((a, b) => a.startTime.compareTo(b.startTime));
-    return result;
+    targets.sort((a, b) => a.startTime.compareTo(b.startTime));
+    return targets;
   }
 
   // 출석/하원 시간 기록용
@@ -764,7 +664,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     final AttendanceRecord? rec = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
                     DateTime? arr = rec?.arrivalTime;
                     DateTime? dep = rec?.departureTime;
-                    bool isArrived = arr != null;
+                    bool isArrived = arr != null || (rec?.isPresent ?? false);
                     bool isLeaved = dep != null;
                     if (!isArrived && _attendedSetIds.contains(t.setId)) {
                       isArrived = true;

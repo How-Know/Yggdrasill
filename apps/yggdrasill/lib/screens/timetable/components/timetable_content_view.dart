@@ -2808,11 +2808,22 @@ class _ClassCardState extends State<_ClassCard> {
     }
     // 기존 단일 등록 로직 (아래 함수로 분리)
     final studentWithInfo = data['student'] as StudentWithInfo?;
-    final setId = data['setId'] as String?;
-    if (studentWithInfo == null || setId == null) {
-      // print('[DEBUG][_handleStudentDrop] 드래그 데이터 부족: studentWithInfo= [33m$studentWithInfo [0m, setId=$setId');
-      return;
+    String? setId = data['setId'] as String?;
+    if (studentWithInfo == null) return;
+    if (setId == null) {
+      final oldDayIndex = data['oldDayIndex'] as int?;
+      final oldStartTime = data['oldStartTime'] as DateTime?;
+      final fallback = DataManager.instance.studentTimeBlocks.firstWhere(
+        (b) =>
+            b.studentId == studentWithInfo.student.id &&
+            b.dayIndex == oldDayIndex &&
+            b.startHour == oldStartTime?.hour &&
+            b.startMinute == oldStartTime?.minute,
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+      );
+      setId = fallback.setId;
     }
+    if (setId == null) return;
     await _registerSingleStudent(studentWithInfo, setId: setId);
     // await DataManager.instance.loadStudentTimeBlocks(); // 전체 reload 제거
     // print('[DEBUG][_handleStudentDrop] 단일 등록 완료: ${studentWithInfo.student.name}');
@@ -2866,7 +2877,20 @@ class _ClassCardState extends State<_ClassCard> {
           // print('[DEBUG][onWillAccept] entries=$entries');
           for (final entry in entries) {
             final student = entry['student'] as StudentWithInfo?;
-            final setId = entry['setId'] as String?;
+            String? setId = entry['setId'] as String?;
+            if (student != null && setId == null) {
+              final oldDayIndex = data['oldDayIndex'] as int?;
+              final oldStartTime = data['oldStartTime'] as DateTime?;
+              final fallback = DataManager.instance.studentTimeBlocks.firstWhere(
+                (b) =>
+                    b.studentId == student.student.id &&
+                    b.dayIndex == oldDayIndex &&
+                    b.startHour == oldStartTime?.hour &&
+                    b.startMinute == oldStartTime?.minute,
+                orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+              );
+              setId = fallback.setId;
+            }
             if (student == null || setId == null) return false;
             final blocks = isDefaultClass
                 ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()
@@ -2878,7 +2902,21 @@ class _ClassCardState extends State<_ClassCard> {
           return true;
         } else {
           final student = data['student'] as StudentWithInfo?;
-          final setId = data['setId'] as String?;
+          String? setId = data['setId'] as String?;
+          // setId 누락 시 기존 블록에서 찾기(드롭 거부 방지)
+          if (student != null && setId == null) {
+            final oldDayIndex = data['oldDayIndex'] as int?;
+            final oldStartTime = data['oldStartTime'] as DateTime?;
+            final fallback = DataManager.instance.studentTimeBlocks.firstWhere(
+              (b) =>
+                  b.studentId == student.student.id &&
+                  b.dayIndex == oldDayIndex &&
+                  b.startHour == oldStartTime?.hour &&
+                  b.startMinute == oldStartTime?.minute,
+              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+            );
+            setId = fallback.setId;
+          }
           if (student == null || setId == null) return false;
           final blocks = isDefaultClass
               ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()

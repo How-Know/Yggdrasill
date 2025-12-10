@@ -875,8 +875,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
                 onUpdate: widget.onStudentUpdated,
                 onOpenStudentPage: (s) {
-                  Navigator.of(context).push(
-                    DarkPanelRoute(
+                            Navigator.of(context).push(
+                              DarkPanelRoute(
                       child: StudentCourseDetailScreen(studentWithInfo: s),
                     ),
                   );

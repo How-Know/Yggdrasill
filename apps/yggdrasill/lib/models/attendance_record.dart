@@ -10,6 +10,11 @@ class AttendanceRecord {
   final DateTime? arrivalTime; // 등원 시간 (슬라이드시트와 연동)
   final DateTime? departureTime; // 하원 시간 (슬라이드시트와 연동)
   final String? notes; // 비고 (지각, 조퇴 등)
+  final String? sessionTypeId; // 수업 타입
+  final String? setId; // student_time_block set_id
+  final int? cycle; // 등록 회차
+  final int? sessionOrder; // 회차 내 순서
+  final bool isPlanned; // 예정 여부
   final DateTime createdAt;
   final DateTime updatedAt;
   final int version; // 낙관적 잠금을 위한 버전
@@ -24,6 +29,11 @@ class AttendanceRecord {
     this.arrivalTime,
     this.departureTime,
     this.notes,
+    this.sessionTypeId,
+    this.setId,
+    this.cycle,
+    this.sessionOrder,
+    this.isPlanned = false,
     required this.createdAt,
     required this.updatedAt,
     this.version = 1,
@@ -38,6 +48,11 @@ class AttendanceRecord {
     DateTime? arrivalTime,
     DateTime? departureTime,
     String? notes,
+    String? sessionTypeId,
+    String? setId,
+    int? cycle,
+    int? sessionOrder,
+    bool isPlanned = false,
   }) {
     final now = DateTime.now();
     return AttendanceRecord(
@@ -50,6 +65,11 @@ class AttendanceRecord {
       arrivalTime: arrivalTime,
       departureTime: departureTime,
       notes: notes,
+      sessionTypeId: sessionTypeId,
+      setId: setId,
+      cycle: cycle,
+      sessionOrder: sessionOrder,
+      isPlanned: isPlanned,
       createdAt: now,
       updatedAt: now,
       version: 1,
@@ -78,6 +98,11 @@ class AttendanceRecord {
           ? DateTime.parse(map['departure_time'] as String)
           : null,
       notes: map['notes'] as String?,
+      sessionTypeId: map['session_type_id'] as String?,
+      setId: map['set_id'] as String?,
+      cycle: map['cycle'] is num ? (map['cycle'] as num).toInt() : null,
+      sessionOrder: map['session_order'] is num ? (map['session_order'] as num).toInt() : null,
+      isPlanned: map['is_planned'] == true || map['is_planned'] == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
       version: _asInt(map['version']),
@@ -95,6 +120,11 @@ class AttendanceRecord {
       'arrival_time': arrivalTime?.toIso8601String(),
       'departure_time': departureTime?.toIso8601String(),
       'notes': notes,
+      'session_type_id': sessionTypeId,
+      'set_id': setId,
+      'cycle': cycle,
+      'session_order': sessionOrder,
+      'is_planned': isPlanned,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'version': version,
@@ -111,6 +141,11 @@ class AttendanceRecord {
     DateTime? arrivalTime,
     DateTime? departureTime,
     String? notes,
+    String? sessionTypeId,
+    String? setId,
+    int? cycle,
+    int? sessionOrder,
+    bool? isPlanned,
     DateTime? createdAt,
     DateTime? updatedAt,
     int? version,
@@ -125,6 +160,11 @@ class AttendanceRecord {
       arrivalTime: arrivalTime ?? this.arrivalTime,
       departureTime: departureTime ?? this.departureTime,
       notes: notes ?? this.notes,
+      sessionTypeId: sessionTypeId ?? this.sessionTypeId,
+      setId: setId ?? this.setId,
+      cycle: cycle ?? this.cycle,
+      sessionOrder: sessionOrder ?? this.sessionOrder,
+      isPlanned: isPlanned ?? this.isPlanned,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
       version: version ?? this.version,

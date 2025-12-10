@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../../models/attendance_record.dart';
 import '../../../models/student.dart';
@@ -269,7 +269,7 @@ class _AttendanceStatusDashboardState extends State<AttendanceStatusDashboard> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 tile(
-                  '어제 출결',
+                  '어제 출석',
                   '출석 ${yPresent + yLate} · 결석 $yAbsent',
                   '지각 $yLate',
                   trailing: _buildActionButton('리스트', _showRecentAttendanceDialog),
@@ -284,7 +284,7 @@ class _AttendanceStatusDashboardState extends State<AttendanceStatusDashboard> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 tile(
-                  '오늘 출결',
+                  '오늘 출석',
                   '출석 ${tPresent + tLate} · 결석 $tAbsent',
                   '지각 $tLate',
                 ),
@@ -420,6 +420,8 @@ class _AttendanceStatusDashboardState extends State<AttendanceStatusDashboard> {
                                   children: [
                                     if (isLate)
                                       const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w700)),
+                                    if (!isLate)
+                                      const Text('출석', style: TextStyle(color: Color(0xFF7BD8A0), fontWeight: FontWeight.w700)),
                                   ],
                                 );
                           return Padding(
@@ -509,7 +511,7 @@ class _AttendanceStatusDashboardState extends State<AttendanceStatusDashboard> {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                '최근 출결 ( ${anchor.month}/${anchor.day} 기준 )',
+                                '최근 출석 ( ${anchor.month}/${anchor.day} 기준 )',
                                 style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
                               ),
                               const Spacer(),

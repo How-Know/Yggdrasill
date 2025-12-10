@@ -478,11 +478,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       left: 0,
                       right: 0,
                       child: Center(
-                        child: AttendanceIndicator(
-                          studentId: studentId,
-                          date: date,
+                      child: AttendanceIndicator(
+                        studentId: studentId,
+                        date: date,
                           width: indicatorWidth,
-                          thickness: 6,
+                        thickness: 6,
                         ),
                       ),
                     ),
@@ -697,7 +697,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: Row(
+                    child: Row(
                                 children: [
                                   Text(
                                     cycle != null && sessionOrder != null ? '${cycle}회차 ${sessionOrder}회' : '',
@@ -747,30 +747,30 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         ),
                         const SizedBox(height: 6),
                         Row(
-                          children: [
-                            Text(
-                              dateLabel,
+                      children: [
+                        Text(
+                          dateLabel,
                               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-                            ),
-                            const Spacer(),
-                            if (record.isPresent) ...[
-                              Text(
-                                '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
+                        ),
+                        const Spacer(),
+                        if (record.isPresent) ...[
+                          Text(
+                            '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
                                 style: const TextStyle(color: Colors.white70, fontSize: 14),
-                              ),
+                          ),
                               const SizedBox(width: 10),
-                            ],
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: statusColor.withOpacity(0.18),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: statusColor.withOpacity(0.5)),
-                              ),
-                              child: Text(
-                                statusText,
+                        ],
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: statusColor.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: statusColor.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            statusText,
                                 style: TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w700),
-                              ),
+                          ),
                             ),
                           ],
                         ),

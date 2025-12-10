@@ -37,7 +37,7 @@ class AttendanceStatusScreen extends StatelessWidget {
                             color: const Color(0xFF0B1112),
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          child: const AttendanceStatusDashboard(isFullPage: true),
+                          child: AttendanceStatusDashboard(isFullPage: true),
                         ),
                       ),
                     ],
@@ -110,6 +110,7 @@ class AttendanceStatusScreen extends StatelessWidget {
     );
   }
 }
+
 
 
 

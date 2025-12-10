@@ -54,8 +54,9 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     _loadClassSessions();
     // 출석 기록 변경 시 자동 새로고침
     DataManager.instance.attendanceRecordsNotifier.addListener(_onAttendanceRecordsChanged);
-    // 보강/예외 변경 시 자동 새로고침
-    DataManager.instance.sessionOverridesNotifier.addListener(_onAttendanceRecordsChanged);
+    // 보강/예외/시간표 변경 시 자동 새로고침
+    DataManager.instance.sessionOverridesNotifier.addListener(_onScheduleChanged);
+    DataManager.instance.studentTimeBlocksNotifier.addListener(_onScheduleChanged);
     if (widget.autoOpenListOnStart && widget.selectedStudent != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showSessionListDialog();
@@ -66,7 +67,8 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
   @override
   void dispose() {
     DataManager.instance.attendanceRecordsNotifier.removeListener(_onAttendanceRecordsChanged);
-    DataManager.instance.sessionOverridesNotifier.removeListener(_onAttendanceRecordsChanged);
+    DataManager.instance.sessionOverridesNotifier.removeListener(_onScheduleChanged);
+    DataManager.instance.studentTimeBlocksNotifier.removeListener(_onScheduleChanged);
     super.dispose();
   }
 
@@ -74,6 +76,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     if (!mounted) return;
     // 파생 상태는 빌더에서 계산하므로 여기서 강제 setState만 호출해 즉시 리빌드
     setState(() {});
+  }
+
+  void _onScheduleChanged() {
+    if (!mounted) return;
+    _loadClassSessions();
   }
 
   DateTime _toMonday(DateTime d) {
