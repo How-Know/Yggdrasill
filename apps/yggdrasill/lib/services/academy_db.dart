@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 36,
+      version: 37,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -151,6 +151,8 @@ class AcademyDbService {
             start_minute INTEGER,
             duration INTEGER,
             created_at TEXT,
+            start_date TEXT,
+            end_date TEXT,
             set_id TEXT,
             number INTEGER,
             session_type_id TEXT,
@@ -487,6 +489,26 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v36 teachers.display_order 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 37) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(student_time_blocks)");
+            final hasStartDate = cols.any((c) => c['name'] == 'start_date');
+            final hasEndDate = cols.any((c) => c['name'] == 'end_date');
+            if (!hasStartDate) {
+              await db.execute('ALTER TABLE student_time_blocks ADD COLUMN start_date TEXT');
+            }
+            if (!hasEndDate) {
+              await db.execute('ALTER TABLE student_time_blocks ADD COLUMN end_date TEXT');
+            }
+            await db.execute('''
+              UPDATE student_time_blocks
+                 SET start_date = COALESCE(start_date, SUBSTR(created_at, 1, 10))
+               WHERE start_date IS NULL
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v37 student_time_blocks start/end_date 추가 실패: $e');
           }
         }
         if (oldVersion < 26) {
@@ -1804,12 +1826,13 @@ class AcademyDbService {
       {
         'id': block.id,
         'student_id': block.studentId,
-        
         'day_index': block.dayIndex,
         'start_hour': block.startHour,
         'start_minute': block.startMinute,
         'duration': block.duration.inMinutes,
         'created_at': block.createdAt.toIso8601String(),
+        'start_date': block.toJson()['start_date'],
+        'end_date': block.toJson()['end_date'],
         'set_id': block.setId,
         'number': block.number,
         'session_type_id': block.sessionTypeId,
@@ -1830,6 +1853,8 @@ class AcademyDbService {
       startMinute: row['start_minute'] as int? ?? 0,
       duration: Duration(minutes: row['duration'] as int? ?? 0),
       createdAt: DateTime.parse(row['created_at'] as String),
+      startDate: DateTime.parse(row['start_date'] as String? ?? (row['created_at'] as String)),
+      endDate: (row['end_date'] as String?) != null ? DateTime.tryParse(row['end_date'] as String) : null,
       setId: row['set_id'] as String?,
       number: row['number'] as int?,
       sessionTypeId: row['session_type_id'] as String?,
@@ -1844,12 +1869,13 @@ class AcademyDbService {
       await dbClient.insert('student_time_blocks', {
         'id': block.id,
         'student_id': block.studentId,
-        
         'day_index': block.dayIndex,
         'start_hour': block.startHour,
         'start_minute': block.startMinute,
         'duration': block.duration.inMinutes,
         'created_at': block.createdAt.toIso8601String(),
+        'start_date': block.toJson()['start_date'],
+        'end_date': block.toJson()['end_date'],
         'set_id': block.setId,
         'number': block.number,
         'session_type_id': block.sessionTypeId,
@@ -1877,12 +1903,13 @@ class AcademyDbService {
           {
             'id': block.id,
             'student_id': block.studentId,
-           
             'day_index': block.dayIndex,
             'start_hour': block.startHour,
             'start_minute': block.startMinute,
             'duration': block.duration.inMinutes,
             'created_at': block.createdAt.toIso8601String(),
+            'start_date': block.toJson()['start_date'],
+            'end_date': block.toJson()['end_date'],
             'set_id': block.setId,
             'number': block.number,
             'session_type_id': block.sessionTypeId,
@@ -2013,6 +2040,21 @@ class AcademyDbService {
       whereArgs: [id],
     );
     // print('[DEBUG][AcademyDbService.updateStudentTimeBlock] update result: $result');
+  }
+
+  Future<void> closeStudentTimeBlocks(List<String> blockIds, DateTime endDate) async {
+    final dbClient = await db;
+    final endIso = DateTime(endDate.year, endDate.month, endDate.day).toIso8601String().split('T').first;
+    await dbClient.transaction((txn) async {
+      for (final id in blockIds) {
+        await txn.update(
+          'student_time_blocks',
+          {'end_date': endIso},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    });
   }
 
   // ClassInfo CRUD

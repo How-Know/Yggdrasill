@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/animation.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:uuid/uuid.dart';
 import 'package:mneme_flutter/models/student_time_block.dart';
 import 'package:mneme_flutter/models/student.dart';
 import 'package:mneme_flutter/models/self_study_time_block.dart';
@@ -131,7 +132,7 @@ class TimetableCell extends StatelessWidget {
             final targetBlock = allBlocks.firstWhere(
               (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
               orElse: () => StudentTimeBlock(
-                id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null, number: null,
+                id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null, number: null,
               ),
             );
             bool studentHasConflict = false;
@@ -145,7 +146,16 @@ class TimetableCell extends StatelessWidget {
                   }
                 }
                 if (!studentHasConflict) {
-                  final newBlock = block.copyWith(dayIndex: dayIdx, startHour: startTime.hour, startMinute: startTime.minute);
+                  final now = DateTime.now();
+                  final newBlock = block.copyWith(
+                    id: const Uuid().v4(),
+                    dayIndex: dayIdx,
+                    startHour: startTime.hour,
+                    startMinute: startTime.minute,
+                    createdAt: now,
+                    startDate: DateTime(now.year, now.month, now.day),
+                    endDate: null,
+                  );
                   toRemove.add(block);
                   toAdd.add(newBlock);
                 }
@@ -160,10 +170,20 @@ class TimetableCell extends StatelessWidget {
               final baseTime = startTime;
               final duration = targetBlock.duration;
               final newBlocks = <StudentTimeBlock>[];
+              final now = DateTime.now();
+              final today = DateTime(now.year, now.month, now.day);
               for (final block in toMove) {
                 final diff = block.number! - baseNumber;
                 final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
-                final newBlock = block.copyWith(dayIndex: dayIdx, startHour: newTime.hour, startMinute: newTime.minute);
+                final newBlock = block.copyWith(
+                  id: const Uuid().v4(),
+                  dayIndex: dayIdx,
+                  startHour: newTime.hour,
+                  startMinute: newTime.minute,
+                  createdAt: now,
+                  startDate: today,
+                  endDate: null,
+                );
                 newBlocks.add(newBlock);
               }
               for (final newBlock in newBlocks) {
@@ -286,6 +306,7 @@ class TimetableCell extends StatelessWidget {
               startMinute: newMinute,
               duration: duration,
               createdAt: DateTime.now(),
+              startDate: DateTime.now(),
               setId: b['setId'] as String?,
               number: b['number'] as int?,
               sessionTypeId: b['sessionTypeId'] as String?,

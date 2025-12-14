@@ -196,7 +196,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             onTap: onTap,
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF1976D2),
+                color: const Color(0xFF1B6B63),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -261,7 +261,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1976D2),
+                    color: const Color(0xFF1B6B63),
                     borderRadius: BorderRadius.circular(_shapeAnimation.value), // 동적으로 변하는 모서리
                     boxShadow: [
                       BoxShadow(

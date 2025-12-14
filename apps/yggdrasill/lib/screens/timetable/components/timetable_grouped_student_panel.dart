@@ -280,6 +280,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                   startMinute: 0,
                                   duration: Duration.zero,
                                   createdAt: DateTime(0),
+                                  startDate: DateTime(0),
                                   sessionTypeId: null,
                                   setId: null,
                                 ),
@@ -453,7 +454,7 @@ class _DraggablePanelCard extends StatelessWidget {
   String? _findSetId(StudentWithInfo s) {
     final block = DataManager.instance.studentTimeBlocks.firstWhere(
       (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
-      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
     );
     return block.id.isEmpty ? null : block.setId;
   }

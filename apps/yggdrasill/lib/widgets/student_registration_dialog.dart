@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:mneme_flutter/models/student.dart';
 import 'package:mneme_flutter/models/group_info.dart';
 import 'package:mneme_flutter/models/education_level.dart';
@@ -33,6 +33,14 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _parentPhoneController;
   final TextEditingController _memoController = ImeAwareTextEditingController();
   final TextEditingController _weeklyClassCountController = ImeAwareTextEditingController(text: '1');
+
+  // 필수 필드 포커스 및 시각적 피드백
+  final FocusNode _nameFocusNode = FocusNode();
+  final FocusNode _schoolFocusNode = FocusNode();
+  bool _blinkName = false;
+  bool _blinkSchool = false;
+  bool _forceErrorName = false;
+  bool _forceErrorSchool = false;
 
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
@@ -101,11 +109,13 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _nameController.addListener(() {
       setState(() {
         _isNameValid = _nameController.text.isNotEmpty;
+        if (_isNameValid) _forceErrorName = false;
       });
     });
     _schoolController.addListener(() {
       setState(() {
         _isSchoolValid = _schoolController.text.isNotEmpty;
+        if (_isSchoolValid) _forceErrorSchool = false;
       });
     });
   }
@@ -116,6 +126,8 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     _schoolController.dispose();
     _phoneController.dispose();
     _parentPhoneController.dispose();
+    _nameFocusNode.dispose();
+    _schoolFocusNode.dispose();
 
     _paymentCycleController.dispose();
     _weeklyClassCountController.dispose();
@@ -172,8 +184,41 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
+  Future<void> _triggerBlink({
+    required bool forName,
+  }) async {
+    // 에러 강조: 한 번 깜빡이고 빨간색 유지
+    setState(() {
+      if (forName) {
+        _blinkName = true;
+        _forceErrorName = true;
+      } else {
+        _blinkSchool = true;
+        _forceErrorSchool = true;
+      }
+    });
+    final focusNode = forName ? _nameFocusNode : _schoolFocusNode;
+    focusNode.requestFocus();
+    await Future.delayed(const Duration(milliseconds: 160));
+    setState(() {
+      if (forName) {
+        _blinkName = false;
+      } else {
+        _blinkSchool = false;
+      }
+    });
+  }
+
   void _handleSave() async {
-    if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
+    final missingName = _nameController.text.isEmpty;
+    final missingSchool = _schoolController.text.isEmpty;
+    if (missingName || missingSchool || _grade == null) {
+      // 가장 먼저 빈 필드로 포커스 및 깜빡임
+      if (missingName) {
+        _triggerBlink(forName: true);
+      } else if (missingSchool) {
+        _triggerBlink(forName: false);
+      }
       return;
     }
     
@@ -264,18 +309,31 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
-  InputDecoration _buildInputDecoration(String label, {bool required = false, bool isValid = false}) {
+  InputDecoration _buildInputDecoration(
+    String label, {
+    bool required = false,
+    bool isValid = false,
+    bool blink = false,
+    bool forceError = false,
+  }) {
+    final baseColor = const Color(0xFF3A3F44).withOpacity(0.6);
+    final errorColor = const Color(0xFFF04747);
+    final isError = blink || forceError;
+    final borderColor = isError ? errorColor : baseColor;
     return InputDecoration(
       labelText: required ? '$label *' : label,
-      labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+      labelStyle: TextStyle(
+        color: isError ? errorColor : const Color(0xFF9FB3B3),
+        fontSize: 14,
+      ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+        borderSide: BorderSide(color: borderColor),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFF33A373)),
+        borderSide: BorderSide(color: isError ? errorColor : const Color(0xFF33A373)),
       ),
       filled: true,
       fillColor: const Color(0xFF15171C),
@@ -345,8 +403,15 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     flex: 3,
                     child: TextField(
                       controller: _nameController,
+                      focusNode: _nameFocusNode,
                       style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration('이름', required: true, isValid: _isNameValid),
+                      decoration: _buildInputDecoration(
+                        '이름',
+                        required: true,
+                        isValid: _isNameValid,
+                        blink: _blinkName,
+                        forceError: _forceErrorName,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -354,8 +419,15 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                     flex: 3,
                     child: TextField(
                       controller: _schoolController,
+                      focusNode: _schoolFocusNode,
                       style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration('학교', required: true, isValid: _isSchoolValid),
+                      decoration: _buildInputDecoration(
+                        '학교',
+                        required: true,
+                        isValid: _isSchoolValid,
+                        blink: _blinkSchool,
+                        forceError: _forceErrorSchool,
+                      ),
                     ),
                   ),
                 ],

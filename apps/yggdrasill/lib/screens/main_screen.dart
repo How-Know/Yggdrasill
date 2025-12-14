@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../widgets/navigation_rail.dart';
 import '../widgets/student_registration_dialog.dart';
@@ -41,6 +41,8 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
+  // 디버그 로그 스위치 (사이드 시트 출석 분류)
+  static const bool _sideSheetDebug = true;
   int _selectedIndex = 0; // 0~5 (5는 설정)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;
@@ -53,6 +55,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late AnimationController _uiAnimController;
   // 진단용: 사이드 시트 완료 상태 전이 추적
   bool _sideSheetWasComplete = false;
+  // 사이드 시트 데이터 캐시
+  bool _sideSheetDataDirty = true;
+  List<_AttendanceTarget> _cachedWaiting = const [];
+  List<_AttendanceTarget> _cachedAttended = const [];
+  List<_AttendanceTarget> _cachedLeaved = const [];
+  Map<String, DateTime?> _arrivalBySetCache = const {};
+  Map<String, DateTime?> _departureBySetCache = const {};
+  Map<DateTime, List<_AttendanceTarget>> _waitingByTimeCache = SplayTreeMap();
   late final ScrollController _attendedScrollCtrl;
   late final ScrollController _waitingScrollCtrl;
   
@@ -81,20 +91,72 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final Set<String> _leavedSetIds = {};   // 하원한 setId
 
   // 오늘 등원해야 하는 학생(setId별) 리스트 추출
-  List<_AttendanceTarget> getTodayAttendanceTargets() {
+  List<_AttendanceTarget> getTodayAttendanceTargets([
+    List<AttendanceRecord>? records,
+    Map<String, AttendanceRecord>? outRecordBySet,
+  ]) {
+    final source = records ?? DataManager.instance.attendanceRecords;
+    if (_sideSheetDebug) {
+      final todayCount = source.where((r) {
+        final now = DateTime.now();
+        final a = DateTime(now.year, now.month, now.day);
+        final dt = r.classDateTime;
+        return dt.year == a.year && dt.month == a.month && dt.day == a.day;
+      });
+      final presentCnt = todayCount.where((r) => r.isPresent).length;
+      final arrivedCnt = todayCount.where((r) => r.arrivalTime != null).length;
+      final plannedCnt = todayCount.where((r) => r.isPlanned).length;
+      debugPrint('[SIDE][records] today=${todayCount.length} present=$presentCnt arrival=$arrivedCnt planned=$plannedCnt');
+      final samplePresent = todayCount.where((r) => r.isPresent || r.arrivalTime != null).take(5);
+      for (final r in samplePresent) {
+        debugPrint('[SIDE][records][sample-present] student=${r.studentId} setId=${r.setId} dt=${r.classDateTime} arr=${r.arrivalTime} dep=${r.departureTime} isPlanned=${r.isPlanned} id=${r.id}');
+      }
+    }
     final now = DateTime.now();
     final anchor = DateTime(now.year, now.month, now.day);
-    // setId별로 "가장 이른 수업 시간" 하나만 대표로 사용
+    // setId별로 "가장 이른 수업 시간" 하나만 대표로 사용 (실제 등원 기록이 있으면 우선 선택)
     final Map<String, AttendanceRecord> earliestBySet = {};
-    for (final r in DataManager.instance.attendanceRecords) {
+    for (final r in source) {
       final dt = r.classDateTime;
       if (dt.year != anchor.year || dt.month != anchor.month || dt.day != anchor.day) continue;
-      final setId = r.setId;
-      if (setId == null || setId.isEmpty) continue;
-      final prev = earliestBySet[setId];
-      if (prev == null || dt.isBefore(prev.classDateTime)) {
-        earliestBySet[setId] = r;
+      final effectiveSetId = (r.setId != null && r.setId!.isNotEmpty)
+          ? r.setId!
+          : _resolveSetIdFromTime(r.studentId, dt) ?? '';
+      if (effectiveSetId.isEmpty) {
+        if (_sideSheetDebug) {
+          debugPrint('[SIDE][skip] setId null student=${r.studentId} dt=$dt recId=${r.id}');
+        }
+        continue;
       }
+      final prev = earliestBySet[effectiveSetId];
+      bool preferCurrent = false;
+      if (prev == null) {
+        preferCurrent = true;
+      } else {
+        final prevHasAttendance = (prev.arrivalTime != null) || prev.isPresent;
+        final curHasAttendance = (r.arrivalTime != null) || r.isPresent;
+        final prevPlanned = prev.isPlanned;
+        final curPlanned = r.isPlanned;
+        if (!prevHasAttendance && curHasAttendance) {
+          preferCurrent = true;
+        } else if (prevHasAttendance == curHasAttendance) {
+          if (prevPlanned && !curPlanned) {
+            preferCurrent = true;
+          } else if (prevPlanned == curPlanned && dt.isBefore(prev.classDateTime)) {
+            preferCurrent = true;
+          }
+        } else if (prevHasAttendance == curHasAttendance && dt.isBefore(prev.classDateTime)) {
+          preferCurrent = true;
+        }
+      }
+      if (preferCurrent) earliestBySet[effectiveSetId] = r;
+    }
+    if (_sideSheetDebug) {
+      debugPrint('[SIDE][map] earliestBySet=${earliestBySet.length}');
+    }
+    if (outRecordBySet != null) {
+      outRecordBySet.clear();
+      outRecordBySet.addAll(earliestBySet);
     }
 
     final List<_AttendanceTarget> targets = [];
@@ -120,6 +182,81 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     targets.sort((a, b) => a.startTime.compareTo(b.startTime));
     return targets;
+  }
+
+  String? _resolveSetIdFromTime(String studentId, DateTime classDateTime) {
+    final blocks = DataManager.instance.studentTimeBlocks;
+    final dayIdx = classDateTime.weekday - 1;
+    final block = blocks.firstWhereOrNull(
+      (b) =>
+          b.studentId == studentId &&
+          b.dayIndex == dayIdx &&
+          b.startHour == classDateTime.hour &&
+          b.startMinute == classDateTime.minute,
+    );
+    return block?.setId;
+  }
+
+  void _markSideSheetDirty() {
+    _sideSheetDataDirty = true;
+  }
+
+  void _recomputeSideSheetCache(List<AttendanceRecord> records) {
+    final Map<String, AttendanceRecord> recordBySet = {};
+    final attendanceTargets = getTodayAttendanceTargets(records, recordBySet);
+
+    final List<_AttendanceTarget> leaved = [];
+    final List<_AttendanceTarget> attended = [];
+    final List<_AttendanceTarget> waiting = [];
+    final Map<String, DateTime?> arrivalBySet = {};
+    final Map<String, DateTime?> departureBySet = {};
+
+    for (final t in attendanceTargets) {
+      final AttendanceRecord? rec = recordBySet[t.setId];
+      DateTime? arr = rec?.arrivalTime;
+      DateTime? dep = rec?.departureTime;
+      bool isArrived = arr != null || (rec?.isPresent ?? false);
+      bool isLeaved = dep != null;
+      if (!isArrived && _attendedSetIds.contains(t.setId)) {
+        isArrived = true;
+        arr = _attendTimes[t.setId];
+      }
+      if (!isLeaved && _leavedSetIds.contains(t.setId)) {
+        isLeaved = true;
+        dep = _leaveTimes[t.setId];
+      }
+      arrivalBySet[t.setId] = arr;
+      departureBySet[t.setId] = dep;
+      if (isLeaved) {
+        leaved.add(t);
+      } else if (isArrived) {
+        attended.add(t);
+      } else {
+        waiting.add(t);
+      }
+    }
+
+    attended.sort((a, b) {
+      final ta = arrivalBySet[a.setId];
+      final tb = arrivalBySet[b.setId];
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return ta.compareTo(tb);
+    });
+
+    final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
+    for (final t in waiting) {
+      waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
+    }
+
+    _cachedWaiting = waiting;
+    _cachedAttended = attended;
+    _cachedLeaved = leaved;
+    _arrivalBySetCache = arrivalBySet;
+    _departureBySetCache = departureBySet;
+    _waitingByTimeCache = waitingByTime;
+    _sideSheetDataDirty = false;
   }
 
   // 출석/하원 시간 기록용
@@ -207,6 +344,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     super.initState();
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
+    // 출석 데이터 변경 시 사이드 시트 캐시 무효화
+    DataManager.instance.attendanceRecordsNotifier.addListener(_markSideSheetDirty);
     _rotationAnimation = AnimationController(
       duration: const Duration(milliseconds: 240),
       vsync: this,
@@ -336,6 +475,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    DataManager.instance.attendanceRecordsNotifier.removeListener(_markSideSheetDirty);
     _rotationAnimation.dispose();
     _fabController.dispose();
     _searchController.dispose();
@@ -351,6 +491,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (_rotationAnimation.status == AnimationStatus.completed) {
       _rotationAnimation.reverse();
     } else {
+      _sideSheetDataDirty = true;
       _rotationAnimation.forward();
     }
   }
@@ -607,7 +748,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               
               final bool isComplete = _rotationAnimation.status == AnimationStatus.completed && progress >= 1.0;
               if (isComplete != _sideSheetWasComplete) { _sideSheetWasComplete = isComplete; }
-              final attendanceTargets = isComplete ? getTodayAttendanceTargets() : const <_AttendanceTarget>[];
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
               Widget _ellipsisWrap(List<Widget> cards, {int maxLines = 2, double spacing = 8, double runSpacing = 8}) {
                 // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
@@ -652,51 +792,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               return ValueListenableBuilder<List<AttendanceRecord>>(
                 valueListenable: DataManager.instance.attendanceRecordsNotifier,
                 builder: (context, _records, _) {
-                  // 파생 분류: attendance_records 기반 + 로컬 낙관 오버레이
-                  final List<_AttendanceTarget> leaved = [];
-                  final List<_AttendanceTarget> attended = [];
-                  final List<_AttendanceTarget> waiting = [];
-                  final Map<String, DateTime?> arrivalBySet = {};
-                  final Map<String, DateTime?> departureBySet = {};
-                  final DateTime now = DateTime.now();
-                  for (final t in attendanceTargets) {
-                    final DateTime classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
-                    final AttendanceRecord? rec = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
-                    DateTime? arr = rec?.arrivalTime;
-                    DateTime? dep = rec?.departureTime;
-                    bool isArrived = arr != null || (rec?.isPresent ?? false);
-                    bool isLeaved = dep != null;
-                    if (!isArrived && _attendedSetIds.contains(t.setId)) {
-                      isArrived = true;
-                      arr = _attendTimes[t.setId];
-                    }
-                    if (!isLeaved && _leavedSetIds.contains(t.setId)) {
-                      isLeaved = true;
-                      dep = _leaveTimes[t.setId];
-                    }
-                    arrivalBySet[t.setId] = arr;
-                    departureBySet[t.setId] = dep;
-                    if (isLeaved) {
-                      leaved.add(t);
-                    } else if (isArrived) {
-                      attended.add(t);
-                    } else {
-                      waiting.add(t);
+                  if (_sideSheetDataDirty) {
+                    _recomputeSideSheetCache(_records);
+                    if (_sideSheetDebug) {
+                      debugPrint('[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}');
                     }
                   }
-                  attended.sort((a, b) {
-                    final ta = arrivalBySet[a.setId];
-                    final tb = arrivalBySet[b.setId];
-                    if (ta == null && tb == null) return 0;
-                    if (ta == null) return 1;
-                    if (tb == null) return -1;
-                    return ta.compareTo(tb);
-                  });
-                  final Map<DateTime, List<_AttendanceTarget>> waitingByTime = SplayTreeMap();
-                  for (final t in waiting) {
-                    waitingByTime.putIfAbsent(t.startTime, () => []).add(t);
-                  }
-                  
+                  final waiting = _cachedWaiting;
+                  final attended = _cachedAttended;
+                  final leaved = _cachedLeaved;
+                  final arrivalBySet = _arrivalBySetCache;
+                  final departureBySet = _departureBySetCache;
+                  final waitingByTime = _waitingByTimeCache;
 
                   return AnimatedContainer(
                     duration: const Duration(milliseconds: 160),

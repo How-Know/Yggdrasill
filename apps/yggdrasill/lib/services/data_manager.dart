@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:sqflite/sqflite.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/operating_hours.dart';
@@ -28,6 +27,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 import 'tenant_service.dart';
 import 'tag_preset_service.dart';
+import 'memo_service.dart';
+import 'resource_service.dart';
+import 'attendance_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase, AuthState, AuthChangeEvent;
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
 
@@ -57,16 +59,13 @@ class DataManager {
   Map<String, GroupInfo> _groupsById = {};
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
-  List<AttendanceRecord> _attendanceRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
-  RealtimeChannel? _attendanceRealtimeChannel;
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
   // invalidation-only refresh: bump 시 화면에서 디바운스 재조회 트리거
   final ValueNotifier<int> studentsRevision = ValueNotifier<int>(0);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
-  final ValueNotifier<List<AttendanceRecord>> attendanceRecordsNotifier = ValueNotifier<List<AttendanceRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
   final ValueNotifier<int> studentPaymentInfoRevision = ValueNotifier<int>(0);
   
@@ -81,7 +80,9 @@ class DataManager {
   }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
   List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
-  List<AttendanceRecord> get attendanceRecords => List.unmodifiable(_attendanceRecords);
+  List<AttendanceRecord> get attendanceRecords => AttendanceService.instance.attendanceRecords;
+  ValueNotifier<List<AttendanceRecord>> get attendanceRecordsNotifier =>
+      AttendanceService.instance.attendanceRecordsNotifier;
 
   AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
   PaymentType _paymentType = PaymentType.monthly;
@@ -101,6 +102,25 @@ class DataManager {
   void _bumpStudentTimeBlocksRevision() {
     studentTimeBlocksRevision.value++;
     classAssignmentsRevision.value++;
+  }
+  DateTime _todayDateOnly() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  bool _isBlockActiveOn(StudentTimeBlock block, DateTime date) {
+    final target = DateTime(date.year, date.month, date.day);
+    final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final end = block.endDate != null ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day) : null;
+    return !start.isAfter(target) && (end == null || !end.isBefore(target));
+  }
+
+  List<StudentTimeBlock> _activeBlocks(DateTime date) =>
+      _studentTimeBlocks.where((b) => _isBlockActiveOn(b, date)).toList();
+
+  void _publishStudentTimeBlocks({DateTime? refDate}) {
+    final date = refDate ?? _todayDateOnly();
+    studentTimeBlocksNotifier.value = List.unmodifiable(_activeBlocks(date));
   }
   
   List<GroupSchedule> _groupSchedules = [];
@@ -138,6 +158,22 @@ class DataManager {
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
   }
 
+  void _configureAttendanceService() {
+    AttendanceService.instance.configure(
+      AttendanceDependencies(
+        getStudentTimeBlocks: () => _activeBlocks(_todayDateOnly()),
+        getPaymentRecords: () => _paymentRecords,
+        getClasses: () => _classes,
+        getSessionOverrides: () => _sessionOverrides,
+        getAcademySettings: () => _academySettings,
+        loadPaymentRecords: loadPaymentRecords,
+        updateSessionOverrideRemote: updateSessionOverride,
+        applySessionOverrideLocal: _applySessionOverrideLocal,
+      ),
+    );
+  }
+
+
   Future<void> addSelfStudyTimeBlock(SelfStudyTimeBlock block) async {
     _selfStudyTimeBlocks.add(block);
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
@@ -167,6 +203,7 @@ class DataManager {
     }
 
     try {
+      _configureAttendanceService();
       // 로그인/테넌트 보장 후 일괄 로딩
       try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
       await reloadAllData();
@@ -278,136 +315,12 @@ class DataManager {
   }
 
   // ======== MEMOS ========
-  List<Memo> _memos = [];
-  final ValueNotifier<List<Memo>> memosNotifier = ValueNotifier<List<Memo>>([]);
+  ValueNotifier<List<Memo>> get memosNotifier => MemoService.instance.memosNotifier;
 
-  Future<void> loadMemos() async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final rows = await supa.from('memos')
-            .select('id,original,summary,scheduled_at,dismissed,created_at,updated_at,recurrence_type,weekdays,recurrence_end,recurrence_count')
-            .eq('academy_id', academyId)
-            .order('scheduled_at', ascending: true);
-        final List<dynamic> list = rows as List<dynamic>;
-        _memos = list.map<Memo>((m) {
-          final String? schedStr = m['scheduled_at'] as String?;
-          final String? createdStr = m['created_at'] as String?;
-          final String? updatedStr = m['updated_at'] as String?;
-          final String? weekdaysStr = m['weekdays'] as String?;
-          final String? recurEndStr = m['recurrence_end'] as String?;
-          return Memo(
-            id: m['id'] as String,
-            original: (m['original'] as String?) ?? '',
-            summary: (m['summary'] as String?) ?? '',
-            scheduledAt: (schedStr != null && schedStr.isNotEmpty) ? DateTime.parse(schedStr) : null,
-            dismissed: (m['dismissed'] as bool?) ?? false,
-            createdAt: (createdStr != null && createdStr.isNotEmpty) ? DateTime.parse(createdStr) : DateTime.now(),
-            updatedAt: (updatedStr != null && updatedStr.isNotEmpty) ? DateTime.parse(updatedStr) : DateTime.now(),
-            recurrenceType: m['recurrence_type'] as String?,
-            weekdays: (weekdaysStr == null || weekdaysStr.isEmpty)
-                ? null
-                : weekdaysStr.split(',').where((e) => e.isNotEmpty).map(int.parse).toList(),
-            recurrenceEnd: (recurEndStr != null && recurEndStr.isNotEmpty) ? DateTime.parse(recurEndStr) : null,
-            recurrenceCount: m['recurrence_count'] as int?,
-          );
-        }).toList();
-        memosNotifier.value = List.unmodifiable(_memos);
-        return;
-      } catch (e, st) {
-        print('[SUPA][memos load] $e\n$st');
-      }
-    }
-    if (RuntimeFlags.serverOnly) {
-      _memos = [];
-      memosNotifier.value = List.unmodifiable(_memos);
-      return;
-    }
-    final rows = await AcademyDbService.instance.getMemos();
-    _memos = rows.map((m) => Memo.fromMap(m)).toList();
-    memosNotifier.value = List.unmodifiable(_memos);
-  }
-
-  Future<void> addMemo(Memo memo) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final row = {
-          'id': memo.id,
-          'academy_id': academyId,
-          'original': memo.original,
-          'summary': memo.summary,
-          'scheduled_at': memo.scheduledAt?.toIso8601String(),
-          'dismissed': memo.dismissed,
-          'recurrence_type': memo.recurrenceType,
-          'weekdays': memo.weekdays?.join(','),
-          'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0,10),
-          'recurrence_count': memo.recurrenceCount,
-        }..removeWhere((k,v)=>v==null);
-        await supa.from('memos').upsert(row, onConflict: 'id');
-        _memos.insert(0, memo);
-        memosNotifier.value = List.unmodifiable(_memos);
-        return;
-      } catch (e, st) { print('[SUPA][memos add] $e\n$st'); }
-    }
-    _memos.insert(0, memo);
-    memosNotifier.value = List.unmodifiable(_memos);
-    if (!RuntimeFlags.serverOnly) {
-      await AcademyDbService.instance.addMemo(memo.toMap());
-    }
-  }
-
-  Future<void> updateMemo(Memo memo) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final row = {
-          'id': memo.id,
-          'academy_id': academyId,
-          'original': memo.original,
-          'summary': memo.summary,
-          'scheduled_at': memo.scheduledAt?.toIso8601String(),
-          'dismissed': memo.dismissed,
-          'recurrence_type': memo.recurrenceType,
-          'weekdays': memo.weekdays?.join(','),
-          'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0,10),
-          'recurrence_count': memo.recurrenceCount,
-        }..removeWhere((k,v)=>v==null);
-        await supa.from('memos').upsert(row, onConflict: 'id');
-        final idx = _memos.indexWhere((m) => m.id == memo.id);
-        if (idx != -1) _memos[idx] = memo;
-        memosNotifier.value = List.unmodifiable(_memos);
-        return;
-      } catch (e, st) { print('[SUPA][memos update] $e\n$st'); }
-    }
-    final idx = _memos.indexWhere((m) => m.id == memo.id);
-    if (idx != -1) {
-      _memos[idx] = memo;
-      memosNotifier.value = List.unmodifiable(_memos);
-      if (!RuntimeFlags.serverOnly) {
-        await AcademyDbService.instance.updateMemo(memo.id, memo.toMap());
-      }
-    }
-  }
-
-  Future<void> deleteMemo(String id) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        await Supabase.instance.client.from('memos').delete().eq('id', id);
-        _memos.removeWhere((m) => m.id == id);
-        memosNotifier.value = List.unmodifiable(_memos);
-        return;
-      } catch (e, st) { print('[SUPA][memos delete] $e\n$st'); }
-    }
-    _memos.removeWhere((m) => m.id == id);
-    memosNotifier.value = List.unmodifiable(_memos);
-    if (!RuntimeFlags.serverOnly) {
-      await AcademyDbService.instance.deleteMemo(id);
-    }
-  }
+  Future<void> loadMemos() => MemoService.instance.loadMemos();
+  Future<void> addMemo(Memo memo) => MemoService.instance.addMemo(memo);
+  Future<void> updateMemo(Memo memo) => MemoService.instance.updateMemo(memo);
+  Future<void> deleteMemo(String id) => MemoService.instance.deleteMemo(id);
 
   void _initializeDefaults() {
     _groups = [];
@@ -417,7 +330,7 @@ class DataManager {
     _studentTimeBlocks = [];
     _classes = [];
     _paymentRecords = [];
-    _attendanceRecords = [];
+    AttendanceService.instance.reset();
     _sessionOverrides = [];
     _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
     _paymentType = PaymentType.monthly;
@@ -822,13 +735,22 @@ class DataManager {
   void _notifyListeners() {
     groupsNotifier.value = List.unmodifiable(_groups);
     studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    _publishStudentTimeBlocks();
     groupSchedulesNotifier.value = List.unmodifiable(_groupSchedules);
     teachersNotifier.value = List.unmodifiable(_teachers);
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
     classesNotifier.value = List.unmodifiable(_classes);
     paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+  }
+
+  void _applySessionOverrideLocal(SessionOverride updated) {
+    final idx = _sessionOverrides.indexWhere((o) => o.id == updated.id);
+    if (idx != -1) {
+      _sessionOverrides[idx] = updated;
+    } else {
+      _sessionOverrides.add(updated);
+    }
     sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
   }
 
@@ -1366,8 +1288,7 @@ class DataManager {
         .eq('student_id', id)
         .eq('academy_id', academyId)
         .eq('is_planned', true);
-      _attendanceRecords.removeWhere((r) => r.studentId == id && r.isPlanned);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      await AttendanceService.instance.loadAttendanceRecords();
       print('[DEBUG][deleteStudent] planned attendance 삭제 완료: id=$id');
     } catch (e) {
       print('[WARN][deleteStudent] planned attendance 삭제 실패: $e');
@@ -1557,7 +1478,7 @@ class DataManager {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final data = await Supabase.instance.client
             .from('student_time_blocks')
-            .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,set_id,number,session_type_id,weekly_order')
+            .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
             .eq('academy_id', academyId)
             .order('day_index')
             .order('start_hour')
@@ -1572,13 +1493,17 @@ class DataManager {
             startMinute: (mm['start_minute'] as int?) ?? 0,
             duration: Duration(minutes: (mm['duration'] as int?) ?? 0),
             createdAt: DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ?? DateTime.now(),
+            startDate: DateTime.tryParse((mm['start_date'] as String?) ?? '') ??
+                DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ??
+                _todayDateOnly(),
+            endDate: (mm['end_date'] as String?) != null ? DateTime.tryParse(mm['end_date'] as String) : null,
             setId: mm['set_id'] as String?,
             number: mm['number'] as int?,
             sessionTypeId: mm['session_type_id'] as String?,
             weeklyOrder: mm['weekly_order'] as int?,
           );
         }).toList();
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _publishStudentTimeBlocks();
         print('[REPRO][stb][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
         return;
       } catch (e) {
@@ -1588,7 +1513,7 @@ class DataManager {
 
     final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
     _studentTimeBlocks = rawBlocks;
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    _publishStudentTimeBlocks();
     print('[REPRO][stb][load] source=local count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
   }
 
@@ -1597,12 +1522,17 @@ class DataManager {
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
+    final dateOnly = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final normalized = block.copyWith(
+      startDate: dateOnly,
+      endDate: block.endDate != null ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day) : null,
+    );
     // 중복 체크: 같은 학생, 같은 요일, 같은 시작시간, 같은 duration 블록이 이미 있으면 등록 금지
-    final exists = _studentTimeBlocks.any((b) =>
-      b.studentId == block.studentId &&
-      b.dayIndex == block.dayIndex &&
-      b.startHour == block.startHour &&
-      b.startMinute == block.startMinute
+    final exists = _activeBlocks(dateOnly).any((b) =>
+      b.studentId == normalized.studentId &&
+      b.dayIndex == normalized.dayIndex &&
+      b.startHour == normalized.startHour &&
+      b.startMinute == normalized.startMinute
     );
     if (exists) {
       throw Exception('이미 등록된 시간입니다.');
@@ -1611,28 +1541,31 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
         final row = <String, dynamic>{
-          'id': block.id,
+          'id': normalized.id,
           'academy_id': academyId,
-          'student_id': block.studentId,
-          'day_index': block.dayIndex,
-          'start_hour': block.startHour,
-          'start_minute': block.startMinute,
-          'duration': block.duration.inMinutes,
-          'block_created_at': block.createdAt.toIso8601String(),
-          'set_id': block.setId,
-          'number': block.number,
-          'session_type_id': block.sessionTypeId,
-          'weekly_order': block.weeklyOrder,
+          'student_id': normalized.studentId,
+          'day_index': normalized.dayIndex,
+          'start_hour': normalized.startHour,
+          'start_minute': normalized.startMinute,
+          'duration': normalized.duration.inMinutes,
+          'block_created_at': normalized.createdAt.toIso8601String(),
+          'start_date': normalized.startDate.toIso8601String().split('T').first,
+          'end_date': normalized.endDate?.toIso8601String().split('T').first,
+          'set_id': normalized.setId,
+          'number': normalized.number,
+          'session_type_id': normalized.sessionTypeId,
+          'weekly_order': normalized.weeklyOrder,
         }..removeWhere((k, v) => v == null);
+        print('[SUPA][stb add] upsert row=$row');
         await Supabase.instance.client.from('student_time_blocks').upsert(row, onConflict: 'id');
-        _studentTimeBlocks.add(block);
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-        if (block.setId != null) {
-          await _recalculateWeeklyOrderForStudent(block.studentId);
+        _studentTimeBlocks.add(normalized);
+        _publishStudentTimeBlocks(refDate: dateOnly);
+        if (normalized.setId != null) {
+          await _recalculateWeeklyOrderForStudent(normalized.studentId);
         }
-        await syncWeeklyClassCount(block.studentId, onAdd: true);
-        if (block.setId != null) {
-          _schedulePlannedRegen(block.studentId, block.setId!);
+        await syncWeeklyClassCount(normalized.studentId, onAdd: true);
+        if (normalized.setId != null) {
+          _schedulePlannedRegen(normalized.studentId, normalized.setId!);
         }
         return;
       } catch (e, st) {
@@ -1640,27 +1573,31 @@ class DataManager {
         rethrow;
       }
     }
-    _studentTimeBlocks.add(block);
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-    await AcademyDbService.instance.addStudentTimeBlock(block);
-    if (block.setId != null) {
-      await _recalculateWeeklyOrderForStudent(block.studentId);
+    _studentTimeBlocks.add(normalized);
+    _publishStudentTimeBlocks(refDate: dateOnly);
+    await AcademyDbService.instance.addStudentTimeBlock(normalized);
+    if (normalized.setId != null) {
+      await _recalculateWeeklyOrderForStudent(normalized.studentId);
     }
-    await syncWeeklyClassCount(block.studentId, onAdd: true);
-    if (block.setId != null) {
-      _schedulePlannedRegen(block.studentId, block.setId!);
+    await syncWeeklyClassCount(normalized.studentId, onAdd: true);
+    if (normalized.setId != null) {
+      _schedulePlannedRegen(normalized.studentId, normalized.setId!);
     }
   }
 
   Future<void> removeStudentTimeBlock(String id) async {
     String? sidForSync;
+    final today = _todayDateOnly();
+    final endDate = today.subtract(const Duration(days: 1));
     if (TagPresetService.preferSupabaseRead) {
       try {
         final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
         sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
-        await Supabase.instance.client.from('student_time_blocks').delete().eq('id', id);
-        _studentTimeBlocks.removeWhere((b) => b.id == id);
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        await Supabase.instance.client.from('student_time_blocks').update({
+          'end_date': endDate.toIso8601String().split('T').first,
+        }).eq('id', id);
+        _studentTimeBlocks = _studentTimeBlocks.map((b) => b.id == id ? b.copyWith(endDate: endDate) : b).toList();
+        _publishStudentTimeBlocks(refDate: today);
         if (sidForSync != null) {
           final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
           final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
@@ -1675,10 +1612,9 @@ class DataManager {
     }
     final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
     sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
-    _studentTimeBlocks.removeWhere((b) => b.id == id);
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-    await AcademyDbService.instance.deleteStudentTimeBlock(id);
-    await loadStudentTimeBlocks();
+    _studentTimeBlocks = _studentTimeBlocks.map((b) => b.id == id ? b.copyWith(endDate: endDate) : b).toList();
+    _publishStudentTimeBlocks(refDate: today);
+    await AcademyDbService.instance.closeStudentTimeBlocks([id], endDate);
     if (sidForSync != null) {
       final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
       final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
@@ -1832,7 +1768,7 @@ class DataManager {
           _studentsWithInfo = [];
           _studentTimeBlocks = [];
           studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
-          studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+          _publishStudentTimeBlocks();
         }
       } catch (_) {}
     });
@@ -1863,8 +1799,14 @@ class DataManager {
   
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
     // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
-    for (final newBlock in blocks) {
-      final overlap = _studentTimeBlocks.any((b) =>
+    final normalizedBlocks = blocks.map((b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      return b.copyWith(startDate: sd, endDate: ed);
+    }).toList();
+
+    for (final newBlock in normalizedBlocks) {
+      final overlap = _activeBlocks(newBlock.startDate).any((b) =>
         b.studentId == newBlock.studentId &&
         b.dayIndex == newBlock.dayIndex &&
         // 시간 겹침 검사
@@ -1879,9 +1821,9 @@ class DataManager {
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final sessionTypes = blocks.map((b) => b.sessionTypeId).toSet();
-        print('[SYNC][bulkAdd] count=${blocks.length}, sessionTypes=$sessionTypes, sample=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
-        final rows = blocks.map((b) => <String, dynamic>{
+        final sessionTypes = normalizedBlocks.map((b) => b.sessionTypeId).toSet();
+        print('[SYNC][bulkAdd] count=${normalizedBlocks.length}, sessionTypes=$sessionTypes, sample=${normalizedBlocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+        final rows = normalizedBlocks.map((b) => <String, dynamic>{
           'id': b.id,
           'academy_id': academyId,
           'student_id': b.studentId,
@@ -1890,33 +1832,36 @@ class DataManager {
           'start_minute': b.startMinute,
           'duration': b.duration.inMinutes,
           'block_created_at': b.createdAt.toIso8601String(),
+          'start_date': b.startDate.toIso8601String().split('T').first,
+          'end_date': b.endDate?.toIso8601String().split('T').first,
           'set_id': b.setId,
           'number': b.number,
           'session_type_id': b.sessionTypeId,
           'weekly_order': b.weeklyOrder,
         }..removeWhere((k, v) => v == null)).toList();
+        print('[SUPA][stb bulk add] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
         await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
-        _studentTimeBlocks.addAll(blocks);
+        _studentTimeBlocks.addAll(normalizedBlocks);
       } catch (e, st) {
         print('[SUPA][stb bulk add] $e\n$st');
         rethrow;
       }
     } else {
-    _studentTimeBlocks.addAll(blocks);
-    print('[SYNC][bulkAdd-local] count=${blocks.length}, sessionTypes=${blocks.map((b)=>b.sessionTypeId).toSet()}, sample=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
-    await AcademyDbService.instance.bulkAddStudentTimeBlocks(blocks);
+    _studentTimeBlocks.addAll(normalizedBlocks);
+    print('[SYNC][bulkAdd-local] count=${normalizedBlocks.length}, sessionTypes=${normalizedBlocks.map((b)=>b.sessionTypeId).toSet()}, sample=${normalizedBlocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+    await AcademyDbService.instance.bulkAddStudentTimeBlocks(normalizedBlocks);
     }
     
-    final affectedStudents = blocks.map((b) => b.studentId).toSet();
+    final affectedStudents = normalizedBlocks.map((b) => b.studentId).toSet();
     if (immediate || blocks.length == 1) {
       // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
-      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      _publishStudentTimeBlocks();
       _bumpStudentTimeBlocksRevision();
     } else {
       // 다중 블록은 debouncing으로 지연 (150ms 후 한 번에 반영)
       _uiUpdateTimer?.cancel();
       _uiUpdateTimer = Timer(const Duration(milliseconds: 150), () {
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _publishStudentTimeBlocks();
         _bumpStudentTimeBlocksRevision();
       });
     }
@@ -1928,15 +1873,21 @@ class DataManager {
       await syncWeeklyClassCount(studentId, onAdd: true);
     }
     // 예정 출석 재생성 (setId가 있는 블록) - 학생별로 setId를 모아서 한 번씩만 수행
-    for (final b in blocks.where((e) => e.setId != null)) {
+    for (final b in normalizedBlocks.where((e) => e.setId != null)) {
       _schedulePlannedRegen(b.studentId, b.setId!);
     }
   }
 
   Future<void> bulkAddStudentTimeBlocksDeferred(List<StudentTimeBlock> blocks) async {
     // 기존 overlap 방어 로직 재사용
-    for (final newBlock in blocks) {
-      final overlap = _studentTimeBlocks.any((b) =>
+    final normalizedBlocks = blocks.map((b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      return b.copyWith(startDate: sd, endDate: ed);
+    }).toList();
+
+    for (final newBlock in normalizedBlocks) {
+      final overlap = _activeBlocks(newBlock.startDate).any((b) =>
         b.studentId == newBlock.studentId &&
         b.dayIndex == newBlock.dayIndex &&
         (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
@@ -1946,16 +1897,16 @@ class DataManager {
         throw Exception('이미 등록된 시간과 겹칩니다.');
       }
     }
-    _pendingTimeBlocks.addAll(blocks);
-    _studentTimeBlocks.addAll(blocks);
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    _pendingTimeBlocks.addAll(normalizedBlocks);
+    _studentTimeBlocks.addAll(normalizedBlocks);
+    _publishStudentTimeBlocks();
     _bumpStudentTimeBlocksRevision();
   }
 
   Future<void> discardPendingTimeBlocks(String studentId, {Set<String>? setIds}) async {
     _pendingTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
     _studentTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    _publishStudentTimeBlocks();
   }
 
   Future<void> flushPendingTimeBlocks({bool generatePlanned = true}) async {
@@ -1973,12 +1924,15 @@ class DataManager {
       'start_minute': b.startMinute,
       'duration': b.duration.inMinutes,
       'block_created_at': b.createdAt.toIso8601String(),
+      'start_date': b.startDate.toIso8601String().split('T').first,
+      'end_date': b.endDate?.toIso8601String().split('T').first,
       'set_id': b.setId,
       'number': b.number,
       'session_type_id': b.sessionTypeId,
       'weekly_order': b.weeklyOrder,
     }..removeWhere((k, v) => v == null)).toList();
     try {
+      print('[SUPA][stb flushPending] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
       await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
     } catch (e, st) {
       print('[SUPA][stb flushPending] $e\n$st');
@@ -2009,14 +1963,16 @@ class DataManager {
   Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
     final removedBlocks = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
     final affectedStudents = removedBlocks.map((b) => b.studentId).toSet();
+    final today = _todayDateOnly();
+    final endDate = today.subtract(const Duration(days: 1));
 
     if (TagPresetService.preferSupabaseRead) {
       try {
         await Supabase.instance.client
             .from('student_time_blocks')
-            .delete()
+            .update({'end_date': endDate.toIso8601String().split('T').first})
             .filter('id', 'in', '(${blockIds.map((e) => '"$e"').join(',')})');
-        _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
+        _studentTimeBlocks = _studentTimeBlocks.map((b) => blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b).toList();
         for (final sid in affectedStudents) {
           final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
           final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
@@ -2028,8 +1984,8 @@ class DataManager {
         rethrow;
       }
     } else {
-      _studentTimeBlocks.removeWhere((b) => blockIds.contains(b.id));
-      await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(blockIds);
+      _studentTimeBlocks = _studentTimeBlocks.map((b) => blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b).toList();
+      await AcademyDbService.instance.closeStudentTimeBlocks(blockIds, endDate);
       for (final sid in affectedStudents) {
         final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
         final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
@@ -2040,18 +1996,15 @@ class DataManager {
     
     if (immediate || blockIds.length == 1) {
       // 단일 삭제나 즉시 반영 요청 시 바로 업데이트
-      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+      _publishStudentTimeBlocks(refDate: today);
       _bumpStudentTimeBlocksRevision();
     } else {
       // 다중 삭제는 debouncing으로 지연 (100ms 후 한 번에 반영)
       _uiUpdateTimer?.cancel();
       _uiUpdateTimer = Timer(const Duration(milliseconds: 100), () {
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+        _publishStudentTimeBlocks(refDate: today);
         _bumpStudentTimeBlocksRevision();
       });
-    }
-    if (!TagPresetService.preferSupabaseRead) {
-    await loadStudentTimeBlocks();
     }
 
     // 예정 출석 정리: 삭제된 블록들의 setId 기준으로 미래 planned 제거/재생성(없으므로 제거만)
@@ -2092,81 +2045,25 @@ class DataManager {
       // ignore: avoid_print
       print('[REPRO][stb][update] id=$id setId=${newBlock.setId} day=${newBlock.dayIndex} time=${newBlock.startHour}:${newBlock.startMinute} session:$prevSession -> $newSession');
     }
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final row = <String, dynamic>{
-          'id': newBlock.id,
-          'academy_id': academyId,
-          'student_id': newBlock.studentId,
-          'day_index': newBlock.dayIndex,
-          'start_hour': newBlock.startHour,
-          'start_minute': newBlock.startMinute,
-          'duration': newBlock.duration.inMinutes,
-          'block_created_at': newBlock.createdAt.toIso8601String(),
-          'set_id': newBlock.setId,
-          'number': newBlock.number,
-          'session_type_id': newBlock.sessionTypeId,
-          'weekly_order': newBlock.weeklyOrder,
-        };
-        // session_type_id는 null도 명시적으로 업데이트해야 하므로 제거하지 않는다.
-        row.removeWhere((k, v) => v == null && k != 'session_type_id');
-        await Supabase.instance.client.from('student_time_blocks').upsert(row, onConflict: 'id');
-        final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
-        if (index != -1) _studentTimeBlocks[index] = newBlock; else _studentTimeBlocks.add(newBlock);
-        studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-        _bumpStudentTimeBlocksRevision();
-        if (newBlock.setId != null) {
-          await _recalculateWeeklyOrderForStudent(newBlock.studentId);
-        }
-        // 예정 출석 재생성: 이전 setId와 새 setId 모두 처리
-        final Set<String> targetSetIds = {
-          if (prev?.setId != null) prev!.setId!,
-          if (newBlock.setId != null) newBlock.setId!,
-        };
-        for (final setId in targetSetIds) {
-          await _regeneratePlannedAttendanceForSet(
-            studentId: newBlock.studentId,
-            setId: setId,
-            days: 14,
-          );
-        }
-        return;
-      } catch (e, st) {
-        print('[SUPA][stb update] $e\n$st');
-        rethrow;
-      }
-    }
-    final index = _studentTimeBlocks.indexWhere((b) => b.id == id);
-    if (index != -1) {
-      _studentTimeBlocks[index] = newBlock;
-      studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
-      _bumpStudentTimeBlocksRevision();
-      await AcademyDbService.instance.updateStudentTimeBlock(id, newBlock);
-      await loadStudentTimeBlocks();
-      if (newBlock.setId != null) {
-        await _recalculateWeeklyOrderForStudent(newBlock.studentId);
-      }
-    }
+    final today = _todayDateOnly();
+    final endDate = today.subtract(const Duration(days: 1));
+    // 1) 기존 블록 종료
+    await bulkDeleteStudentTimeBlocks([id], immediate: true);
 
-    // 예정 출석 재생성: 이전 setId와 새 setId 모두 처리
-    final Set<String> targetSetIds = {
-      if (prev?.setId != null) prev!.setId!,
-      if (newBlock.setId != null) newBlock.setId!,
-    };
-    for (final setId in targetSetIds) {
-      await _regeneratePlannedAttendanceForSet(
-        studentId: newBlock.studentId,
-        setId: setId,
-        days: 14,
-      );
-    }
+    // 2) 새 블록 생성 (새 ID, start_date=오늘, end_date=null)
+    final fresh = newBlock.copyWith(
+      id: const Uuid().v4(),
+      startDate: today,
+      endDate: null,
+      createdAt: DateTime.now(),
+    );
+    await addStudentTimeBlock(fresh);
   }
 
   // 주간 순번 재계산: 학생의 모든 set_id를 대표시간(가장 이른 요일/시간) 기준으로 정렬하여 weekly_order=1..N 부여
   Future<void> _recalculateWeeklyOrderForStudent(String studentId) async {
-    // 대상 학생 블록만 수집
-    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    // 대상 학생의 활성 블록만 수집
+    final blocks = _activeBlocks(_todayDateOnly()).where((b) => b.studentId == studentId).toList();
     if (blocks.isEmpty) return;
     // setId가 있는 블록만 고려
     final Map<String, List<StudentTimeBlock>> bySet = {};
@@ -2224,7 +2121,7 @@ class DataManager {
     }
     await Future.wait(futures);
     }
-    studentTimeBlocksNotifier.value = List.unmodifiable(_studentTimeBlocks);
+    _publishStudentTimeBlocks();
   }
 
   // GroupSchedule 관련 메서드들
@@ -2278,6 +2175,7 @@ class DataManager {
         startMinute: schedule.startTime.minute,
         duration: schedule.duration,
         createdAt: DateTime.now(),
+        startDate: _todayDateOnly(),
       );
       _studentTimeBlocks.add(block);
     }
@@ -2711,7 +2609,7 @@ class DataManager {
   /// 특정 수업에 등록된 학생 수 반환
   int getStudentCountForClass(String classId) {
     // print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
-    final blocks = _studentTimeBlocks.where((b) => b.sessionTypeId == classId).toList();
+    final blocks = _activeBlocks(_todayDateOnly()).where((b) => b.sessionTypeId == classId).toList();
     //print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
     final studentIds = blocks.map((b) => b.studentId).toSet();
     //print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
@@ -2720,7 +2618,7 @@ class DataManager {
 
   /// 학생이 속한 수업 색상 반환 (없으면 null)
   Color? getStudentClassColor(String studentId) {
-    final block = _studentTimeBlocks.firstWhere(
+    final block = _activeBlocks(_todayDateOnly()).firstWhere(
       (b) => b.studentId == studentId && b.sessionTypeId != null,
       orElse: () => StudentTimeBlock(
         id: '',
@@ -2730,6 +2628,7 @@ class DataManager {
         startMinute: 0,
         duration: Duration.zero,
         createdAt: DateTime(0),
+        startDate: DateTime(0),
         sessionTypeId: null,
       ),
     );
@@ -2743,7 +2642,7 @@ class DataManager {
 
   /// 특정 요일/시간(+선택적 setId) 블록 기준 학생의 수업 색상 반환 (없으면 null)
   Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId}) {
-    final block = _studentTimeBlocks.firstWhere(
+    final block = _activeBlocks(_todayDateOnly()).firstWhere(
       (b) =>
           b.studentId == studentId &&
           b.dayIndex == dayIdx &&
@@ -2759,6 +2658,7 @@ class DataManager {
         startMinute: 0,
         duration: Duration.zero,
         createdAt: DateTime(0),
+        startDate: DateTime(0),
         sessionTypeId: null,
       ),
     );
@@ -3208,166 +3108,98 @@ DateTime? _lastClassesOrderSaveStart;
   // 결제 보정 로직 완전 제거 (요청에 따라 비활성화)
 
   // =================== ATTENDANCE RECORDS ===================
-  
-  Future<void> forceMigration() async {
-    try {
-      print('[DEBUG] 강제 마이그레이션 시작...');
-      await AcademyDbService.instance.ensureAttendanceRecordsTable();
-      await loadAttendanceRecords();
-      print('[DEBUG] 강제 마이그레이션 완료');
-    } catch (e) {
-      print('[ERROR] 강제 마이그레이션 실패: $e');
-    }
-  }
-  
-  Future<void> loadAttendanceRecords() async {
-    try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      final supa = Supabase.instance.client;
-      final rows = await supa
-          .from('attendance_records')
-          .select('id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,created_at,updated_at,version')
-          .eq('academy_id', academyId)
-          .order('class_date_time', ascending: false);
-      final list = rows as List<dynamic>;
-      _attendanceRecords = list.map<AttendanceRecord>((m) {
-        DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
-        DateTime? parseTsOpt(String k) {
-          final v = m[k] as String?;
-          if (v == null || v.isEmpty) return null;
-          return DateTime.parse(v).toLocal();
-        }
-        final dynamic isPresentDyn = m['is_present'];
-        final bool isPresent = (isPresentDyn is bool)
-            ? isPresentDyn
-            : ((isPresentDyn is num) ? isPresentDyn == 1 : false);
-        return AttendanceRecord(
-          id: m['id'] as String?,
-          studentId: m['student_id'] as String,
-          classDateTime: parseTs('class_date_time'),
-          classEndTime: parseTs('class_end_time'),
-          className: (m['class_name'] as String?) ?? '',
-          isPresent: isPresent,
-          arrivalTime: parseTsOpt('arrival_time'),
-          departureTime: parseTsOpt('departure_time'),
-          notes: m['notes'] as String?,
-          sessionTypeId: m['session_type_id'] as String?,
-          setId: m['set_id'] as String?,
-          cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : null,
-          sessionOrder: (m['session_order'] is num) ? (m['session_order'] as num).toInt() : null,
-          isPlanned: m['is_planned'] == true || m['is_planned'] == 1,
-          createdAt: parseTs('created_at'),
-          updatedAt: parseTs('updated_at'),
-          version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
-        );
-      }).toList();
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[SUPA] 출석 기록 로드: ${_attendanceRecords.length}개');
-    } catch (e, st) {
-      print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
-      _attendanceRecords = [];
-      attendanceRecordsNotifier.value = [];
-    }
-  }
 
-  Future<void> _subscribeAttendanceRealtime() async {
-    try {
-      _attendanceRealtimeChannel?.unsubscribe();
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:attendance_records:$academyId');
-      _attendanceRealtimeChannel = chan
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'attendance_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) {
-            final m = payload.newRecord;
-            if (m == null) return;
-            try {
-              final rec = AttendanceRecord(
-                id: m['id'] as String?,
-                studentId: m['student_id'] as String,
-                classDateTime: DateTime.parse(m['class_date_time'] as String).toLocal(),
-                classEndTime: DateTime.parse(m['class_end_time'] as String).toLocal(),
-                className: (m['class_name'] as String?) ?? '',
-                isPresent: (m['is_present'] is bool) ? m['is_present'] as bool : ((m['is_present'] is num) ? (m['is_present'] as num) == 1 : false),
-                arrivalTime: (m['arrival_time'] != null) ? DateTime.parse(m['arrival_time'] as String).toLocal() : null,
-                departureTime: (m['departure_time'] != null) ? DateTime.parse(m['departure_time'] as String).toLocal() : null,
-                notes: m['notes'] as String?,
-                sessionTypeId: m['session_type_id'] as String?,
-                setId: m['set_id'] as String?,
-                cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : null,
-                sessionOrder: (m['session_order'] is num) ? (m['session_order'] as num).toInt() : null,
-                isPlanned: m['is_planned'] == true || m['is_planned'] == 1,
-                createdAt: DateTime.parse(m['created_at'] as String).toLocal(),
-                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
-                version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
-              );
-              // 중복 체크 후 추가
-              final exists = _attendanceRecords.any((r) => r.id == rec.id);
-              if (!exists) {
-                _attendanceRecords.add(rec);
-                attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-              }
-            } catch (_) {}
-          },
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'attendance_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) {
-            final m = payload.newRecord;
-            if (m == null) return;
-            try {
-              final id = m['id'] as String?;
-              if (id == null) return;
-              final idx = _attendanceRecords.indexWhere((r) => r.id == id);
-              if (idx == -1) return;
-              final updated = _attendanceRecords[idx].copyWith(
-                classDateTime: DateTime.parse(m['class_date_time'] as String).toLocal(),
-                classEndTime: DateTime.parse(m['class_end_time'] as String).toLocal(),
-                className: (m['class_name'] as String?) ?? _attendanceRecords[idx].className,
-                isPresent: (m['is_present'] is bool) ? m['is_present'] as bool : ((m['is_present'] is num) ? (m['is_present'] as num) == 1 : _attendanceRecords[idx].isPresent),
-                arrivalTime: (m['arrival_time'] != null) ? DateTime.parse(m['arrival_time'] as String).toLocal() : null,
-                departureTime: (m['departure_time'] != null) ? DateTime.parse(m['departure_time'] as String).toLocal() : null,
-                notes: m['notes'] as String?,
-                sessionTypeId: m['session_type_id'] as String? ?? _attendanceRecords[idx].sessionTypeId,
-                setId: m['set_id'] as String? ?? _attendanceRecords[idx].setId,
-                cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : _attendanceRecords[idx].cycle,
-                sessionOrder: (m['session_order'] is num) ? (m['session_order'] as num).toInt() : _attendanceRecords[idx].sessionOrder,
-                isPlanned: m['is_planned'] == true || m['is_planned'] == 1 || _attendanceRecords[idx].isPlanned,
-                updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
-                version: (m['version'] is num) ? (m['version'] as num).toInt() : _attendanceRecords[idx].version,
-              );
-              _attendanceRecords[idx] = updated;
-              attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-            } catch (_) {}
-          },
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.delete,
-          schema: 'public',
-          table: 'attendance_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) {
-            final m = payload.oldRecord;
-            if (m == null) return;
-            try {
-              final id = m['id'] as String?;
-              if (id == null) return;
-              _attendanceRecords.removeWhere((r) => r.id == id);
-              attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-            } catch (_) {}
-          },
-        )
-        ..subscribe();
-    } catch (e) {
-      // ignore
-    }
-  }
+  Future<void> forceMigration() => AttendanceService.instance.forceMigration();
+  Future<void> loadAttendanceRecords() =>
+      AttendanceService.instance.loadAttendanceRecords();
+  Future<void> _subscribeAttendanceRealtime() =>
+      AttendanceService.instance.subscribeAttendanceRealtime();
+  Future<void> addAttendanceRecord(AttendanceRecord record) =>
+      AttendanceService.instance.addAttendanceRecord(record);
+  Future<void> updateAttendanceRecord(AttendanceRecord record) =>
+      AttendanceService.instance.updateAttendanceRecord(record);
+  Future<void> deleteAttendanceRecord(String id) =>
+      AttendanceService.instance.deleteAttendanceRecord(id);
+  List<AttendanceRecord> getAttendanceRecordsForStudent(String studentId) =>
+      AttendanceService.instance.getAttendanceRecordsForStudent(studentId);
+  AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) =>
+      AttendanceService.instance.getAttendanceRecord(studentId, classDateTime);
+  Future<void> _generatePlannedAttendanceForNextDays({int days = 14}) =>
+      AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
+  Future<void> _regeneratePlannedAttendanceForSet({
+    required String studentId,
+    required String setId,
+    int days = 14,
+  }) =>
+      AttendanceService.instance.regeneratePlannedAttendanceForSet(
+        studentId: studentId,
+        setId: setId,
+        days: days,
+      );
+  Future<void> _regeneratePlannedAttendanceForStudentSets({
+    required String studentId,
+    required Set<String> setIds,
+    int days = 14,
+  }) =>
+      AttendanceService.instance.regeneratePlannedAttendanceForStudentSets(
+        studentId: studentId,
+        setIds: setIds,
+        days: days,
+      );
+  Future<void> _regeneratePlannedAttendanceForStudent({
+    required String studentId,
+    int days = 14,
+  }) =>
+      AttendanceService.instance.regeneratePlannedAttendanceForStudent(
+        studentId: studentId,
+        days: days,
+      );
+  void _schedulePlannedRegen(String studentId, String setId, {bool immediate = false}) =>
+      AttendanceService.instance.schedulePlannedRegen(studentId, setId, immediate: immediate);
+  Future<void> flushPendingPlannedRegens() =>
+      AttendanceService.instance.flushPendingPlannedRegens();
+  Future<void> _regeneratePlannedAttendanceForOverride(SessionOverride ov) =>
+      AttendanceService.instance.regeneratePlannedAttendanceForOverride(ov);
+  Future<void> _removePlannedAttendanceForDate({
+    required String studentId,
+    required DateTime classDateTime,
+  }) =>
+      AttendanceService.instance.removePlannedAttendanceForDate(
+        studentId: studentId,
+        classDateTime: classDateTime,
+      );
+  Future<void> saveOrUpdateAttendance({
+    required String studentId,
+    required DateTime classDateTime,
+    required DateTime classEndTime,
+    required String className,
+    required bool isPresent,
+    DateTime? arrivalTime,
+    DateTime? departureTime,
+    String? notes,
+    String? sessionTypeId,
+    String? setId,
+    int? cycle,
+    int? sessionOrder,
+    bool isPlanned = false,
+  }) =>
+      AttendanceService.instance.saveOrUpdateAttendance(
+        studentId: studentId,
+        classDateTime: classDateTime,
+        classEndTime: classEndTime,
+        className: className,
+        isPresent: isPresent,
+        arrivalTime: arrivalTime,
+        departureTime: departureTime,
+        notes: notes,
+        sessionTypeId: sessionTypeId,
+        setId: setId,
+        cycle: cycle,
+        sessionOrder: sessionOrder,
+        isPlanned: isPlanned,
+      );
+  Future<void> fixMissingDeparturesForYesterdayKst() =>
+      AttendanceService.instance.fixMissingDeparturesForYesterdayKst();
 
   // =================== PAYMENTS REALTIME ===================
   RealtimeChannel? _paymentsRealtimeChannel;
@@ -3406,1158 +3238,6 @@ DateTime? _lastClassesOrderSaveStart;
         )
         ..subscribe();
     } catch (_) {}
-  }
-
-  Future<void> addAttendanceRecord(AttendanceRecord record) async {
-    final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-    final supa = Supabase.instance.client;
-    final row = {
-      'id': record.id,
-      'academy_id': academyId,
-      'student_id': record.studentId,
-      'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-      'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-      'class_name': record.className,
-      'is_present': record.isPresent,
-      'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
-      'departure_time': record.departureTime?.toUtc().toIso8601String(),
-      'notes': record.notes,
-      'session_type_id': record.sessionTypeId,
-      'set_id': record.setId,
-      'cycle': record.cycle,
-      'session_order': record.sessionOrder,
-      'is_planned': record.isPlanned,
-      'created_at': record.createdAt.toUtc().toIso8601String(),
-      'updated_at': record.updatedAt.toUtc().toIso8601String(),
-      'version': record.version,
-    };
-    final inserted = await supa.from('attendance_records').insert(row).select('id,version').maybeSingle();
-    if (inserted != null) {
-      final withId = record.copyWith(id: (inserted['id'] as String?), version: (inserted['version'] as num?)?.toInt() ?? 1);
-      _attendanceRecords.add(withId);
-    } else {
-      _attendanceRecords.add(record);
-    }
-    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-  }
-
-  Future<void> updateAttendanceRecord(AttendanceRecord record) async {
-    final supa = Supabase.instance.client;
-    if (record.id != null) {
-      final row = {
-        'student_id': record.studentId,
-        'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-        'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-        'class_name': record.className,
-        'is_present': record.isPresent,
-        'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
-        'departure_time': record.departureTime?.toUtc().toIso8601String(),
-        'notes': record.notes,
-        'session_type_id': record.sessionTypeId,
-        'set_id': record.setId,
-        'cycle': record.cycle,
-        'session_order': record.sessionOrder,
-        'is_planned': record.isPlanned,
-        'updated_at': record.updatedAt.toUtc().toIso8601String(),
-        // version은 트리거에서 +1 증가
-      };
-      final updated = await supa
-          .from('attendance_records')
-          .update(row)
-          .eq('id', record.id!)
-          .eq('version', record.version)
-          .select('id,version')
-          .maybeSingle();
-      if (updated == null) {
-        throw StateError('CONFLICT_ATTENDANCE_VERSION');
-      }
-      final index = _attendanceRecords.indexWhere((r) => r.id == record.id);
-      if (index != -1) {
-        final newVersion = (updated['version'] as num?)?.toInt() ?? (record.version + 1);
-        _attendanceRecords[index] = record.copyWith(version: newVersion);
-        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      }
-      return;
-    }
-
-    // id가 없으면 동일 키(학생, 시간)로 업데이트 시도 후 없으면 추가
-    final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-    final keyFilter = supa
-        .from('attendance_records')
-        .select('id')
-        .eq('academy_id', academyId)
-        .eq('student_id', record.studentId)
-        .eq('class_date_time', record.classDateTime.toUtc().toIso8601String())
-        .limit(1);
-    final found = await keyFilter;
-    if (found is List && found.isNotEmpty && found.first['id'] is String) {
-      final id = found.first['id'] as String;
-      // 원격에서 최신 버전 조회 후 버전 싱크
-      final current = await supa
-          .from('attendance_records')
-          .select('version')
-          .eq('id', id)
-          .limit(1)
-          .maybeSingle();
-      final curVersion = (current?['version'] as num?)?.toInt() ?? 1;
-      final updated = record.copyWith(id: id, version: curVersion);
-      await updateAttendanceRecord(updated);
-    } else {
-      await addAttendanceRecord(record);
-    }
-  }
-
-  Future<void> deleteAttendanceRecord(String id) async {
-    try {
-      final supa = Supabase.instance.client;
-      await supa.from('attendance_records').delete().eq('id', id);
-    } catch (_) {}
-    _attendanceRecords.removeWhere((r) => r.id == id);
-    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-  }
-
-  List<AttendanceRecord> getAttendanceRecordsForStudent(String studentId) {
-    return _attendanceRecords.where((r) => r.studentId == studentId).toList();
-  }
-
-  AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) {
-    try {
-      return _attendanceRecords.firstWhere(
-        (r) => r.studentId == studentId && 
-               r.classDateTime.year == classDateTime.year &&
-               r.classDateTime.month == classDateTime.month &&
-               r.classDateTime.day == classDateTime.day &&
-               r.classDateTime.hour == classDateTime.hour &&
-               r.classDateTime.minute == classDateTime.minute,
-      );
-    } catch (e) {
-      return null;
-    }
-  }
-
-  String _resolveClassName(String? sessionTypeId) {
-    if (sessionTypeId == null) return '수업';
-    try {
-      final cls = _classes.firstWhere((c) => c.id == sessionTypeId);
-      if (cls.name.trim().isNotEmpty) return cls.name;
-    } catch (_) {}
-    return '수업';
-  }
-
-  // 초기 14일 예정 출석 생성 (중복/실출석 보호)
-  Future<void> _generatePlannedAttendanceForNextDays({int days = 14}) async {
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    final now = DateTime.now();
-    final anchor = DateTime(now.year, now.month, now.day);
-    final supa = Supabase.instance.client;
-
-    // payment_records 최신 보장: 학생별 due/cycle이 없으면 리로드
-    try {
-      await loadPaymentRecords();
-    } catch (_) {}
-
-    // time block 기반 생성
-    final blocks = _studentTimeBlocks.where((b) => b.setId != null && b.setId!.isNotEmpty).toList();
-    if (blocks.isEmpty) return;
-
-    final List<Map<String, dynamic>> rows = [];
-    final List<AttendanceRecord> localAdds = [];
-
-    // cycle/session_order 계산용 맵 시드
-    final Map<String, DateTime> earliestMonthByKey = {};
-    final Map<String, int> monthCountByKey = {};
-    _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    // student+cycle별 날짜→session_order 매핑 (같은 날짜는 같은 번호, 세트 구분 안함)
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
-
-    bool samplePrinted = false;
-    int decisionLogCount = 0;
-    for (int i = 0; i < days; i++) {
-      final date = anchor.add(Duration(days: i));
-      final dayIdx = date.weekday - 1;
-      final dailyBlocks = blocks.where((b) => b.dayIndex == dayIdx);
-      for (final b in dailyBlocks) {
-        final classDateTime = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
-        final classEndTime = classDateTime.add(b.duration);
-
-        // 이미 존재하거나 실출석이 있으면 건너뜀
-        final existing = getAttendanceRecord(b.studentId, classDateTime);
-        if (existing != null) {
-          // 실출석/도착 기록이 있으면 유지, planned라도 존재하면 중복 방지
-          if (existing.arrivalTime != null || existing.isPresent || existing.isPlanned) {
-            continue;
-          }
-        }
-
-        final keyBase = '${b.studentId}|${b.setId}';
-        final dateKey = _dateKey(classDateTime);
-
-        int? cycle = _resolveCycleByDueDate(b.studentId, classDateTime);
-        int sessionOrder;
-        if (cycle == null) {
-          final monthDate = _monthKey(classDateTime);
-          cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
-        }
-        final studentCycleKey = '${b.studentId}|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
-        }
-        if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
-          _logCycleDecision(
-            studentId: b.studentId,
-            setId: b.setId ?? '',
-            classDateTime: classDateTime,
-            resolvedCycle: cycle,
-            sessionOrderCandidate: sessionOrder,
-            source: 'plan-init',
-          );
-          decisionLogCount++;
-        }
-        // 최종 방어: null/0이면 1로 + 로그
-        if (cycle == null || cycle == 0) {
-          print('[WARN][PLAN] cycle null/0 → 1 set=${b.setId} student=${b.studentId} date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(b.studentId, classDateTime);
-          cycle = 1;
-        }
-        cycle ??= 1;
-        if (sessionOrder <= 0) {
-          print('[WARN][PLAN] sessionOrder<=0 → 1 set=${b.setId} student=${b.studentId} date=$classDateTime');
-          sessionOrder = 1;
-        }
-        if (!samplePrinted) {
-          print('[PLAN][SAMPLE] set=${b.setId} student=${b.studentId} date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(b.studentId, classDateTime)}');
-          samplePrinted = true;
-        }
-
-        final record = AttendanceRecord.create(
-          studentId: b.studentId,
-          classDateTime: classDateTime,
-          classEndTime: classEndTime,
-          className: _resolveClassName(b.sessionTypeId),
-          isPresent: false,
-          arrivalTime: null,
-          departureTime: null,
-          notes: null,
-          sessionTypeId: b.sessionTypeId,
-          setId: b.setId,
-          cycle: cycle,
-          sessionOrder: sessionOrder,
-          isPlanned: true,
-        );
-
-        rows.add({
-          'id': record.id,
-          'academy_id': academyId,
-          'student_id': record.studentId,
-          'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-          'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-          'class_name': record.className,
-          'is_present': record.isPresent,
-          'arrival_time': null,
-          'departure_time': null,
-          'notes': null,
-          'session_type_id': record.sessionTypeId,
-          'set_id': record.setId,
-          'cycle': record.cycle,
-          'session_order': record.sessionOrder,
-          'is_planned': record.isPlanned,
-          'created_at': record.createdAt.toUtc().toIso8601String(),
-          'updated_at': record.updatedAt.toUtc().toIso8601String(),
-          'version': record.version,
-        });
-        localAdds.add(record);
-      }
-    }
-
-    if (rows.isEmpty) return;
-
-    try {
-      await supa.from('attendance_records').upsert(rows, onConflict: 'id');
-      _attendanceRecords.addAll(localAdds);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[INFO] planned 생성: ${localAdds.length}건 (다음 ${days}일)');
-    } catch (e, st) {
-      print('[ERROR] planned 생성 실패: $e\n$st');
-    }
-  }
-
-  // -------- 예정 cycle/session_order 계산 유틸 --------
-  DateTime _monthKey(DateTime dt) => DateTime(dt.year, dt.month);
-  int _monthsBetween(DateTime start, DateTime end) => (end.year - start.year) * 12 + (end.month - start.month);
-
-  void _seedCycleMaps(
-    Map<String, DateTime> earliestMonthByKey,
-    Map<String, int> monthCountByKey,
-  ) {
-    for (final r in _attendanceRecords) {
-      if (r.setId == null || r.setId!.isEmpty) continue;
-      final keyBase = '${r.studentId}|${r.setId}';
-      final m = _monthKey(r.classDateTime);
-      final existingEarliest = earliestMonthByKey[keyBase];
-      if (existingEarliest == null || m.isBefore(existingEarliest)) {
-        earliestMonthByKey[keyBase] = m;
-      }
-      final mk = '$keyBase|${m.year}-${m.month}';
-      monthCountByKey[mk] = (monthCountByKey[mk] ?? 0) + 1;
-    }
-  }
-
-  int _calcCycle(Map<String, DateTime> earliestMonthByKey, String keyBase, DateTime monthDate) {
-    final existing = earliestMonthByKey[keyBase];
-    if (existing == null) {
-      earliestMonthByKey[keyBase] = monthDate;
-      return 1;
-    }
-    if (monthDate.isBefore(existing)) {
-      earliestMonthByKey[keyBase] = monthDate;
-      return 1;
-    }
-    return _monthsBetween(existing, monthDate) + 1;
-  }
-
-  int _nextSessionOrder(Map<String, int> monthCountByKey, String keyBase, DateTime monthDate) {
-    final mk = '$keyBase|${monthDate.year}-${monthDate.month}';
-    final next = (monthCountByKey[mk] ?? 0) + 1;
-    monthCountByKey[mk] = next;
-    return next;
-  }
-
-  String _dateKey(DateTime dt) => '${dt.year}-${dt.month}-${dt.day}';
-
-  // setId + cycle 단위로 날짜별 session_order를 유지하기 위한 시드
-  void _seedDateOrderBySetCycle(
-    Map<String, Map<String, int>> dateOrderByKey,
-    Map<String, int> counterByKey,
-  ) {
-    for (final r in _attendanceRecords) {
-      if (r.setId == null || r.setId!.isEmpty) continue;
-      if (r.cycle == null) continue;
-      final key = '${r.setId}|${r.cycle}';
-      final dk = _dateKey(r.classDateTime);
-      final m = dateOrderByKey.putIfAbsent(key, () => {});
-      if (!m.containsKey(dk)) {
-        final next = (counterByKey[key] ?? 0) + 1;
-        m[dk] = r.sessionOrder ?? next;
-        counterByKey[key] = next > (counterByKey[key] ?? 0) ? next : (counterByKey[key] ?? next);
-      }
-    }
-  }
-
-  // student+cycle 기준으로 날짜별 session_order 시드 (같은 날짜는 같은 order)
-  void _seedDateOrderByStudentCycle(
-    Map<String, Map<String, int>> dateOrderByKey,
-    Map<String, int> counterByKey,
-  ) {
-    for (final r in _attendanceRecords) {
-      if (r.setId == null || r.setId!.isEmpty || r.cycle == null) continue;
-      final studentCycleKey = '${r.studentId}|${r.cycle}';
-      final dateKey = _dateKey(r.classDateTime);
-      final m = dateOrderByKey.putIfAbsent(studentCycleKey, () => {});
-      if (m.containsKey(dateKey)) continue;
-      final next = (counterByKey[studentCycleKey] ?? 0) + 1;
-      m[dateKey] = next;
-      counterByKey[studentCycleKey] = next;
-    }
-  }
-
-  // -------- due_date 기반 cycle/session_order 계산 (payment_records 사용) --------
-  int? _resolveCycleByDueDate(String studentId, DateTime classDate) {
-    // payment_records를 due_date 오름차순으로 보고, 구간 [due, next_due) 안에 있으면 해당 cycle을 반환
-    final prs = _paymentRecords.where((p) => p.studentId == studentId && p.dueDate != null && p.cycle != null).toList();
-    if (prs.isEmpty) return null;
-    prs.sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-    // 날짜만 비교(시간/타임존 영향 최소화)
-    final classDateOnly = DateTime(classDate.year, classDate.month, classDate.day);
-    for (var i = 0; i < prs.length; i++) {
-      final curDue = DateTime(prs[i].dueDate!.year, prs[i].dueDate!.month, prs[i].dueDate!.day);
-      final nextDue = (i + 1 < prs.length)
-          ? DateTime(prs[i + 1].dueDate!.year, prs[i + 1].dueDate!.month, prs[i + 1].dueDate!.day)
-          : null;
-      if (classDateOnly.isBefore(curDue)) continue;
-      if (nextDue == null || classDateOnly.isBefore(nextDue)) {
-        return prs[i].cycle;
-      }
-    }
-    // classDate가 모든 due_date보다 이전인 경우 첫 사이클로 간주
-    if (classDateOnly.isBefore(DateTime(prs.first.dueDate!.year, prs.first.dueDate!.month, prs.first.dueDate!.day))) {
-      return prs.first.cycle ?? 1;
-    }
-    // 이후면 마지막 사이클
-    return prs.last.cycle;
-  }
-
-  void _logCycleDebug(String studentId, DateTime classDate) {
-    final prs = _paymentRecords.where((p) => p.studentId == studentId && p.dueDate != null && p.cycle != null).toList();
-    prs.sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-    final list = prs.map((p) => 'cycle=${p.cycle} due=${p.dueDate}').toList();
-    print('[PLAN][CYCLE-DEBUG] student=$studentId date=$classDate payments=${list.join('; ')}');
-  }
-
-  void _logCycleDecision({
-    required String studentId,
-    required String setId,
-    required DateTime classDateTime,
-    required int? resolvedCycle,
-    required int sessionOrderCandidate,
-    required String source, // e.g. plan-set / plan-init
-  }) {
-    print(
-      '[PLAN][CYCLE-DECISION][$source] student=$studentId set=$setId date=$classDateTime '
-      'resolvedCycle=$resolvedCycle sessionOrderCandidate=$sessionOrderCandidate '
-      'dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)} '
-      'payCount=${_paymentRecords.where((p) => p.studentId == studentId).length}',
-    );
-  }
-
-  int _nextSessionOrderByCycle(String studentId, String setId, int cycle) {
-    final existing = _attendanceRecords.where((r) => r.studentId == studentId && r.setId == setId && r.cycle == cycle);
-    if (existing.isEmpty) return 1;
-    final maxOrder = existing.map((e) => e.sessionOrder ?? 0).fold<int>(0, (a, b) => a > b ? a : b);
-    return maxOrder + 1;
-  }
-
-  String? _resolveSetId(String studentId, DateTime classDateTime) {
-    final dayIdx = classDateTime.weekday - 1; // 0~6
-    try {
-      final block = _studentTimeBlocks.firstWhere(
-        (b) =>
-            b.studentId == studentId &&
-            b.dayIndex == dayIdx &&
-            b.startHour == classDateTime.hour &&
-            b.startMinute == classDateTime.minute,
-      );
-      return block.setId;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // 특정 학생+setId에 대해 미래 예정 출석(오늘 포함, arrivalTime 기록된 실제 출석은 보존) 재생성
-  Future<void> _regeneratePlannedAttendanceForSet({
-    required String studentId,
-    required String setId,
-    int days = 14,
-  }) async {
-    if (setId.isEmpty) return;
-    final payCount = _paymentRecords.where((p) => p.studentId == studentId).length;
-    final payList = _paymentRecords
-        .where((p) => p.studentId == studentId && p.dueDate != null && p.cycle != null)
-        .map((p) => 'cycle=${p.cycle} due=${p.dueDate}')
-        .take(5)
-        .join('; ');
-    print('[PLAN] regen start student=$studentId set=$setId days=$days payCount=$payCount pays=$payList');
-    // payment_records 최신화 (학생 데이터 없으면 리로드)
-    final hasPaymentInfo = _paymentRecords.any((p) => p.studentId == studentId);
-    if (!hasPaymentInfo) {
-      try {
-        await loadPaymentRecords();
-        print('[PLAN] payment_records reloaded for student=$studentId');
-      } catch (e) {
-        print('[PLAN][WARN] payment_records reload failed: $e');
-      }
-    }
-    final today = DateTime.now();
-    final anchor = DateTime(today.year, today.month, today.day); // 오늘 00:00
-    final DateTime endDate = anchor.add(Duration(days: days));
-
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    final supa = Supabase.instance.client;
-
-    // 1) 대상 planned 레코드 삭제 (도착/실출석이 있는 실제 레코드는 삭제하지 않음)
-    try {
-      final delRes = await supa
-          .from('attendance_records')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .eq('set_id', setId)
-          .eq('is_planned', true)
-          .gte('class_date_time', anchor.toUtc().toIso8601String());
-      print('[PLAN] deleted planned rows: $delRes');
-      // 메모리에서도 제거
-      _attendanceRecords.removeWhere((r) =>
-          r.studentId == studentId &&
-          r.setId == setId &&
-          r.isPlanned == true &&
-          !r.isPresent &&
-          r.arrivalTime == null &&
-          !r.classDateTime.isBefore(anchor));
-    } catch (e) {
-      print('[WARN] planned 삭제 실패(student=$studentId set=$setId): $e');
-    }
-
-    // 2) time block 기반으로 14일치 예정 재생성
-    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId == setId).toList();
-    if (blocks.isEmpty) {
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      return;
-    }
-
-    final List<Map<String, dynamic>> rows = [];
-    final List<AttendanceRecord> localAdds = [];
-
-    String _className(String? sessionTypeId) => _resolveClassName(sessionTypeId);
-
-    // cycle/session_order 계산 시드 (기존 출석 기반)
-    final Map<String, DateTime> earliestMonthByKey = {};
-    final Map<String, int> monthCountByKey = {};
-    _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    final Map<String, Map<String, int>> dateOrderByKey = {};
-    final Map<String, int> counterByKey = {};
-    _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-    // student+cycle별 날짜→session_order 매핑 (cross-set 연속 순번)
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
-
-    bool samplePrinted = false;
-    int decisionLogCount = 0;
-    for (int i = 0; i < days; i++) {
-      final date = anchor.add(Duration(days: i));
-      final int dayIdx = date.weekday - 1; // 0~6
-      for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
-        final classDateTime = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
-        final classEndTime = classDateTime.add(b.duration);
-
-        // 이미 실제 출석이 기록된 경우(Arrival or isPresent) 건너뛴다
-        final existing = getAttendanceRecord(studentId, classDateTime);
-        if (existing != null && (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
-          continue;
-        }
-
-        final keyBase = '$studentId|$setId';
-        final dateKey = _dateKey(classDateTime);
-
-        int? cycle = _resolveCycleByDueDate(studentId, classDateTime);
-        int sessionOrder;
-        if (cycle == null) {
-          final monthDate = _monthKey(classDateTime);
-          cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
-        }
-        final studentCycleKey = '$studentId|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
-        }
-        if (cycle == null || cycle == 0) {
-          print('[WARN][PLAN-set] cycle null/0 → 1 set=$setId student=$studentId date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(studentId, classDateTime);
-          cycle = 1;
-        }
-        if (sessionOrder <= 0) {
-          print('[WARN][PLAN-set] sessionOrder<=0 → 1 set=$setId student=$studentId date=$classDateTime');
-          sessionOrder = 1;
-        }
-        if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
-          _logCycleDecision(
-            studentId: studentId,
-            setId: setId,
-            classDateTime: classDateTime,
-            resolvedCycle: cycle,
-            sessionOrderCandidate: sessionOrder,
-            source: 'plan-set',
-          );
-          decisionLogCount++;
-        }
-        if (!samplePrinted) {
-          print('[PLAN][SAMPLE-set] set=$setId student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
-          samplePrinted = true;
-        }
-
-        final record = AttendanceRecord.create(
-          studentId: studentId,
-          classDateTime: classDateTime,
-          classEndTime: classEndTime,
-          className: _className(b.sessionTypeId),
-          isPresent: false,
-          arrivalTime: null,
-          departureTime: null,
-          notes: null,
-          sessionTypeId: b.sessionTypeId,
-          setId: setId,
-          cycle: cycle,
-          sessionOrder: sessionOrder,
-          isPlanned: true,
-        );
-
-        rows.add({
-          'id': record.id,
-          'academy_id': academyId,
-          'student_id': record.studentId,
-          'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-          'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-          'class_name': record.className,
-          'is_present': record.isPresent,
-          'arrival_time': null,
-          'departure_time': null,
-          'notes': null,
-          'session_type_id': record.sessionTypeId,
-          'set_id': record.setId,
-          'cycle': record.cycle,
-          'session_order': record.sessionOrder,
-          'is_planned': record.isPlanned,
-          'created_at': record.createdAt.toUtc().toIso8601String(),
-          'updated_at': record.updatedAt.toUtc().toIso8601String(),
-          'version': record.version,
-        });
-        localAdds.add(record);
-      }
-    }
-
-    if (rows.isEmpty) {
-      print('[PLAN] regen skip (no rows) student=$studentId set=$setId');
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      return;
-    }
-
-    try {
-      final upRes = await supa.from('attendance_records').upsert(rows, onConflict: 'id');
-      // 메모리에 추가
-      _attendanceRecords.addAll(localAdds);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[PLAN] regen done set_id=$setId added=${localAdds.length} rowsResp=$upRes');
-    } catch (e, st) {
-      print('[ERROR] set_id=$setId 예정 출석 upsert 실패: $e\n$st');
-    }
-  }
-
-  // 여러 setId를 한 번에 재생성 (학생 단위, cross-set session_order 유지)
-  Future<void> _regeneratePlannedAttendanceForStudentSets({
-    required String studentId,
-    required Set<String> setIds,
-    int days = 14,
-  }) async {
-    if (setIds.isEmpty) return;
-    final payCount = _paymentRecords.where((p) => p.studentId == studentId).length;
-    final payList = _paymentRecords
-        .where((p) => p.studentId == studentId && p.dueDate != null && p.cycle != null)
-        .map((p) => 'cycle=${p.cycle} due=${p.dueDate}')
-        .take(5)
-        .join('; ');
-    print('[PLAN] regen(student) start student=$studentId setIds=$setIds days=$days payCount=$payCount pays=$payList');
-
-    final hasPaymentInfo = _paymentRecords.any((p) => p.studentId == studentId);
-    if (!hasPaymentInfo) {
-      try {
-        await loadPaymentRecords();
-        print('[PLAN] payment_records reloaded for student=$studentId');
-      } catch (e) {
-        print('[PLAN][WARN] payment_records reload failed: $e');
-      }
-    }
-
-    final today = DateTime.now();
-    final anchor = DateTime(today.year, today.month, today.day);
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    final supa = Supabase.instance.client;
-
-    // 삭제 대상 planned 제거
-    try {
-      final delRes = await supa
-          .from('attendance_records')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .inFilter('set_id', setIds.toList())
-          .eq('is_planned', true)
-          .gte('class_date_time', anchor.toUtc().toIso8601String());
-      print('[PLAN] deleted planned rows (student): $delRes');
-      _attendanceRecords.removeWhere((r) =>
-          r.studentId == studentId &&
-          r.setId != null &&
-          setIds.contains(r.setId!) &&
-          r.isPlanned == true &&
-          !r.isPresent &&
-          r.arrivalTime == null &&
-          !r.classDateTime.isBefore(anchor));
-    } catch (e) {
-      print('[WARN] planned 삭제 실패(student=$studentId sets=$setIds): $e');
-    }
-
-    // 대상 블록 모으기
-    final blocks = _studentTimeBlocks
-        .where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId!))
-        .toList();
-    if (blocks.isEmpty) {
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      return;
-    }
-
-    // cycle/session_order 계산 시드
-    final Map<String, DateTime> earliestMonthByKey = {};
-    final Map<String, int> monthCountByKey = {};
-    _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
-
-    final List<Map<String, dynamic>> rows = [];
-    final List<AttendanceRecord> localAdds = [];
-    bool samplePrinted = false;
-    int decisionLogCount = 0;
-
-    for (int i = 0; i < days; i++) {
-      final date = anchor.add(Duration(days: i));
-      final int dayIdx = date.weekday - 1;
-      for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
-        final classDateTime = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
-        final classEndTime = classDateTime.add(b.duration);
-
-        final existing = getAttendanceRecord(studentId, classDateTime);
-        if (existing != null && (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
-          continue;
-        }
-
-        int? cycle = _resolveCycleByDueDate(studentId, classDateTime);
-        if (cycle == null) {
-          final monthDate = _monthKey(classDateTime);
-          cycle = _calcCycle(earliestMonthByKey, '$studentId|${b.setId}', monthDate);
-        }
-        final studentCycleKey = '$studentId|$cycle';
-        final dateKey = _dateKey(classDateTime);
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        int sessionOrder;
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
-        }
-
-        if (cycle == null || cycle == 0) {
-          print('[WARN][PLAN-stu] cycle null/0 → 1 sets=$setIds student=$studentId date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(studentId, classDateTime);
-          cycle = 1;
-        }
-        if (sessionOrder <= 0) {
-          print('[WARN][PLAN-stu] sessionOrder<=0 → 1 sets=$setIds student=$studentId date=$classDateTime');
-          sessionOrder = 1;
-        }
-        if (decisionLogCount < 3 || cycle == null || sessionOrder <= 0) {
-          _logCycleDecision(
-            studentId: studentId,
-            setId: b.setId ?? '',
-            classDateTime: classDateTime,
-            resolvedCycle: cycle,
-            sessionOrderCandidate: sessionOrder,
-            source: 'plan-student',
-          );
-          decisionLogCount++;
-        }
-        if (!samplePrinted) {
-          print('[PLAN][SAMPLE-stu] set=${b.setId} student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
-          samplePrinted = true;
-        }
-
-        final record = AttendanceRecord.create(
-          studentId: studentId,
-          classDateTime: classDateTime,
-          classEndTime: classEndTime,
-          className: _resolveClassName(b.sessionTypeId),
-          isPresent: false,
-          arrivalTime: null,
-          departureTime: null,
-          notes: null,
-          sessionTypeId: b.sessionTypeId,
-          setId: b.setId,
-          cycle: cycle,
-          sessionOrder: sessionOrder,
-          isPlanned: true,
-        );
-
-        rows.add({
-          'id': record.id,
-          'academy_id': academyId,
-          'student_id': record.studentId,
-          'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-          'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-          'class_name': record.className,
-          'is_present': record.isPresent,
-          'arrival_time': null,
-          'departure_time': null,
-          'notes': null,
-          'session_type_id': record.sessionTypeId,
-          'set_id': record.setId,
-          'cycle': record.cycle,
-          'session_order': record.sessionOrder,
-          'is_planned': record.isPlanned,
-          'created_at': record.createdAt.toUtc().toIso8601String(),
-          'updated_at': record.updatedAt.toUtc().toIso8601String(),
-          'version': record.version,
-        });
-        localAdds.add(record);
-      }
-    }
-
-    if (rows.isEmpty) {
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      return;
-    }
-
-    try {
-      final upRes = await supa.from('attendance_records').upsert(rows, onConflict: 'id');
-      _attendanceRecords.addAll(localAdds);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[PLAN] regen(student) done setIds=$setIds added=${localAdds.length} rowsResp=$upRes');
-    } catch (e, st) {
-      print('[ERROR] student=$studentId setIds=$setIds 예정 출석 upsert 실패: $e\n$st');
-    }
-  }
-
-  void _schedulePlannedRegen(String studentId, String setId, {bool immediate = false}) {
-    _pendingRegenSetIdsByStudent.putIfAbsent(studentId, () => <String>{}).add(setId);
-    if (immediate) {
-      _flushPlannedRegen();
-      return;
-    }
-    _plannedRegenTimer?.cancel();
-    _plannedRegenTimer = Timer(const Duration(milliseconds: 200), _flushPlannedRegen);
-  }
-
-  Future<void> _flushPlannedRegen() async {
-    final pending = Map<String, Set<String>>.from(_pendingRegenSetIdsByStudent);
-    _pendingRegenSetIdsByStudent.clear();
-    _plannedRegenTimer?.cancel();
-    _plannedRegenTimer = null;
-    for (final entry in pending.entries) {
-      await _regeneratePlannedAttendanceForStudentSets(
-        studentId: entry.key,
-        setIds: entry.value,
-        days: 14,
-      );
-    }
-  }
-
-  /// 외부에서 강제로 대기중인 예정 재생성을 모두 즉시 수행
-  Future<void> flushPendingPlannedRegens() async {
-    await _flushPlannedRegen();
-  }
-
-  // 특정 override의 replacement 일정에 대해 planned 출석을 재생성/정리
-  Future<void> _regeneratePlannedAttendanceForOverride(SessionOverride ov) async {
-    if (ov.replacementClassDateTime == null) return;
-    if (ov.status == OverrideStatus.canceled) {
-      await _removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: ov.replacementClassDateTime!);
-      return;
-    }
-    final DateTime target = ov.replacementClassDateTime!;
-    await _removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: target);
-
-    int? cycle = _resolveCycleByDueDate(ov.studentId, target);
-    int sessionOrder;
-    if (cycle != null) {
-      final setCycleKey = '${(ov.setId ?? ov.id)}|$cycle';
-      final dateKey = _dateKey(target);
-      final Map<String, Map<String, int>> dateOrderByKey = {};
-      final Map<String, int> counterByKey = {};
-      _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-      final m = dateOrderByKey.putIfAbsent(setCycleKey, () => {});
-      if (m.containsKey(dateKey)) {
-        sessionOrder = m[dateKey]!;
-      } else {
-        final next = (counterByKey[setCycleKey] ?? 0) + 1;
-        m[dateKey] = next;
-        counterByKey[setCycleKey] = next;
-        sessionOrder = next;
-      }
-    } else {
-      final Map<String, DateTime> earliestMonthByKey = {};
-      final Map<String, int> monthCountByKey = {};
-      _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-      final keyBase = '${ov.studentId}|${(ov.setId ?? ov.id)}';
-      final monthDate = _monthKey(target);
-      cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
-      final setCycleKey = '${(ov.setId ?? ov.id)}|$cycle';
-      final dateKey = _dateKey(target);
-      final Map<String, Map<String, int>> dateOrderByKey = {};
-      final Map<String, int> counterByKey = {};
-      _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-      final m = dateOrderByKey.putIfAbsent(setCycleKey, () => {});
-      if (m.containsKey(dateKey)) {
-        sessionOrder = m[dateKey]!;
-      } else {
-        final next = (counterByKey[setCycleKey] ?? 0) + 1;
-        m[dateKey] = next;
-        counterByKey[setCycleKey] = next;
-        sessionOrder = next;
-      }
-    }
-    if (cycle == null || cycle == 0) {
-      print('[WARN][PLAN][OVR] cycle null/0 → 1 set=${ov.setId ?? ov.id} student=${ov.studentId} date=$target (payment_records miss?)');
-      cycle = 1;
-    }
-    if (sessionOrder <= 0) {
-      print('[WARN][PLAN][OVR] sessionOrder<=0 → 1 set=${ov.setId ?? ov.id} student=${ov.studentId} date=$target');
-      sessionOrder = 1;
-    }
-
-    // 새 planned 추가 (오늘 포함 1건)
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    final classEndTime = target.add(Duration(minutes: ov.durationMinutes ?? _academySettings.lessonDuration));
-    final record = AttendanceRecord.create(
-      studentId: ov.studentId,
-      classDateTime: target,
-      classEndTime: classEndTime,
-      className: _resolveClassName(ov.sessionTypeId),
-      isPresent: false,
-      arrivalTime: null,
-      departureTime: null,
-      notes: null,
-      sessionTypeId: ov.sessionTypeId,
-      setId: ov.setId ?? ov.id, // setId가 없을 때 override id로 대체
-      cycle: cycle,
-      sessionOrder: sessionOrder,
-      isPlanned: true,
-    );
-
-    final row = {
-      'id': record.id,
-      'academy_id': academyId,
-      'student_id': record.studentId,
-      'class_date_time': record.classDateTime.toUtc().toIso8601String(),
-      'class_end_time': record.classEndTime.toUtc().toIso8601String(),
-      'class_name': record.className,
-      'is_present': record.isPresent,
-      'arrival_time': null,
-      'departure_time': null,
-      'notes': null,
-      'session_type_id': record.sessionTypeId,
-      'set_id': record.setId,
-      'cycle': record.cycle,
-      'session_order': record.sessionOrder,
-      'is_planned': record.isPlanned,
-      'created_at': record.createdAt.toUtc().toIso8601String(),
-      'updated_at': record.updatedAt.toUtc().toIso8601String(),
-      'version': record.version,
-    };
-
-    try {
-      await Supabase.instance.client.from('attendance_records').upsert(row, onConflict: 'id');
-      _attendanceRecords.add(record);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[INFO] override planned regenerated: student=${ov.studentId}, date=$target');
-    } catch (e, st) {
-      print('[ERROR] override planned upsert 실패: $e\n$st');
-    }
-  }
-
-  // 특정 날짜 planned 한 건 제거 (실출석은 보존)
-  Future<void> _removePlannedAttendanceForDate({
-    required String studentId,
-    required DateTime classDateTime,
-  }) async {
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    try {
-      await Supabase.instance.client
-          .from('attendance_records')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .eq('is_planned', true)
-          .eq('class_date_time', classDateTime.toUtc().toIso8601String());
-      _attendanceRecords.removeWhere((r) =>
-          r.studentId == studentId &&
-          r.isPlanned == true &&
-          r.classDateTime.year == classDateTime.year &&
-          r.classDateTime.month == classDateTime.month &&
-          r.classDateTime.day == classDateTime.day &&
-          r.classDateTime.hour == classDateTime.hour &&
-          r.classDateTime.minute == classDateTime.minute);
-      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-    } catch (e) {
-      print('[WARN] planned 제거 실패(student=$studentId, dt=$classDateTime): $e');
-    }
-  }
-
-  Future<void> saveOrUpdateAttendance({
-    required String studentId,
-    required DateTime classDateTime,
-    required DateTime classEndTime,
-    required String className,
-    required bool isPresent,
-    DateTime? arrivalTime,
-    DateTime? departureTime,
-    String? notes,
-    String? sessionTypeId,
-    String? setId,
-    int? cycle,
-    int? sessionOrder,
-    bool isPlanned = false,
-  }) async {
-    print('[SUPA] saveOrUpdateAttendance 시작 - 학생ID: $studentId');
-    final now = DateTime.now();
-    final resolvedSetId = setId ?? _resolveSetId(studentId, classDateTime);
-    final existing = getAttendanceRecord(studentId, classDateTime);
-    if (existing != null) {
-      final updated = existing.copyWith(
-        classEndTime: classEndTime,
-        className: className,
-        isPresent: isPresent,
-        arrivalTime: arrivalTime,
-        departureTime: departureTime,
-        notes: notes,
-        sessionTypeId: sessionTypeId ?? existing.sessionTypeId,
-        setId: resolvedSetId ?? existing.setId,
-        cycle: cycle ?? existing.cycle,
-        sessionOrder: sessionOrder ?? existing.sessionOrder,
-        isPlanned: isPlanned || existing.isPlanned,
-        updatedAt: now,
-      );
-      try {
-        await updateAttendanceRecord(updated);
-      } on StateError catch (e) {
-        if (e.message == 'CONFLICT_ATTENDANCE_VERSION') {
-          // 최신 데이터 재로딩 후 충돌 알림
-          await loadAttendanceRecords();
-          throw Exception('다른 기기에서 먼저 수정했습니다. 내용을 확인 후 다시 시도하세요.');
-        } else {
-          rethrow;
-        }
-      }
-      final idx = _attendanceRecords.indexWhere((r) => r.studentId == studentId &&
-          r.classDateTime.year == classDateTime.year &&
-          r.classDateTime.month == classDateTime.month &&
-          r.classDateTime.day == classDateTime.day &&
-          r.classDateTime.hour == classDateTime.hour &&
-          r.classDateTime.minute == classDateTime.minute);
-      if (idx != -1) {
-        _attendanceRecords[idx] = updated;
-        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      }
-      try {
-        if (updated.id != null) {
-          await _completePlannedOverrideFor(
-            studentId: studentId,
-            replacementDateTime: classDateTime,
-            replacementAttendanceId: updated.id!,
-          );
-        }
-      } catch (e) {
-        print('[WARN] planned→completed 링크 실패(업데이트): $e');
-      }
-    } else {
-      final newRecord = AttendanceRecord.create(
-        studentId: studentId,
-        classDateTime: classDateTime,
-        classEndTime: classEndTime,
-        className: className,
-        isPresent: isPresent,
-        arrivalTime: arrivalTime,
-        departureTime: departureTime,
-        notes: notes,
-        sessionTypeId: sessionTypeId,
-        setId: resolvedSetId,
-        cycle: cycle,
-        sessionOrder: sessionOrder,
-        isPlanned: isPlanned,
-      );
-      await addAttendanceRecord(newRecord);
-      try {
-        if (newRecord.id != null) {
-          await _completePlannedOverrideFor(
-            studentId: studentId,
-            replacementDateTime: classDateTime,
-            replacementAttendanceId: newRecord.id!,
-          );
-        }
-      } catch (e) {
-        print('[WARN] planned→completed 링크 실패(추가): $e');
-      }
-    }
-  }
-
-  // replacementClassDateTime와 동일한 planned override(add/replace)를 completed로 전환
-  Future<void> _completePlannedOverrideFor({
-    required String studentId,
-    required DateTime replacementDateTime,
-    required String replacementAttendanceId,
-  }) async {
-    bool sameMinute(DateTime a, DateTime b) {
-      return a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
-    }
-
-    SessionOverride? target;
-    for (final o in _sessionOverrides) {
-      if (o.studentId != studentId) continue;
-      if (o.status != OverrideStatus.planned) continue;
-      if (!(o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace)) continue;
-      if (o.replacementClassDateTime == null) continue;
-      if (sameMinute(o.replacementClassDateTime!, replacementDateTime)) {
-        target = o;
-        break;
-      }
-    }
-
-    if (target == null) {
-      print('[DEBUG] matching planned override 없음: studentId=$studentId, time=$replacementDateTime');
-      return;
-    }
-
-    final updated = target.copyWith(
-      status: OverrideStatus.completed,
-      replacementAttendanceId: replacementAttendanceId,
-      updatedAt: DateTime.now(),
-    );
-    try {
-      await updateSessionOverride(updated);
-    } catch (_) {}
-
-    final idx = _sessionOverrides.indexWhere((o) => o.id == updated.id);
-    if (idx != -1) {
-      _sessionOverrides[idx] = updated;
-    } else {
-      _sessionOverrides.add(updated);
-    }
-    sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-    print('[DEBUG] planned→completed 링크 완료: overrideId=${updated.id}');
-  }
-
-  // 어제(KST) 등원했지만 하원 기록이 없는 경우 자동 하원 처리
-  Future<void> fixMissingDeparturesForYesterdayKst() async {
-    try {
-      final int lessonMinutes = _academySettings.lessonDuration;
-      final DateTime nowKst = DateTime.now().toUtc().add(const Duration(hours: 9));
-      final DateTime ymdYesterdayKst = DateTime(nowKst.year, nowKst.month, nowKst.day).subtract(const Duration(days: 1));
-
-      bool isSameKstDay(DateTime dt, DateTime ymdKst) {
-        final k = dt.toUtc().add(const Duration(hours: 9));
-        return k.year == ymdKst.year && k.month == ymdKst.month && k.day == ymdKst.day;
-      }
-
-      int updated = 0;
-      for (final rec in _attendanceRecords) {
-        final arrival = rec.arrivalTime;
-        if (arrival == null) continue;
-        if (rec.departureTime != null) continue;
-        if (!isSameKstDay(arrival, ymdYesterdayKst)) continue;
-
-        final DateTime dep = arrival.add(Duration(minutes: lessonMinutes));
-        final updatedRec = rec.copyWith(
-          isPresent: true,
-          departureTime: dep,
-        );
-        await updateAttendanceRecord(updatedRec);
-        updated++;
-      }
-      print('[ATT] 어제(KST) 미하원 자동 처리: ' + updated.toString() + '건');
-    } catch (e, st) {
-      print('[ATT][ERROR] 미하원 자동 처리 실패: ' + e.toString() + '\n' + st.toString());
-    }
   }
 
   // =================== STUDENT PAYMENT INFO ===================
@@ -4770,385 +3450,56 @@ DateTime? _lastClassesOrderSaveStart;
   }
 
   // ======== RESOURCES (FOLDERS/FILES) ========
-  Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
-    await AcademyDbService.instance.saveResourceFolders(rows);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        await supa.from('resource_folders').delete().eq('academy_id', academyId);
-        if (rows.isNotEmpty) {
-          final up = rows.map((r) => {
-            'id': r['id'],
-            'academy_id': academyId,
-            'name': r['name'],
-            'parent_id': r['parent_id'],
-            'order_index': r['order_index'],
-            'category': r['category'],
-          }).toList();
-          await supa.from('resource_folders').insert(up);
-        }
-      } catch (_) {}
-    }
-  }
-
-  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) async {
-    await AcademyDbService.instance.saveResourceFoldersForCategory(category, rows);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        await supa.from('resource_folders').delete().match({'academy_id': academyId, 'category': category});
-        if (rows.isNotEmpty) {
-          final up = rows.map((raw) {
-            final r = Map<String, dynamic>.from(raw);
-            return {
-              'id': r['id'],
-              'academy_id': academyId,
-              'name': r['name'],
-              'parent_id': r['parent_id'],
-              'order_index': r['order_index'],
-              'category': category,
-            };
-          }).toList();
-          await supa.from('resource_folders').insert(up);
-        }
-      } catch (_) {}
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> loadResourceFolders() async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final data = await supa.from('resource_folders').select('id,name,parent_id,order_index,category').eq('academy_id', academyId).order('order_index');
-        return (data as List).cast<Map<String, dynamic>>();
-      } catch (e, st) {
-        print('[RES][folders] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <Map<String, dynamic>>[];
-        }
-      }
-    }
-    return await AcademyDbService.instance.loadResourceFolders();
-  }
-
-  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        List<dynamic> data;
-        if (category == 'textbook') {
-          data = await supa
-              .from('resource_folders')
-              .select('id,name,parent_id,order_index,category')
-              .eq('academy_id', academyId)
-              .or('category.is.null,category.eq.textbook')
-              .order('order_index');
-        } else {
-          data = await supa
-              .from('resource_folders')
-              .select('id,name,parent_id,order_index,category')
-              .match({'academy_id': academyId, 'category': category})
-              .order('order_index');
-        }
-        return (data as List).cast<Map<String, dynamic>>();
-      } catch (e, st) {
-        print('[RES][foldersByCat] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <Map<String, dynamic>>[];
-        }
-      }
-    }
-    return await AcademyDbService.instance.loadResourceFoldersForCategory(category);
-  }
-
-  Future<void> saveResourceFile(Map<String, dynamic> row) async {
-    await AcademyDbService.instance.saveResourceFile(row);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final up = {
-          'id': row['id'],
-          'academy_id': academyId,
-          'folder_id': row['parent_id'],
-          'name': row['name'],
-          'url': row['url'],
-          'category': row['category'],
-          'order_index': row['order_index'],
-        };
-        await supa.from('resource_files').upsert(up, onConflict: 'id');
-      } catch (e, st) { print('[RES][file save] supabase upsert failed: $e\n$st'); }
-    }
-  }
-
-  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) async {
-    final copy = Map<String, dynamic>.from(row);
-    copy['category'] = category;
-    await saveResourceFile(copy);
-  }
-
-  Future<List<Map<String, dynamic>>> loadResourceFiles() async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final data = await supa.from('resource_files').select('id,parent_id:folder_id,name,url,category,order_index').eq('academy_id', academyId).order('order_index');
-        return (data as List).cast<Map<String, dynamic>>();
-      } catch (e, st) {
-        print('[RES][files] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <Map<String, dynamic>>[];
-        }
-      }
-    }
-    return await AcademyDbService.instance.loadResourceFiles();
-  }
-
-  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        List<dynamic> data;
-        if (category == 'textbook') {
-          data = await supa
-              .from('resource_files')
-              .select('id,parent_id:folder_id,name,url,category,order_index')
-              .eq('academy_id', academyId)
-              .or('category.is.null,category.eq.textbook')
-              .order('order_index');
-        } else {
-          data = await supa
-              .from('resource_files')
-              .select('id,parent_id:folder_id,name,url,category,order_index')
-              .match({'academy_id': academyId, 'category': category})
-              .order('order_index');
-        }
-        return (data as List).cast<Map<String, dynamic>>();
-      } catch (e, st) {
-        print('[RES][filesByCat] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <Map<String, dynamic>>[];
-        }
-      }
-    }
-    return await AcademyDbService.instance.loadResourceFilesForCategory(category);
-  }
-
-  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
-    await AcademyDbService.instance.saveResourceFileLinks(fileId, links);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        await supa.from('resource_file_links').delete().match({'academy_id': academyId, 'file_id': fileId});
-        if (links.isNotEmpty) {
-          final rows = links.entries
-              .where((e) => e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
-              .map((e) => {
-                    'academy_id': academyId,
-                    'file_id': fileId,
-                    'grade': e.key.trim(),
-                    'url': e.value.trim(),
-                  })
-              .toList();
-          if (rows.isNotEmpty) {
-            await supa.from('resource_file_links').insert(rows);
-          }
-        }
-      } catch (e, st) { print('[RES][links save] supabase write failed: $e\n$st'); }
-    }
-  }
-
-  Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final data = await supa
-            .from('resource_file_links')
-            .select('grade,url')
-            .match({'academy_id': academyId, 'file_id': fileId});
-        final Map<String, String> result = {};
-        for (final r in (data as List).cast<Map<String, dynamic>>()) {
-          final grade = (r['grade'] as String?)?.trim() ?? '';
-          final url = (r['url'] as String?)?.trim() ?? '';
-          if (grade.isNotEmpty && url.isNotEmpty) result[grade] = url;
-        }
-        return result;
-      } catch (e, st) {
-        print('[RES][links load] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <String, String>{};
-        }
-      }
-    }
-    return await AcademyDbService.instance.loadResourceFileLinks(fileId);
-  }
-
-  Future<void> deleteResourceFile(String fileId) async {
-    await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
-    await AcademyDbService.instance.deleteResourceFile(fileId);
-    if (TagPresetService.dualWrite) {
-      try {
-        final supa = Supabase.instance.client;
-        await supa.from('resource_files').delete().eq('id', fileId);
-      } catch (_) {}
-    }
-  }
+  Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) =>
+      ResourceService.instance.saveResourceFolders(rows);
+  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) =>
+      ResourceService.instance.saveResourceFoldersForCategory(category, rows);
+  Future<List<Map<String, dynamic>>> loadResourceFolders() =>
+      ResourceService.instance.loadResourceFolders();
+  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) =>
+      ResourceService.instance.loadResourceFoldersForCategory(category);
+  Future<void> saveResourceFile(Map<String, dynamic> row) =>
+      ResourceService.instance.saveResourceFile(row);
+  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) =>
+      ResourceService.instance.saveResourceFileWithCategory(row, category);
+  Future<List<Map<String, dynamic>>> loadResourceFiles() =>
+      ResourceService.instance.loadResourceFiles();
+  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) =>
+      ResourceService.instance.loadResourceFilesForCategory(category);
+  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) =>
+      ResourceService.instance.saveResourceFileLinks(fileId, links);
+  Future<Map<String, String>> loadResourceFileLinks(String fileId) =>
+      ResourceService.instance.loadResourceFileLinks(fileId);
+  Future<void> deleteResourceFile(String fileId) =>
+      ResourceService.instance.deleteResourceFile(fileId);
 
   // ======== RESOURCE FAVORITES ========
-  Future<Set<String>> loadResourceFavorites() async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final userId = Supabase.instance.client.auth.currentUser?.id;
-        if (userId != null) {
-          final data = await Supabase.instance.client
-              .from('resource_favorites')
-              .select('file_id')
-              .match({'academy_id': academyId, 'user_id': userId});
-          final set = (data as List).map((r) => (r['file_id'] as String)).toSet();
-          return set;
-        }
-      } catch (e, st) {
-        print('[RES][favorites load] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <String>{};
-        }
-      }
-    }
-    final dbClient = await AcademyDbService.instance.db;
-    await AcademyDbService.instance.ensureResourceTables();
-    final rows = await dbClient.query('resource_favorites');
-    return rows.map((r) => (r['file_id'] as String)).toSet();
-  }
-
-  Future<void> addResourceFavorite(String fileId) async {
-    final dbClient = await AcademyDbService.instance.db;
-    await AcademyDbService.instance.ensureResourceTables();
-    await dbClient.insert('resource_favorites', {'file_id': fileId}, conflictAlgorithm: ConflictAlgorithm.replace);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final userId = Supabase.instance.client.auth.currentUser?.id;
-        if (userId != null) {
-          await Supabase.instance.client.from('resource_favorites').upsert({
-            'academy_id': academyId,
-            'file_id': fileId,
-            'user_id': userId,
-          });
-        }
-      } catch (_) {}
-    }
-  }
-
-  Future<void> removeResourceFavorite(String fileId) async {
-    final dbClient = await AcademyDbService.instance.db;
-    await AcademyDbService.instance.ensureResourceTables();
-    await dbClient.delete('resource_favorites', where: 'file_id = ?', whereArgs: [fileId]);
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final userId = Supabase.instance.client.auth.currentUser?.id;
-        if (userId != null) {
-          await Supabase.instance.client.from('resource_favorites').delete().match({
-            'academy_id': academyId,
-            'file_id': fileId,
-            'user_id': userId,
-          });
-        }
-      } catch (_) {}
-    }
-  }
+  Future<Set<String>> loadResourceFavorites() =>
+      ResourceService.instance.loadResourceFavorites();
+  Future<void> addResourceFavorite(String fileId) =>
+      ResourceService.instance.addResourceFavorite(fileId);
+  Future<void> removeResourceFavorite(String fileId) =>
+      ResourceService.instance.removeResourceFavorite(fileId);
 
   // ======== RESOURCE FILE BOOKMARKS ========
-  Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final data = await supa
-            .from('resource_file_bookmarks')
-            .select('name,description,path,order_index')
-            .match({'academy_id': academyId, 'file_id': fileId})
-            .order('order_index');
-        return (data as List).cast<Map<String, dynamic>>();
-      } catch (e, st) {
-        print('[RES][bookmarks load] server load failed: $e\n$st');
-        if (RuntimeFlags.serverOnly) {
-          return <Map<String, dynamic>>[];
-        }
-      }
-    }
-    final dbClient = await AcademyDbService.instance.db;
-    await AcademyDbService.instance.ensureResourceTables();
-    return await dbClient.query('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId], orderBy: 'order_index ASC');
-  }
-
-  Future<void> saveResourceFileBookmarks(String fileId, List<Map<String, dynamic>> items) async {
-    final dbClient = await AcademyDbService.instance.db;
-    await AcademyDbService.instance.ensureResourceTables();
-    await dbClient.transaction((txn) async {
-      await txn.delete('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId]);
-      for (int i = 0; i < items.length; i++) {
-        final it = Map<String, dynamic>.from(items[i]);
-        it['file_id'] = fileId;
-        it['order_index'] = i;
-        await txn.insert('resource_file_bookmarks', it);
-      }
-    });
-    if (TagPresetService.dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        await supa.from('resource_file_bookmarks').delete().match({'academy_id': academyId, 'file_id': fileId});
-        if (items.isNotEmpty) {
-          final rows = <Map<String, dynamic>>[];
-          for (int i = 0; i < items.length; i++) {
-            final it = Map<String, dynamic>.from(items[i]);
-            rows.add({
-              'academy_id': academyId,
-              'file_id': fileId,
-              'name': it['name'],
-              'description': it['description'],
-              'path': it['path'],
-              'order_index': i,
-            });
-          }
-          if (rows.isNotEmpty) {
-            await supa.from('resource_file_bookmarks').insert(rows);
-          }
-        }
-      } catch (_) {}
-    }
-  }
+  Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) =>
+      ResourceService.instance.loadResourceFileBookmarks(fileId);
+  Future<void> saveResourceFileBookmarks(String fileId, List<Map<String, dynamic>> items) =>
+      ResourceService.instance.saveResourceFileBookmarks(fileId, items);
 
   // ======== RESOURCE GRADES (학년 목록/순서) ========
-  Future<List<Map<String, dynamic>>> getResourceGrades() async {
-    return await AcademyDbService.instance.getResourceGrades();
-  }
-
-  Future<void> saveResourceGrades(List<String> names) async {
-    await AcademyDbService.instance.saveResourceGrades(names);
-  }
+  Future<List<Map<String, dynamic>>> getResourceGrades() =>
+      ResourceService.instance.getResourceGrades();
+  Future<void> saveResourceGrades(List<String> names) =>
+      ResourceService.instance.saveResourceGrades(names);
 
   // ======== RESOURCE GRADE ICONS ========
-  Future<Map<String, int>> getResourceGradeIcons() async {
-    return await AcademyDbService.instance.getResourceGradeIcons();
-  }
-
-  Future<void> setResourceGradeIcon(String name, int icon) async {
-    await AcademyDbService.instance.setResourceGradeIcon(name, icon);
-  }
-
-  Future<void> deleteResourceGradeIcon(String name) async {
-    await AcademyDbService.instance.deleteResourceGradeIcon(name);
-  }
+  Future<Map<String, int>> getResourceGradeIcons() =>
+      ResourceService.instance.getResourceGradeIcons();
+  Future<void> setResourceGradeIcon(String name, int icon) =>
+      ResourceService.instance.setResourceGradeIcon(name, icon);
+  Future<void> deleteResourceGradeIcon(String name) =>
+      ResourceService.instance.deleteResourceGradeIcon(name);
 
   // ===== EXAM (persisted) =====
   Future<void> saveExamFor(String school, EducationLevel level, int grade, Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {

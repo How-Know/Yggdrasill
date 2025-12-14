@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
@@ -1385,6 +1385,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   startMinute: 0,
                                   duration: Duration.zero,
                                   createdAt: DateTime(0),
+                                  startDate: DateTime(0),
                                   setId: null,
                                   number: null,
                                 ),
@@ -1619,7 +1620,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     if (dayIndex != null && startTime != null) {
       final block = DataManager.instance.studentTimeBlocks.firstWhere(
         (b) => b.studentId == info.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
-        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
       );
       setId = block.id.isEmpty ? null : block.setId;
     }
@@ -1632,7 +1633,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             b.startHour == startTime.hour &&
             b.startMinute == startTime.minute &&
             b.sessionTypeId != null,
-        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), sessionTypeId: null),
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), sessionTypeId: null),
       );
       final sessionId = blockWithClass.sessionTypeId;
       if (sessionId != null && sessionId != '__default_class__') {
@@ -1652,7 +1653,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             if (dayIndex != null && startTime != null) {
               final block = DataManager.instance.studentTimeBlocks.firstWhere(
                 (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
-                orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+                orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
               );
               sSetId = block.id.isEmpty ? null : block.setId;
             }
@@ -1841,7 +1842,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         s.student.id: (() {
           final block = studentBlocks.firstWhere(
             (b) => b.studentId == s.student.id && b.dayIndex == selectedDayIdx && b.startHour == selectedStartTime?.hour && b.startMinute == selectedStartTime?.minute,
-            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
           );
           return block.id.isEmpty ? null : block.sessionTypeId;
         })()
@@ -2058,7 +2059,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             final studentId = students.first.student.id;
             final block = blocks.firstWhere(
               (b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == hour && b.startMinute == min,
-              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0)),
+              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
             );
             if (block.id.isNotEmpty && block.sessionTypeId != null && block.sessionTypeId!.isNotEmpty) {
               final classInfo = DataManager.instance.classes.firstWhere(
@@ -2284,6 +2285,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             startMinute: block.startMinute,
             duration: block.duration,
             createdAt: block.createdAt,
+            startDate: block.startDate,
+            endDate: block.endDate,
             setId: block.setId,
             number: block.number,
             sessionTypeId: null, // 명시적으로 null 설정
@@ -2352,6 +2355,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             startMinute: block.startMinute,
             duration: block.duration,
             createdAt: block.createdAt,
+            startDate: block.startDate,
+            endDate: block.endDate,
             setId: block.setId,
             number: block.number,
             sessionTypeId: null, // 명시적으로 null 설정
@@ -2527,6 +2532,9 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
   late final TextEditingController _capacityController;
   Color? _selectedColor;
   bool _unlimitedCapacity = false;
+  final FocusNode _nameFocusNode = FocusNode();
+  bool _blinkName = false;
+  bool _forceErrorName = false;
   // 없음 포함 총 24개 색상 (null + 기본 18 + 추가 5, 마지막은 짙은 네이비)
   final List<Color?> _colors = [
     null,
@@ -2546,6 +2554,13 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
     _capacityController = ImeAwareTextEditingController(text: widget.editTarget?.capacity?.toString() ?? '');
     _selectedColor = widget.editTarget?.color;
     _unlimitedCapacity = widget.editTarget?.capacity == null;
+    _nameController.addListener(() {
+      if (_nameController.text.isNotEmpty) {
+        setState(() {
+          _forceErrorName = false;
+        });
+      }
+    });
   }
 
   @override
@@ -2553,7 +2568,20 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
     _nameController.dispose();
     _descController.dispose();
     _capacityController.dispose();
+    _nameFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _triggerBlinkName() async {
+    setState(() {
+      _blinkName = true;
+      _forceErrorName = true;
+    });
+    _nameFocusNode.requestFocus();
+    await Future.delayed(const Duration(milliseconds: 160));
+    setState(() {
+      _blinkName = false;
+    });
   }
 
   void _handleSave() {
@@ -2561,6 +2589,7 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
     final desc = _descController.text.trim();
     final capacity = _unlimitedCapacity ? null : int.tryParse(_capacityController.text.trim());
     if (name.isEmpty) {
+      _triggerBlinkName();
       showAppSnackBar(context, '수업명을 입력하세요');
       return;
     }
@@ -2602,8 +2631,15 @@ class _ClassRegistrationDialogState extends State<_ClassRegistrationDialog> {
               _buildSectionHeader('기본 정보'),
               TextField(
                 controller: _nameController,
+                focusNode: _nameFocusNode,
                 style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15),
-                decoration: _inputDecoration(label: '수업명', required: true, hint: '예) 수학 A'),
+                decoration: _inputDecoration(
+                  label: '수업명',
+                  required: true,
+                  hint: '예) 수학 A',
+                  blink: _blinkName,
+                  forceError: _forceErrorName,
+                ),
               ),
               const SizedBox(height: 12),
               Row(
@@ -2740,10 +2776,21 @@ Widget _buildSectionHeader(String title) {
   );
 }
 
-InputDecoration _inputDecoration({required String label, String? hint, bool disabled = false, bool required = false}) {
+InputDecoration _inputDecoration({
+  required String label,
+  String? hint,
+  bool disabled = false,
+  bool required = false,
+  bool blink = false,
+  bool forceError = false,
+}) {
+  final baseColor = const Color(0xFF3A3F44).withOpacity(0.6);
+  final errorColor = const Color(0xFFF04747);
+  final isError = blink || forceError;
+  final borderColor = isError ? errorColor : baseColor;
   return InputDecoration(
     labelText: required ? '$label *' : label,
-    labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+    labelStyle: TextStyle(color: isError ? errorColor : const Color(0xFF9FB3B3), fontSize: 14),
     hintText: hint,
     hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
     filled: true,
@@ -2751,15 +2798,15 @@ InputDecoration _inputDecoration({required String label, String? hint, bool disa
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+      borderSide: BorderSide(color: borderColor),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: const BorderSide(color: Color(0xFF33A373)),
+      borderSide: BorderSide(color: isError ? errorColor : const Color(0xFF33A373)),
     ),
     disabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+      borderSide: BorderSide(color: borderColor),
     ),
   );
 }
@@ -2819,7 +2866,7 @@ class _ClassCardState extends State<_ClassCard> {
             b.dayIndex == oldDayIndex &&
             b.startHour == oldStartTime?.hour &&
             b.startMinute == oldStartTime?.minute,
-        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+        orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null),
       );
       setId = fallback.setId;
     }
@@ -2851,6 +2898,8 @@ class _ClassCardState extends State<_ClassCard> {
               startMinute: block.startMinute,
               duration: block.duration,
               createdAt: block.createdAt,
+              startDate: block.startDate,
+              endDate: block.endDate,
               setId: block.setId,
               number: block.number,
               sessionTypeId: null,
@@ -2887,7 +2936,7 @@ class _ClassCardState extends State<_ClassCard> {
                     b.dayIndex == oldDayIndex &&
                     b.startHour == oldStartTime?.hour &&
                     b.startMinute == oldStartTime?.minute,
-                orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null),
               );
               setId = fallback.setId;
             }
@@ -2913,7 +2962,7 @@ class _ClassCardState extends State<_ClassCard> {
                   b.dayIndex == oldDayIndex &&
                   b.startHour == oldStartTime?.hour &&
                   b.startMinute == oldStartTime?.minute,
-              orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), setId: null),
+            orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null),
             );
             setId = fallback.setId;
           }

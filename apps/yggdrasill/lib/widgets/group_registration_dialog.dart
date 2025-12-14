@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../models/group_info.dart';
 import 'package:uuid/uuid.dart';
 import 'app_snackbar.dart';
@@ -31,6 +31,9 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
   late int _duration;
   late Color _selectedColor;
   bool _unlimitedCapacity = false;
+  final FocusNode _nameFocusNode = FocusNode();
+  bool _blinkName = false;
+  bool _forceErrorName = false;
 
   // 없음 포함 총 24개 색상 (null + 기본 18 + 추가 5, 마지막은 짙은 네이비)
   final List<Color?> _colors = [
@@ -58,6 +61,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     _nameController.addListener(() {
       setState(() {
         _isNameValid = _nameController.text.isNotEmpty;
+        if (_isNameValid) _forceErrorName = false;
       });
     });
   }
@@ -85,7 +89,20 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     _nameController.dispose();
     _descriptionController.dispose();
     _capacityController.dispose();
+    _nameFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _triggerBlinkName() async {
+    setState(() {
+      _blinkName = true;
+      _forceErrorName = true;
+    });
+    _nameFocusNode.requestFocus();
+    await Future.delayed(const Duration(milliseconds: 160));
+    setState(() {
+      _blinkName = false;
+    });
   }
 
   void _handleSave() async {
@@ -97,6 +114,7 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     final color = _selectedColor;
 
     if (name.isEmpty) {
+      await _triggerBlinkName();
       showAppSnackBar(context, '그룹명을 입력해주세요', useRoot: true);
       return;
     }
@@ -191,20 +209,24 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
     }
   }
 
-  InputDecoration _buildInputDecoration(String label, {bool required = false, bool isValid = false, bool disabled = false, String? hint}) {
+  InputDecoration _buildInputDecoration(String label, {bool required = false, bool isValid = false, bool disabled = false, String? hint, bool blink = false, bool forceError = false}) {
+    final baseColor = const Color(0xFF3A3F44).withOpacity(0.6);
+    final errorColor = const Color(0xFFF04747);
+    final isError = blink || forceError;
+    final borderColor = isError ? errorColor : baseColor;
     return InputDecoration(
       labelText: required ? '$label *' : label,
-      labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+      labelStyle: TextStyle(color: isError ? errorColor : const Color(0xFF9FB3B3), fontSize: 14),
       hintText: hint,
       hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+        borderSide: BorderSide(color: borderColor),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFF33A373)),
+        borderSide: BorderSide(color: isError ? errorColor : const Color(0xFF33A373)),
       ),
       filled: true,
       fillColor: disabled ? const Color(0xFF15171C).withOpacity(0.6) : const Color(0xFF15171C),
@@ -271,8 +293,15 @@ class _GroupRegistrationDialogState extends State<GroupRegistrationDialog> {
                 _buildSectionHeader('기본 정보'),
                 TextField(
                   controller: _nameController,
+                  focusNode: _nameFocusNode,
                   style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15),
-                  decoration: _buildInputDecoration('그룹명', required: true, isValid: _isNameValid),
+                  decoration: _buildInputDecoration(
+                    '그룹명',
+                    required: true,
+                    isValid: _isNameValid,
+                    blink: _blinkName,
+                    forceError: _forceErrorName,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
