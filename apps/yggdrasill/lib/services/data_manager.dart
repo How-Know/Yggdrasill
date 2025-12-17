@@ -127,6 +127,119 @@ class DataManager {
   final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
   final ValueNotifier<int> studentBasicInfoRevision = ValueNotifier<int>(0);
 
+  // ===== SNAPSHOT HELPERS =====
+  Future<String> createLessonSnapshotForStudent({
+    required String studentId,
+    DateTime? effectiveStart,
+    DateTime? effectiveEnd,
+    String source = 'manual',
+    double? billedAmount,
+    double? unitPrice,
+    String? note,
+  }) async {
+    final now = DateTime.now();
+    final effStart = effectiveStart ?? _todayDateOnly();
+    final effEnd = effectiveEnd;
+    final dateOnlyStart = DateTime(effStart.year, effStart.month, effStart.day);
+    final dateOnlyEnd = effEnd != null ? DateTime(effEnd.year, effEnd.month, effEnd.day) : null;
+
+    // 활성 블록 중 대상 학생만 추출
+    final blocks = _activeBlocks(dateOnlyStart).where((b) => b.studentId == studentId).toList();
+    if (blocks.isEmpty) {
+      throw Exception('해당 학생의 활성 블록이 없습니다.');
+    }
+
+    // setId 기준 그룹
+    final Map<String?, List<StudentTimeBlock>> bySet = {};
+    for (final b in blocks) {
+      bySet.putIfAbsent(b.setId, () => []).add(b);
+    }
+
+    final dayPattern = blocks.map((b) => b.dayIndex).toSet().toList()..sort();
+    final weeklyCount = blocks.length;
+    final expectedSessions = weeklyCount * 4; // 간단 예상(4주치) - 추후 보완 가능
+    final setIds = bySet.keys.whereType<String>().toList();
+
+    // Supabase용/로컬용 헤더
+    final headerId = const Uuid().v4();
+    Map<String, dynamic> _headerRow(String academyId) => {
+      'id': headerId,
+      'academy_id': academyId,
+      'student_id': studentId,
+      'snapshot_at': now.toIso8601String(),
+      'effective_start': dateOnlyStart.toIso8601String().split('T').first,
+      'effective_end': dateOnlyEnd?.toIso8601String().split('T').first,
+      'weekly_count': weeklyCount,
+      'day_pattern': dayPattern,
+      'expected_sessions': expectedSessions,
+      'billed_amount': billedAmount,
+      'unit_price': unitPrice,
+      'note': note,
+      'set_ids': setIds,
+      'source': source,
+    }..removeWhere((k, v) => v == null);
+
+    List<Map<String, dynamic>> _blockRows(String academyId) =>
+      blocks.map((b) => <String, dynamic>{
+        'id': const Uuid().v4(),
+        'snapshot_id': headerId,
+        'day_index': b.dayIndex,
+        'start_hour': b.startHour,
+        'start_minute': b.startMinute,
+        'duration': b.duration.inMinutes,
+        'number': b.number,
+        'weekly_order': b.weeklyOrder,
+        'set_id': b.setId,
+        'session_type_id': b.sessionTypeId,
+      }..removeWhere((k, v) => v == null)).toList();
+
+    if (TagPresetService.preferSupabaseRead) {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final header = _headerRow(academyId);
+      final blocksRow = _blockRows(academyId);
+      final supa = Supabase.instance.client;
+      await supa.from('lesson_snapshot_headers').insert(header);
+      if (blocksRow.isNotEmpty) {
+        await supa.from('lesson_snapshot_blocks').insert(blocksRow);
+      }
+    } else {
+      final header = _headerRow('local');
+      final blocksRow = _blockRows('local');
+      await AcademyDbService.instance.addLessonSnapshot(header: header, blocks: blocksRow);
+    }
+    return headerId;
+  }
+
+  /// 스냅샷을 생성한 뒤 해당 스냅샷을 근거로 planned를 재생성
+  Future<void> regeneratePlannedWithSnapshot({
+    required String studentId,
+    required Set<String> setIds,
+    int days = 14,
+    double? billedAmount,
+    double? unitPrice,
+    String? note,
+  }) async {
+    final snapshotId = await createLessonSnapshotForStudent(
+      studentId: studentId,
+      effectiveStart: _todayDateOnly(),
+      effectiveEnd: null,
+      source: 'plan-regenerate',
+      billedAmount: billedAmount,
+      unitPrice: unitPrice,
+      note: note,
+    );
+    final activeBlocks = _activeBlocks(_todayDateOnly())
+        .where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId))
+        .toList();
+    await AttendanceService.instance.replanRemainingForStudentSets(
+      studentId: studentId,
+      setIds: setIds,
+      days: days,
+      snapshotId: snapshotId,
+      blocksOverride: activeBlocks,
+    );
+  }
+
   List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
   set studentTimeBlocks(List<StudentTimeBlock> value) {
     _studentTimeBlocks = value;
@@ -161,7 +274,8 @@ class DataManager {
   void _configureAttendanceService() {
     AttendanceService.instance.configure(
       AttendanceDependencies(
-        getStudentTimeBlocks: () => _activeBlocks(_todayDateOnly()),
+        // 전체 블록을 전달하고, attendance 측에서 날짜별로 start/end를 필터링한다.
+        getStudentTimeBlocks: () => _studentTimeBlocks,
         getPaymentRecords: () => _paymentRecords,
         getClasses: () => _classes,
         getSessionOverrides: () => _sessionOverrides,
@@ -3130,22 +3244,24 @@ DateTime? _lastClassesOrderSaveStart;
     required String studentId,
     required String setId,
     int days = 14,
-  }) =>
-      AttendanceService.instance.regeneratePlannedAttendanceForSet(
-        studentId: studentId,
-        setId: setId,
-        days: days,
-      );
+  }) async {
+    await regeneratePlannedWithSnapshot(
+      studentId: studentId,
+      setIds: {setId},
+      days: days,
+    );
+  }
   Future<void> _regeneratePlannedAttendanceForStudentSets({
     required String studentId,
     required Set<String> setIds,
     int days = 14,
-  }) =>
-      AttendanceService.instance.regeneratePlannedAttendanceForStudentSets(
-        studentId: studentId,
-        setIds: setIds,
-        days: days,
-      );
+  }) async {
+    await regeneratePlannedWithSnapshot(
+      studentId: studentId,
+      setIds: setIds,
+      days: days,
+    );
+  }
   Future<void> _regeneratePlannedAttendanceForStudent({
     required String studentId,
     int days = 14,
@@ -3154,10 +3270,30 @@ DateTime? _lastClassesOrderSaveStart;
         studentId: studentId,
         days: days,
       );
-  void _schedulePlannedRegen(String studentId, String setId, {bool immediate = false}) =>
-      AttendanceService.instance.schedulePlannedRegen(studentId, setId, immediate: immediate);
-  Future<void> flushPendingPlannedRegens() =>
-      AttendanceService.instance.flushPendingPlannedRegens();
+  void _schedulePlannedRegen(String studentId, String setId, {bool immediate = false}) {
+    _pendingRegenSetIdsByStudent.putIfAbsent(studentId, () => <String>{}).add(setId);
+    if (immediate) {
+      _flushPlannedRegen();
+      return;
+    }
+    _plannedRegenTimer ??= Timer(const Duration(milliseconds: 200), _flushPlannedRegen);
+  }
+
+  Future<void> flushPendingPlannedRegens() => _flushPlannedRegen();
+
+  Future<void> _flushPlannedRegen() async {
+    final pending = Map<String, Set<String>>.from(_pendingRegenSetIdsByStudent);
+    _pendingRegenSetIdsByStudent.clear();
+    _plannedRegenTimer?.cancel();
+    _plannedRegenTimer = null;
+    for (final entry in pending.entries) {
+      await regeneratePlannedWithSnapshot(
+        studentId: entry.key,
+        setIds: entry.value,
+        days: 14,
+      );
+    }
+  }
   Future<void> _regeneratePlannedAttendanceForOverride(SessionOverride ov) =>
       AttendanceService.instance.regeneratePlannedAttendanceForOverride(ov);
   Future<void> _removePlannedAttendanceForDate({

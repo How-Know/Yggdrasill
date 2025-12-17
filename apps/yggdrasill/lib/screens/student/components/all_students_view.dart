@@ -490,7 +490,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                 ),
                                                 const SizedBox(width: 12),
                                                 Text(
-                                                  '${studentsInGroup.length}/${groupInfo.capacity}명',
+                                                  groupInfo.capacity == null
+                                                      ? '${studentsInGroup.length}명'
+                                                      : '${studentsInGroup.length}/${groupInfo.capacity}명',
                                                   style: const TextStyle(
                                                     color: Colors.white70,
                                                     fontSize: 15,

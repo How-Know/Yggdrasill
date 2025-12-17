@@ -12,6 +12,8 @@ class AttendanceRecord {
   final String? notes; // 비고 (지각, 조퇴 등)
   final String? sessionTypeId; // 수업 타입
   final String? setId; // student_time_block set_id
+  final String? snapshotId; // lesson snapshot 근거
+  final String? batchSessionId; // 배치 세션 참조
   final int? cycle; // 등록 회차
   final int? sessionOrder; // 회차 내 순서
   final bool isPlanned; // 예정 여부
@@ -31,6 +33,8 @@ class AttendanceRecord {
     this.notes,
     this.sessionTypeId,
     this.setId,
+    this.snapshotId,
+    this.batchSessionId,
     this.cycle,
     this.sessionOrder,
     this.isPlanned = false,
@@ -50,6 +54,8 @@ class AttendanceRecord {
     String? notes,
     String? sessionTypeId,
     String? setId,
+    String? snapshotId,
+    String? batchSessionId,
     int? cycle,
     int? sessionOrder,
     bool isPlanned = false,
@@ -67,6 +73,8 @@ class AttendanceRecord {
       notes: notes,
       sessionTypeId: sessionTypeId,
       setId: setId,
+      snapshotId: snapshotId,
+      batchSessionId: batchSessionId,
       cycle: cycle,
       sessionOrder: sessionOrder,
       isPlanned: isPlanned,
@@ -100,6 +108,8 @@ class AttendanceRecord {
       notes: map['notes'] as String?,
       sessionTypeId: map['session_type_id'] as String?,
       setId: map['set_id'] as String?,
+      snapshotId: map['snapshot_id'] as String?,
+      batchSessionId: map['batch_session_id'] as String?,
       cycle: map['cycle'] is num ? (map['cycle'] as num).toInt() : null,
       sessionOrder: map['session_order'] is num ? (map['session_order'] as num).toInt() : null,
       isPlanned: map['is_planned'] == true || map['is_planned'] == 1,
@@ -122,6 +132,8 @@ class AttendanceRecord {
       'notes': notes,
       'session_type_id': sessionTypeId,
       'set_id': setId,
+      'snapshot_id': snapshotId,
+      'batch_session_id': batchSessionId,
       'cycle': cycle,
       'session_order': sessionOrder,
       'is_planned': isPlanned,
@@ -143,6 +155,8 @@ class AttendanceRecord {
     String? notes,
     String? sessionTypeId,
     String? setId,
+    String? snapshotId,
+    String? batchSessionId,
     int? cycle,
     int? sessionOrder,
     bool? isPlanned,
@@ -162,6 +176,8 @@ class AttendanceRecord {
       notes: notes ?? this.notes,
       sessionTypeId: sessionTypeId ?? this.sessionTypeId,
       setId: setId ?? this.setId,
+      snapshotId: snapshotId ?? this.snapshotId,
+      batchSessionId: batchSessionId ?? this.batchSessionId,
       cycle: cycle ?? this.cycle,
       sessionOrder: sessionOrder ?? this.sessionOrder,
       isPlanned: isPlanned ?? this.isPlanned,

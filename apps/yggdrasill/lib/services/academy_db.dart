@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 37,
+      version: 39,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -200,9 +200,77 @@ class AcademyDbService {
             arrival_time TEXT,
             departure_time TEXT,
             notes TEXT,
+            snapshot_id TEXT,
+            batch_session_id TEXT,
             created_at TEXT,
             updated_at TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE lesson_snapshot_headers (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            snapshot_at TEXT,
+            effective_start TEXT,
+            effective_end TEXT,
+            weekly_count INTEGER,
+            day_pattern TEXT,
+            expected_sessions INTEGER,
+            billed_amount REAL,
+            unit_price REAL,
+            note TEXT,
+            set_ids TEXT,
+            source TEXT,
+            version INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE lesson_snapshot_blocks (
+            id TEXT PRIMARY KEY,
+            snapshot_id TEXT,
+            day_index INTEGER,
+            start_hour INTEGER,
+            start_minute INTEGER,
+            duration INTEGER,
+            number INTEGER,
+            weekly_order INTEGER,
+            set_id TEXT,
+            session_type_id TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE lesson_batch_headers (
+            id TEXT PRIMARY KEY,
+            academy_id TEXT,
+            student_id TEXT NOT NULL,
+            snapshot_id TEXT,
+            total_sessions INTEGER NOT NULL,
+            expected_sessions INTEGER,
+            consumed_sessions INTEGER DEFAULT 0,
+            term_days INTEGER,
+            next_registration_date TEXT,
+            status TEXT,
+            note TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE lesson_batch_sessions (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            session_no INTEGER,
+            planned_at TEXT,
+            state TEXT,
+            replaced_with_session_id TEXT,
+            attendance_id TEXT,
+            snapshot_id TEXT,
+            created_at TEXT,
+            updated_at TEXT
           )
         ''');
         await db.execute('''
@@ -489,6 +557,97 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v36 teachers.display_order 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 38) {
+          try {
+            // lesson_snapshot_headers 테이블 생성
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS lesson_snapshot_headers (
+                id TEXT PRIMARY KEY,
+                student_id TEXT,
+                snapshot_at TEXT,
+                effective_start TEXT,
+                effective_end TEXT,
+                weekly_count INTEGER,
+                day_pattern TEXT,
+                expected_sessions INTEGER,
+                billed_amount REAL,
+                unit_price REAL,
+                note TEXT,
+                set_ids TEXT,
+                source TEXT,
+                version INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+            // lesson_snapshot_blocks 테이블 생성
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS lesson_snapshot_blocks (
+                id TEXT PRIMARY KEY,
+                snapshot_id TEXT,
+                day_index INTEGER,
+                start_hour INTEGER,
+                start_minute INTEGER,
+                duration INTEGER,
+                number INTEGER,
+                weekly_order INTEGER,
+                set_id TEXT,
+                session_type_id TEXT
+              )
+            ''');
+            // attendance_records.snapshot_id 컬럼 추가
+            final cols = await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final hasSnapshot = cols.any((c) => c['name'] == 'snapshot_id');
+            if (!hasSnapshot) {
+              await db.execute("ALTER TABLE attendance_records ADD COLUMN snapshot_id TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v38 lesson snapshots/snapshot_id 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 39) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS lesson_batch_headers (
+                id TEXT PRIMARY KEY,
+                academy_id TEXT,
+                student_id TEXT NOT NULL,
+                snapshot_id TEXT,
+                total_sessions INTEGER NOT NULL,
+                expected_sessions INTEGER,
+                consumed_sessions INTEGER DEFAULT 0,
+                term_days INTEGER,
+                next_registration_date TEXT,
+                status TEXT,
+                note TEXT,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS lesson_batch_sessions (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                session_no INTEGER,
+                planned_at TEXT,
+                state TEXT,
+                replaced_with_session_id TEXT,
+                attendance_id TEXT,
+                snapshot_id TEXT,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+            final cols = await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final hasBatchSession = cols.any((c) => c['name'] == 'batch_session_id');
+            if (!hasBatchSession) {
+              await db.execute("ALTER TABLE attendance_records ADD COLUMN batch_session_id TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v39 lesson batch/batch_session_id 추가 실패: $e');
           }
         }
         if (oldVersion < 37) {
@@ -2303,6 +2462,29 @@ class AcademyDbService {
     print('[DEBUG] 출석 기록 삭제: $id');
   }
 
+  // =================== LESSON SNAPSHOTS ===================
+
+  Future<void> addLessonSnapshot({
+    required Map<String, dynamic> header,
+    required List<Map<String, dynamic>> blocks,
+  }) async {
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      await txn.insert(
+        'lesson_snapshot_headers',
+        header,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      for (final b in blocks) {
+        await txn.insert(
+          'lesson_snapshot_blocks',
+          b,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
   Future<List<Map<String, dynamic>>> getAttendanceRecordsForStudent(String studentId) async {
     final dbClient = await db;
     final result = await dbClient.query(
@@ -2349,6 +2531,7 @@ class AcademyDbService {
             arrival_time TEXT,
             departure_time TEXT,
             notes TEXT,
+            snapshot_id TEXT,
             created_at TEXT,
             updated_at TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
@@ -2394,6 +2577,7 @@ class AcademyDbService {
               arrival_time TEXT,
               departure_time TEXT,
               notes TEXT,
+              snapshot_id TEXT,
               created_at TEXT,
               updated_at TEXT,
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE

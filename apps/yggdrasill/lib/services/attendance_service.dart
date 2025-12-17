@@ -8,6 +8,7 @@ import '../models/class_info.dart';
 import '../models/payment_record.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
+import 'package:uuid/uuid.dart';
 import '../models/academy_settings.dart';
 import 'runtime_flags.dart';
 import 'tenant_service.dart';
@@ -102,7 +103,7 @@ class AttendanceService {
       final rows = await supa
           .from('attendance_records')
           .select(
-              'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,created_at,updated_at,version')
+              'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('class_date_time', ascending: false);
       final list = rows as List<dynamic>;
@@ -129,6 +130,8 @@ class AttendanceService {
           notes: m['notes'] as String?,
           sessionTypeId: m['session_type_id'] as String?,
           setId: m['set_id'] as String?,
+          snapshotId: m['snapshot_id'] as String?,
+          batchSessionId: m['batch_session_id'] as String?,
           cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : null,
           sessionOrder:
               (m['session_order'] is num) ? (m['session_order'] as num).toInt() : null,
@@ -185,6 +188,8 @@ class AttendanceService {
                 notes: m['notes'] as String?,
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
+                snapshotId: m['snapshot_id'] as String?,
+                batchSessionId: m['batch_session_id'] as String?,
                 cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : null,
                 sessionOrder: (m['session_order'] is num)
                     ? (m['session_order'] as num).toInt()
@@ -237,6 +242,9 @@ class AttendanceService {
                 sessionTypeId:
                     m['session_type_id'] as String? ?? _attendanceRecords[idx].sessionTypeId,
                 setId: m['set_id'] as String? ?? _attendanceRecords[idx].setId,
+                snapshotId: m['snapshot_id'] as String? ?? _attendanceRecords[idx].snapshotId,
+                batchSessionId:
+                    m['batch_session_id'] as String? ?? _attendanceRecords[idx].batchSessionId,
                 cycle: (m['cycle'] is num)
                     ? (m['cycle'] as num).toInt()
                     : _attendanceRecords[idx].cycle,
@@ -294,6 +302,8 @@ class AttendanceService {
       'notes': record.notes,
       'session_type_id': record.sessionTypeId,
       'set_id': record.setId,
+      'snapshot_id': record.snapshotId,
+      'batch_session_id': record.batchSessionId,
       'cycle': record.cycle,
       'session_order': record.sessionOrder,
       'is_planned': record.isPlanned,
@@ -328,6 +338,8 @@ class AttendanceService {
         'notes': record.notes,
         'session_type_id': record.sessionTypeId,
         'set_id': record.setId,
+        'snapshot_id': record.snapshotId,
+        'batch_session_id': record.batchSessionId,
         'cycle': record.cycle,
         'session_order': record.sessionOrder,
         'is_planned': record.isPlanned,
@@ -392,6 +404,57 @@ class AttendanceService {
     return _attendanceRecords.where((r) => r.studentId == studentId).toList();
   }
 
+  Future<Map<String, String>> _createBatchSessionsForPlanned({
+    required String studentId,
+    required List<AttendanceRecord> plannedRecords,
+    String? snapshotId,
+  }) async {
+    if (plannedRecords.isEmpty) return {};
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    plannedRecords.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+    final headerId = const Uuid().v4();
+    final headerRow = {
+      'id': headerId,
+      'academy_id': academyId,
+      'student_id': studentId,
+      'snapshot_id': snapshotId,
+      'total_sessions': plannedRecords.length,
+      'expected_sessions': plannedRecords.length,
+      'consumed_sessions': 0,
+      'status': 'active',
+    };
+    final Map<String, String> mapping = {};
+    final List<Map<String, dynamic>> sessionRows = [];
+    for (var i = 0; i < plannedRecords.length; i++) {
+      final rec = plannedRecords[i];
+      final sessionId = const Uuid().v4();
+      mapping[rec.id ?? sessionId] = sessionId;
+      sessionRows.add({
+        'id': sessionId,
+        'batch_id': headerId,
+        'student_id': studentId,
+        'session_no': i + 1,
+        'planned_at': rec.classDateTime.toUtc().toIso8601String(),
+        'state': 'planned',
+        'snapshot_id': snapshotId,
+        'set_id': rec.setId,
+        'session_type_id': rec.sessionTypeId,
+      });
+    }
+    try {
+      final supa = Supabase.instance.client;
+      await supa.from('lesson_batch_headers').insert(headerRow);
+      if (sessionRows.isNotEmpty) {
+        await supa.from('lesson_batch_sessions').insert(sessionRows);
+      }
+    } catch (e, st) {
+      print('[BATCH][ERROR] 배치 세션 생성 실패(student=$studentId): $e\n$st');
+      return {};
+    }
+    return mapping;
+  }
+
   AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) {
     final matches = _attendanceRecords.where(
       (r) =>
@@ -412,6 +475,130 @@ class AttendanceService {
     return withAttendance;
   }
 
+  Future<void> _updateBatchSessionState({
+    required String batchSessionId,
+    required String state,
+    String? attendanceId,
+  }) async {
+    try {
+      final supa = Supabase.instance.client;
+      // 현재 세션과 배치 정보 조회
+      final session = await supa
+          .from('lesson_batch_sessions')
+          .select('id,batch_id,state,planned_at')
+          .eq('id', batchSessionId)
+          .maybeSingle();
+      if (session == null) return;
+      final String batchId = session['batch_id'] as String;
+      final String prevState = session['state'] as String? ?? 'planned';
+      final bool wasConsumed =
+          prevState == 'completed' || prevState == 'no_show' || prevState == 'replaced';
+
+      await supa.from('lesson_batch_sessions').update({
+        'state': state,
+        'attendance_id': attendanceId,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', batchSessionId);
+
+      final bool nowConsumed = state == 'completed' || state == 'no_show' || state == 'replaced';
+      if (!wasConsumed && nowConsumed) {
+        // 소비 카운트 및 next_registration_date 갱신
+        final header = await supa
+            .from('lesson_batch_headers')
+            .select('consumed_sessions,term_days')
+            .eq('id', batchId)
+            .maybeSingle();
+        if (header != null) {
+          final int consumed = (header['consumed_sessions'] as int?) ?? 0;
+          final int? termDays = (header['term_days'] as int?);
+          DateTime? nextReg;
+          if (termDays != null && termDays > 0) {
+            final maxPlanned = await supa
+                .from('lesson_batch_sessions')
+                .select('planned_at')
+                .eq('batch_id', batchId)
+                .order('planned_at', ascending: false)
+                .limit(1)
+                .maybeSingle();
+            if (maxPlanned != null && maxPlanned['planned_at'] != null) {
+              final String maxPlanStr = maxPlanned['planned_at'] as String;
+              final DateTime maxPlan =
+                  DateTime.tryParse(maxPlanStr)?.toUtc() ?? DateTime.now().toUtc();
+              nextReg = maxPlan.add(Duration(days: termDays));
+            }
+          }
+          await supa.from('lesson_batch_headers').update({
+            'consumed_sessions': consumed + 1,
+            if (nextReg != null) 'next_registration_date': nextReg.toIso8601String().split('T').first,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', batchId);
+        }
+      }
+    } catch (e, st) {
+      print('[BATCH][WARN] 세션 상태 업데이트 실패(id=$batchSessionId): $e\n$st');
+    }
+  }
+
+  Future<void> _cancelPlannedForSets({
+    required String studentId,
+    required Set<String> setIds,
+    DateTime? anchor,
+  }) async {
+    final DateTime dateAnchor = anchor ?? DateTime.now().toUtc();
+    final supa = Supabase.instance.client;
+    try {
+      await supa
+          .from('attendance_records')
+          .delete()
+          .eq('student_id', studentId)
+          .eq('is_planned', true)
+          .eq('is_present', false)
+          .isFilter('arrival_time', null)
+          .inFilter('set_id', setIds.toList())
+          .gte('class_date_time', dateAnchor.toIso8601String());
+    } catch (e, st) {
+      print('[PLAN][WARN] planned 삭제 실패(student=$studentId sets=$setIds): $e\n$st');
+    }
+    _attendanceRecords.removeWhere((r) {
+      if (!r.isPlanned) return false;
+      if (r.isPresent || r.arrivalTime != null) return false;
+      if (r.setId == null || !setIds.contains(r.setId)) return false;
+      return !r.classDateTime.toUtc().isBefore(dateAnchor);
+    });
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+
+    // 배치 세션: planned 상태인 동일 세트의 미래 세션 삭제
+    try {
+      await supa
+          .from('lesson_batch_sessions')
+          .delete()
+          .eq('student_id', studentId)
+          .eq('state', 'planned')
+          .inFilter('set_id', setIds.toList())
+          .gte('planned_at', dateAnchor.toIso8601String());
+    } catch (e, st) {
+      print('[BATCH][WARN] planned 세션 삭제 실패(student=$studentId sets=$setIds): $e\n$st');
+    }
+  }
+
+  Future<void> replanRemainingForStudentSets({
+    required String studentId,
+    required Set<String> setIds,
+    int days = 60,
+    String? snapshotId,
+    List<StudentTimeBlock>? blocksOverride,
+  }) async {
+    final DateTime anchor = DateTime.now().toUtc();
+    await _cancelPlannedForSets(studentId: studentId, setIds: setIds, anchor: anchor);
+    await regeneratePlannedAttendanceForStudentSets(
+      studentId: studentId,
+      setIds: setIds,
+      days: days,
+      snapshotId: snapshotId,
+      blocksOverride: blocksOverride,
+    );
+  }
+
   String _resolveClassName(String? sessionTypeId) {
     final classes = _d.getClasses();
     if (sessionTypeId == null) return '수업';
@@ -420,6 +607,15 @@ class AttendanceService {
       if (cls.name.trim().isNotEmpty) return cls.name;
     } catch (_) {}
     return '수업';
+  }
+
+  bool _isBlockActiveOnDate(StudentTimeBlock block, DateTime date) {
+    final target = DateTime(date.year, date.month, date.day);
+    final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final end = block.endDate != null
+        ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day)
+        : null;
+    return !start.isAfter(target) && (end == null || !end.isBefore(target));
   }
 
   Future<void> generatePlannedAttendanceForNextDays({int days = 14}) async {
@@ -494,6 +690,7 @@ class AttendanceService {
       // 하루/세트 단위로 묶어서 하나의 예정 레코드만 생성
       final Map<String, _PlannedDailyAgg> aggBySet = {};
       for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        if (!_isBlockActiveOnDate(b, date)) continue;
         final classStart = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
         final classEnd = classStart.add(b.duration);
         final setId = b.setId!;
@@ -611,6 +808,8 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
+          'snapshot_id': null,
+          'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
           'version': record.version,
@@ -624,6 +823,27 @@ class AttendanceService {
     }
 
     if (rows.isEmpty) return;
+
+    // 배치 세션 생성 후 매핑 적용
+    final Map<String, List<AttendanceRecord>> byStudent = {};
+    for (final r in localAdds) {
+      byStudent.putIfAbsent(r.studentId, () => []).add(r);
+    }
+    final Map<String, String> batchSessionByRecordId = {};
+    for (final entry in byStudent.entries) {
+      final map = await _createBatchSessionsForPlanned(
+        studentId: entry.key,
+        plannedRecords: entry.value,
+        snapshotId: null,
+      );
+      batchSessionByRecordId.addAll(map);
+    }
+    for (int i = 0; i < localAdds.length; i++) {
+      final rec = localAdds[i];
+      final updated = rec.copyWith(batchSessionId: batchSessionByRecordId[rec.id]);
+      localAdds[i] = updated;
+      rows[i]['batch_session_id'] = updated.batchSessionId;
+    }
 
     try {
       await supa.from('attendance_records').upsert(rows, onConflict: 'id');
@@ -750,7 +970,8 @@ class AttendanceService {
             b.studentId == studentId &&
             b.dayIndex == dayIdx &&
             b.startHour == classDateTime.hour &&
-            b.startMinute == classDateTime.minute,
+            b.startMinute == classDateTime.minute &&
+            _isBlockActiveOnDate(b, classDateTime),
       );
       return block.setId;
     } catch (_) {
@@ -777,6 +998,8 @@ class AttendanceService {
         studentId: entry.key,
         setIds: entry.value,
         days: 14,
+        snapshotId: null,
+        blocksOverride: null,
       );
     }
   }
@@ -789,20 +1012,31 @@ class AttendanceService {
     required String studentId,
     required Set<String> setIds,
     int days = 14,
+    String? snapshotId,
+    List<StudentTimeBlock>? blocksOverride,
   }) =>
       _regeneratePlannedAttendanceForStudentSets(
         studentId: studentId,
         setIds: setIds,
         days: days,
+        snapshotId: snapshotId,
+        blocksOverride: blocksOverride,
       );
 
   Future<void> regeneratePlannedAttendanceForStudent({
     required String studentId,
     int days = 14,
+    String? snapshotId,
+    List<StudentTimeBlock>? blocksOverride,
   }) async {
+    final today = DateTime.now();
     final allSetIds = _d
         .getStudentTimeBlocks()
-        .where((b) => b.studentId == studentId && b.setId != null && b.setId!.isNotEmpty)
+        .where((b) =>
+            b.studentId == studentId &&
+            b.setId != null &&
+            b.setId!.isNotEmpty &&
+            _isBlockActiveOnDate(b, today))
         .map((b) => b.setId!)
         .toSet();
     if (allSetIds.isEmpty) {
@@ -814,6 +1048,8 @@ class AttendanceService {
       studentId: studentId,
       setIds: allSetIds,
       days: days,
+      snapshotId: snapshotId,
+      blocksOverride: blocksOverride,
     );
   }
 
@@ -848,6 +1084,8 @@ class AttendanceService {
     required String studentId,
     required Set<String> setIds,
     int days = 14,
+    String? snapshotId,
+    List<StudentTimeBlock>? blocksOverride,
   }) async {
     if (setIds.isEmpty) return;
 
@@ -887,8 +1125,7 @@ class AttendanceService {
       print('[WARN] planned 삭제 실패(student=$studentId setIds=$setIds): $e');
     }
 
-    final blocks = _d
-        .getStudentTimeBlocks()
+    final blocks = (blocksOverride ?? _d.getStudentTimeBlocks())
         .where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId))
         .toList();
     if (blocks.isEmpty) {
@@ -915,6 +1152,7 @@ class AttendanceService {
       final date = anchor.add(Duration(days: i));
       final int dayIdx = date.weekday - 1;
       for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        if (!_isBlockActiveOnDate(b, date)) continue;
         final classDateTime =
             DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
         final classEndTime = classDateTime.add(b.duration);
@@ -1004,6 +1242,8 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
+          'snapshot_id': snapshotId,
+          'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
           'version': record.version,
@@ -1015,6 +1255,19 @@ class AttendanceService {
     if (rows.isEmpty) {
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
       return;
+    }
+
+    // 배치 세션 생성 후 매핑 적용 (학생 단위)
+    final Map<String, String> batchSessionByRecordId = await _createBatchSessionsForPlanned(
+      studentId: studentId,
+      plannedRecords: localAdds,
+      snapshotId: snapshotId,
+    );
+    for (int i = 0; i < localAdds.length; i++) {
+      final rec = localAdds[i];
+      final updated = rec.copyWith(batchSessionId: batchSessionByRecordId[rec.id]);
+      localAdds[i] = updated;
+      rows[i]['batch_session_id'] = updated.batchSessionId;
     }
 
     try {
@@ -1060,10 +1313,14 @@ class AttendanceService {
     int? cycle,
     int? sessionOrder,
     bool isPlanned = false,
+    String? snapshotId,
+    String? batchSessionId,
   }) async {
     final now = DateTime.now();
     final resolvedSetId = setId ?? _resolveSetId(studentId, classDateTime);
     final existing = getAttendanceRecord(studentId, classDateTime);
+    final resolvedSnapshotId = snapshotId ?? existing?.snapshotId;
+    final resolvedBatchSessionId = batchSessionId ?? existing?.batchSessionId;
     if (existing != null) {
       final updated = existing.copyWith(
         classEndTime: classEndTime,
@@ -1077,6 +1334,8 @@ class AttendanceService {
         cycle: cycle ?? existing.cycle,
         sessionOrder: sessionOrder ?? existing.sessionOrder,
         isPlanned: isPlanned || existing.isPlanned,
+        snapshotId: resolvedSnapshotId ?? existing.snapshotId,
+        batchSessionId: resolvedBatchSessionId ?? existing.batchSessionId,
         updatedAt: now,
       );
       try {
@@ -1111,6 +1370,27 @@ class AttendanceService {
         print('[WARN] planned→completed 링크 실패(업데이트): $e');
       }
     } else {
+      // 동일 시각 planned가 있으면 snapshot_id를 이어받는다.
+      final planned = _attendanceRecords.firstWhere(
+        (r) =>
+            r.studentId == studentId &&
+            r.classDateTime.year == classDateTime.year &&
+            r.classDateTime.month == classDateTime.month &&
+            r.classDateTime.day == classDateTime.day &&
+            r.classDateTime.hour == classDateTime.hour &&
+            r.classDateTime.minute == classDateTime.minute &&
+            r.isPlanned,
+        orElse: () => AttendanceRecord.create(
+          studentId: studentId,
+          classDateTime: classDateTime,
+          classEndTime: classEndTime,
+          className: className,
+          isPresent: false,
+        ),
+      );
+      final plannedSnapshotId = planned.snapshotId;
+      final plannedBatchSessionId = planned.batchSessionId;
+
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
         classDateTime: classDateTime,
@@ -1125,6 +1405,8 @@ class AttendanceService {
         cycle: cycle,
         sessionOrder: sessionOrder,
         isPlanned: isPlanned,
+        snapshotId: resolvedSnapshotId ?? plannedSnapshotId,
+        batchSessionId: resolvedBatchSessionId ?? plannedBatchSessionId,
       );
       await addAttendanceRecord(newRecord);
       try {
@@ -1135,9 +1417,27 @@ class AttendanceService {
             replacementAttendanceId: newRecord.id!,
           );
         }
+        if (newRecord.batchSessionId != null) {
+          await _updateBatchSessionState(
+            batchSessionId: newRecord.batchSessionId!,
+            state: isPresent ? 'completed' : 'planned',
+            attendanceId: newRecord.id,
+          );
+        }
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(추가): $e');
       }
+    }
+
+    // 기존 또는 새 레코드에 batch_session_id가 있다면 상태 갱신
+    final targetBatchSessionId =
+        resolvedBatchSessionId ?? existing?.batchSessionId;
+    if (targetBatchSessionId != null) {
+      await _updateBatchSessionState(
+        batchSessionId: targetBatchSessionId,
+        state: isPresent ? 'completed' : 'planned',
+        attendanceId: existing?.id,
+      );
     }
   }
 
@@ -1326,6 +1626,8 @@ class AttendanceService {
     required String studentId,
     required String setId,
     int days = 14,
+    String? snapshotId,
+    List<StudentTimeBlock>? blocksOverride,
   }) async {
     if (setId.isEmpty) return;
 
@@ -1363,8 +1665,7 @@ class AttendanceService {
       print('[WARN] planned 삭제 실패(student=$studentId set=$setId): $e');
     }
 
-    final blocks = _d
-        .getStudentTimeBlocks()
+    final blocks = (blocksOverride ?? _d.getStudentTimeBlocks())
         .where((b) => b.studentId == studentId && b.setId == setId)
         .toList();
     if (blocks.isEmpty) {
@@ -1396,6 +1697,7 @@ class AttendanceService {
 
       final Map<String, _PlannedDailyAgg> aggBySet = {};
       for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        if (!_isBlockActiveOnDate(b, date)) continue;
         final classStart = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
         final classEnd = classStart.add(b.duration);
 
@@ -1514,6 +1816,7 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
+          'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
           'version': record.version,
@@ -1529,6 +1832,19 @@ class AttendanceService {
     if (rows.isEmpty) {
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
       return;
+    }
+
+    // 배치 세션 생성 후 매핑 적용 (세트 단위지만 학생 단일)
+    final Map<String, String> batchSessionByRecordId = await _createBatchSessionsForPlanned(
+      studentId: studentId,
+      plannedRecords: localAdds,
+      snapshotId: null,
+    );
+    for (int i = 0; i < localAdds.length; i++) {
+      final rec = localAdds[i];
+      final updated = rec.copyWith(batchSessionId: batchSessionByRecordId[rec.id]);
+      localAdds[i] = updated;
+      rows[i]['batch_session_id'] = updated.batchSessionId;
     }
 
     try {
