@@ -119,11 +119,16 @@ class StudentTimeBlockFactory {
     required int dayIndex,
     required List<DateTime> startTimes,
     required Duration duration,
+    DateTime? startDate,
+    DateTime? endDate,
   }) {
     final uuid = Uuid();
     final setId = uuid.v4();
     final now = DateTime.now();
-    final startDate = DateTime(now.year, now.month, now.day);
+    final sd = startDate != null
+        ? DateTime(startDate.year, startDate.month, startDate.day)
+        : DateTime(now.year, now.month, now.day);
+    final ed = endDate != null ? DateTime(endDate.year, endDate.month, endDate.day) : null;
     // 시간순 정렬
     final sortedTimes = List<DateTime>.from(startTimes)..sort();
     return List.generate(sortedTimes.length, (i) {
@@ -135,7 +140,8 @@ class StudentTimeBlockFactory {
         startMinute: sortedTimes[i].minute,
         duration: duration,
         createdAt: now,
-        startDate: startDate,
+        startDate: sd,
+        endDate: ed,
         setId: setId,
         number: i + 1,
       );

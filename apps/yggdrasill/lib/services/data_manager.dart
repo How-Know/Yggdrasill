@@ -2074,7 +2074,7 @@ class DataManager {
     }
   }
 
-  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false}) async {
+  Future<void> bulkDeleteStudentTimeBlocks(List<String> blockIds, {bool immediate = false, bool skipPlannedRegen = false}) async {
     final removedBlocks = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
     final affectedStudents = removedBlocks.map((b) => b.studentId).toSet();
     final today = _todayDateOnly();
@@ -2121,15 +2121,17 @@ class DataManager {
       });
     }
 
-    // 예정 출석 정리: 삭제된 블록들의 setId 기준으로 미래 planned 제거/재생성(없으므로 제거만)
-    final setIds = removedBlocks.map((b) => b.setId).whereType<String>().toSet();
-    for (final sid in affectedStudents) {
-      for (final setId in setIds) {
-        await _regeneratePlannedAttendanceForSet(
-          studentId: sid,
-          setId: setId,
-          days: 14,
-        );
+    if (!skipPlannedRegen) {
+      // 예정 출석 정리: 삭제된 블록들의 setId 기준으로 미래 planned 제거/재생성(없으므로 제거만)
+      final setIds = removedBlocks.map((b) => b.setId).whereType<String>().toSet();
+      for (final sid in affectedStudents) {
+        for (final setId in setIds) {
+          await _regeneratePlannedAttendanceForSet(
+            studentId: sid,
+            setId: setId,
+            days: 14,
+          );
+        }
       }
     }
   }
@@ -2635,12 +2637,19 @@ class DataManager {
   }
 
   /// 학생별 수업블록(setId 기준) 개수 반환 (수업명 무관, setId 고유 개수)
-  int getStudentLessonSetCount(String studentId) {
-    // sessionTypeId가 null(기본수업)이어도 setId가 있으면 카운트 대상
-    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null && b.setId!.isNotEmpty).toList();
+  int getStudentLessonSetCount(String studentId, {DateTime? refDate}) {
+    // 기준 날짜(refDate, 기본 오늘) 기준 활성 블록만 포함하여 setId 개수 계산
+    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
+    final blocks = _studentTimeBlocks.where((b) {
+      if (b.studentId != studentId) return false;
+      if (b.setId == null || b.setId!.isEmpty) return false;
+      final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      return !start.isAfter(date) && (end == null || !end.isBefore(date));
+    }).toList();
     final setIds = blocks.map((b) => b.setId!).toSet();
-    final detail = blocks.take(20).map((b) => '${b.sessionTypeId}|set:${b.setId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}').toList();
-    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId) = ${setIds.length}, blocks=${blocks.length}, setIds=$setIds, detail=$detail');
+    final detail = blocks.take(20).map((b) => '${b.sessionTypeId}|set:${b.setId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}').toList();
+    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId, date=$date) = ${setIds.length}, blocks=${blocks.length}, setIds=$setIds, detail=$detail');
     return setIds.length;
   }
 
@@ -2656,28 +2665,34 @@ class DataManager {
   }
 
   /// 학생별 고유 세트 개수 반환 (setId 고유 개수, sessionTypeId 여부 무관)
-  int getStudentSetCount(String studentId) {
-    final blocks = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
-    final assigned = blocks.where((b) => b.sessionTypeId != null).toList();
-    final setIds = blocks
-        .where((b) => b.setId != null && b.setId!.isNotEmpty)
-        .map((b) => b.setId!)
-        .toSet();
+  /// refDate 기준 활성 블록만 카운트한다.
+  int getStudentSetCount(String studentId, {DateTime? refDate}) {
+    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
+    final blocks = _studentTimeBlocks.where((b) {
+      if (b.studentId != studentId) return false;
+      if (b.setId == null || b.setId!.isEmpty) return false;
+      final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      return !start.isAfter(date) && (end == null || !end.isBefore(date));
+    }).toList();
+    final setIds = blocks.map((b) => b.setId!).toSet();
+    final detail = blocks.take(50).map((b) => '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}').toList();
     final cnt = setIds.length;
-    print('[SYNC][setCount] studentId=$studentId blocks=${blocks.length}, assigned=${assigned.length}, setIds=$setIds setCount=$cnt');
+    print('[SYNC][setCount] studentId=$studentId date=$date blocks=${blocks.length} setIds=$setIds setCount=$cnt detail=$detail');
     return cnt;
   }
 
   /// weekly_class_count를 set 개수와 조건부 동기화
   /// - onAdd: setCount가 weekly보다 크면 올려준다(최대값 유지), 작으면 그대로 둠
   /// - onRemove: setCount가 weekly보다 작으면 내려준다(최소값 유지), 크거나 같으면 그대로 둠
-  Future<void> syncWeeklyClassCount(String studentId, {required bool onAdd}) async {
+  Future<void> syncWeeklyClassCount(String studentId, {required bool onAdd, DateTime? refDate}) async {
+    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
     final blocksForStudent = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
     final detail = blocksForStudent
         .take(50)
         .map((b) => '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}')
         .toList();
-    final actual = getStudentSetCount(studentId);
+    final actual = getStudentSetCount(studentId, refDate: date);
     final current = getStudentWeeklyClassCount(studentId);
     int next = current;
     if (onAdd) {
@@ -2685,7 +2700,7 @@ class DataManager {
     } else {
       if (actual < current) next = actual;
     }
-    print('[SYNC][weekly] onAdd=$onAdd studentId=$studentId actual=$actual current=$current next=$next blocks=${blocksForStudent.length} detail=$detail');
+    print('[SYNC][weekly] date=$date onAdd=$onAdd studentId=$studentId actual=$actual current=$current next=$next blocks=${blocksForStudent.length} detail=$detail');
     if (next != current) {
       await setStudentWeeklyClassCount(studentId, next);
     }

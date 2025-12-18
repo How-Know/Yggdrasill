@@ -66,6 +66,12 @@ class TimetableScreen extends StatefulWidget {
   State<TimetableScreen> createState() => _TimetableScreenState();
 }
 
+class _BlockRange {
+  final DateTime start;
+  final DateTime? end;
+  _BlockRange({required this.start, this.end});
+}
+
 class _TimetableScreenState extends State<TimetableScreen> {
   DateTime _selectedDate = DateTime.now();
   List<GroupInfo> _groups = [];
@@ -118,6 +124,285 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+
+  Future<_BlockRange?> _pickBlockEffectiveRange(BuildContext context) async {
+    final today = DateTime.now();
+    String _pad(int v) => v.toString().padLeft(2, '0');
+    DateTime startDate = DateTime(today.year, today.month, today.day);
+    DateTime endDate = startDate;
+    bool hasEnd = false;
+    final green = const Color(0xFF66BB6A);
+
+    final startYearC = TextEditingController(text: startDate.year.toString());
+    final startMonthC = TextEditingController(text: _pad(startDate.month));
+    final startDayC = TextEditingController(text: _pad(startDate.day));
+    final endYearC = TextEditingController(text: endDate.year.toString());
+    final endMonthC = TextEditingController(text: _pad(endDate.month));
+    final endDayC = TextEditingController(text: _pad(endDate.day));
+    final startYearFocus = FocusNode();
+    final startMonthFocus = FocusNode();
+    final startDayFocus = FocusNode();
+    final endYearFocus = FocusNode();
+    final endMonthFocus = FocusNode();
+    final endDayFocus = FocusNode();
+
+    void _syncControllers() {
+      startYearC.text = startDate.year.toString();
+      startMonthC.text = _pad(startDate.month);
+      startDayC.text = _pad(startDate.day);
+      endYearC.text = endDate.year.toString();
+      endMonthC.text = _pad(endDate.month);
+      endDayC.text = _pad(endDate.day);
+    }
+
+    void _applyFromPicker(bool isStart, DateTime d, void Function(void Function()) setState) {
+      setState(() {
+        if (isStart) {
+          startDate = DateTime(d.year, d.month, d.day);
+          if (!hasEnd) endDate = startDate;
+        } else {
+          endDate = DateTime(d.year, d.month, d.day);
+        }
+        _syncControllers();
+      });
+    }
+
+    Future<void> _pickDate(bool isStart, void Function(void Function()) setState) async {
+      final initial = isStart ? startDate : endDate;
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: initial,
+        firstDate: DateTime(2000),
+        lastDate: DateTime(2100),
+        builder: (ctx, child) {
+          return Theme(
+            data: Theme.of(ctx).copyWith(
+              colorScheme: ColorScheme.dark(
+                primary: green,
+                onPrimary: Colors.white,
+                surface: Color(0xFF0B1112),
+                onSurface: Colors.white,
+              ),
+              dialogBackgroundColor: const Color(0xFF0B1112),
+            ),
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
+      );
+      if (picked != null) {
+        _applyFromPicker(isStart, picked, setState);
+      }
+    }
+
+    InputDecoration _decoration(String label, {String? suffix}) => InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 12),
+          suffixText: suffix,
+          suffixStyle: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 12),
+          enabledBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+            borderSide: BorderSide(color: Color(0xFF223131)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: const BorderRadius.all(Radius.circular(8)),
+            borderSide: BorderSide(color: green),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        );
+
+    Widget _dateFields({
+      required bool isStart,
+      required void Function(void Function()) setState,
+    }) {
+      final date = isStart ? startDate : endDate;
+      final yController = isStart ? startYearC : endYearC;
+      final mController = isStart ? startMonthC : endMonthC;
+      final dController = isStart ? startDayC : endDayC;
+      final yFocus = isStart ? startYearFocus : endYearFocus;
+      final mFocus = isStart ? startMonthFocus : endMonthFocus;
+      final dFocus = isStart ? startDayFocus : endDayFocus;
+      return Row(
+        children: [
+          Expanded(
+            child: TextField(
+              keyboardType: TextInputType.number,
+              focusNode: yFocus,
+              controller: yController,
+              style: const TextStyle(color: Color(0xFFEAF2F2)),
+              decoration: _decoration(isStart ? '시작 년도' : '종료 년도', suffix: '년'),
+              onChanged: (v) {
+                final year = int.tryParse(v);
+                if (year != null && year > 0) {
+                  if (isStart) {
+                    startDate = DateTime(year, startDate.month, startDate.day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(year, endDate.month, endDate.day);
+                  }
+                }
+              },
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 70,
+            child: TextField(
+              keyboardType: TextInputType.number,
+              focusNode: mFocus,
+              controller: mController,
+              style: const TextStyle(color: Color(0xFFEAF2F2)),
+              decoration: _decoration('월', suffix: '월'),
+              onChanged: (v) {
+                final month = int.tryParse(v);
+                if (month != null && month >= 1 && month <= 12) {
+                  if (isStart) {
+                    startDate = DateTime(startDate.year, month, startDate.day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(endDate.year, month, endDate.day);
+                  }
+                }
+              },
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 70,
+            child: TextField(
+              keyboardType: TextInputType.number,
+              focusNode: dFocus,
+              controller: dController,
+              style: const TextStyle(color: Color(0xFFEAF2F2)),
+              decoration: _decoration('일', suffix: '일'),
+              onChanged: (v) {
+                final day = int.tryParse(v);
+                if (day != null && day >= 1 && day <= 31) {
+                  if (isStart) {
+                    startDate = DateTime(startDate.year, startDate.month, day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(endDate.year, endDate.month, day);
+                  }
+                }
+              },
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: () => _pickDate(isStart, setState),
+            icon: const Icon(Icons.calendar_today, color: Color(0xFFEAF2F2), size: 18),
+            splashRadius: 18,
+          ),
+        ],
+      );
+    }
+
+    return showDialog<_BlockRange>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF223131)),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+              contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              title: const Text('효력 기간 설정', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 18, fontWeight: FontWeight.bold)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Divider(color: Color(0xFF223131), height: 1),
+                  const SizedBox(height: 12),
+                  Theme(
+                    data: Theme.of(context).copyWith(
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.transparent,
+                      hoverColor: Colors.transparent,
+                      focusColor: Colors.transparent,
+                    ),
+                    child: Column(
+                      children: [
+                        RadioListTile<bool>(
+                          value: false,
+                          groupValue: hasEnd,
+                          onChanged: (v) => setState(() {
+                            hasEnd = v ?? false;
+                            if (!hasEnd) endDate = startDate;
+                            _syncControllers();
+                          }),
+                          title: const Text('종료기간 없음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          activeColor: green,
+                          enableFeedback: false,
+                        ),
+                        RadioListTile<bool>(
+                          value: true,
+                          groupValue: hasEnd,
+                          onChanged: (v) => setState(() {
+                            hasEnd = v ?? true;
+                            _syncControllers();
+                          }),
+                          title: const Text('종료기간 있음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          activeColor: green,
+                          enableFeedback: false,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('시작일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  _dateFields(isStart: true, setState: setState),
+                  if (hasEnd) ...[
+                    const SizedBox(height: 16),
+                    const Text('종료일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 10),
+                    _dateFields(isStart: false, setState: setState),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('취소', style: TextStyle(color: Color(0xFFEAF2F2))),
+                ),
+                TextButton(
+                  onPressed: () {
+                    if (!hasEnd) {
+                      Navigator.of(context).pop(_BlockRange(start: startDate, end: null));
+                      return;
+                    }
+                    if (endDate.isBefore(startDate)) {
+                      showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.', useRoot: true);
+                      return;
+                    }
+                    Navigator.of(context).pop(_BlockRange(start: startDate, end: endDate));
+                  },
+                  child: Text('확인', style: TextStyle(color: green, fontWeight: FontWeight.w600)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  bool _isBlockActiveOnDate(StudentTimeBlock block, DateTime date) {
+    final target = DateTime(date.year, date.month, date.day);
+    final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final end = block.endDate != null
+        ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day)
+        : null;
+    return !start.isAfter(target) && (end == null || !end.isBefore(target));
+  }
   String? _selectedClassId; // 학생 검색 다이얼로그에서 선택된 수업(session_type_id)
   String _headerSearchQuery = '';
 
@@ -426,6 +711,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           }
           print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
         });
+        // ESC 등 키 입력 포커스를 다시 메인 타임테이블로 돌려 등록 취소/종료가 동작하도록 한다.
+        _focusNode.requestFocus();
         print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       } else {
         setState(() {
@@ -1401,8 +1688,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         // 수업 블록과의 중복 체크
                         bool hasConflict = false;
                         for (final startTime in actualStartTimes) {
+                          final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
                           final conflictingBlocks = DataManager.instance.studentTimeBlocks.where((b) {
                             if (b.studentId != studentId || b.dayIndex != dayIdx) return false;
+                            if (!_isBlockActiveOnDate(b, dateOnly)) return false;
                             final blockStartMinutes = b.startHour * 60 + b.startMinute;
                             final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
                             final checkStartMinutes = startTime.hour * 60 + startTime.minute;
@@ -1507,16 +1796,28 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           List<DateTime> actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
                           
                           print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                          // 효력 기간 입력
+                          final range = await _pickBlockEffectiveRange(context);
+                          if (range == null) {
+                            showAppSnackBar(context, '등록이 취소되었습니다.', useRoot: true);
+                            return;
+                          }
                           // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
                           final allBlocks = DataManager.instance.studentTimeBlocks;
-                          bool hasConflict = false;
-                          for (final startTime in actualStartTimes) {
-                            final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
-                            if (conflictBlock != null) {
-                              hasConflict = true;
-                              break;
-                            }
-                          }
+                  bool hasConflict = false;
+                  for (final startTime in actualStartTimes) {
+                    final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
+                    final conflictBlock = allBlocks.firstWhereOrNull((b) =>
+                      b.studentId == student.id &&
+                      b.dayIndex == dayIdx &&
+                      b.startHour == startTime.hour &&
+                      b.startMinute == startTime.minute &&
+                      _isBlockActiveOnDate(b, dateOnly));
+                    if (conflictBlock != null) {
+                      hasConflict = true;
+                      break;
+                    }
+                  }
                           print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
                           if (hasConflict) {
                             showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
@@ -1528,6 +1829,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             dayIndex: dayIdx,
                             startTimes: actualStartTimes,
                             duration: Duration(minutes: blockMinutes),
+                            startDate: range.start,
+                            endDate: range.end,
                           );
                           blocks = _applySelectedClassId(blocks);
                           print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
@@ -1785,7 +2088,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   final allBlocks = DataManager.instance.studentTimeBlocks;
                   bool hasConflict = false;
                   for (final startTime in actualStartTimes) {
-                    final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == student.id && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+                    final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
+                    final conflictBlock = allBlocks.firstWhereOrNull((b) =>
+                      b.studentId == student.id &&
+                      b.dayIndex == dayIdx &&
+                      b.startHour == startTime.hour &&
+                      b.startMinute == startTime.minute &&
+                      _isBlockActiveOnDate(b, dateOnly));
                     if (conflictBlock != null) {
                       hasConflict = true;
                       print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복 블록 발견: $conflictBlock');
@@ -1896,11 +2205,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
           return;
         }
         // 2. 시간블록 추가 (팩토리 사용, 단일 등록도 일관성 있게)
+        final range = await _pickBlockEffectiveRange(context);
+        if (range == null) {
+          showAppSnackBar(context, '등록이 취소되었습니다.', useRoot: true);
+          return;
+        }
         var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
           studentIds: [studentWithInfo.student.id],
           dayIndex: dayIdx,
           startTimes: [startTime],
           duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
+          startDate: range.start,
+          endDate: range.end,
         );
         blocks = _applySelectedClassId(blocks);
         await DataManager.instance.addStudentTimeBlock(blocks.first);

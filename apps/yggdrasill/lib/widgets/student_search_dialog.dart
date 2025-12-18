@@ -59,10 +59,26 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     setState(() {});
   }
 
-  /// 실제 수업 개수(수업별 고유 setId) + setId 없는 수업은 1로 카운트
-  int _getActualClassCount(String studentId) {
+  DateTime _today() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  bool _isActive(DateTime start, DateTime? end, DateTime ref) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = end != null ? DateTime(end.year, end.month, end.day) : null;
+    return !s.isAfter(ref) && (e == null || !e.isBefore(ref));
+  }
+
+  /// 실제 수업 개수(수업별 고유 setId) + setId 없는 수업은 1로 카운트 (refDate 기준 활성 블록만)
+  int _getActualClassCount(String studentId, {DateTime? refDate}) {
     final dm = DataManager.instance;
-    final allBlocks = dm.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+    final date = refDate ?? _today();
+    final allBlocks = dm.studentTimeBlocks
+        .where((b) =>
+            b.studentId == studentId &&
+            _isActive(b.startDate, b.endDate, date))
+        .toList();
     final Map<String, Set<String?>> setsByClass = {};
     for (final b in allBlocks) {
       final cls = b.sessionTypeId ?? 'default_class';
@@ -130,10 +146,13 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   /// 수업 정보를 색상이 적용된 위젯으로 반환
   Widget _buildClassInfoWidget(String studentId, {required int setCount, required int weeklyCount}) {
+    final refDate = _today();
     final allTimeBlocks = DataManager.instance.studentTimeBlocks
-        .where((block) => block.studentId == studentId)
+        .where((block) =>
+            block.studentId == studentId &&
+            _isActive(block.startDate, block.endDate, refDate))
         .toList();
-    print('[DEBUG] 학생 $studentId의 전체 시간블록: ${allTimeBlocks.length}개');
+    print('[DEBUG] 학생 $studentId의 활성 시간블록(${refDate.toIso8601String().split("T").first} 기준): ${allTimeBlocks.length}개');
     
     if (allTimeBlocks.isEmpty) {
       return const SizedBox.shrink();

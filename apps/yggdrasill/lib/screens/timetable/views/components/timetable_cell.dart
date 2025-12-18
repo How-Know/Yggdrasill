@@ -23,6 +23,204 @@ import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
 import '../../../../models/session_override.dart';
 
+class _BlockRange {
+  final DateTime start;
+  final DateTime? end;
+  const _BlockRange({required this.start, required this.end});
+}
+
+Future<_BlockRange?> _pickEffectiveRange(BuildContext context, DateTime defaultDate) async {
+  DateTime startDate = DateTime(defaultDate.year, defaultDate.month, defaultDate.day);
+  DateTime endDate = startDate;
+  bool hasEnd = false;
+  String _pad(int v) => v.toString().padLeft(2, '0');
+  final startYearC = TextEditingController(text: startDate.year.toString());
+  final startMonthC = TextEditingController(text: _pad(startDate.month));
+  final startDayC = TextEditingController(text: _pad(startDate.day));
+  final endYearC = TextEditingController(text: endDate.year.toString());
+  final endMonthC = TextEditingController(text: _pad(endDate.month));
+  final endDayC = TextEditingController(text: _pad(endDate.day));
+
+  Future<void> pickDate(bool isStart, StateSetter setState) async {
+    final initial = isStart ? startDate : endDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      builder: (ctx, child) => Theme(data: Theme.of(ctx).copyWith(useMaterial3: true), child: child ?? const SizedBox.shrink()),
+    );
+    if (picked != null) {
+      setState(() {
+        if (isStart) {
+          startDate = DateTime(picked.year, picked.month, picked.day);
+          if (!hasEnd) endDate = startDate;
+        } else {
+          endDate = DateTime(picked.year, picked.month, picked.day);
+        }
+        startYearC.text = startDate.year.toString();
+        startMonthC.text = _pad(startDate.month);
+        startDayC.text = _pad(startDate.day);
+        endYearC.text = endDate.year.toString();
+        endMonthC.text = _pad(endDate.month);
+        endDayC.text = _pad(endDate.day);
+      });
+    }
+  }
+
+  Widget dateFields({required bool isStart, required StateSetter setState}) {
+    final yC = isStart ? startYearC : endYearC;
+    final mC = isStart ? startMonthC : endMonthC;
+    final dC = isStart ? startDayC : endDayC;
+    return Row(
+      children: [
+        SizedBox(
+          width: 72,
+          child: TextField(
+            controller: yC,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(labelText: '년', labelStyle: TextStyle(color: Colors.white54)),
+            onChanged: (v) {
+              final year = int.tryParse(v);
+              if (year != null && year > 0) {
+                setState(() {
+                  if (isStart) {
+                    startDate = DateTime(year, startDate.month, startDate.day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(year, endDate.month, endDate.day);
+                  }
+                });
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 56,
+          child: TextField(
+            controller: mC,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(labelText: '월', labelStyle: TextStyle(color: Colors.white54)),
+            onChanged: (v) {
+              final month = int.tryParse(v);
+              if (month != null && month >= 1 && month <= 12) {
+                setState(() {
+                  if (isStart) {
+                    startDate = DateTime(startDate.year, month, startDate.day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(endDate.year, month, endDate.day);
+                  }
+                });
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 56,
+          child: TextField(
+            controller: dC,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(labelText: '일', labelStyle: TextStyle(color: Colors.white54)),
+            onChanged: (v) {
+              final day = int.tryParse(v);
+              if (day != null && day >= 1 && day <= 31) {
+                setState(() {
+                  if (isStart) {
+                    startDate = DateTime(startDate.year, startDate.month, day);
+                    if (!hasEnd) endDate = startDate;
+                  } else {
+                    endDate = DateTime(endDate.year, endDate.month, day);
+                  }
+                });
+              }
+            },
+          ),
+        ),
+        IconButton(
+          onPressed: () => pickDate(isStart, setState),
+          icon: const Icon(Icons.calendar_today, color: Colors.white70, size: 20),
+        ),
+      ],
+    );
+  }
+
+  return showDialog<_BlockRange?>(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF0B1112),
+            title: const Text('효력 기간 선택', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RadioListTile<bool>(
+                  value: false,
+                  groupValue: hasEnd,
+                  onChanged: (v) => setState(() {
+                    hasEnd = v ?? false;
+                    if (!hasEnd) endDate = startDate;
+                  }),
+                  title: const Text('종료기간 없음', style: TextStyle(color: Colors.white70)),
+                  activeColor: const Color(0xFF66BB6A),
+                  enableFeedback: false,
+                ),
+                RadioListTile<bool>(
+                  value: true,
+                  groupValue: hasEnd,
+                  onChanged: (v) => setState(() {
+                    hasEnd = v ?? true;
+                  }),
+                  title: const Text('종료기간 있음', style: TextStyle(color: Colors.white70)),
+                  activeColor: const Color(0xFF66BB6A),
+                  enableFeedback: false,
+                ),
+                const SizedBox(height: 8),
+                const Text('시작일', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                dateFields(isStart: true, setState: setState),
+                if (hasEnd) ...[
+                  const SizedBox(height: 12),
+                  const Text('종료일', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  dateFields(isStart: false, setState: setState),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              ),
+              TextButton(
+                onPressed: () {
+                  if (hasEnd && endDate.isBefore(startDate)) {
+                    showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.', useRoot: true);
+                    return;
+                  }
+                  Navigator.of(ctx).pop(_BlockRange(start: startDate, end: hasEnd ? endDate : null));
+                },
+                child: const Text('확인', style: TextStyle(color: Color(0xFF66BB6A), fontWeight: FontWeight.w700)),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
 class OverlayLabel {
   final String text;
   final OverrideType type; // add 또는 replace
@@ -98,6 +296,211 @@ class TimetableCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    /*
+    class _BlockRange {
+      final DateTime start;
+      final DateTime? end;
+      const _BlockRange({required this.start, required this.end});
+    }
+
+    Future<_BlockRange?> _pickEffectiveRange(DateTime defaultDate) async {
+      DateTime startDate = DateTime(defaultDate.year, defaultDate.month, defaultDate.day);
+      DateTime endDate = startDate;
+      bool hasEnd = false;
+      String _pad(int v) => v.toString().padLeft(2, '0');
+      final startYearC = TextEditingController(text: startDate.year.toString());
+      final startMonthC = TextEditingController(text: _pad(startDate.month));
+      final startDayC = TextEditingController(text: _pad(startDate.day));
+      final endYearC = TextEditingController(text: endDate.year.toString());
+      final endMonthC = TextEditingController(text: _pad(endDate.month));
+      final endDayC = TextEditingController(text: _pad(endDate.day));
+
+      Future<void> pickDate(bool isStart, StateSetter setState) async {
+        final initial = isStart ? startDate : endDate;
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: initial,
+          firstDate: DateTime(2000),
+          lastDate: DateTime(2100),
+          builder: (ctx, child) => Theme(data: Theme.of(ctx).copyWith(useMaterial3: true), child: child ?? const SizedBox.shrink()),
+        );
+        if (picked != null) {
+          setState(() {
+            if (isStart) {
+              startDate = DateTime(picked.year, picked.month, picked.day);
+              if (!hasEnd) endDate = startDate;
+            } else {
+              endDate = DateTime(picked.year, picked.month, picked.day);
+            }
+            startYearC.text = startDate.year.toString();
+            startMonthC.text = _pad(startDate.month);
+            startDayC.text = _pad(startDate.day);
+            endYearC.text = endDate.year.toString();
+            endMonthC.text = _pad(endDate.month);
+            endDayC.text = _pad(endDate.day);
+          });
+        }
+      }
+
+      Widget dateFields({required bool isStart, required StateSetter setState}) {
+        final yC = isStart ? startYearC : endYearC;
+        final mC = isStart ? startMonthC : endMonthC;
+        final dC = isStart ? startDayC : endDayC;
+        return Row(
+          children: [
+            SizedBox(
+              width: 72,
+              child: TextField(
+                controller: yC,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: '년', labelStyle: TextStyle(color: Colors.white54)),
+                onChanged: (v) {
+                  final year = int.tryParse(v);
+                  if (year != null && year > 0) {
+                    setState(() {
+                      if (isStart) {
+                        startDate = DateTime(year, startDate.month, startDate.day);
+                        if (!hasEnd) endDate = startDate;
+                      } else {
+                        endDate = DateTime(year, endDate.month, endDate.day);
+                      }
+                    });
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 56,
+              child: TextField(
+                controller: mC,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: '월', labelStyle: TextStyle(color: Colors.white54)),
+                onChanged: (v) {
+                  final month = int.tryParse(v);
+                  if (month != null && month >= 1 && month <= 12) {
+                    setState(() {
+                      if (isStart) {
+                        startDate = DateTime(startDate.year, month, startDate.day);
+                        if (!hasEnd) endDate = startDate;
+                      } else {
+                        endDate = DateTime(endDate.year, month, endDate.day);
+                      }
+                    });
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 56,
+              child: TextField(
+                controller: dC,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: '일', labelStyle: TextStyle(color: Colors.white54)),
+                onChanged: (v) {
+                  final day = int.tryParse(v);
+                  if (day != null && day >= 1 && day <= 31) {
+                    setState(() {
+                      if (isStart) {
+                        startDate = DateTime(startDate.year, startDate.month, day);
+                        if (!hasEnd) endDate = startDate;
+                      } else {
+                        endDate = DateTime(endDate.year, endDate.month, day);
+                      }
+                    });
+                  }
+                },
+              ),
+            ),
+            IconButton(
+              onPressed: () => pickDate(isStart, setState),
+              icon: const Icon(Icons.calendar_today, color: Colors.white70, size: 20),
+            ),
+          ],
+        );
+      }
+
+      return showDialog<_BlockRange?>(
+        context: context,
+        builder: (ctx) {
+          return StatefulBuilder(
+            builder: (ctx, setState) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF0B1112),
+                title: const Text('효력 기간 선택', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RadioListTile<bool>(
+                      value: false,
+                      groupValue: hasEnd,
+                      onChanged: (v) => setState(() {
+                        hasEnd = v ?? false;
+                        if (!hasEnd) endDate = startDate;
+                      }),
+                      title: const Text('종료기간 없음', style: TextStyle(color: Colors.white70)),
+                      activeColor: const Color(0xFF66BB6A),
+                      enableFeedback: false,
+                    ),
+                    RadioListTile<bool>(
+                      value: true,
+                      groupValue: hasEnd,
+                      onChanged: (v) => setState(() {
+                        hasEnd = v ?? true;
+                      }),
+                      title: const Text('종료기간 있음', style: TextStyle(color: Colors.white70)),
+                      activeColor: const Color(0xFF66BB6A),
+                      enableFeedback: false,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('시작일', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    dateFields(isStart: true, setState: setState),
+                    if (hasEnd) ...[
+                      const SizedBox(height: 12),
+                      const Text('종료일', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      dateFields(isStart: false, setState: setState),
+                    ],
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(null),
+                    child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      if (hasEnd && endDate.isBefore(startDate)) {
+                        showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.', useRoot: true);
+                        return;
+                      }
+                      Navigator.of(ctx).pop(_BlockRange(start: startDate, end: hasEnd ? endDate : null));
+                    },
+                    child: const Text('확인', style: TextStyle(color: Color(0xFF66BB6A), fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    }
+    */
+    bool _isBlockActiveOnDate(StudentTimeBlock block, DateTime date) {
+      final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+      final end = block.endDate != null ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day) : null;
+      return !start.isAfter(date) && (end == null || !end.isBefore(date));
+    }
+
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
         print('[DRAG][drop:onWillAccept] data=$data');
@@ -119,6 +522,9 @@ class TimetableCell extends StatelessWidget {
               .toList();
           final oldDayIndex = data['oldDayIndex'] as int?;
           final oldStartTime = data['oldStartTime'] as DateTime?;
+          final refDate = DateTime(startTime.year, startTime.month, startTime.day);
+          final range = await _pickEffectiveRange(context, refDate);
+          if (range == null) return;
           final ids = students.map((s) => s.student.id).join(',');
           final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
           print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
@@ -129,7 +535,8 @@ class TimetableCell extends StatelessWidget {
             if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
             final studentId = studentWithInfo.student.id;
             final allBlocks = DataManager.instance.studentTimeBlocks;
-            final targetBlock = allBlocks.firstWhere(
+            final activeBlocks = allBlocks.where((b) => _isBlockActiveOnDate(b, refDate)).toList();
+            final targetBlock = activeBlocks.firstWhere(
               (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
               orElse: () => StudentTimeBlock(
                 id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null, number: null,
@@ -137,9 +544,9 @@ class TimetableCell extends StatelessWidget {
             );
             bool studentHasConflict = false;
             if (targetBlock.setId == null || targetBlock.number == null) {
-              final block = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
+              final block = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
               if (block != null) {
-                final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
+                final conflictBlock = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
                 if (conflictBlock != null) {
                   if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
                     studentHasConflict = true;
@@ -165,7 +572,7 @@ class TimetableCell extends StatelessWidget {
             } else {
               final setId = targetBlock.setId;
               final baseNumber = targetBlock.number!;
-              final toMove = allBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
+              final toMove = activeBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
               toMove.sort((a, b) => a.number!.compareTo(b.number!));
               final baseTime = startTime;
               final duration = targetBlock.duration;
@@ -175,19 +582,19 @@ class TimetableCell extends StatelessWidget {
               for (final block in toMove) {
                 final diff = block.number! - baseNumber;
                 final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
-                final newBlock = block.copyWith(
+                  final newBlock = block.copyWith(
                   id: const Uuid().v4(),
                   dayIndex: dayIdx,
                   startHour: newTime.hour,
                   startMinute: newTime.minute,
                   createdAt: now,
-                  startDate: today,
-                  endDate: null,
+                    startDate: range.start,
+                    endDate: range.end,
                 );
                 newBlocks.add(newBlock);
               }
               for (final newBlock in newBlocks) {
-                final conflictBlock = allBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
+                final conflictBlock = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
                 if (conflictBlock != null) {
                   if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
                     studentHasConflict = true;
@@ -231,7 +638,7 @@ class TimetableCell extends StatelessWidget {
             return;
           }
           print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList());
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList(), skipPlannedRegen: true);
           await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
           await DataManager.instance.loadStudents();
           if (failedStudents.isNotEmpty) {
@@ -279,40 +686,62 @@ class TimetableCell extends StatelessWidget {
         if (data['type'] == 'class-move') {
           final blocksRaw = (data['blocks'] as List).cast<Map>();
           if (blocksRaw.isEmpty) return;
-          // 기준점 계산
+          final refDate = DateTime(startTime.year, startTime.month, startTime.day);
+          final range = await _pickEffectiveRange(context, refDate);
+          if (range == null) return;
+          final allBlocks = DataManager.instance.studentTimeBlocks;
+          final activeBlocks = allBlocks.where((b) => _isBlockActiveOnDate(b, refDate)).toList();
+          final sourceBlocks = blocksRaw
+              .map((b) => activeBlocks.firstWhereOrNull((ab) => ab.id == (b['id'] as String)))
+              .whereType<StudentTimeBlock>()
+              .toList();
+          if (sourceBlocks.isEmpty) {
+            print('[DRAG][class-move] active source blocks not found -> skip');
+            return;
+          }
+          // 기준점 계산 (sourceBlocks 기준)
           int minTotal = 1 << 30;
-          for (final b in blocksRaw) {
-            final total = (b['dayIndex'] as int) * 24 * 60 + (b['startHour'] as int) * 60 + (b['startMinute'] as int);
+          for (final b in sourceBlocks) {
+            final total = b.dayIndex * 24 * 60 + b.startHour * 60 + b.startMinute;
             if (total < minTotal) minTotal = total;
           }
           final targetTotal = dayIdx * 24 * 60 + startTime.hour * 60 + startTime.minute;
           final delta = targetTotal - minTotal;
-          List<StudentTimeBlock> newBlocks = [];
-          List<String> oldIds = [];
-          for (final b in blocksRaw) {
-            final oldTotal = (b['dayIndex'] as int) * 24 * 60 + (b['startHour'] as int) * 60 + (b['startMinute'] as int);
+          final now = DateTime.now();
+          final List<StudentTimeBlock> newBlocks = [];
+          final List<String> oldIds = [];
+          for (final b in sourceBlocks) {
+            final oldTotal = b.dayIndex * 24 * 60 + b.startHour * 60 + b.startMinute;
             final newTotal = oldTotal + delta;
             final newDay = newTotal ~/ (24 * 60);
             final newMinuteTotal = newTotal % (24 * 60);
             final newHour = newMinuteTotal ~/ 60;
             final newMinute = newMinuteTotal % 60;
-            final duration = Duration(minutes: b['duration'] as int);
-            oldIds.add(b['id'] as String);
-            newBlocks.add(StudentTimeBlock(
-              id: b['id'] as String,
-              studentId: b['studentId'] as String,
+            oldIds.add(b.id);
+            newBlocks.add(b.copyWith(
               dayIndex: newDay,
               startHour: newHour,
               startMinute: newMinute,
-              duration: duration,
-              createdAt: DateTime.now(),
-              startDate: DateTime.now(),
-              setId: b['setId'] as String?,
-              number: b['number'] as int?,
-              sessionTypeId: b['sessionTypeId'] as String?,
+              createdAt: now,
+              startDate: range.start,
+              endDate: range.end,
             ));
           }
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(oldIds, immediate: true);
+          // 겹침 체크: 기존 활성 블록 중 이동 대상 외에 겹치는 것 있으면 실패
+          final activeExcludingSource = activeBlocks.where((b) => !oldIds.contains(b.id)).toList();
+          for (final nb in newBlocks) {
+            final conflict = activeExcludingSource.firstWhereOrNull((b) =>
+                b.studentId == nb.studentId &&
+                b.dayIndex == nb.dayIndex &&
+                b.startHour == nb.startHour &&
+                b.startMinute == nb.startMinute &&
+                (b.setId == null || nb.setId == null || b.setId != nb.setId));
+            if (conflict != null) {
+              showAppSnackBar(context, '이미 등록된 시간과 겹칩니다.', useRoot: true);
+              return;
+            }
+          }
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(oldIds, immediate: true, skipPlannedRegen: true);
           await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
           await DataManager.instance.loadStudents();
           final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
