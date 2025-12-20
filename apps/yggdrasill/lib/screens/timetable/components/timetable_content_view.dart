@@ -130,6 +130,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
       await cleanupOrphanedSessionTypeIds();
       await _diagnoseOrphanedSessionTypeIds(); // 정리 후 다시 확인
     });
+    // 임시 진단: 특정 학생 블록 payload 덤프
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      DataManager.instance.debugDumpStudentBlocks(
+        dayIdx: 5,
+        startHour: 16,
+        startMinute: 0,
+        studentId: 'fce51628-cc03-416f-9ee4-02d68cc3a10c',
+      );
+    });
   }
 
   @override
@@ -274,109 +283,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
     if (widget.onCellStudentsChanged != null) {
       widget.onCellStudentsChanged!(dayIdx, startTime, updatedCellStudents);
     }
-  }
-
-  // 자습 블록 수정 (셀 위에 드롭)
-  void _onSelfStudyBlockMoved(int dayIdx, DateTime startTime, List<StudentWithInfo> students) async {
-    // print('[DEBUG][_onSelfStudyBlockMoved] 호출: dayIdx=$dayIdx, startTime=$startTime, students=${students.map((s) => s.student.name).toList()}');
-    
-    // 이동할 자습 블록들 찾기 (현재 선택된 셀의 자습 블록들)
-    final currentSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
-      if (b.dayIndex != widget.selectedCellDayIndex || widget.selectedCellStartTime == null) return false;
-      final blockStartMinutes = b.startHour * 60 + b.startMinute;
-      final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
-      final checkMinutes = widget.selectedCellStartTime!.hour * 60 + widget.selectedCellStartTime!.minute;
-      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
-    }).toList();
-    
-    if (currentSelfStudyBlocks.isEmpty) {
-      // print('[DEBUG][_onSelfStudyBlockMoved] 이동할 자습 블록이 없음');
-      return;
-    }
-    
-    // 중복 체크
-    final blockMinutes = 30; // 자습 블록 길이
-    bool hasConflict = false;
-    for (final student in students) {
-      for (final block in currentSelfStudyBlocks) {
-        if (_isSelfStudyTimeOverlap(student.student.id, dayIdx, startTime, blockMinutes)) {
-          hasConflict = true;
-          break;
-        }
-      }
-      if (hasConflict) break;
-    }
-    
-    if (hasConflict) {
-      showAppSnackBar(context, '이미 등록된 시간과 겹칩니다. 자습시간을 이동할 수 없습니다.', useRoot: true);
-      return;
-    }
-    
-    // 자습 블록 이동
-    for (final block in currentSelfStudyBlocks) {
-      final newBlock = block.copyWith(
-        dayIndex: dayIdx,
-        startHour: startTime.hour,
-        startMinute: startTime.minute,
-      );
-      await DataManager.instance.updateSelfStudyTimeBlock(block.id, newBlock);
-    }
-    
-    // UI 업데이트
-    final updatedSelfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) {
-      if (b.dayIndex != dayIdx) return false;
-      final blockStartMinutes = b.startHour * 60 + b.startMinute;
-      final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
-      final checkMinutes = startTime.hour * 60 + startTime.minute;
-      return checkMinutes >= blockStartMinutes && checkMinutes < blockEndMinutes;
-    }).toList();
-    
-    final updatedStudents = DataManager.instance.students;
-    final updatedCellStudents = updatedSelfStudyBlocks.map((b) =>
-      updatedStudents.firstWhere(
-        (s) => s.student.id == b.studentId,
-        orElse: () => StudentWithInfo(
-          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-          basicInfo: StudentBasicInfo(studentId: ''),
-        ),
-      )
-    ).toList();
-    
-    if (widget.onCellSelfStudyStudentsChanged != null) {
-      widget.onCellSelfStudyStudentsChanged!(dayIdx, startTime, updatedCellStudents);
-    }
-    
-    // 자습 블록 수정 로직 호출
-    _onSelfStudyBlockMoved(dayIdx, startTime, students);
-  }
-  
-  // 자습 블록 시간 중복 체크
-  bool _isSelfStudyTimeOverlap(String studentId, int dayIndex, DateTime startTime, int lessonDurationMinutes) {
-    final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
-    final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks.where((b) => b.studentId == studentId).toList();
-    
-    final newStart = startTime.hour * 60 + startTime.minute;
-    final newEnd = newStart + lessonDurationMinutes;
-    
-    // 수업 블록 체크
-    for (final block in studentBlocks) {
-      final blockStart = block.startHour * 60 + block.startMinute;
-      final blockEnd = blockStart + block.duration.inMinutes;
-      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
-        return true;
-      }
-    }
-    
-    // 자습 블록 체크 (자신 제외)
-    for (final block in selfStudyBlocks) {
-      final blockStart = block.startHour * 60 + block.startMinute;
-      final blockEnd = blockStart + block.duration.inMinutes;
-      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
-        return true;
-      }
-    }
-    
-    return false;
   }
 
   // 다중 이동/수정 후
@@ -976,30 +882,36 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           : (
                               // 1) 셀 선택 시: 해당 시간 학생카드
                               (widget.selectedCellDayIndex != null && widget.selectedCellStartTime != null)
-                                ? ValueListenableBuilder<List<StudentTimeBlock>>(
-                                    valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-                                    builder: (context, studentTimeBlocks, _) {
-                                      return ValueListenableBuilder<List<SelfStudyTimeBlock>>(
-                                        valueListenable: DataManager.instance.selfStudyTimeBlocksNotifier,
-                                        builder: (context, selfStudyTimeBlocksRaw, __) {
-                                  final selfStudyTimeBlocks = selfStudyTimeBlocksRaw.cast<SelfStudyTimeBlock>();
-                                  final blocks = studentTimeBlocks.where((b) =>
-                                    b.dayIndex == widget.selectedCellDayIndex &&
-                                    b.startHour == widget.selectedCellStartTime!.hour &&
-                                    b.startMinute == widget.selectedCellStartTime!.minute
-                                  ).toList();
-                                  // 보강 원본 블라인드(set_id 우선): 같은 날짜(YMD)의 replace 원본이 있으면 해당 (studentId,setId) 전체를 제외
-                                  final DateTime weekStart = DateTime(widget.selectedCellStartTime!.year, widget.selectedCellStartTime!.month, widget.selectedCellStartTime!.day)
-                                      .subtract(Duration(days: widget.selectedCellStartTime!.weekday - DateTime.monday));
-                                  final DateTime weekEnd = weekStart.add(const Duration(days: 7));
+                                ? ValueListenableBuilder<int>(
+                                    valueListenable: DataManager.instance.studentTimeBlocksRevision,
+                                    builder: (context, _, __) {
+                                  // 셀 날짜 기준 refDate 산출
+                                  final selectedDate = widget.selectedCellStartTime!;
+                                  final DateTime refDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
                                   final int selDayIdx = widget.selectedCellDayIndex ?? 0; // 0=월
+                                  final allBlocks = DataManager.instance.studentTimeBlocks;
+                                  final blocks = allBlocks.where((b) =>
+                                    b.dayIndex == selDayIdx &&
+                                    b.startHour == selectedDate.hour &&
+                                    b.startMinute == selectedDate.minute
+                                  ).toList();
+                                  bool _isActive(StudentTimeBlock b) {
+                                    final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+                                    final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+                                    return !start.isAfter(refDate) && (end == null || !end.isBefore(refDate));
+                                  }
+                                  final activeBlocks = blocks.where(_isActive).toList();
+                                  // 보강 원본 블라인드(set_id 우선): 같은 날짜(YMD)의 replace 원본이 있으면 해당 (studentId,setId) 전체를 제외
+                                  final DateTime weekStart = DateTime(selectedDate.year, selectedDate.month, selectedDate.day)
+                                      .subtract(Duration(days: selectedDate.weekday - DateTime.monday));
+                                  final DateTime weekEnd = weekStart.add(const Duration(days: 7));
                                   final DateTime cellYmd = weekStart.add(Duration(days: selDayIdx));
                                   final DateTime cellDate = DateTime(
                                     cellYmd.year,
                                     cellYmd.month,
                                     cellYmd.day,
-                                    widget.selectedCellStartTime!.hour,
-                                    widget.selectedCellStartTime!.minute,
+                                    selectedDate.hour,
+                                    selectedDate.minute,
                                   );
                                   final Set<String> hiddenPairs = {};
                                   for (final ov in DataManager.instance.sessionOverrides) {
@@ -1014,7 +926,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     String? setId = ov.setId;
                                     if (setId == null || setId.isEmpty) {
                                       // 학생의 같은 요일 블록에서 원본 시간과 가장 가까운 블록의 setId 추정
-                                      final blocksByStudent = studentTimeBlocks.where((b) => b.studentId == ov.studentId && b.dayIndex == widget.selectedCellDayIndex).toList();
+                                      final blocksByStudent = allBlocks.where((b) => b.studentId == ov.studentId && b.dayIndex == selDayIdx).toList();
                                       if (blocksByStudent.isNotEmpty) {
                                         int origMin = orig.hour * 60 + orig.minute;
                                         int bestDiff = 1 << 30;
@@ -1032,22 +944,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       hiddenPairs.add('${ov.studentId}|$setId');
                                     }
                                   }
-                                  // DIAG: hiddenPairs 요약 출력(있을 때만)
-                                  if (hiddenPairs.isNotEmpty) {
-                                    // ignore: avoid_print
-                                    print('[BLIND][list] cell=${cellDate.toString().substring(0,16)} hiddenPairs=$hiddenPairs');
-                                  }
-                                  final selectedDate = widget.selectedCellStartTime!;
                                   final studentIdSet = (widget.filteredStudentIds ?? DataManager.instance.students.map((s) => s.student.id).toList()).toSet();
                                   List<StudentTimeBlock> filteredBlocks = [];
-                                  for (final b in blocks) {
+                                  for (final b in activeBlocks) {
                                     if (!studentIdSet.contains(b.studentId)) continue;
                                     final pairKey = '${b.studentId}|${b.setId ?? ''}';
-                                    if (hiddenPairs.isNotEmpty) {
-                                      final hit = hiddenPairs.contains(pairKey);
-                                      // ignore: avoid_print
-                                      print('[BLIND][list] check pairKey=$pairKey setId=${b.setId} hit=$hit');
-                                    }
                                     if (hiddenPairs.contains(pairKey)) {
                                       continue; // set_id 블라인드 적용
                                     }
@@ -1070,16 +971,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   }
                                   final blocksToUse = filteredBlocks;
                                   final allStudents = DataManager.instance.students;
-                                  // print('[DEBUG][학생카드리스트] 전체 학생 수: ${allStudents.length}');
-                                  // print('[DEBUG][학생카드리스트] 필터링된 학생 ID: ${widget.filteredStudentIds}');
-                                  // print('[DEBUG][학생카드리스트] 해당 셀의 블록 수(필터 전): ${blocks.length}, (블라인드 후): ${blocksToUse.length}');
-                                  
-                                  // 필터링 적용: 필터가 있으면 필터링된 학생만, 없으면 전체 학생
                                   final students = widget.filteredStudentIds == null 
                                     ? allStudents 
                                     : allStudents.where((s) => widget.filteredStudentIds!.contains(s.student.id)).toList();
-                                  // print('[DEBUG][학생카드리스트] 필터링 후 학생 수: ${students.length}');
-                                  
                                   final cellStudents = blocksToUse.map((b) =>
                                     students.firstWhere(
                                       (s) => s.student.id == b.studentId,
@@ -1089,72 +983,72 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       ),
                                     )
                                   ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
-                                  // print('[DEBUG][학생카드리스트] 최종 셀 학생 수: ${cellStudents.length}');
-                                  // print('[DEBUG][학생카드리스트] 최종 셀 학생 이름들: ${cellStudents.map((s) => s.student.name).toList()}');
-                                  // 자습 블록 필터링
-                                  // print('[DEBUG][자습블록필터링] 전체 자습 블록: ${selfStudyTimeBlocks.length}개');
-                                  // print('[DEBUG][자습블록필터링] selectedCellDayIndex=${widget.selectedCellDayIndex}, selectedCellStartTime=${widget.selectedCellStartTime}');
-                                  final cellSelfStudyBlocks = selfStudyTimeBlocks.where((b) {
-                                    final matches = b.dayIndex == widget.selectedCellDayIndex &&
-                                        b.startHour == widget.selectedCellStartTime!.hour &&
-                                        b.startMinute == widget.selectedCellStartTime!.minute;
-                                    if (matches) {
-                                      // print('[DEBUG][자습블록필터링] 매칭된 자습 블록: studentId=${b.studentId}, dayIndex=${b.dayIndex}, startTime=${b.startHour}:${b.startMinute}');
+                                  // DIAG: 셀 리스트 구성 로그
+                                  // 블록 기준(refDate=선택 셀 날짜)으로 sessionTypeId/set/number/기간을 덤프
+                                  final blockLog = blocksToUse.map((b) =>
+                                    '${b.studentId}|sess=${b.sessionTypeId}|set=${b.setId}|num=${b.number}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}'
+                                  ).toList();
+                                  // 학생별 최신 블록(생성시각 기준) 매핑: 번호/SET/색상 계산 시 재탐색 없이 사용
+                                  final Map<String, StudentTimeBlock> blockOverrides = {};
+                                  for (final b in blocksToUse) {
+                                    final prev = blockOverrides[b.studentId];
+                                    if (prev == null || b.createdAt.isAfter(prev.createdAt)) {
+                                      blockOverrides[b.studentId] = b;
                                     }
-                                    return matches;
-                                  }).cast<SelfStudyTimeBlock>().toList();
-                                  // print('[DEBUG][자습블록필터링] 필터링된 자습 블록: ${cellSelfStudyBlocks.length}개');
-                                  final cellSelfStudyStudents = cellSelfStudyBlocks.map((b) =>
-                                    students.firstWhere(
-                                      (s) => s.student.id == b.studentId,
-                                      orElse: () => StudentWithInfo(
-                                        student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-                                        basicInfo: StudentBasicInfo(studentId: ''),
-                                      ),
-                                    )
-                                  ).where((s) => s.student.id.isNotEmpty).toList(); // 빈 학생 제거
-                                  // print('[DEBUG][학생카드리스트] 자습 학생 수: ${cellSelfStudyStudents.length}');
+                                  }
+                                  // 선택 셀 날짜/시간 + 리스트 디테일 로그 (리비전 포함)
+                                  print('[TT][cellList] rev=${DataManager.instance.studentTimeBlocksRevision.value} cellDate=${cellDate.toIso8601String()} day=${widget.selectedCellDayIndex} time=${widget.selectedCellStartTime} blocks=${blocksToUse.length} students=${cellStudents.length} detail=$blockLog');
                                   
-                                  // 컨테이너는 항상 렌더링(내용은 조건부)
                                   return LayoutBuilder(
                                     builder: (context, constraints) {
                                   final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
                                       return Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          // 전체 아웃라인 제거 후, 내용 컨테이너만 별도 아웃라인
                                           Container(
                                             margin: const EdgeInsets.only(top: 24), // 등록 버튼과 간격 24
                                             height: containerHeight,
                                             padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                                             color: Colors.transparent,
-                                            child: _buildCellPanelCached(
-                                              students: cellStudents,
-                                              dayIdx: widget.selectedCellDayIndex,
-                                              startTime: widget.selectedCellStartTime,
-                                              maxHeight: containerHeight,
-                                              isSelectMode: widget.isSelectMode,
-                                              selectedIds: widget.selectedStudentIds,
-                                              onSelectChanged: widget.onStudentSelectChanged,
+                                            child: KeyedSubtree(
+                                              key: ValueKey(
+                                                'cell-${widget.selectedCellDayIndex}-${widget.selectedCellStartTime}-${DataManager.instance.studentTimeBlocksRevision.value}',
+                                              ),
+                                              child: _buildCellPanelCached(
+                                                students: cellStudents,
+                                                dayIdx: widget.selectedCellDayIndex,
+                                                startTime: widget.selectedCellStartTime,
+                                                maxHeight: containerHeight,
+                                                isSelectMode: widget.isSelectMode,
+                                                selectedIds: widget.selectedStudentIds,
+                                                onSelectChanged: widget.onStudentSelectChanged,
+                                                blockOverrides: blockOverrides,
+                                              ),
                                             ),
                                           ),
                                         ],
                                       );
                                     },
                                   );
-                              },
-                              );
-                                    },
-                                  )
+                                },
+                              )
                                 // 2) 요일만 선택 시: 해당 요일 등원 시간 그룹 순서대로
                                 : (widget.selectedCellDayIndex != null && widget.selectedDayDate != null)
-                                  ? ValueListenableBuilder<List<StudentTimeBlock>>(
-                                      valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-                                      builder: (context, studentTimeBlocks, _) {
+                                  ? ValueListenableBuilder<int>(
+                                      valueListenable: DataManager.instance.studentTimeBlocksRevision,
+                                      builder: (context, _, __) {
                                         final int dayIdx = widget.selectedCellDayIndex!; // 0=월
                                         final DateTime dayDate = widget.selectedDayDate!;
-                                        // 해당 요일의 수업 블록에 속한 학생들 모으기 (number==1 우선)
-                                        final blocksOfDay = studentTimeBlocks.where((b) => b.dayIndex == dayIdx && (b.number == null || b.number == 1)).toList();
+                                        final DateTime refDate = DateTime(dayDate.year, dayDate.month, dayDate.day);
+                                        // 해당 요일의 수업 블록에 속한 학생들 모으기 (number==1 우선), refDate 기준 활성 필터
+                                        final blocksOfDay = DataManager.instance.studentTimeBlocks.where((b) {
+                                          if (b.dayIndex != dayIdx) return false;
+                                          final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+                                          final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+                                          final active = !start.isAfter(refDate) && (end == null || !end.isBefore(refDate));
+                                          if (!active) return false;
+                                          return (b.number == null || b.number == 1);
+                                        }).toList();
                                         // 셀렉터: 필터가 있으면 필터 학생만
                                         final allStudents = widget.filteredStudentIds == null 
                                           ? DataManager.instance.students
@@ -1184,44 +1078,50 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                         final totalCount = groups.values.fold<int>(0, (p, c) => p + c.length);
                                         return LayoutBuilder(
                                           builder: (context, constraints) {
-                                            final double containerHeight = (constraints.maxHeight - 24).clamp(120.0, double.infinity);
+                                            // 상단 라벨은 고정, 아래 학생 리스트만 스크롤 + 여유 공간으로 덮도록 변경
+                                            final double visibleHeight = (constraints.maxHeight - 24).clamp(180.0, double.infinity);
+                                            const double extraScrollSpace = 240.0;
+                                            final double headerHeight = 48 + 24 + 10; // 컨테이너 높이 + top margin + bottom margin
+                                            final double bodyMinHeight = (visibleHeight - headerHeight).clamp(120.0, double.infinity);
+                                            
                                             return Column(
                                               crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
-                                                SizedBox(
-                                                  height: containerHeight,
-                                                  child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                // 고정 상단 라벨
+                                                Container(
+                                                  height: 48,
+                                                  width: double.infinity,
+                                                  margin: const EdgeInsets.only(top: 24, bottom: 10),
+                                                  padding: const EdgeInsets.symmetric(horizontal: 15),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFF223131),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  alignment: Alignment.center,
+                                                  child: Row(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    mainAxisSize: MainAxisSize.max,
                                                     children: [
-                                                      // 상단 요일/날짜/총원수 라벨 (셀 선택 패널과 동일한 48px 스타일)
-                                                      Container(
-                                                        height: 48,
-                                                        width: double.infinity,
-                                                        margin: const EdgeInsets.only(top: 24, bottom: 10),
-                                                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFF223131),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                        ),
-                                                        alignment: Alignment.center,
-                                                        child: Row(
-                                                          mainAxisAlignment: MainAxisAlignment.center,
-                                                          mainAxisSize: MainAxisSize.max,
-                                                          children: [
-                                                            Text(
-                                                              '${dayDate.month}/${dayDate.day} ${_weekdayLabel(dayIdx)}',
-                                                              style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
-                                                            ),
-                                                            const SizedBox(width: 10),
-                                                            Text(
-                                                              '총 $totalCount명',
-                                                              style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
-                                                            ),
-                                                          ],
-                                                        ),
+                                                      Text(
+                                                        '${dayDate.month}/${dayDate.day} ${_weekdayLabel(dayIdx)}',
+                                                        style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
                                                       ),
-                                                      // 본문 컨테이너 (셀 선택 패널 스타일과 동일)
-                                                      Expanded(
+                                                      const SizedBox(width: 10),
+                                                      Text(
+                                                        '총 $totalCount명',
+                                                        style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                // 스크롤 가능 본문 (여유 공간 추가로 아래 덮기)
+                                                SizedBox(
+                                                  height: bodyMinHeight,
+                                                  child: Scrollbar(
+                                                    child: SingleChildScrollView(
+                                                      padding: const EdgeInsets.only(bottom: extraScrollSpace),
+                                                      child: ConstrainedBox(
+                                                        constraints: BoxConstraints(minHeight: bodyMinHeight + extraScrollSpace),
                                                         child: Container(
                                                           padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
                                                           decoration: BoxDecoration(
@@ -1229,72 +1129,67 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                             borderRadius: BorderRadius.circular(14),
                                                             border: Border.all(color: const Color(0xFF223131), width: 1),
                                                           ),
-                                                          child: Scrollbar(
-                                                            child: SingleChildScrollView(
-                                                              primary: true,
-                                                              child: Column(
-                                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                                children: [
-                                                                  ...sortedKeys.map((k) {
-                                                                    final list = groups[k]!;
-                                                                    list.sort((a, b) => a.student.name.compareTo(b.student.name));
-                                                                    final parts = k.split(':');
-                                                                    final int hour = int.tryParse(parts[0]) ?? 0;
-                                                                    final int minute = int.tryParse(parts[1]) ?? 0;
-                                                                    return Padding(
-                                                                      padding: const EdgeInsets.only(bottom: 16.0),
-                                                                      child: Column(
-                                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                          child: Column(
+                                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                                            children: [
+                                                              ...sortedKeys.map((k) {
+                                                                final list = groups[k]!;
+                                                                list.sort((a, b) => a.student.name.compareTo(b.student.name));
+                                                                final parts = k.split(':');
+                                                                final int hour = int.tryParse(parts[0]) ?? 0;
+                                                                final int minute = int.tryParse(parts[1]) ?? 0;
+                                                                return Padding(
+                                                                  padding: const EdgeInsets.only(bottom: 16.0),
+                                                                  child: Column(
+                                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                                    children: [
+                                                                      Row(
                                                                         children: [
-                                                                          Row(
-                                                                            children: [
-                                                                              Container(
-                                                                                width: 5,
-                                                                                height: 22,
-                                                                                margin: const EdgeInsets.only(right: 8),
-                                                                                decoration: BoxDecoration(
-                                                                                  color: const Color(0xFF223131),
-                                                                                  borderRadius: BorderRadius.circular(4),
-                                                                                ),
-                                                                              ),
-                                                                              Text(
-                                                                                k,
-                                                                                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
-                                                                              ),
-                                                                            ],
-                                                                          ),
-                                                                          const SizedBox(height: 10),
-                                                                          Padding(
-                                                                            padding: const EdgeInsets.only(left: 14),
-                                                                            child: Wrap(
-                                                                              spacing: 6.4,
-                                                                              runSpacing: 6.4,
-                                                                              children: list
-                                                                                  .map((info) => _buildDraggableStudentCard(
-                                                                                        info,
-                                                                                        dayIndex: dayIdx,
-                                                                                        startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
-                                                                                        cellStudents: list,
-                                                                                      ))
-                                                                                  .toList(),
+                                                                          Container(
+                                                                            width: 5,
+                                                                            height: 22,
+                                                                            margin: const EdgeInsets.only(right: 8),
+                                                                            decoration: BoxDecoration(
+                                                                              color: const Color(0xFF223131),
+                                                                              borderRadius: BorderRadius.circular(4),
                                                                             ),
+                                                                          ),
+                                                                          Text(
+                                                                            k,
+                                                                            style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
                                                                           ),
                                                                         ],
                                                                       ),
-                                                                    );
-                                                                  }),
-                                                                  if (sortedKeys.isEmpty)
-                                                                    Padding(
-                                                                      padding: const EdgeInsets.all(4.0),
-                                                                      child: Text(widget.placeholderText ?? '해당 요일에 등록된 학생이 없습니다.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
-                                                                    ),
-                                                                ],
-                                                              ),
-                                                            ),
+                                                                      const SizedBox(height: 10),
+                                                                      Padding(
+                                                                        padding: const EdgeInsets.only(left: 14),
+                                                                        child: Wrap(
+                                                                          spacing: 6.4,
+                                                                          runSpacing: 6.4,
+                                                                          children: list
+                                                                              .map((info) => _buildDraggableStudentCard(
+                                                                                    info,
+                                                                                    dayIndex: dayIdx,
+                                                                                    startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
+                                                                                    cellStudents: list,
+                                                                                  ))
+                                                                              .toList(),
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                );
+                                                              }),
+                                                              if (sortedKeys.isEmpty)
+                                                                Padding(
+                                                                  padding: const EdgeInsets.all(4.0),
+                                                                  child: Text(widget.placeholderText ?? '해당 요일에 등록된 학생이 없습니다.', style: const TextStyle(color: Colors.white38, fontSize: 16)),
+                                                                ),
+                                                            ],
                                                           ),
                                                         ),
                                                       ),
-                                                    ],
+                                                    ),
                                                   ),
                                                 ),
                                               ],
@@ -1318,123 +1213,66 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               .toList();
                           final oldDayIndex = data['oldDayIndex'] as int?;
                           final oldStartTime = data['oldStartTime'] as DateTime?;
-                          final isSelfStudy = data['isSelfStudy'] as bool? ?? false;
-                          // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime, isSelfStudy=$isSelfStudy');
+                          // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
                           List<Future> futures = [];
                           
-                          if (isSelfStudy) {
-                            // 자습 블록 삭제 로직
-                            for (final student in students) {
-                              // print('[삭제드롭존][자습] studentId=${student.student.id}');
-                              // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
-                              final targetBlock = DataManager.instance.selfStudyTimeBlocks.firstWhere(
-                                (b) =>
-                                  b.studentId == student.student.id &&
-                                  b.dayIndex == oldDayIndex &&
-                                  b.startHour == oldStartTime?.hour &&
-                                  b.startMinute == oldStartTime?.minute,
-                                orElse: () => SelfStudyTimeBlock(
-                                  id: '',
-                                  studentId: '',
-                                  dayIndex: -1,
-                                  startHour: 0,
-                                  startMinute: 0,
-                                  duration: Duration.zero,
-                                  createdAt: DateTime(0),
-                                  setId: null,
-                                  number: null,
-                                ),
-                              );
-                              if (targetBlock != null && targetBlock.setId != null) {
-                                // setId+studentId로 모든 블록 삭제 (일괄 삭제)
-                                final allBlocks = DataManager.instance.selfStudyTimeBlocks;
-                                final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
-                                for (final b in toDelete) {
-                                  // print('[삭제드롭존][자습] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
-                                  futures.add(DataManager.instance.removeSelfStudyTimeBlock(b.id));
-                                }
-                              }
-                              // setId가 없는 경우 단일 블록 삭제
-                              final blocks = DataManager.instance.selfStudyTimeBlocks.where((b) =>
+                          // 기존 수업 블록 삭제 로직
+                          for (final student in students) {
+                            // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                            final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
+                              (b) =>
                                 b.studentId == student.student.id &&
                                 b.dayIndex == oldDayIndex &&
                                 b.startHour == oldStartTime?.hour &&
-                                b.startMinute == oldStartTime?.minute
-                              ).toList();
-                              for (final block in blocks) {
-                                // print('[삭제드롭존][자습] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
-                                futures.add(DataManager.instance.removeSelfStudyTimeBlock(block.id));
+                                b.startMinute == oldStartTime?.minute,
+                              orElse: () => StudentTimeBlock(
+                                id: '',
+                                studentId: '',
+                                dayIndex: -1,
+                                startHour: 0,
+                                startMinute: 0,
+                                duration: Duration.zero,
+                                createdAt: DateTime(0),
+                                startDate: DateTime(0),
+                                setId: null,
+                                number: null,
+                              ),
+                            );
+                            if (targetBlock != null && targetBlock.setId != null) {
+                              // setId+studentId로 모든 블록 삭제 (일괄 삭제)
+                              final allBlocks = DataManager.instance.studentTimeBlocks;
+                              final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
+                              for (final b in toDelete) {
+                                futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
                               }
                             }
-                          } else {
-                            // 기존 수업 블록 삭제 로직
-                            for (final student in students) {
-                              // print('[삭제드롭존][수업] studentId=${student.student.id}');
-                              // print('[삭제드롭존][수업] 전체 studentTimeBlocks setId 목록: ' + DataManager.instance.studentTimeBlocks.map((b) => b.setId).toList().toString());
-                              // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
-                              final targetBlock = DataManager.instance.studentTimeBlocks.firstWhere(
-                                (b) =>
-                                  b.studentId == student.student.id &&
-                                  b.dayIndex == oldDayIndex &&
-                                  b.startHour == oldStartTime?.hour &&
-                                  b.startMinute == oldStartTime?.minute,
-                                orElse: () => StudentTimeBlock(
-                                  id: '',
-                                  studentId: '',
-                                  dayIndex: -1,
-                                  startHour: 0,
-                                  startMinute: 0,
-                                  duration: Duration.zero,
-                                  createdAt: DateTime(0),
-                                  startDate: DateTime(0),
-                                  setId: null,
-                                  number: null,
-                                ),
-                              );
-                              if (targetBlock != null && targetBlock.setId != null) {
-                                // setId+studentId로 모든 블록 삭제 (일괄 삭제)
-                                final allBlocks = DataManager.instance.studentTimeBlocks;
-                                final toDelete = allBlocks.where((b) => b.setId == targetBlock.setId && b.studentId == student.student.id).toList();
-                                for (final b in toDelete) {
-                                  // print('[삭제드롭존][수업] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}');
-                                  futures.add(DataManager.instance.removeStudentTimeBlock(b.id));
-                                }
-                              }
-                              // setId가 없는 경우 단일 블록 삭제
-                              final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
-                                b.studentId == student.student.id &&
-                                b.dayIndex == oldDayIndex &&
-                                b.startHour == oldStartTime?.hour &&
-                                b.startMinute == oldStartTime?.minute
-                              ).toList();
-                              for (final block in blocks) {
-                                // print('[삭제드롭존][수업] 삭제 시도: block.id=${block.id}, block.dayIndex=${block.dayIndex}, block.startTime=${block.startHour}:${block.startMinute}');
-                                futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
-                              }
+                            // setId가 없는 경우 단일 블록 삭제
+                            final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
+                              b.studentId == student.student.id &&
+                              b.dayIndex == oldDayIndex &&
+                              b.startHour == oldStartTime?.hour &&
+                              b.startMinute == oldStartTime?.minute
+                            ).toList();
+                            for (final block in blocks) {
+                              futures.add(DataManager.instance.removeStudentTimeBlock(block.id));
                             }
                           }
                           
                           await Future.wait(futures);
                           await DataManager.instance.loadStudents();
                           await DataManager.instance.loadStudentTimeBlocks();
-                          await DataManager.instance.loadSelfStudyTimeBlocks();
                           setState(() {
                             _showDeleteZone = false;
                           });
-                          // print('[삭제드롭존] 삭제 후 studentTimeBlocks 개수: ${DataManager.instance.studentTimeBlocks.length}');
-                          // print('[삭제드롭존] 삭제 후 selfStudyTimeBlocks 개수: ${DataManager.instance.selfStudyTimeBlocks.length}');
-                          // 수업 블록 삭제 후 weekly_class_count를 현재 set 개수로 동기화 (수업 삭제에만 적용)
-                          if (!isSelfStudy) {
-                            for (final s in students) {
-                              final sid = s.student.id;
-                              final registered = DataManager.instance.getStudentLessonSetCount(sid);
-                              await DataManager.instance.setStudentWeeklyClassCount(sid, registered);
-                            }
+                          // 수업 블록 삭제 후 weekly_class_count를 현재 set 개수로 동기화
+                          for (final s in students) {
+                            final sid = s.student.id;
+                            final registered = DataManager.instance.getStudentLessonSetCount(sid);
+                            await DataManager.instance.setStudentWeeklyClassCount(sid, registered);
                           }
                           // 스낵바 즉시 표시 (지연 제거)
                           if (mounted) {
-                            final blockType = isSelfStudy ? '자습시간' : '수업시간';
-                            showAppSnackBar(context, '${students.length}명 학생의 $blockType이 삭제되었습니다.', useRoot: true);
+                            showAppSnackBar(context, '${students.length}명 학생의 수업시간이 삭제되었습니다.', useRoot: true);
                           }
                           // 삭제 후 선택모드 종료 콜백 직접 호출
                           if (widget.onExitSelectMode != null) {
@@ -1550,7 +1388,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   ],
                                   Expanded(
                                     child: classes.isEmpty
-                                        ? const SizedBox.shrink()
+                                        ? SizedBox.shrink()
                                         : ReorderableListView.builder(
                                             padding: EdgeInsets.zero,
                                             itemCount: classes.length,
@@ -1607,8 +1445,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   // --- 학생카드 Draggable 래퍼 공통 함수 ---
-  Widget _buildDraggableStudentCard(StudentWithInfo info, {int? dayIndex, DateTime? startTime, List<StudentWithInfo>? cellStudents, bool isSelfStudy = false}) {
-    // print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, isSelfStudy=$isSelfStudy, dayIndex=$dayIndex, startTime=$startTime');
+  Widget _buildDraggableStudentCard(
+    StudentWithInfo info, {
+    int? dayIndex,
+    DateTime? startTime,
+    List<StudentWithInfo>? cellStudents,
+    StudentTimeBlock? blockOverride,
+  }) {
+    // print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, dayIndex=$dayIndex, startTime=$startTime');
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
@@ -1623,32 +1467,53 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final ed = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
       return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
     }
-    // 해당 학생+시간의 StudentTimeBlock에서 활성 블록 기준 setId/색상 결정
-    String? setId;
+    // 해당 학생+시간의 StudentTimeBlock에서 활성 블록 기준 setId/색상/회차 결정
+    String? setId = blockOverride?.setId;
+    int? blockNumber = blockOverride?.number;
     Color? indicatorOverride;
     if (dayIndex != null && startTime != null) {
       final ref = _refDateFor(startTime);
-      // 활성 블록만 사용해 색상/SET 산출 (종료된 블록 제외)
-      final blocks = DataManager.instance.studentTimeBlocksNotifier.value.where((b) =>
-        b.studentId == info.student.id &&
-        b.dayIndex == dayIndex &&
-        b.startHour == startTime.hour &&
-        b.startMinute == startTime.minute &&
-        _isActive(b, ref)
-      ).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      if (blocks.isNotEmpty) {
-        setId = blocks.first.setId;
+      // 우선: 셀 선택 등에서 전달된 override 블록 기준으로 색상 계산(setId로 후보 제한)
+      if (blockOverride != null) {
+        indicatorOverride = DataManager.instance.getStudentClassColorAt(
+          info.student.id,
+          dayIndex,
+          startTime,
+          setId: setId,
+          refDate: ref,
+        );
       }
-      indicatorOverride = DataManager.instance.getStudentClassColorAt(info.student.id, dayIndex, startTime);
+      // fallback: 메모리 블록 재탐색
+      if (indicatorOverride == null) {
+        final blocks = DataManager.instance.studentTimeBlocks.where((b) =>
+          b.studentId == info.student.id &&
+          b.dayIndex == dayIndex &&
+          b.startHour == startTime.hour &&
+          b.startMinute == startTime.minute &&
+          _isActive(b, ref)
+        ).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        if (blocks.isNotEmpty) {
+          setId ??= blocks.first.setId;
+          blockNumber ??= blocks.first.number;
+        }
+        indicatorOverride = DataManager.instance.getStudentClassColorAt(
+          info.student.id,
+          dayIndex,
+          startTime,
+          setId: setId,
+          refDate: ref,
+        );
+      }
     }
     // 다중 선택 시 각 학생의 setId도 포함해서 넘김
     final studentsWithSetId = (isSelected && selectedCount > 1)
         ? selectedStudents.map((s) {
             String? sSetId;
+            int? sNumber;
             if (dayIndex != null && startTime != null) {
               final ref = _refDateFor(startTime);
-              final block = DataManager.instance.studentTimeBlocksNotifier.value.where(
+              final block = DataManager.instance.studentTimeBlocks.where(
                 (b) =>
                     b.studentId == s.student.id &&
                     b.dayIndex == dayIndex &&
@@ -1659,11 +1524,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
               if (block.isNotEmpty) {
                 sSetId = block.first.setId;
+                sNumber = block.first.number;
               }
             }
-            return {'student': s, 'setId': sSetId};
+            return {'student': s, 'setId': sSetId, 'number': sNumber};
           }).toList()
-        : [ {'student': info, 'setId': setId} ];
+        : [ {'student': info, 'setId': setId, 'number': blockNumber} ];
     return Stack(
       children: [
         Builder(builder: (context) {
@@ -1676,7 +1542,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'oldStartTime': startTime,
             'dayIndex': dayIndex,
             'startTime': startTime,
-            'isSelfStudy': isSelfStudy,
           };
           // print('[DEBUG][TT] Draggable dragData 준비: type=${dragData['type']}, setId=${dragData['setId']}, oldDayIndex=${dragData['oldDayIndex']}, oldStartTime=${dragData['oldStartTime']}, studentsCount=${(dragData['students'] as List).length});
           return Draggable<Map<String, dynamic>>(
@@ -1707,15 +1572,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
               child: _buildSelectableStudentCard(
                 info,
                 selected: widget.selectedStudentIds.contains(info.student.id),
-              isSelectMode: false,
-              indicatorColorOverride: indicatorOverride,
+                isSelectMode: false,
+                indicatorColorOverride: indicatorOverride,
+                blockNumber: blockNumber,
               ),
             ),
             child: _buildSelectableStudentCard(
               info,
               selected: widget.selectedStudentIds.contains(info.student.id),
               isSelectMode: widget.isSelectMode,
-            indicatorColorOverride: indicatorOverride,
+              indicatorColorOverride: indicatorOverride,
+              blockNumber: blockNumber,
               onToggleSelect: (next) {
                 if (widget.onStudentSelectChanged != null) {
                   widget.onStudentSelectChanged!(info.student.id, next);
@@ -1844,8 +1711,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
     // 1. 학생별로 해당 시간에 속한 StudentTimeBlock을 찾아 sessionTypeId로 분류
     // 종료된 블록이 섞여 색상/세션이 비는 문제를 막기 위해
-    // 활성 블록(notifier 기반)만 사용
-    final studentBlocks = DataManager.instance.studentTimeBlocksNotifier.value;
+    // 선택한 셀의 날짜(refDate) 기준으로 직접 활성 필터링
+    final allBlocks = DataManager.instance.studentTimeBlocks;
     final selectedDayIdx = widget.selectedCellDayIndex;
     final selectedStartTime = widget.selectedCellStartTime;
     DateTime _refDate() {
@@ -1862,7 +1729,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
     StudentTimeBlock? _pickLatestActiveBlock(String studentId) {
       final ref = _refDate();
-      final candidates = studentBlocks.where((b) {
+      final candidates = allBlocks.where((b) {
         final dayOk = selectedDayIdx == null ? true : b.dayIndex == selectedDayIdx;
         final timeOk = selectedStartTime == null
             ? true
@@ -1981,6 +1848,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     bool isSelectMode = false,
     ValueChanged<bool>? onToggleSelect,
     Color? indicatorColorOverride,
+    int? blockNumber,
   }) {
     final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
     final schoolStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
@@ -2016,11 +1884,26 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    info.student.name,
-                    style: nameStyle,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          info.student.name,
+                          style: nameStyle,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                      if (blockNumber != null) ...[
+                        const SizedBox(width: 10),
+                        Text(
+                          '$blockNumber',
+                          style: schoolStyle,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 if (schoolLabel.isNotEmpty) ...[
@@ -2185,6 +2068,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required bool isSelectMode,
     required Set<String> selectedIds,
     required void Function(String, bool)? onSelectChanged,
+    required Map<String, StudentTimeBlock> blockOverrides,
   }) {
     final rev = DataManager.instance.studentTimeBlocksRevision.value;
     final classRev = DataManager.instance.classesRevision.value;
@@ -2208,6 +2092,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       isClassRegisterMode: isClassRegisterMode,
       onDragStart: () => setState(() => _showDeleteZone = true),
       onDragEnd: () => setState(() => _showDeleteZone = false),
+      blockOverrides: blockOverrides,
     );
     _cachedCellPanelKey = key;
     _cachedCellPanelWidget = built;
@@ -2934,36 +2819,60 @@ class _ClassCardState extends State<_ClassCard> {
 
   // 단일 학생 등록 로직 분리
   Future<void> _registerSingleStudent(StudentWithInfo studentWithInfo, {String? setId}) async {
-    // setId가 확정되지 않은 경우 다른 블록까지 퍼질 수 있으므로 스킵
+    // setId가 확정되지 않은 경우 스킵
     if (setId == null) return;
     final bool isDefaultClass = widget.classInfo.id == '__default_class__';
-    final blocks = DataManager.instance.studentTimeBlocks
+
+    // 해당 set의 모든 블록을 한 번에 갱신(기존 모두 닫고 새 블록들을 한 번에 재생성)
+    final allSetBlocks = DataManager.instance.studentTimeBlocks
         .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
         .toList();
-    // 재현 로그: 수업 등록 대상 블록 요약
-    // ignore: avoid_print
-    print('[TT][class-assign] classId=${widget.classInfo.id} studentId=${studentWithInfo.student.id} setId=$setId blocks=${blocks.map((b) => '${b.id}:${b.dayIndex}@${b.startHour}:${b.startMinute}|sess=${b.sessionTypeId}|sd=${b.startDate}|ed=${b.endDate}').join(',')}');
-    for (final block in blocks) {
-      // 기본 수업 카드로 드롭하는 경우 sessionTypeId를 null로 되돌려야 함
-      final updated = isDefaultClass
-          ? StudentTimeBlock(
-              id: block.id,
-              studentId: block.studentId,
-              dayIndex: block.dayIndex,
-              startHour: block.startHour,
-              startMinute: block.startMinute,
-              duration: block.duration,
-              createdAt: block.createdAt,
-              startDate: block.startDate,
-              endDate: block.endDate,
-              setId: block.setId,
-              number: block.number,
-              sessionTypeId: null,
-              weeklyOrder: block.weeklyOrder,
-            )
-          : block.copyWith(sessionTypeId: widget.classInfo.id);
-      debugPrint('[TT][class-drop][update] class=${widget.classInfo.id} block=${block.id} fromSess=${block.sessionTypeId} -> ${updated.sessionTypeId} day=${block.dayIndex} time=${block.startHour}:${block.startMinute}');
-      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
+    if (allSetBlocks.isEmpty) {
+      print('[TT][class-assign-bulk] skip: no blocks for set=$setId student=${studentWithInfo.student.id}');
+      return;
+    }
+
+    // 기본 수업이면 sessionTypeId=null, 아니면 target class id로 일괄 설정
+    final targetSession = isDefaultClass ? null : widget.classInfo.id;
+    // 오늘 날짜 기준으로 새롭게 생성할 블록 목록
+    final List<StudentTimeBlock> newBlocks = allSetBlocks.map((b) {
+      return StudentTimeBlock(
+        id: const Uuid().v4(),
+        studentId: b.studentId,
+        dayIndex: b.dayIndex,
+        startHour: b.startHour,
+        startMinute: b.startMinute,
+        duration: b.duration,
+        createdAt: DateTime.now(),
+        startDate: b.startDate, // 원래 시작일 유지
+        endDate: null,
+        setId: b.setId,
+        number: b.number,
+        sessionTypeId: targetSession,
+        weeklyOrder: b.weeklyOrder,
+      );
+    }).toList();
+
+    final beforeDump = allSetBlocks
+        .map((b) => '${b.id}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}')
+        .join(',');
+    print('[TT][class-assign-bulk] class=${widget.classInfo.id} student=${studentWithInfo.student.id} set=$setId before=[$beforeDump] newSess=$targetSession count=${newBlocks.length}');
+
+    final idsToClose = allSetBlocks.map((b) => b.id).toList();
+    try {
+      // 1) 기존 set 블록 모두 end_date 처리 (즉시 반영, publish는 bulkAdd에서 처리)
+      //    planned 재생성은 삭제-추가 연속 작업 동안 비활성화(skipPlannedRegen: true)하여 "활성 블록 없음" 오류를 피함
+      await DataManager.instance.bulkDeleteStudentTimeBlocks(
+        idsToClose,
+        immediate: true,
+        publish: false,
+        skipPlannedRegen: true,
+      );
+      // 2) 새 블록 일괄 추가 (즉시 publish)
+      await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
+    } catch (e, st) {
+      print('[TT][class-assign-bulk][error] set=$setId student=${studentWithInfo.student.id} err=$e\n$st');
+      rethrow;
     }
   }
 

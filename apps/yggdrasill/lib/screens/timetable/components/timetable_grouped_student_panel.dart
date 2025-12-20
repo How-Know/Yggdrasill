@@ -19,6 +19,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final bool isClassRegisterMode;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
+  // 셀 선택 시 미리 계산된 블록 정보를 우선 사용하기 위한 override 맵
+  final Map<String, StudentTimeBlock>? blockOverrides;
 
   // 그룹핑 캐시 (학생 ID 목록 기준)
   static final Map<String, _GroupedCache> _groupCache = {};
@@ -40,6 +42,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.isClassRegisterMode = false,
     this.onDragStart,
     this.onDragEnd,
+    this.blockOverrides,
   });
 
   String _levelLabel(EducationLevel level) {
@@ -263,9 +266,24 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                           children: gradeStudents.map<Widget>((s) {
                             final isSelected = selectedStudentIds.contains(s.student.id);
                             Color? indicatorOverride;
+                          int? blockNumber;
                             final int? dIdx = dayIndex;
                             final DateTime? st = startTime;
-                            if (dIdx != null && st != null) {
+                          final StudentTimeBlock? overrideBlock = blockOverrides?[s.student.id];
+                          if (dIdx != null && st != null) {
+                            if (overrideBlock != null) {
+                              blockNumber = overrideBlock.number;
+                              indicatorOverride = (overrideBlock.sessionTypeId != null && overrideBlock.sessionTypeId!.isNotEmpty)
+                                  ? DataManager.instance.getStudentClassColorAt(
+                                      s.student.id,
+                                      dIdx,
+                                      DateTime(0, 1, 1, st.hour, st.minute),
+                                      setId: overrideBlock.setId,
+                                      refDate: DateTime(st.year, st.month, st.day),
+                                    )
+                                  : Colors.transparent;
+                            }
+                            if (indicatorOverride == null) {
                               final block = DataManager.instance.studentTimeBlocks.firstWhere(
                                 (b) =>
                                     b.studentId == s.student.id &&
@@ -285,6 +303,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                   setId: null,
                                 ),
                               );
+                              blockNumber ??= block.number;
                               final sessionId = block.sessionTypeId;
                               if (sessionId != null && sessionId != '__default_class__') {
                                 indicatorOverride = DataManager.instance.getStudentClassColorAt(
@@ -292,12 +311,14 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                   dIdx,
                                   DateTime(0, 1, 1, st.hour, st.minute),
                                   setId: block.setId,
+                                  refDate: DateTime(st.year, st.month, st.day),
                                 );
                               } else {
                                 // sessionTypeId 없거나 기본수업이면 색상 표시하지 않음 (fallback 방지)
                                 indicatorOverride = Colors.transparent;
                               }
                             }
+                          }
                             final card = Padding(
                               padding: const EdgeInsets.only(left: 14),
                               child: _PanelStudentCard(
@@ -309,6 +330,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                     : (next) => onStudentSelectChanged!(s.student.id, next),
                                 onOpenStudentPage: onOpenStudentPage,
                                 indicatorColorOverride: indicatorOverride,
+                              blockNumber: blockNumber,
                               ),
                             );
                             if (!enableDrag || dayIndex == null || startTime == null) return card;
@@ -320,8 +342,9 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               dayIndex: dayIndex!,
                               startTime: startTime!,
                               isClassRegisterMode: isClassRegisterMode,
-                          onDragStart: onDragStart,
-                          onDragEnd: onDragEnd,
+                              onDragStart: onDragStart,
+                              onDragEnd: onDragEnd,
+                              blockOverride: blockOverrides?[s.student.id],
                             );
                           }).toList(),
                         ),
@@ -351,6 +374,7 @@ class _PanelStudentCard extends StatelessWidget {
   final void Function(bool next)? onToggleSelect;
   final void Function(StudentWithInfo student)? onOpenStudentPage;
   final Color? indicatorColorOverride;
+  final int? blockNumber;
 
   const _PanelStudentCard({
     required this.student,
@@ -359,6 +383,7 @@ class _PanelStudentCard extends StatelessWidget {
     this.onToggleSelect,
     this.onOpenStudentPage,
     this.indicatorColorOverride,
+    this.blockNumber,
   });
 
   @override
@@ -403,11 +428,26 @@ class _PanelStudentCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    student.student.name,
-                    style: nameStyle,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          student.student.name,
+                          style: nameStyle,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                      if (blockNumber != null) ...[
+                        const SizedBox(width: 10),
+                        Text(
+                          '${blockNumber}',
+                          style: schoolStyle,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 if (schoolLabel.isNotEmpty) ...[
@@ -438,6 +478,7 @@ class _DraggablePanelCard extends StatelessWidget {
   final bool isClassRegisterMode;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
+  final StudentTimeBlock? blockOverride;
 
   const _DraggablePanelCard({
     required this.card,
@@ -449,9 +490,13 @@ class _DraggablePanelCard extends StatelessWidget {
     required this.isClassRegisterMode,
     this.onDragStart,
     this.onDragEnd,
+    this.blockOverride,
   });
 
   String? _findSetId(StudentWithInfo s) {
+    if (blockOverride != null && blockOverride!.studentId == s.student.id) {
+      return blockOverride!.setId;
+    }
     final block = DataManager.instance.studentTimeBlocks.firstWhere(
       (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
       orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
@@ -579,7 +624,12 @@ class _PanelDragFeedback extends StatelessWidget {
   Widget _feedbackCard(StudentWithInfo s) {
     final groupColor = s.student.groupInfo?.color;
     Color? classColor;
-    classColor = DataManager.instance.getStudentClassColorAt(s.student.id, dayIndex, startTime);
+    classColor = DataManager.instance.getStudentClassColorAt(
+      s.student.id,
+      dayIndex,
+      startTime,
+      refDate: DateTime(startTime.year, startTime.month, startTime.day),
+    );
     classColor ??= DataManager.instance.getStudentClassColor(s.student.id);
     final Color indicatorColor = classColor ?? Colors.transparent;
     return Material(

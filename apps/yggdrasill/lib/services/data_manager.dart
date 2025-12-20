@@ -122,6 +122,32 @@ class DataManager {
     final date = refDate ?? _todayDateOnly();
     studentTimeBlocksNotifier.value = List.unmodifiable(_activeBlocks(date));
   }
+
+  // 디버그: 특정 키(dayIdx,startHour,startMinute,studentId)로 내려온 블록 페이로드 덤프
+  void debugDumpStudentBlocks({
+    required int dayIdx,
+    required int startHour,
+    required int startMinute,
+    String? studentId,
+  }) {
+    final blocks = _studentTimeBlocks.where((b) {
+      final hit = b.dayIndex == dayIdx && b.startHour == startHour && b.startMinute == startMinute;
+      if (!hit) return false;
+      if (studentId != null && studentId.isNotEmpty) {
+        return b.studentId == studentId;
+      }
+      return true;
+    }).toList();
+    if (blocks.isEmpty) {
+      print('[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} -> 0');
+      return;
+    }
+    final payload = blocks
+        .map((b) =>
+            '${b.id}|student=${b.studentId}|set=${b.setId}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}|created=${b.createdAt.toIso8601String()}')
+        .join(', ');
+    print('[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} count=${blocks.length} payload=[$payload]');
+  }
   
   List<GroupSchedule> _groupSchedules = [];
   final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
@@ -2176,17 +2202,9 @@ class DataManager {
     final today = _todayDateOnly();
     final endDate = today.subtract(const Duration(days: 1));
     try {
-      final beforeSameSlot = _activeBlocks(today)
-          .where((b) =>
-              b.studentId == newBlock.studentId &&
-              b.dayIndex == newBlock.dayIndex &&
-              b.startHour == newBlock.startHour &&
-              b.startMinute == newBlock.startMinute)
-          .map((b) => '${b.id}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first}|set=${b.setId}')
-          .toList();
-      print('[STB][update][start] id=$id set=${newBlock.setId} day=${newBlock.dayIndex} time=${newBlock.startHour}:${newBlock.startMinute} session:$prevSession->$newSession beforeSameSlot=$beforeSameSlot');
-
-      // 1) 동일 학생/요일/시간의 활성 블록 모두 종료 (충돌/중복 방지)
+      // --- 기존 단일 슬롯 업데이트 로직은 사용하지 않음 ---
+      // 이 함수는 단일 블록 업데이트용으로 호출되므로, set 단위 일괄 교체 로직을 드롭 핸들러 쪽에서 호출하도록 별도 함수로 분리.
+      // 여기서는 기존 동작을 유지하되, 최소한의 로그만 남김.
       final toClose = _activeBlocks(today)
           .where((b) =>
               b.studentId == newBlock.studentId &&
@@ -2199,31 +2217,17 @@ class DataManager {
       if (toClose.isEmpty) {
         toClose.add(id);
       }
-      // 로컬에서도 즉시 종료 마킹하여 add 시 충돌 방지
       _studentTimeBlocks = _studentTimeBlocks
           .map((b) => toClose.contains(b.id) ? b.copyWith(endDate: endDate) : b)
           .toList();
-      print('[STB][update][close-local] toClose=$toClose endDate=$endDate');
-      // 실제 종료 처리 (publish는 나중에 한 번만)
       await bulkDeleteStudentTimeBlocks(toClose, immediate: true, publish: false);
-      final afterDelete = _activeBlocks(today)
-          .where((b) => b.studentId == newBlock.studentId && b.dayIndex == newBlock.dayIndex)
-          .map((b) => '${b.id}|sess=${b.sessionTypeId}|start=${b.startDate.toIso8601String()}|end=${b.endDate?.toIso8601String()}')
-          .toList();
-      print('[STB][update][after-delete] closed=$toClose remain=$afterDelete');
-
-      // 2) 새 블록 생성 (새 ID, start_date=오늘, end_date=null)
       final fresh = newBlock.copyWith(
         id: const Uuid().v4(),
         startDate: today,
         endDate: null,
         createdAt: DateTime.now(),
       );
-      // 디버그: 단일 블록 업데이트 로그 (삭제/추가 순서 확인용)
-      print('[STB][update][add] newId=${fresh.id} set=${fresh.setId} day=${fresh.dayIndex} time=${fresh.startHour}:${fresh.startMinute} session=$newSession');
       await addStudentTimeBlock(fresh);
-
-      // 3) 삭제/추가를 한 번에 반영하도록 수동 publish
       _publishStudentTimeBlocks(refDate: today);
       _bumpStudentTimeBlocksRevision();
     } catch (e, st) {
@@ -2826,48 +2830,57 @@ class DataManager {
   }
 
   /// 특정 요일/시간(+선택적 setId) 블록 기준 학생의 수업 색상 반환 (없으면 null)
-  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId}) {
-    final refDate = _todayDateOnly();
-    final candidates = _studentTimeBlocks
+  /// refDate를 넘기면 해당 날짜 기준 활성 블록을 판단; 없으면 오늘 날짜 사용
+  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId, DateTime? refDate}) {
+    final refDateResolved = refDate ?? _todayDateOnly();
+    // refDate 기준으로 이미 활성 필터를 거친 블록만 대상으로 색상 계산
+    final active = _activeBlocks(refDateResolved);
+    final candidates = active
         .where((b) =>
             b.studentId == studentId &&
             b.dayIndex == dayIdx &&
             b.startHour == startTime.hour &&
             b.startMinute == startTime.minute &&
             (setId == null || b.setId == setId) &&
-            _isBlockActiveOn(b, refDate))
+            _isBlockActiveOn(b, refDateResolved))
         .toList();
+    // 디버그: refDate와 후보 블록 상태 확인
+    if (candidates.isNotEmpty) {
+      print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=${candidates.map((b) => '${b.id}|sess=${b.sessionTypeId}|set=${b.setId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}').join(',')}');
+    } else {
+      print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=0');
+    }
     if (candidates.isEmpty) {
-      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDate no-active-candidates');
+      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved no-active-candidates');
       return null;
     }
 
     final withSession = candidates.where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty).toList();
     if (withSession.isNotEmpty) {
       withSession.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      final block = withSession.first;
+      final block = withSession.first; // 최신 createdAt
       final cls = _classes.firstWhere(
         (c) => c.id == block.sessionTypeId,
         orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
       );
       final color = cls.id.isEmpty ? null : cls.color;
-      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDate choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
+      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
       if (color == null) {
-        print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDate reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
+        print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
       }
       return color;
     }
 
     candidates.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final fallback = candidates.first;
+    final fallback = candidates.first; // sessionTypeId 없을 때도 최신 createdAt 사용
     final cls = _classes.firstWhere(
       (c) => c.id == fallback.sessionTypeId,
       orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
     );
     final color = cls.id.isEmpty ? null : cls.color;
-    print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDate choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
+    print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
     if (color == null) {
-      print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDate reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
+      print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
     }
     return color;
   }
