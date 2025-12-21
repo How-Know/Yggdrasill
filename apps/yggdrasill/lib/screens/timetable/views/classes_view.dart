@@ -37,6 +37,7 @@ class ClassesView extends StatefulWidget {
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
+  final Set<String>? filteredClassIds; // 추가: 필터된 수업 id 리스트(__default_class__ 포함)
   final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
   final StudentWithInfo? selectedSelfStudyStudent;
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
@@ -56,6 +57,7 @@ class ClassesView extends StatefulWidget {
     this.onCellSelfStudyStudentsChanged,
     required this.scrollController,
     this.filteredStudentIds, // 추가
+    this.filteredClassIds, // 추가
     this.selectedStudentWithInfo, // 변경
     this.selectedSelfStudyStudent,
     this.onSelectModeChanged, // 추가
@@ -75,6 +77,15 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   // 변경: widget.scrollController 사용
   String? _hoveredCellKey;
   bool _hasScrolledToCurrentTime = false;
+
+  bool _isClassAllowed(String? sessionTypeId) {
+    final cids = widget.filteredClassIds;
+    if (cids == null || cids.isEmpty) return true;
+    if (sessionTypeId == null || sessionTypeId.isEmpty) {
+      return cids.contains('__default_class__');
+    }
+    return cids.contains(sessionTypeId);
+  }
 
   // 드래그 상태 변수 (UI 구조는 그대로, 상태만 추가)
   int? dragStartIdx;
@@ -628,9 +639,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                 ...DataManager.instance.selfStudyTimeBlocks,
               ];
               // 학생 리스트 필터 등에는 기존 filteredStudentIds/filteredStudentBlocks 사용
-              final filteredStudentBlocks = widget.filteredStudentIds == null
-                  ? studentTimeBlocks
-                  : studentTimeBlocks.where((b) => widget.filteredStudentIds!.contains(b.studentId)).toList();
+              final filteredStudentBlocks = studentTimeBlocks.where((b) {
+                if (widget.filteredStudentIds != null && !widget.filteredStudentIds!.contains(b.studentId)) return false;
+                if (!_isClassAllowed(b.sessionTypeId)) return false;
+                return true;
+              }).toList();
               //print('[DEBUG][필터] filteredStudentBlocks.length=${filteredStudentBlocks.length}');
               final filteredSelfStudyBlocks = widget.filteredStudentIds == null
                   ? selfStudyTimeBlocks
@@ -641,14 +654,21 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               final groups = DataManager.instance.groups;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               // 인원수 카운트 등 공통 필드만 쓸 때 allBlocks 사용, StudentTimeBlock만 필요한 곳에는 filteredStudentBlocks만 넘김
-              final filteredBlocks = widget.filteredStudentIds == null
-                  ? allBlocks
-                  : allBlocks.where((b) {
-                      if (b is StudentTimeBlock || b is SelfStudyTimeBlock) {
-                        return widget.filteredStudentIds!.contains(b.studentId);
-                      }
-                      return false;
-                    }).toList();
+              // 정원/표시에는 수업 필터 적용하지만, 학생 필터만 있을 때는 자습 포함
+              final filteredBlocks = allBlocks.where((b) {
+                if (b is StudentTimeBlock) {
+                  if (widget.filteredStudentIds != null && !widget.filteredStudentIds!.contains(b.studentId)) return false;
+                  if (!_isClassAllowed(b.sessionTypeId)) return false;
+                  return true;
+                }
+                if (b is SelfStudyTimeBlock) {
+                  if (widget.filteredStudentIds != null && !widget.filteredStudentIds!.contains(b.studentId)) return false;
+                  // 수업 필터가 있을 때 자습은 제외
+                  if (widget.filteredClassIds != null && widget.filteredClassIds!.isNotEmpty) return false;
+                  return true;
+                }
+                return false;
+              }).toList();
               // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
                return Listener(
                 behavior: HitTestBehavior.translucent,

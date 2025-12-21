@@ -6,6 +6,7 @@ import '../../services/data_manager.dart';
 import '../../widgets/student_search_dialog.dart';
 import '../../widgets/group_schedule_dialog.dart';
 import '../../models/group_schedule.dart';
+import '../../models/class_info.dart';
 import 'components/timetable_header.dart';
 import 'views/classes_view.dart';
 import 'views/makeup_view.dart';
@@ -1584,9 +1585,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final Set<String>? filteredStudentIds = _activeFilter == null
           ? null
           : _filteredStudents.map((s) => s.student.id).toSet();
+        final Set<String> filteredClassIds = _classIdsFromFilter(_activeFilter);
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
+          filteredClassIds: filteredClassIds,
+          onToggleClassFilter: _toggleClassQuickFilter,
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           header: Padding(
             padding: const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
@@ -1645,6 +1649,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
                         ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
                         : null,
+                    filteredClassIds: filteredClassIds.isEmpty ? null : filteredClassIds,
                     onTimeSelected: (dayIdx, startTime) {
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
@@ -2329,13 +2334,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final classes = DataManager.instance.classesNotifier.value;
         final selectedClassIds = f['classes']!.map((className) {
           final classInfo = classes.firstWhereOrNull((c) => c.name == className);
-          return classInfo?.id;
+          return classInfo?.id ?? (className == '수업' ? '__default_class__' : null);
         }).where((id) => id != null).cast<String>().toSet();
-        
+
         if (selectedClassIds.isNotEmpty) {
           final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-          final hasMatchingClass = studentBlocks.any((block) => 
-            block.sessionTypeId != null && selectedClassIds.contains(block.sessionTypeId));
+          final hasMatchingClass = studentBlocks.any((block) =>
+            (block.sessionTypeId == null && selectedClassIds.contains('__default_class__')) ||
+            (block.sessionTypeId != null && selectedClassIds.contains(block.sessionTypeId)));
           if (!hasMatchingClass) return false;
         }
       }
@@ -2344,6 +2350,57 @@ class _TimetableScreenState extends State<TimetableScreen> {
     }).toList();
     print('[DEBUG] 필터 적용 결과: ${filtered.map((s) => s.student.name).toList()}');
     return filtered;
+  }
+
+  Set<String> _classIdsFromFilter(Map<String, Set<String>>? f) {
+    if (f == null || !(f['classes']?.isNotEmpty ?? false)) return {};
+    final classes = DataManager.instance.classesNotifier.value;
+    final ids = f['classes']!
+        .map((name) => classes.firstWhereOrNull((c) => c.name == name)?.id)
+        .whereType<String>()
+        .toSet();
+    // 기본 수업(세션 null) 필터 지원: 이름이 '수업'이거나 id가 '__default_class__'인 경우 포함
+    if (f['classes']!.contains('수업') || f['classes']!.contains('__default_class__')) {
+      ids.add('__default_class__');
+    }
+    return ids;
+  }
+
+  bool _isFilterEmptyExceptClasses(Map<String, Set<String>> f) {
+    return (f['educationLevels']?.isEmpty ?? true) &&
+        (f['grades']?.isEmpty ?? true) &&
+        (f['schools']?.isEmpty ?? true) &&
+        (f['groups']?.isEmpty ?? true);
+  }
+
+  void _toggleClassQuickFilter(ClassInfo classInfo) {
+    final className = classInfo.name.isNotEmpty ? classInfo.name : '수업';
+    final current = _activeFilter;
+    final currentClasses = current?['classes'] ?? <String>{};
+    final onlyThisClassActive = current != null &&
+        _isFilterEmptyExceptClasses(current) &&
+        currentClasses.length == 1 &&
+        currentClasses.contains(className);
+
+    setState(() {
+      if (onlyThisClassActive) {
+        _activeFilter = null;
+        _selectedClasses.clear();
+      } else {
+        _selectedEducationLevels.clear();
+        _selectedGrades.clear();
+        _selectedSchools.clear();
+        _selectedGroups.clear();
+        _selectedClasses = {className};
+        _activeFilter = {
+          'educationLevels': <String>{},
+          'grades': <String>{},
+          'schools': <String>{},
+          'groups': <String>{},
+          'classes': {className},
+        };
+      }
+    });
   }
 
   String _educationLevelToKor(EducationLevel level) {

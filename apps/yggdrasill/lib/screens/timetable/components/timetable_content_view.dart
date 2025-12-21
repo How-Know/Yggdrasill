@@ -34,6 +34,8 @@ class TimetableContentView extends StatefulWidget {
   final VoidCallback? onExitSelectMode; // 추가: 다중모드 종료 콜백
   final String? registrationModeType;
   final Set<String>? filteredStudentIds; // 추가: 필터링된 학생 ID 목록
+  final Set<String>? filteredClassIds; // 추가: 필터링된 수업 ID 목록
+  final void Function(ClassInfo classInfo)? onToggleClassFilter; // 수업카드 클릭 시 필터 토글
   final String? placeholderText; // 빈 셀 안내 문구 대체용
   final bool showRegisterControls;
   final Widget? header;
@@ -58,6 +60,8 @@ class TimetableContentView extends StatefulWidget {
     this.onExitSelectMode,
     this.registrationModeType,
     this.filteredStudentIds, // 추가
+    this.filteredClassIds,
+    this.onToggleClassFilter,
     this.placeholderText,
     this.showRegisterControls = true,
     this.header,
@@ -102,6 +106,42 @@ class TimetableContentViewState extends State<TimetableContentView> {
   bool isClassRegisterMode = false;
   // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
   late final VoidCallback _revListener;
+
+  bool _isBlockAllowed(StudentTimeBlock b) {
+    final cids = widget.filteredClassIds;
+    if (cids == null || cids.isEmpty) return true;
+    final sid = b.sessionTypeId;
+    if (sid == null || sid.isEmpty) {
+      return cids.contains('__default_class__');
+    }
+    return cids.contains(sid);
+  }
+
+  Set<String> _studentFilterSet() {
+    return widget.filteredStudentIds?.toSet() ??
+        DataManager.instance.students.map((s) => s.student.id).toSet();
+  }
+
+  int _unfilteredDefaultClassCount() {
+    return DataManager.instance.studentTimeBlocks
+        .where((b) => b.sessionTypeId == null)
+        .map((b) => b.studentId)
+        .toSet()
+        .length;
+  }
+
+  int _countStudentsForClass(String? classId) {
+    final students = _studentFilterSet();
+    final blocks = DataManager.instance.studentTimeBlocks.where((b) {
+      if (!_isBlockAllowed(b)) return false;
+      if (!students.contains(b.studentId)) return false;
+      if (classId == null) {
+        return b.sessionTypeId == null;
+      }
+      return b.sessionTypeId == classId;
+    }).map((b) => b.studentId).toSet();
+    return blocks.length;
+  }
 
   String _weekdayLabel(int dayIdx) {
     const labels = ['월', '화', '수', '목', '금', '토', '일'];
@@ -948,6 +988,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   List<StudentTimeBlock> filteredBlocks = [];
                                   for (final b in activeBlocks) {
                                     if (!studentIdSet.contains(b.studentId)) continue;
+                                    if (!_isBlockAllowed(b)) continue;
                                     final pairKey = '${b.studentId}|${b.setId ?? ''}';
                                     if (hiddenPairs.contains(pairKey)) {
                                       continue; // set_id 블라인드 적용
@@ -1348,12 +1389,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                         valueListenable: DataManager.instance.studentTimeBlocksRevision,
                         builder: (context, __, ___) {
                           // 항상 최신 블록을 참조하여 기본 수업 인원 계산
-                          final blocks = DataManager.instance.studentTimeBlocks;
-                          final int unassignedCount = blocks
-                              .where((b) => b.sessionTypeId == null)
-                              .map((b) => b.studentId)
-                              .toSet()
-                              .length;
+                          final int unassignedCount = _unfilteredDefaultClassCount();
+                          final filteredClassIds = widget.filteredClassIds ?? const <String>{};
 
                           return ValueListenableBuilder<List<ClassInfo>>(
                             valueListenable: DataManager.instance.classesNotifier,
@@ -1383,6 +1420,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       studentCountOverride: unassignedCount,
                                       enableActions: false,
                                       showDragHandle: false,
+                                      onFilterToggle: widget.onToggleClassFilter != null
+                                          ? () => widget.onToggleClassFilter!(ClassInfo(
+                                                id: '__default_class__',
+                                                name: '수업',
+                                                description: '기본 수업',
+                                                capacity: null,
+                                                color: const Color(0xFF223131),
+                                              ))
+                                          : null,
+                                      isFiltered: filteredClassIds.contains('__default_class__'),
                                     ),
                                     const SizedBox(height: 12),
                                   ],
@@ -1414,6 +1461,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                   onDelete: () => _deleteClass(idx),
                                                   reorderIndex: idx,
                                                   registrationModeType: widget.registrationModeType,
+                                                  studentCountOverride: null, // 원본 수로 표시
+                                                  onFilterToggle: widget.onToggleClassFilter != null
+                                                      ? () => widget.onToggleClassFilter!(c)
+                                                      : null,
+                                                  isFiltered: filteredClassIds.contains(c.id),
                                                 ),
                                               );
                                             },
@@ -2759,6 +2811,8 @@ class _ClassCard extends StatefulWidget {
   final int? studentCountOverride;
   final bool enableActions;
   final bool showDragHandle;
+  final VoidCallback? onFilterToggle;
+  final bool isFiltered;
   const _ClassCard({
     Key? key,
     required this.classInfo,
@@ -2769,6 +2823,8 @@ class _ClassCard extends StatefulWidget {
     this.studentCountOverride,
     this.enableActions = true,
     this.showDragHandle = true,
+    this.onFilterToggle,
+    this.isFiltered = false,
   }) : super(key: key);
   @override
   State<_ClassCard> createState() => _ClassCardState();
@@ -2899,7 +2955,8 @@ class _ClassCardState extends State<_ClassCard> {
   Widget build(BuildContext context) {
     final c = widget.classInfo;
     final bool isDefaultClass = c.id == '__default_class__';
-    final int studentCount = widget.studentCountOverride ?? DataManager.instance.getStudentCountForClass(widget.classInfo.id);
+    final int studentCount = widget.studentCountOverride ??
+        DataManager.instance.getStudentCountForClass(widget.classInfo.id);
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
@@ -2990,7 +3047,8 @@ class _ClassCardState extends State<_ClassCard> {
       },
       builder: (context, candidateData, rejectedData) {
         // print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
-        final Color borderColor = _isHovering
+        final bool highlight = _isHovering || widget.isFiltered;
+        final Color borderColor = highlight
             ? (c.color ?? const Color(0xFF223131))
             : Colors.transparent;
         final Color indicatorColor = c.color ?? const Color(0xFF223131);
@@ -3104,8 +3162,15 @@ class _ClassCardState extends State<_ClassCard> {
             ),
           ),
         );
+        final tappableBody = widget.onFilterToggle != null
+            ? GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: widget.onFilterToggle,
+                child: cardBody,
+              )
+            : cardBody;
         if (classBlocks.isEmpty) {
-          return cardBody;
+          return tappableBody;
         }
         final dataPayload = {
           'type': 'class-move',
@@ -3185,7 +3250,7 @@ class _ClassCardState extends State<_ClassCard> {
             ),
           ),
           childWhenDragging: Opacity(opacity: 0.35, child: cardBody),
-          child: cardBody,
+          child: tappableBody,
         );
       },
     );

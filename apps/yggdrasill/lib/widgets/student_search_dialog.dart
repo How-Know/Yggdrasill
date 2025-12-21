@@ -2,6 +2,8 @@
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../services/data_manager.dart';
+import '../models/class_info.dart';
+import 'custom_form_dropdown.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentSearchDialog extends StatefulWidget {
@@ -214,39 +216,27 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
 
   Widget _buildClassDropdown() {
     final classes = DataManager.instance.classes;
-    final items = [
-      const DropdownMenuItem<String?>(
-        value: null,
-        child: Text('수업 선택 없음'),
-      ),
-      ...classes.map((c) => DropdownMenuItem<String?>(
-            value: c.id,
-            child: Text(c.name, overflow: TextOverflow.ellipsis),
-          )),
-    ];
-    return DropdownButtonFormField<String?>(
-      value: _selectedClassId,
+    final items = <String>['', ...classes.map((c) => c.id)];
+
+    String _labelFor(String id) {
+      if (id.isEmpty) return '수업 선택 없음';
+      final cls = classes.firstWhere(
+        (c) => c.id == id,
+        orElse: () => ClassInfo(id: id, name: '삭제된 수업', description: '', capacity: null, color: null),
+      );
+      return cls.name;
+    }
+
+    return CustomFormDropdown<String>(
+      label: '수업',
+      placeholder: '수업 선택 없음',
+      value: _selectedClassId ?? '',
       items: items,
+      itemLabelBuilder: _labelFor,
       onChanged: (v) {
-        setState(() => _selectedClassId = v);
+        setState(() => _selectedClassId = v.isEmpty ? null : v);
         print('[DEBUG][StudentSearchDialog] dropdown changed -> $_selectedClassId');
       },
-      decoration: InputDecoration(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        filled: true,
-        fillColor: const Color(0xFF111418),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF223131)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 1.4),
-        ),
-      ),
-      dropdownColor: const Color(0xFF111418),
-      iconEnabledColor: Colors.white70,
-      style: const TextStyle(color: Color(0xFFEAF2F2)),
     );
   }
 
