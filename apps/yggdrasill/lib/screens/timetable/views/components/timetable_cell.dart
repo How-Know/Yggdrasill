@@ -519,7 +519,9 @@ class TimetableCell extends StatelessWidget {
             final newHour = newMinuteTotal ~/ 60;
             final newMinute = newMinuteTotal % 60;
             oldIds.add(b.id);
+            // 새 레코드로 생성하여 기존 end_date가 덮어쓰이지 않게 함
             newBlocks.add(b.copyWith(
+              id: const Uuid().v4(),
               dayIndex: newDay,
               startHour: newHour,
               startMinute: newMinute,
@@ -542,6 +544,7 @@ class TimetableCell extends StatelessWidget {
               return;
             }
           }
+          print('[DRAG][class-move] remove=${oldIds.length} add=${newBlocks.length} targetDay=$dayIdx targetTime=${startTime.hour}:${startTime.minute}');
           await DataManager.instance.bulkDeleteStudentTimeBlocks(oldIds, immediate: true, skipPlannedRegen: true);
           await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
           await DataManager.instance.loadStudents();

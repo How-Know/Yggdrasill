@@ -123,6 +123,13 @@ class DataManager {
     studentTimeBlocksNotifier.value = List.unmodifiable(_activeBlocks(date));
   }
 
+  // UI 깜빡임을 줄이기 위한 낙관적 반영용 헬퍼
+  void applyStudentTimeBlocksOptimistic(List<StudentTimeBlock> blocks, {DateTime? refDate}) {
+    _studentTimeBlocks = List<StudentTimeBlock>.from(blocks);
+    _publishStudentTimeBlocks(refDate: refDate);
+    _bumpStudentTimeBlocksRevision();
+  }
+
   // 디버그: 특정 키(dayIdx,startHour,startMinute,studentId)로 내려온 블록 페이로드 덤프
   void debugDumpStudentBlocks({
     required int dayIdx,
@@ -1946,7 +1953,17 @@ class DataManager {
     try { await _generatePlannedAttendanceForNextDays(days: 14); } catch (_) {}
   }
   
-  Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks, {bool immediate = false}) async {
+  Future<void> bulkAddStudentTimeBlocks(
+    List<StudentTimeBlock> blocks, {
+    bool immediate = false,
+    bool injectLocal = true,
+    bool skipOverlapCheck = false,
+  }) async {
+    if (blocks.isEmpty) {
+      print('[SUPA][stb bulk add] skip empty payload');
+      return;
+    }
+    print('[SUPA][stb bulk add][start] count=${blocks.length} immediate=$immediate injectLocal=$injectLocal skipOverlap=$skipOverlapCheck sample=${blocks.take(3).map((b)=>'${b.studentId}:${b.sessionTypeId}:${b.setId}:${b.startDate.toIso8601String().split("T").first}').toList()}');
     // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
     final normalizedBlocks = blocks.map((b) {
       final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
@@ -1954,17 +1971,21 @@ class DataManager {
       return b.copyWith(startDate: sd, endDate: ed);
     }).toList();
 
-    for (final newBlock in normalizedBlocks) {
-      final overlap = _activeBlocks(newBlock.startDate).any((b) =>
-        b.studentId == newBlock.studentId &&
-        b.dayIndex == newBlock.dayIndex &&
-        // 시간 겹침 검사
-        (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
-        (b.startHour * 60 + b.startMinute) < (newBlock.startHour * 60 + newBlock.startMinute + newBlock.duration.inMinutes)
-      );
-      if (overlap) {
-        throw Exception('이미 등록된 시간과 겹칩니다.');
+    if (!skipOverlapCheck) {
+      for (final newBlock in normalizedBlocks) {
+        final overlap = _activeBlocks(newBlock.startDate).any((b) =>
+          b.studentId == newBlock.studentId &&
+          b.dayIndex == newBlock.dayIndex &&
+          // 시간 겹침 검사
+          (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
+          (b.startHour * 60 + b.startMinute) < (newBlock.startHour * 60 + newBlock.startMinute + newBlock.duration.inMinutes)
+        );
+        if (overlap) {
+          throw Exception('이미 등록된 시간과 겹칩니다.');
+        }
       }
+    } else {
+      print('[SUPA][stb bulk add] overlap check skipped (caller requested)');
     }
     
     if (TagPresetService.preferSupabaseRead) {
@@ -1990,13 +2011,17 @@ class DataManager {
         }..removeWhere((k, v) => v == null)).toList();
         print('[SUPA][stb bulk add] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
         await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
-        _studentTimeBlocks.addAll(normalizedBlocks);
+        if (injectLocal) {
+          _studentTimeBlocks.addAll(normalizedBlocks);
+        }
       } catch (e, st) {
-        print('[SUPA][stb bulk add] $e\n$st');
+        print('[SUPA][stb bulk add][error] $e\n$st');
         rethrow;
       }
     } else {
-    _studentTimeBlocks.addAll(normalizedBlocks);
+    if (injectLocal) {
+      _studentTimeBlocks.addAll(normalizedBlocks);
+    }
     print('[SYNC][bulkAdd-local] count=${normalizedBlocks.length}, sessionTypes=${normalizedBlocks.map((b)=>b.sessionTypeId).toSet()}, sample=${normalizedBlocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
     await AcademyDbService.instance.bulkAddStudentTimeBlocks(normalizedBlocks);
     }

@@ -2782,15 +2782,13 @@ class _ClassCardState extends State<_ClassCard> {
     // 다중이동: students 리스트가 있으면 병렬 처리
     final students = data['students'] as List<dynamic>?;
     if (students != null && students.isNotEmpty) {
-      final tasks = <Future>[];
       for (final entry in students) {
         final studentWithInfo = entry['student'] as StudentWithInfo?;
         final setId = entry['setId'] as String?;
         debugPrint('[TT][class-drop][multi] class=${widget.classInfo.id} sid=${studentWithInfo?.student.id} setId=$setId oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']}');
         if (studentWithInfo == null || setId == null) continue; // setId 없으면 스킵
-        tasks.add(_registerSingleStudent(studentWithInfo, setId: setId));
+        await _registerSingleStudent(studentWithInfo, setId: setId);
       }
-      await Future.wait(tasks);
       return;
     }
     // 기존 단일 등록 로직 (아래 함수로 분리)
@@ -2822,12 +2820,19 @@ class _ClassCardState extends State<_ClassCard> {
     // setId가 확정되지 않은 경우 스킵
     if (setId == null) return;
     final bool isDefaultClass = widget.classInfo.id == '__default_class__';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final beforeLocal = List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
+    bool isOngoingOrFuture(StudentTimeBlock b) {
+      final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      return end == null || !end.isBefore(today);
+    }
 
     // 해당 set의 모든 블록을 한 번에 갱신(기존 모두 닫고 새 블록들을 한 번에 재생성)
-    final allSetBlocks = DataManager.instance.studentTimeBlocks
-        .where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId)
-        .toList();
-    if (allSetBlocks.isEmpty) {
+    final allSetBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentWithInfo.student.id && b.setId == setId).toList();
+    final activeOrFutureBlocks = allSetBlocks.where(isOngoingOrFuture).toList();
+    final blocksToUse = activeOrFutureBlocks.isNotEmpty ? activeOrFutureBlocks : allSetBlocks;
+    if (blocksToUse.isEmpty) {
       print('[TT][class-assign-bulk] skip: no blocks for set=$setId student=${studentWithInfo.student.id}');
       return;
     }
@@ -2835,7 +2840,7 @@ class _ClassCardState extends State<_ClassCard> {
     // 기본 수업이면 sessionTypeId=null, 아니면 target class id로 일괄 설정
     final targetSession = isDefaultClass ? null : widget.classInfo.id;
     // 오늘 날짜 기준으로 새롭게 생성할 블록 목록
-    final List<StudentTimeBlock> newBlocks = allSetBlocks.map((b) {
+    final List<StudentTimeBlock> newBlocks = blocksToUse.map((b) {
       return StudentTimeBlock(
         id: const Uuid().v4(),
         studentId: b.studentId,
@@ -2844,7 +2849,8 @@ class _ClassCardState extends State<_ClassCard> {
         startMinute: b.startMinute,
         duration: b.duration,
         createdAt: DateTime.now(),
-        startDate: b.startDate, // 원래 시작일 유지
+        // 닫힌 시점 이후부터 새 수업으로 적용되도록 시작일은 오늘로 갱신
+        startDate: today,
         endDate: null,
         setId: b.setId,
         number: b.number,
@@ -2853,12 +2859,12 @@ class _ClassCardState extends State<_ClassCard> {
       );
     }).toList();
 
-    final beforeDump = allSetBlocks
+    final beforeDump = blocksToUse
         .map((b) => '${b.id}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}')
         .join(',');
-    print('[TT][class-assign-bulk] class=${widget.classInfo.id} student=${studentWithInfo.student.id} set=$setId before=[$beforeDump] newSess=$targetSession count=${newBlocks.length}');
+    print('[TT][class-assign-bulk] class=${widget.classInfo.id} student=${studentWithInfo.student.id} set=$setId before=[$beforeDump] newSess=$targetSession count=${newBlocks.length} today=$today');
 
-    final idsToClose = allSetBlocks.map((b) => b.id).toList();
+    final idsToClose = blocksToUse.map((b) => b.id).toList();
     try {
       // 1) 기존 set 블록 모두 end_date 처리 (즉시 반영, publish는 bulkAdd에서 처리)
       //    planned 재생성은 삭제-추가 연속 작업 동안 비활성화(skipPlannedRegen: true)하여 "활성 블록 없음" 오류를 피함
@@ -2868,10 +2874,23 @@ class _ClassCardState extends State<_ClassCard> {
         publish: false,
         skipPlannedRegen: true,
       );
+      // 1.5) 낙관적 UI 반영: 닫힌 블록 제거 + 새 블록 추가 후 바로 퍼블리시
+      final others = DataManager.instance.studentTimeBlocks.where((b) => !idsToClose.contains(b.id)).toList();
+      final optimistic = [...others, ...newBlocks];
+      print('[TT][class-assign-bulk][optimistic] set=$setId student=${studentWithInfo.student.id} add=${newBlocks.length} close=${idsToClose.length}');
+      DataManager.instance.applyStudentTimeBlocksOptimistic(optimistic, refDate: today);
       // 2) 새 블록 일괄 추가 (즉시 publish)
-      await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
+      await DataManager.instance.bulkAddStudentTimeBlocks(
+        newBlocks,
+        immediate: true,
+        injectLocal: false,
+        skipOverlapCheck: true, // 낙관적 반영으로 이미 로컬에 들어간 블록과의 중복 검사를 건너뛰어 서버 반영 막힘 방지
+      );
+      print('[TT][class-assign-bulk][done] set=$setId student=${studentWithInfo.student.id} add=${newBlocks.length}');
     } catch (e, st) {
       print('[TT][class-assign-bulk][error] set=$setId student=${studentWithInfo.student.id} err=$e\n$st');
+      // 실패 시 로컬 상태 롤백
+      DataManager.instance.applyStudentTimeBlocksOptimistic(beforeLocal, refDate: today);
       rethrow;
     }
   }
@@ -2886,6 +2905,12 @@ class _ClassCardState extends State<_ClassCard> {
       onWillAccept: (data) {
         // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
         if (data == null) return false;
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        bool isOngoingOrFuture(StudentTimeBlock b) {
+          final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+          return end == null || !end.isBefore(today);
+        }
         debugPrint('[TT][class-drop][will] class=${widget.classInfo.id} keys=${data.keys.toList()} type=${data['type']}'
             ' setId=${data['setId']} oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']} studentsLen=${(data['students'] as List?)?.length}');
         final isMulti = data['students'] is List;
@@ -2909,9 +2934,11 @@ class _ClassCardState extends State<_ClassCard> {
               setId = fallback.setId;
             }
             if (student == null || setId == null) return false;
-            final blocks = isDefaultClass
-                ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()
-                : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+            final blocks = (isDefaultClass
+                    ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null)
+                    : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id))
+                .where(isOngoingOrFuture)
+                .toList();
             final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
             // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
             if (alreadyRegistered) return false;
@@ -2935,9 +2962,11 @@ class _ClassCardState extends State<_ClassCard> {
             setId = fallback.setId;
           }
           if (student == null || setId == null) return false;
-          final blocks = isDefaultClass
-              ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null).toList()
-              : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id).toList();
+          final blocks = (isDefaultClass
+                  ? DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == null)
+                  : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == widget.classInfo.id))
+              .where(isOngoingOrFuture)
+              .toList();
           final alreadyRegistered = blocks.any((b) => b.studentId == student.student.id && b.setId == setId);
           // print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
           if (alreadyRegistered) return false;
