@@ -76,6 +76,22 @@ class TimetableContentView extends StatefulWidget {
 
 class TimetableContentViewState extends State<TimetableContentView> {
   // 메모 오버레이가 사용할 전역 키 등을 두려면 이곳에 배치 가능 (현재 오버레이는 TimetableScreen에서 처리)
+  // === 우측 학생 패널(셀/요일/검색) 헤더 위치 통일용 상수 ===
+  // - 헤더가 "컨트롤(등록/검색) 바로 아래"에서 시작할 때의 여백(=세 패널 공통 기준)
+  // - 눈으로 보면서 미세 조정하고 싶으면 이 값만 바꾸면 됨.
+  //   (주차 위젯과 라인이 살짝 안 맞으면 1~5px 정도만 조정)
+  static const double _kStudentPanelHeaderTopMargin = 22.0; // +3px fine-tune
+  static const double _kStudentPanelHeaderBottomMargin = 10.0;
+  static const double _kStudentPanelPaddingTop = 8.0; // 학생 패널 Padding(top)
+  // 요일 선택(오버레이) 헤더만 미세 조정: 음수면 위로(상단 여백 감소), 양수면 아래로
+  static const double _kDaySelectedOverlayTopFineTune = -44.0;
+
+  // ✅ 컨트롤(등록/검색 Row)의 "실제 렌더링된 높이"를 측정해서
+  // 요일 선택 오버레이의 시작 위치를 픽셀 단위로 맞추기 위한 키/상태
+  final GlobalKey _studentControlsMeasureKey = GlobalKey();
+  double _studentControlsMeasuredHeight = 0.0;
+  bool _studentControlsMeasureScheduled = false;
+
   final GlobalKey _dropdownButtonKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
   bool _showDeleteZone = false;
@@ -272,6 +288,21 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
   }
 
+  void _scheduleStudentControlsMeasure() {
+    if (_studentControlsMeasureScheduled) return;
+    _studentControlsMeasureScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _studentControlsMeasureScheduled = false;
+      if (!mounted) return;
+      final ctx = _studentControlsMeasureKey.currentContext;
+      final box = ctx?.findRenderObject() as RenderBox?;
+      final h = box?.size.height;
+      if (h == null) return;
+      if ((h - _studentControlsMeasuredHeight).abs() <= 0.5) return;
+      setState(() => _studentControlsMeasuredHeight = h);
+    });
+  }
+
   // 시간 미선택 시 기본 스켈레톤
   Widget _buildTimeIdleSkeleton() {
     const levelBarColor = Color(0xFF223131);
@@ -281,7 +312,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
         Container(
           height: 48,
           width: double.infinity,
-          margin: const EdgeInsets.only(top: 24, bottom: 10),
+          margin: const EdgeInsets.only(
+            top: _kStudentPanelHeaderTopMargin,
+            bottom: _kStudentPanelHeaderBottomMargin,
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 15),
           decoration: BoxDecoration(
             color: levelBarColor,
@@ -549,23 +583,33 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   double _daySelectedOverlayTopPadding(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    final isNarrow = screenW <= 1600;
-
-    // 학생 패널 상단 컨트롤(등록/검색) 높이와 동일한 기준으로 계산
-    final double controlsHeight;
-    if (isNarrow) {
-      final double t = ((screenW - 1200) / 400).clamp(0.0, 1.0);
-      controlsHeight = 30 + (38 - 30) * t; // 1200px에서 30 → 1600px에서 38
-    } else {
-      controlsHeight = 44;
+    // ✅ 셀 선택/검색 패널과 동일하게:
+    // (학생패널 top padding) + (컨트롤 "실측" 높이) + (공통 헤더 top margin)
+    //
+    // 컨트롤 높이가 아직 측정 전(0)인 첫 프레임에는 기존 추정치를 fallback으로 사용
+    final measured = _studentControlsMeasuredHeight;
+    if (measured > 0) {
+      return (_kStudentPanelPaddingTop +
+              measured +
+              _kStudentPanelHeaderTopMargin +
+              _kDaySelectedOverlayTopFineTune)
+          .clamp(0.0, double.infinity);
     }
 
-    // 셀 선택 패널이 내부에서 top:24 여백을 갖고 있어(등록 버튼과 간격),
-    // 오버레이도 같은 기준으로 맞추기 위해 그만큼 보정(=헤더가 과하게 내려가는 현상 완화)
-    // 셀 선택 리스트의 시작 위치(컨테이너 상단 여백)와 시각적으로 맞추기 위한 보정값
-    const double cellPanelTopInset = 18;
-    return (8 + controlsHeight - cellPanelTopInset).clamp(0.0, double.infinity);
+    final screenW = MediaQuery.of(context).size.width;
+    final isNarrow = screenW <= 1600;
+    final double estimatedControlsHeight;
+    if (isNarrow) {
+      final double t = ((screenW - 1200) / 400).clamp(0.0, 1.0);
+      estimatedControlsHeight = 30 + (38 - 30) * t;
+    } else {
+      estimatedControlsHeight = 44;
+    }
+    return (_kStudentPanelPaddingTop +
+            estimatedControlsHeight +
+            _kStudentPanelHeaderTopMargin +
+            _kDaySelectedOverlayTopFineTune)
+        .clamp(0.0, double.infinity);
   }
 
   // timetable_content_view.dart에 아래 메서드 추가(클래스 내부)
@@ -683,6 +727,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   @override
   Widget build(BuildContext context) {
+    // 요일 오버레이 시작 위치를 맞추기 위해, 컨트롤 Row 높이를 매 프레임 실측
+    _scheduleStudentControlsMeasure();
     return Row(
       children: [
         const SizedBox(width: 30),
@@ -714,660 +760,744 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     flex: 1, // 1:1 비율로 수정
                     child: Padding(
                       padding: const EdgeInsets.only(
-                          left: 4, right: 8, top: 8, bottom: 8),
+                          left: 4,
+                          right: 8,
+                          top: _kStudentPanelPaddingTop,
+                          bottom: 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Builder(builder: (context) {
-                            final screenW = MediaQuery.of(context).size.width;
-                            final isNarrow = screenW <= 1600;
-                            if (isNarrow) {
-                              // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
-                              final double t =
-                                  ((screenW - 1200) / 400).clamp(0.0, 1.0);
-                              final double h = 30 +
-                                  (38 - 30) * t; // 1200px에서 30 → 1600px에서 38
-                              final double regW =
-                                  80 + (96 - 80) * t; // 등록 버튼 너비 80~96
-                              final double dropW =
-                                  30 + (38 - 30) * t; // 드롭다운 30~38
-                              final double dividerLineH =
-                                  16 + (22 - 16) * t; // 구분선 내부 라인 16~22
-                              final double searchW =
-                                  120 + (160 - 120) * t; // 검색바 너비 120~160
-                              return Row(
-                                children: [
-                                  Expanded(
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.start,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.max,
-                                      children: [
-                                        if (widget.showRegisterControls) ...[
-                                          SizedBox(
-                                            width: regW,
-                                            height: h,
-                                            child: Material(
-                                              color: const Color(0xFF1976D2),
-                                              borderRadius:
-                                                  const BorderRadius.only(
-                                                topLeft: Radius.circular(32),
-                                                bottomLeft: Radius.circular(32),
-                                                topRight: Radius.circular(6),
-                                                bottomRight: Radius.circular(6),
-                                              ),
-                                              child: InkWell(
-                                                borderRadius:
-                                                    const BorderRadius.only(
-                                                  topLeft: Radius.circular(32),
-                                                  bottomLeft:
-                                                      Radius.circular(32),
-                                                  topRight: Radius.circular(6),
-                                                  bottomRight:
-                                                      Radius.circular(6),
-                                                ),
-                                                onTap: widget.onRegisterPressed,
-                                                child: Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  mainAxisSize:
-                                                      MainAxisSize.max,
-                                                  children: const [
-                                                    Icon(Icons.add,
-                                                        color: Colors.white,
-                                                        size: 16),
-                                                    SizedBox(width: 6),
-                                                    Text('등록',
-                                                        style: TextStyle(
-                                                            color: Colors.white,
-                                                            fontSize: 14,
-                                                            fontWeight:
-                                                                FontWeight
-                                                                    .bold)),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          Container(
-                                            height: h,
-                                            width: 3.0,
-                                            color: Colors.transparent,
-                                            child: Center(
-                                              child: Container(
-                                                width: 2,
-                                                height: dividerLineH,
-                                                color: Colors.white
-                                                    .withOpacity(0.1),
-                                              ),
-                                            ),
-                                          ),
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 2.5),
-                                            child: GestureDetector(
-                                              key: _dropdownButtonKey,
-                                              onTap: () {
-                                                if (_dropdownOverlay == null) {
-                                                  widget.onDropdownOpenChanged(
-                                                      true);
-                                                  _showDropdownMenu();
-                                                } else {
-                                                  _removeDropdownMenu();
-                                                }
-                                              },
-                                              child: AnimatedContainer(
-                                                duration: const Duration(
-                                                    milliseconds: 350),
-                                                width: dropW,
-                                                height: h,
-                                                decoration: ShapeDecoration(
-                                                  color:
-                                                      const Color(0xFF1976D2),
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius: widget
-                                                            .isDropdownOpen
-                                                        ? BorderRadius.circular(
-                                                            50)
-                                                        : const BorderRadius
-                                                            .only(
-                                                            topLeft:
-                                                                Radius.circular(
-                                                                    6),
-                                                            bottomLeft:
-                                                                Radius.circular(
-                                                                    6),
-                                                            topRight:
-                                                                Radius.circular(
-                                                                    32),
-                                                            bottomRight:
-                                                                Radius.circular(
-                                                                    32),
-                                                          ),
-                                                  ),
-                                                ),
-                                                child: Center(
-                                                  child: AnimatedRotation(
-                                                    turns: widget.isDropdownOpen
-                                                        ? 0.5
-                                                        : 0.0,
-                                                    duration: const Duration(
-                                                        milliseconds: 350),
-                                                    curve: Curves.easeInOut,
-                                                    child: const Icon(
-                                                      Icons.keyboard_arrow_down,
-                                                      color: Colors.white,
-                                                      size: 20,
-                                                      key: ValueKey('arrow'),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                        ],
-                                        if (widget.showRegisterControls) ...[
-                                          // 수업 등록 버튼 (협소 화면 추가 축소)
-                                          SizedBox(
-                                            width: regW,
-                                            height: h,
-                                            child: Material(
-                                              color: const Color(0xFF1976D2),
-                                              borderRadius:
-                                                  const BorderRadius.only(
-                                                topLeft: Radius.circular(32),
-                                                bottomLeft: Radius.circular(32),
-                                                topRight: Radius.circular(6),
-                                                bottomRight: Radius.circular(6),
-                                              ),
-                                              child: InkWell(
-                                                borderRadius:
-                                                    const BorderRadius.only(
-                                                  topLeft: Radius.circular(32),
-                                                  bottomLeft:
-                                                      Radius.circular(32),
-                                                  topRight: Radius.circular(6),
-                                                  bottomRight:
-                                                      Radius.circular(6),
-                                                ),
-                                                onTap: widget.onRegisterPressed,
-                                                child: Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  mainAxisSize:
-                                                      MainAxisSize.max,
-                                                  children: const [
-                                                    Icon(Icons.add,
-                                                        color: Colors.white,
-                                                        size: 16),
-                                                    SizedBox(width: 6),
-                                                    Text('등록',
-                                                        style: TextStyle(
-                                                            color: Colors.white,
-                                                            fontSize: 14,
-                                                            fontWeight:
-                                                                FontWeight
-                                                                    .bold)),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          // 구분선
-                                          Container(
-                                            height: h,
-                                            width: 3.0,
-                                            color: Colors.transparent,
-                                            child: Center(
-                                              child: Container(
-                                                width: 2,
-                                                height: dividerLineH,
-                                                color: Colors.white
-                                                    .withOpacity(0.1),
-                                              ),
-                                            ),
-                                          ),
-                                          // 드롭다운 버튼
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 2.5),
-                                            child: GestureDetector(
-                                              key: _dropdownButtonKey,
-                                              onTap: () {
-                                                if (_dropdownOverlay == null) {
-                                                  widget.onDropdownOpenChanged(
-                                                      true);
-                                                  _showDropdownMenu();
-                                                } else {
-                                                  _removeDropdownMenu();
-                                                }
-                                              },
-                                              child: AnimatedContainer(
-                                                duration: const Duration(
-                                                    milliseconds: 350),
-                                                width: dropW,
-                                                height: h,
-                                                decoration: ShapeDecoration(
-                                                  color:
-                                                      const Color(0xFF1976D2),
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius: widget
-                                                            .isDropdownOpen
-                                                        ? BorderRadius.circular(
-                                                            50)
-                                                        : const BorderRadius
-                                                            .only(
-                                                            topLeft:
-                                                                Radius.circular(
-                                                                    6),
-                                                            bottomLeft:
-                                                                Radius.circular(
-                                                                    6),
-                                                            topRight:
-                                                                Radius.circular(
-                                                                    32),
-                                                            bottomRight:
-                                                                Radius.circular(
-                                                                    32),
-                                                          ),
-                                                  ),
-                                                ),
-                                                child: Center(
-                                                  child: AnimatedRotation(
-                                                    turns: widget.isDropdownOpen
-                                                        ? 0.5
-                                                        : 0.0,
-                                                    duration: const Duration(
-                                                        milliseconds: 350),
-                                                    curve: Curves.easeInOut,
-                                                    child: const Icon(
-                                                      Icons.keyboard_arrow_down,
-                                                      color: Colors.white,
-                                                      size: 20,
-                                                      key: ValueKey('arrow'),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                        ],
-                                        // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
-                                        SizedBox(
-                                          height: h,
-                                          child: Material(
-                                            color: const Color(0xFF1976D2),
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                            child: InkWell(
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                              onTap: () {},
-                                              child: const Padding(
-                                                padding: EdgeInsets.symmetric(
-                                                    horizontal: 12.0),
-                                                child: Icon(
-                                                    Icons.event_repeat_rounded,
-                                                    color: Colors.white,
-                                                    size: 20),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        if (widget.showRegisterControls) ...[
-                                          const SizedBox(width: 8),
-                                          AnimatedContainer(
-                                            duration: const Duration(
-                                                milliseconds: 250),
-                                            height: h,
-                                            width:
-                                                _isSearchExpanded ? searchW : h,
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF2A2A2A),
-                                              borderRadius:
-                                                  BorderRadius.circular(h / 2),
-                                              border: Border.all(
-                                                  color: Colors.white
-                                                      .withOpacity(0.2)),
-                                            ),
-                                            child: Row(
-                                              mainAxisAlignment:
-                                                  _isSearchExpanded
-                                                      ? MainAxisAlignment.start
-                                                      : MainAxisAlignment
-                                                          .center,
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                IconButton(
-                                                  visualDensity:
-                                                      const VisualDensity(
-                                                          horizontal: -4,
-                                                          vertical: -4),
-                                                  padding: _isSearchExpanded
-                                                      ? const EdgeInsets.only(
-                                                          left: 8)
-                                                      : EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                          minWidth: 32,
-                                                          minHeight: 32),
-                                                  icon: const Icon(Icons.search,
-                                                      color: Colors.white70,
-                                                      size: 20),
-                                                  onPressed: () {
-                                                    setState(() {
-                                                      _isSearchExpanded =
-                                                          !_isSearchExpanded;
-                                                    });
-                                                    if (_isSearchExpanded) {
-                                                      Future.delayed(
-                                                          const Duration(
-                                                              milliseconds: 50),
-                                                          () {
-                                                        _searchFocusNode
-                                                            .requestFocus();
-                                                      });
-                                                    } else {
-                                                      setState(() {
-                                                        _searchController
-                                                            .clear();
-                                                        _searchQuery = '';
-                                                      });
-                                                      FocusScope.of(context)
-                                                          .unfocus();
-                                                    }
-                                                  },
-                                                ),
-                                                if (_isSearchExpanded)
-                                                  const SizedBox(width: 10),
-                                                if (_isSearchExpanded)
-                                                  SizedBox(
-                                                    width: searchW - 50,
-                                                    child: TextField(
-                                                      controller:
-                                                          _searchController,
-                                                      focusNode:
-                                                          _searchFocusNode,
-                                                      style: const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 16.5),
-                                                      decoration:
-                                                          const InputDecoration(
-                                                        hintText: '검색',
-                                                        hintStyle: TextStyle(
-                                                            color:
-                                                                Colors.white54,
-                                                            fontSize: 16.5),
-                                                        border:
-                                                            InputBorder.none,
-                                                        isDense: true,
-                                                        contentPadding:
-                                                            EdgeInsets.zero,
-                                                      ),
-                                                      onChanged:
-                                                          _onSearchChanged,
-                                                    ),
-                                                  ),
-                                                if (_isSearchExpanded &&
-                                                    _searchQuery.isNotEmpty)
-                                                  IconButton(
-                                                    visualDensity:
-                                                        const VisualDensity(
-                                                            horizontal: -4,
-                                                            vertical: -4),
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                            right: 10),
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                            minWidth: 32,
-                                                            minHeight: 32),
-                                                    tooltip: '지우기',
-                                                    icon: const Icon(
-                                                        Icons.clear,
-                                                        color: Colors.white70,
-                                                        size: 16),
-                                                    onPressed: () {
-                                                      setState(() {
-                                                        _searchController
-                                                            .clear();
-                                                        _searchQuery = '';
-                                                      });
-                                                      FocusScope.of(context)
-                                                          .requestFocus(
-                                                              _searchFocusNode);
-                                                    },
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                  // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
-                                ],
-                              );
-                            }
-                            // 넓은 화면: 기존 레이아웃 유지
-                            return Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.max,
-                              children: [
-                                if (widget.showRegisterControls) ...[
-                                  SizedBox(
-                                    width: 113,
-                                    height: 44,
-                                    child: Material(
-                                      color: const Color(0xFF1976D2),
-                                      borderRadius: const BorderRadius.only(
-                                        topLeft: Radius.circular(32),
-                                        bottomLeft: Radius.circular(32),
-                                        topRight: Radius.circular(6),
-                                        bottomRight: Radius.circular(6),
-                                      ),
-                                      child: InkWell(
-                                        borderRadius: const BorderRadius.only(
-                                          topLeft: Radius.circular(32),
-                                          bottomLeft: Radius.circular(32),
-                                          topRight: Radius.circular(6),
-                                          bottomRight: Radius.circular(6),
-                                        ),
-                                        onTap: widget.onRegisterPressed,
+                          SizedBox(
+                              key: _studentControlsMeasureKey,
+                              child: Builder(builder: (context) {
+                                final screenW =
+                                    MediaQuery.of(context).size.width;
+                                final isNarrow = screenW <= 1600;
+                                if (isNarrow) {
+                                  // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
+                                  final double t =
+                                      ((screenW - 1200) / 400).clamp(0.0, 1.0);
+                                  final double h = 30 +
+                                      (38 - 30) *
+                                          t; // 1200px에서 30 → 1600px에서 38
+                                  final double regW =
+                                      80 + (96 - 80) * t; // 등록 버튼 너비 80~96
+                                  final double dropW =
+                                      30 + (38 - 30) * t; // 드롭다운 30~38
+                                  final double dividerLineH =
+                                      16 + (22 - 16) * t; // 구분선 내부 라인 16~22
+                                  final double searchW =
+                                      120 + (160 - 120) * t; // 검색바 너비 120~160
+                                  return Row(
+                                    children: [
+                                      Expanded(
                                         child: Row(
                                           mainAxisAlignment:
-                                              MainAxisAlignment.center,
+                                              MainAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
                                           mainAxisSize: MainAxisSize.max,
-                                          children: const [
-                                            Icon(Icons.add,
-                                                color: Colors.white, size: 20),
-                                            SizedBox(width: 8),
-                                            Text('등록',
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontSize: 16,
-                                                    fontWeight:
-                                                        FontWeight.bold)),
+                                          children: [
+                                            if (widget
+                                                .showRegisterControls) ...[
+                                              SizedBox(
+                                                width: regW,
+                                                height: h,
+                                                child: Material(
+                                                  color:
+                                                      const Color(0xFF1976D2),
+                                                  borderRadius:
+                                                      const BorderRadius.only(
+                                                    topLeft:
+                                                        Radius.circular(32),
+                                                    bottomLeft:
+                                                        Radius.circular(32),
+                                                    topRight:
+                                                        Radius.circular(6),
+                                                    bottomRight:
+                                                        Radius.circular(6),
+                                                  ),
+                                                  child: InkWell(
+                                                    borderRadius:
+                                                        const BorderRadius.only(
+                                                      topLeft:
+                                                          Radius.circular(32),
+                                                      bottomLeft:
+                                                          Radius.circular(32),
+                                                      topRight:
+                                                          Radius.circular(6),
+                                                      bottomRight:
+                                                          Radius.circular(6),
+                                                    ),
+                                                    onTap: widget
+                                                        .onRegisterPressed,
+                                                    child: Row(
+                                                      mainAxisAlignment:
+                                                          MainAxisAlignment
+                                                              .center,
+                                                      mainAxisSize:
+                                                          MainAxisSize.max,
+                                                      children: const [
+                                                        Icon(Icons.add,
+                                                            color: Colors.white,
+                                                            size: 16),
+                                                        SizedBox(width: 6),
+                                                        Text('등록',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white,
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold)),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              Container(
+                                                height: h,
+                                                width: 3.0,
+                                                color: Colors.transparent,
+                                                child: Center(
+                                                  child: Container(
+                                                    width: 2,
+                                                    height: dividerLineH,
+                                                    color: Colors.white
+                                                        .withOpacity(0.1),
+                                                  ),
+                                                ),
+                                              ),
+                                              Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 2.5),
+                                                child: GestureDetector(
+                                                  key: _dropdownButtonKey,
+                                                  onTap: () {
+                                                    if (_dropdownOverlay ==
+                                                        null) {
+                                                      widget
+                                                          .onDropdownOpenChanged(
+                                                              true);
+                                                      _showDropdownMenu();
+                                                    } else {
+                                                      _removeDropdownMenu();
+                                                    }
+                                                  },
+                                                  child: AnimatedContainer(
+                                                    duration: const Duration(
+                                                        milliseconds: 350),
+                                                    width: dropW,
+                                                    height: h,
+                                                    decoration: ShapeDecoration(
+                                                      color: const Color(
+                                                          0xFF1976D2),
+                                                      shape:
+                                                          RoundedRectangleBorder(
+                                                        borderRadius: widget
+                                                                .isDropdownOpen
+                                                            ? BorderRadius
+                                                                .circular(50)
+                                                            : const BorderRadius
+                                                                .only(
+                                                                topLeft: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                bottomLeft: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                topRight: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                bottomRight:
+                                                                    Radius
+                                                                        .circular(
+                                                                            32),
+                                                              ),
+                                                      ),
+                                                    ),
+                                                    child: Center(
+                                                      child: AnimatedRotation(
+                                                        turns: widget
+                                                                .isDropdownOpen
+                                                            ? 0.5
+                                                            : 0.0,
+                                                        duration:
+                                                            const Duration(
+                                                                milliseconds:
+                                                                    350),
+                                                        curve: Curves.easeInOut,
+                                                        child: const Icon(
+                                                          Icons
+                                                              .keyboard_arrow_down,
+                                                          color: Colors.white,
+                                                          size: 20,
+                                                          key:
+                                                              ValueKey('arrow'),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                            ],
+                                            if (widget
+                                                .showRegisterControls) ...[
+                                              // 수업 등록 버튼 (협소 화면 추가 축소)
+                                              SizedBox(
+                                                width: regW,
+                                                height: h,
+                                                child: Material(
+                                                  color:
+                                                      const Color(0xFF1976D2),
+                                                  borderRadius:
+                                                      const BorderRadius.only(
+                                                    topLeft:
+                                                        Radius.circular(32),
+                                                    bottomLeft:
+                                                        Radius.circular(32),
+                                                    topRight:
+                                                        Radius.circular(6),
+                                                    bottomRight:
+                                                        Radius.circular(6),
+                                                  ),
+                                                  child: InkWell(
+                                                    borderRadius:
+                                                        const BorderRadius.only(
+                                                      topLeft:
+                                                          Radius.circular(32),
+                                                      bottomLeft:
+                                                          Radius.circular(32),
+                                                      topRight:
+                                                          Radius.circular(6),
+                                                      bottomRight:
+                                                          Radius.circular(6),
+                                                    ),
+                                                    onTap: widget
+                                                        .onRegisterPressed,
+                                                    child: Row(
+                                                      mainAxisAlignment:
+                                                          MainAxisAlignment
+                                                              .center,
+                                                      mainAxisSize:
+                                                          MainAxisSize.max,
+                                                      children: const [
+                                                        Icon(Icons.add,
+                                                            color: Colors.white,
+                                                            size: 16),
+                                                        SizedBox(width: 6),
+                                                        Text('등록',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white,
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold)),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              // 구분선
+                                              Container(
+                                                height: h,
+                                                width: 3.0,
+                                                color: Colors.transparent,
+                                                child: Center(
+                                                  child: Container(
+                                                    width: 2,
+                                                    height: dividerLineH,
+                                                    color: Colors.white
+                                                        .withOpacity(0.1),
+                                                  ),
+                                                ),
+                                              ),
+                                              // 드롭다운 버튼
+                                              Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 2.5),
+                                                child: GestureDetector(
+                                                  key: _dropdownButtonKey,
+                                                  onTap: () {
+                                                    if (_dropdownOverlay ==
+                                                        null) {
+                                                      widget
+                                                          .onDropdownOpenChanged(
+                                                              true);
+                                                      _showDropdownMenu();
+                                                    } else {
+                                                      _removeDropdownMenu();
+                                                    }
+                                                  },
+                                                  child: AnimatedContainer(
+                                                    duration: const Duration(
+                                                        milliseconds: 350),
+                                                    width: dropW,
+                                                    height: h,
+                                                    decoration: ShapeDecoration(
+                                                      color: const Color(
+                                                          0xFF1976D2),
+                                                      shape:
+                                                          RoundedRectangleBorder(
+                                                        borderRadius: widget
+                                                                .isDropdownOpen
+                                                            ? BorderRadius
+                                                                .circular(50)
+                                                            : const BorderRadius
+                                                                .only(
+                                                                topLeft: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                bottomLeft: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                topRight: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                bottomRight:
+                                                                    Radius
+                                                                        .circular(
+                                                                            32),
+                                                              ),
+                                                      ),
+                                                    ),
+                                                    child: Center(
+                                                      child: AnimatedRotation(
+                                                        turns: widget
+                                                                .isDropdownOpen
+                                                            ? 0.5
+                                                            : 0.0,
+                                                        duration:
+                                                            const Duration(
+                                                                milliseconds:
+                                                                    350),
+                                                        curve: Curves.easeInOut,
+                                                        child: const Icon(
+                                                          Icons
+                                                              .keyboard_arrow_down,
+                                                          color: Colors.white,
+                                                          size: 20,
+                                                          key:
+                                                              ValueKey('arrow'),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                            ],
+                                            // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
+                                            SizedBox(
+                                              height: h,
+                                              child: Material(
+                                                color: const Color(0xFF1976D2),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                child: InkWell(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  onTap: () {},
+                                                  child: const Padding(
+                                                    padding:
+                                                        EdgeInsets.symmetric(
+                                                            horizontal: 12.0),
+                                                    child: Icon(
+                                                        Icons
+                                                            .event_repeat_rounded,
+                                                        color: Colors.white,
+                                                        size: 20),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            if (widget
+                                                .showRegisterControls) ...[
+                                              const SizedBox(width: 8),
+                                              AnimatedContainer(
+                                                duration: const Duration(
+                                                    milliseconds: 250),
+                                                height: h,
+                                                width: _isSearchExpanded
+                                                    ? searchW
+                                                    : h,
+                                                decoration: BoxDecoration(
+                                                  color:
+                                                      const Color(0xFF2A2A2A),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          h / 2),
+                                                  border: Border.all(
+                                                      color: Colors.white
+                                                          .withOpacity(0.2)),
+                                                ),
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      _isSearchExpanded
+                                                          ? MainAxisAlignment
+                                                              .start
+                                                          : MainAxisAlignment
+                                                              .center,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.center,
+                                                  children: [
+                                                    IconButton(
+                                                      visualDensity:
+                                                          const VisualDensity(
+                                                              horizontal: -4,
+                                                              vertical: -4),
+                                                      padding: _isSearchExpanded
+                                                          ? const EdgeInsets
+                                                              .only(left: 8)
+                                                          : EdgeInsets.zero,
+                                                      constraints:
+                                                          const BoxConstraints(
+                                                              minWidth: 32,
+                                                              minHeight: 32),
+                                                      icon: const Icon(
+                                                          Icons.search,
+                                                          color: Colors.white70,
+                                                          size: 20),
+                                                      onPressed: () {
+                                                        setState(() {
+                                                          _isSearchExpanded =
+                                                              !_isSearchExpanded;
+                                                        });
+                                                        if (_isSearchExpanded) {
+                                                          Future.delayed(
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      50), () {
+                                                            _searchFocusNode
+                                                                .requestFocus();
+                                                          });
+                                                        } else {
+                                                          setState(() {
+                                                            _searchController
+                                                                .clear();
+                                                            _searchQuery = '';
+                                                          });
+                                                          FocusScope.of(context)
+                                                              .unfocus();
+                                                        }
+                                                      },
+                                                    ),
+                                                    if (_isSearchExpanded)
+                                                      const SizedBox(width: 10),
+                                                    if (_isSearchExpanded)
+                                                      SizedBox(
+                                                        width: searchW - 50,
+                                                        child: TextField(
+                                                          controller:
+                                                              _searchController,
+                                                          focusNode:
+                                                              _searchFocusNode,
+                                                          style:
+                                                              const TextStyle(
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize:
+                                                                      16.5),
+                                                          decoration:
+                                                              const InputDecoration(
+                                                            hintText: '검색',
+                                                            hintStyle: TextStyle(
+                                                                color: Colors
+                                                                    .white54,
+                                                                fontSize: 16.5),
+                                                            border: InputBorder
+                                                                .none,
+                                                            isDense: true,
+                                                            contentPadding:
+                                                                EdgeInsets.zero,
+                                                          ),
+                                                          onChanged:
+                                                              _onSearchChanged,
+                                                        ),
+                                                      ),
+                                                    if (_isSearchExpanded &&
+                                                        _searchQuery.isNotEmpty)
+                                                      IconButton(
+                                                        visualDensity:
+                                                            const VisualDensity(
+                                                                horizontal: -4,
+                                                                vertical: -4),
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(
+                                                                right: 10),
+                                                        constraints:
+                                                            const BoxConstraints(
+                                                                minWidth: 32,
+                                                                minHeight: 32),
+                                                        tooltip: '지우기',
+                                                        icon: const Icon(
+                                                            Icons.clear,
+                                                            color:
+                                                                Colors.white70,
+                                                            size: 16),
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            _searchController
+                                                                .clear();
+                                                            _searchQuery = '';
+                                                          });
+                                                          FocusScope.of(context)
+                                                              .requestFocus(
+                                                                  _searchFocusNode);
+                                                        },
+                                                      ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
                                           ],
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                  Container(
-                                    height: 44,
-                                    width: 3.0,
-                                    color: Colors.transparent,
-                                    child: Center(
-                                      child: Container(
-                                        width: 2,
-                                        height: 28,
-                                        color: Colors.white.withOpacity(0.1),
-                                      ),
-                                    ),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 2.5),
-                                    child: GestureDetector(
-                                      key: _dropdownButtonKey,
-                                      onTap: () {
-                                        if (_dropdownOverlay == null) {
-                                          widget.onDropdownOpenChanged(true);
-                                          _showDropdownMenu();
-                                        } else {
-                                          _removeDropdownMenu();
-                                        }
-                                      },
-                                      child: AnimatedContainer(
-                                        duration:
-                                            const Duration(milliseconds: 350),
-                                        width: 44,
+                                      // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
+                                    ],
+                                  );
+                                }
+                                // 넓은 화면: 기존 레이아웃 유지
+                                return Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.max,
+                                  children: [
+                                    if (widget.showRegisterControls) ...[
+                                      SizedBox(
+                                        width: 113,
                                         height: 44,
-                                        decoration: ShapeDecoration(
+                                        child: Material(
                                           color: const Color(0xFF1976D2),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: widget.isDropdownOpen
-                                                ? BorderRadius.circular(50)
-                                                : const BorderRadius.only(
-                                                    topLeft: Radius.circular(6),
-                                                    bottomLeft:
-                                                        Radius.circular(6),
-                                                    topRight:
-                                                        Radius.circular(32),
-                                                    bottomRight:
-                                                        Radius.circular(32),
-                                                  ),
+                                          borderRadius: const BorderRadius.only(
+                                            topLeft: Radius.circular(32),
+                                            bottomLeft: Radius.circular(32),
+                                            topRight: Radius.circular(6),
+                                            bottomRight: Radius.circular(6),
                                           ),
-                                        ),
-                                        child: Center(
-                                          child: AnimatedRotation(
-                                            turns: widget.isDropdownOpen
-                                                ? 0.5
-                                                : 0.0,
-                                            duration: const Duration(
-                                                milliseconds: 350),
-                                            curve: Curves.easeInOut,
-                                            child: const Icon(
-                                              Icons.keyboard_arrow_down,
-                                              color: Colors.white,
-                                              size: 28,
-                                              key: ValueKey('arrow'),
+                                          child: InkWell(
+                                            borderRadius:
+                                                const BorderRadius.only(
+                                              topLeft: Radius.circular(32),
+                                              bottomLeft: Radius.circular(32),
+                                              topRight: Radius.circular(6),
+                                              bottomRight: Radius.circular(6),
+                                            ),
+                                            onTap: widget.onRegisterPressed,
+                                            child: Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              mainAxisSize: MainAxisSize.max,
+                                              children: const [
+                                                Icon(Icons.add,
+                                                    color: Colors.white,
+                                                    size: 20),
+                                                SizedBox(width: 8),
+                                                Text('등록',
+                                                    style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 16,
+                                                        fontWeight:
+                                                            FontWeight.bold)),
+                                              ],
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                ],
-                                if (widget.showRegisterControls) ...[
-                                  const SizedBox(width: 8),
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 250),
-                                    height: 44,
-                                    width: _isSearchExpanded ? 160 : 44,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF2A2A2A),
-                                      borderRadius: BorderRadius.circular(22),
-                                      border: Border.all(
-                                          color: Colors.white.withOpacity(0.2)),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: _isSearchExpanded
-                                          ? MainAxisAlignment.start
-                                          : MainAxisAlignment.center,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        IconButton(
-                                          visualDensity: const VisualDensity(
-                                              horizontal: -4, vertical: -4),
-                                          padding: _isSearchExpanded
-                                              ? const EdgeInsets.only(left: 8)
-                                              : EdgeInsets.zero,
-                                          constraints: const BoxConstraints(
-                                              minWidth: 32, minHeight: 32),
-                                          icon: const Icon(Icons.search,
-                                              color: Colors.white70, size: 20),
-                                          onPressed: () {
-                                            setState(() {
-                                              _isSearchExpanded =
-                                                  !_isSearchExpanded;
-                                            });
-                                            if (_isSearchExpanded) {
-                                              Future.delayed(
-                                                  const Duration(
-                                                      milliseconds: 50), () {
-                                                _searchFocusNode.requestFocus();
-                                              });
+                                      Container(
+                                        height: 44,
+                                        width: 3.0,
+                                        color: Colors.transparent,
+                                        child: Center(
+                                          child: Container(
+                                            width: 2,
+                                            height: 28,
+                                            color:
+                                                Colors.white.withOpacity(0.1),
+                                          ),
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 2.5),
+                                        child: GestureDetector(
+                                          key: _dropdownButtonKey,
+                                          onTap: () {
+                                            if (_dropdownOverlay == null) {
+                                              widget
+                                                  .onDropdownOpenChanged(true);
+                                              _showDropdownMenu();
                                             } else {
-                                              setState(() {
-                                                _searchController.clear();
-                                                _searchQuery = '';
-                                              });
-                                              FocusScope.of(context).unfocus();
+                                              _removeDropdownMenu();
                                             }
                                           },
-                                        ),
-                                        if (_isSearchExpanded)
-                                          const SizedBox(width: 10),
-                                        if (_isSearchExpanded)
-                                          Expanded(
-                                            child: TextField(
-                                              controller: _searchController,
-                                              focusNode: _searchFocusNode,
-                                              style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 16.5),
-                                              decoration: const InputDecoration(
-                                                hintText: '검색',
-                                                hintStyle: TextStyle(
-                                                    color: Colors.white54,
-                                                    fontSize: 16.5),
-                                                border: InputBorder.none,
-                                                isDense: true,
-                                                contentPadding: EdgeInsets.zero,
+                                          child: AnimatedContainer(
+                                            duration: const Duration(
+                                                milliseconds: 350),
+                                            width: 44,
+                                            height: 44,
+                                            decoration: ShapeDecoration(
+                                              color: const Color(0xFF1976D2),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: widget
+                                                        .isDropdownOpen
+                                                    ? BorderRadius.circular(50)
+                                                    : const BorderRadius.only(
+                                                        topLeft:
+                                                            Radius.circular(6),
+                                                        bottomLeft:
+                                                            Radius.circular(6),
+                                                        topRight:
+                                                            Radius.circular(32),
+                                                        bottomRight:
+                                                            Radius.circular(32),
+                                                      ),
                                               ),
-                                              onChanged: _onSearchChanged,
+                                            ),
+                                            child: Center(
+                                              child: AnimatedRotation(
+                                                turns: widget.isDropdownOpen
+                                                    ? 0.5
+                                                    : 0.0,
+                                                duration: const Duration(
+                                                    milliseconds: 350),
+                                                curve: Curves.easeInOut,
+                                                child: const Icon(
+                                                  Icons.keyboard_arrow_down,
+                                                  color: Colors.white,
+                                                  size: 28,
+                                                  key: ValueKey('arrow'),
+                                                ),
+                                              ),
                                             ),
                                           ),
-                                        if (_isSearchExpanded &&
-                                            _searchQuery.isNotEmpty)
-                                          IconButton(
-                                            visualDensity: const VisualDensity(
-                                                horizontal: -4, vertical: -4),
-                                            padding: const EdgeInsets.only(
-                                                right: 10),
-                                            constraints: const BoxConstraints(
-                                                minWidth: 32, minHeight: 32),
-                                            tooltip: '지우기',
-                                            icon: const Icon(Icons.clear,
-                                                color: Colors.white70,
-                                                size: 16),
-                                            onPressed: () {
-                                              setState(() {
-                                                _searchController.clear();
-                                                _searchQuery = '';
-                                              });
-                                              FocusScope.of(context)
-                                                  .requestFocus(
-                                                      _searchFocusNode);
-                                            },
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            );
-                          }),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                    ],
+                                    if (widget.showRegisterControls) ...[
+                                      const SizedBox(width: 8),
+                                      AnimatedContainer(
+                                        duration:
+                                            const Duration(milliseconds: 250),
+                                        height: 44,
+                                        width: _isSearchExpanded ? 160 : 44,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF2A2A2A),
+                                          borderRadius:
+                                              BorderRadius.circular(22),
+                                          border: Border.all(
+                                              color: Colors.white
+                                                  .withOpacity(0.2)),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: _isSearchExpanded
+                                              ? MainAxisAlignment.start
+                                              : MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            IconButton(
+                                              visualDensity:
+                                                  const VisualDensity(
+                                                      horizontal: -4,
+                                                      vertical: -4),
+                                              padding: _isSearchExpanded
+                                                  ? const EdgeInsets.only(
+                                                      left: 8)
+                                                  : EdgeInsets.zero,
+                                              constraints: const BoxConstraints(
+                                                  minWidth: 32, minHeight: 32),
+                                              icon: const Icon(Icons.search,
+                                                  color: Colors.white70,
+                                                  size: 20),
+                                              onPressed: () {
+                                                setState(() {
+                                                  _isSearchExpanded =
+                                                      !_isSearchExpanded;
+                                                });
+                                                if (_isSearchExpanded) {
+                                                  Future.delayed(
+                                                      const Duration(
+                                                          milliseconds: 50),
+                                                      () {
+                                                    _searchFocusNode
+                                                        .requestFocus();
+                                                  });
+                                                } else {
+                                                  setState(() {
+                                                    _searchController.clear();
+                                                    _searchQuery = '';
+                                                  });
+                                                  FocusScope.of(context)
+                                                      .unfocus();
+                                                }
+                                              },
+                                            ),
+                                            if (_isSearchExpanded)
+                                              const SizedBox(width: 10),
+                                            if (_isSearchExpanded)
+                                              Expanded(
+                                                child: TextField(
+                                                  controller: _searchController,
+                                                  focusNode: _searchFocusNode,
+                                                  style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 16.5),
+                                                  decoration:
+                                                      const InputDecoration(
+                                                    hintText: '검색',
+                                                    hintStyle: TextStyle(
+                                                        color: Colors.white54,
+                                                        fontSize: 16.5),
+                                                    border: InputBorder.none,
+                                                    isDense: true,
+                                                    contentPadding:
+                                                        EdgeInsets.zero,
+                                                  ),
+                                                  onChanged: _onSearchChanged,
+                                                ),
+                                              ),
+                                            if (_isSearchExpanded &&
+                                                _searchQuery.isNotEmpty)
+                                              IconButton(
+                                                visualDensity:
+                                                    const VisualDensity(
+                                                        horizontal: -4,
+                                                        vertical: -4),
+                                                padding: const EdgeInsets.only(
+                                                    right: 10),
+                                                constraints:
+                                                    const BoxConstraints(
+                                                        minWidth: 32,
+                                                        minHeight: 32),
+                                                tooltip: '지우기',
+                                                icon: const Icon(Icons.clear,
+                                                    color: Colors.white70,
+                                                    size: 16),
+                                                onPressed: () {
+                                                  setState(() {
+                                                    _searchController.clear();
+                                                    _searchQuery = '';
+                                                  });
+                                                  FocusScope.of(context)
+                                                      .requestFocus(
+                                                          _searchFocusNode);
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                );
+                              })),
                           // 학생카드 리스트 위에 요일+시간 출력
                           Expanded(
                             child: _searchQuery.isNotEmpty &&
@@ -1652,7 +1782,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                 builder:
                                                     (context, constraints) {
                                                   const double panelTopMargin =
-                                                      18;
+                                                      _kStudentPanelHeaderTopMargin;
                                                   final double containerHeight =
                                                       (constraints.maxHeight -
                                                               panelTopMargin)
@@ -2058,7 +2188,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       padding: EdgeInsets.only(
                         left: 4,
                         right: 8,
-                        bottom: 8,
+                        bottom: 13, // 요일 선택 오버레이(초록 박스) 하단 외부 여백 +5
                         top: _daySelectedOverlayTopPadding(context),
                       ),
                       child: _buildDaySelectedOverlayPanel(),
@@ -2883,7 +3013,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
         Container(
           height: 48,
           width: double.infinity,
-          margin: const EdgeInsets.only(top: 24, bottom: 10),
+          margin: const EdgeInsets.only(
+            top: _kStudentPanelHeaderTopMargin,
+            bottom: _kStudentPanelHeaderBottomMargin,
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 15),
           decoration: BoxDecoration(
             color: const Color(0xFF223131),
