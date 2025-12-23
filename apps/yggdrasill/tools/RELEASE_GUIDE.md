@@ -7,19 +7,28 @@
 - Flutter 설치/동작
 - `apps/yggdrasill/env.local.json`에 `SUPABASE_URL`, `SUPABASE_ANON_KEY` 존재
 
-### 빠른 배포(원라이너)
+### 빠른 배포(복붙 스크립트)
 아래 명령은 버전 증가 → Windows 빌드/MSIX 생성 → ZIP 생성 → GitHub 릴리스 생성/업로드/공개 → 검증까지 일괄 수행합니다.
 
 ```powershell
-cd apps\yggdrasill; \
-./tools/bump_version.ps1; \
-./tools/build_msix_with_defines.ps1 -ReleaseTag ((Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value | ForEach-Object { 'v'+$_ }); \
-Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Yggdrasill_portable_x64.zip -Force; \
-$tag=((Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value); \
-gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d; \
-gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip dist\Yggdrasill_Installer.zip --clobber; \
-gh release edit v$tag -R How-Know/Yggdrasill --draft=false; \
-cd tools; ./verify_release.ps1 -Tag v$tag
+cd apps\yggdrasill
+./tools/bump_version.ps1
+
+$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
+
+# MSIX + appinstaller + Installer.zip(인증서/스크립트/appinstaller 포함) 생성 및 업로드
+./tools/build_msix_with_defines.ps1 -ReleaseTag v$tag
+
+# 포터블 ZIP 생성 및 업로드
+if(!(Test-Path dist)){ New-Item -ItemType Directory dist | Out-Null }
+Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Yggdrasill_portable_x64.zip -Force
+gh release upload v$tag -R How-Know/Yggdrasill dist\Yggdrasill_portable_x64.zip --clobber
+
+# 릴리스 공개 + 검증
+gh release edit v$tag -R How-Know/Yggdrasill --draft=false
+cd tools
+./verify_release.ps1 -Tag v$tag
 ```
 
 ### 안정 단계별 실행(문제 발생 시)
@@ -30,7 +39,8 @@ cd apps\yggdrasill
 ```
 2) Windows 빌드 + MSIX 생성(환경 주입 포함)
 ```powershell
-./tools/build_msix_with_defines.ps1 -ReleaseTag v((Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value)
+$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+./tools/build_msix_with_defines.ps1 -ReleaseTag v$tag
 ```
 3) 포터블 ZIP 생성
 ```powershell
@@ -39,7 +49,7 @@ Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\
 ```
 4) GitHub 릴리스 생성/업로드/공개
 ```powershell
-$tag=(Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+\.[0-9]+\.[0-9]+)').Matches.Groups[1].Value
+$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
 gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
 gh release upload v$tag -R How-Know/Yggdrasill dist\mneme_flutter.msix dist\Yggdrasill.appinstaller dist\Yggdrasill_portable_x64.zip dist\Yggdrasill_Installer.zip --clobber
 gh release edit v$tag -R How-Know/Yggdrasill --draft=false
@@ -75,6 +85,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 ./Install-Yggdrasill.ps1 -AlsoImportToRoot
 ```
 위 스크립트는 인증서를 `TrustedPeople`(필요 시 `Root`)에 설치 후 `Yggdrasill.appinstaller`로 설치/업데이트를 진행합니다.
+
+> 구버전 릴리스에서 `Yggdrasill.appinstaller`가 ZIP에 포함되지 않은 경우, 아래처럼 Raw URL을 직접 지정하면 진행 가능합니다.
+```powershell
+./Install-Yggdrasill.ps1 -AlsoImportToRoot -AppInstaller "https://raw.githubusercontent.com/How-Know/Yggdrasill/main/apps/yggdrasill/dist/Yggdrasill.appinstaller"
+```
 
 ### 참고
 - 버전 규칙: `pubspec.yaml`의 `version: x.y.z+N` ↔ `msix_version: x.y.z.N` ↔ AppInstaller `Version="x.y.z.N"`
