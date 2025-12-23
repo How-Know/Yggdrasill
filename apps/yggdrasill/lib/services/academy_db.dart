@@ -1595,6 +1595,92 @@ class AcademyDbService {
     ''');
   }
 
+  // ======== ANSWER KEY (우측 사이드시트: 책 리스트) ========
+  Future<void> ensureAnswerKeyTables() async {
+    final dbClient = await db;
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS answer_key_books (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        description TEXT,
+        grade_key TEXT,
+        order_index INTEGER
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS answer_key_book_pdfs (
+        book_id TEXT,
+        grade_key TEXT,
+        path TEXT,
+        name TEXT,
+        PRIMARY KEY (book_id, grade_key)
+      )
+    ''');
+  }
+
+  Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    return await dbClient.query('answer_key_books', orderBy: 'order_index ASC');
+  }
+
+  Future<void> saveAnswerKeyBook(Map<String, dynamic> row) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    final String id = row['id'] as String;
+    // 기존 레코드가 있으면 병합하여 덮어쓰기 (일부 필드만 저장하는 호출에서도 안전)
+    final existingList = await dbClient.query('answer_key_books', where: 'id = ?', whereArgs: [id], limit: 1);
+    Map<String, dynamic> merged = {};
+    if (existingList.isNotEmpty) {
+      merged = Map<String, dynamic>.from(existingList.first);
+    }
+    merged.addAll(row);
+    await dbClient.insert('answer_key_books', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> saveAnswerKeyBooks(List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('answer_key_books');
+      for (final row in rows) {
+        await txn.insert('answer_key_books', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  Future<void> deleteAnswerKeyBook(String id) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    await dbClient.delete('answer_key_books', where: 'id = ?', whereArgs: [id]);
+    await dbClient.delete('answer_key_book_pdfs', where: 'book_id = ?', whereArgs: [id]);
+  }
+
+  Future<List<Map<String, dynamic>>> loadAnswerKeyBookPdfs() async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    return await dbClient.query('answer_key_book_pdfs');
+  }
+
+  Future<void> saveAnswerKeyBookPdf(Map<String, dynamic> row) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    await dbClient.insert('answer_key_book_pdfs', row, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> deleteAnswerKeyBookPdf({
+    required String bookId,
+    required String gradeKey,
+  }) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    await dbClient.delete(
+      'answer_key_book_pdfs',
+      where: 'book_id = ? AND grade_key = ?',
+      whereArgs: [bookId, gradeKey],
+    );
+  }
+
   Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
     final dbClient = await db;
     await ensureResourceTables();

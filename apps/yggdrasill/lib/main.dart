@@ -36,6 +36,7 @@ import 'services/app_config.dart';
 import 'services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'widgets/right_side_sheet/right_side_sheet.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -3076,42 +3077,18 @@ class _MemoSlideOverlay extends StatefulWidget {
 }
 
 class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
-  bool _hoveringEdge = false;
-  bool _panelHovered = false;
-  Timer? _closeTimer;
   // 터치 전용 드래그 상태 (엣지 오픈)
   bool _edgeTouchActive = false;
   Offset? _edgeDragStart;
-  // 터치 전용 드래그 상태 (패널 닫기)
-  bool _panelTouchActive = false;
-  Offset? _panelDragStart;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth = 99; // 기존 75에서 +24 확장
+      const double panelWidth = 238; // 기존(198)에서 +20% 확장
       return Stack(children: [
-        // 패널이 열려 있을 때, 패널 바깥 영역을 탭/클릭하면 닫기
-        ValueListenableBuilder<bool>(
-          valueListenable: widget.isOpenListenable,
-          builder: (context, open, _) {
-            if (!open) return const SizedBox.shrink();
-            return Positioned(
-              left: 0,
-              top: kToolbarHeight,
-              bottom: 0,
-              right: panelWidth,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _setOpen(false),
-                onDoubleTap: () => _setOpen(false),
-              ),
-            );
-          },
-        ),
         Positioned(
           right: 0,
-          top: kToolbarHeight,
+          top: 0,
           bottom: 0,
           width: 24,
           child: Stack(
@@ -3120,15 +3097,9 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
               // 마우스 호버로 오픈 (기존 동작)
               MouseRegion(
                 onEnter: (_) {
-                  _hoveringEdge = true;
                   _setOpen(true);
-                  _cancelCloseTimer();
                 },
                 onExit: (_) {
-                  _hoveringEdge = false;
-                  // 엣지에서 패널로 이동하는 순간에 닫기 타이머가 먼저 실행되며 깜빡임이 발생하므로
-                  // 여기서는 닫기를 스케줄하지 않고, 패널 영역 MouseRegion.onExit에서만 닫도록 위임한다.
-                  _cancelCloseTimer();
                 },
                 child: const SizedBox.shrink(),
               ),
@@ -3169,55 +3140,17 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeInOut,
               right: open ? 0 : -panelWidth,
-              top: kToolbarHeight,
+              top: 0,
               bottom: 0,
               width: panelWidth,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  MouseRegion(
-                    onEnter: (_) {
-                      _panelHovered = true;
-                      _cancelCloseTimer(); // 패널에 진입하는 즉시 닫기 타이머 해제
-                    },
-                    onExit: (_) {
-                      _panelHovered = false;
-                      _scheduleMaybeClose(); // 패널을 벗어날 때에만 닫기 스케줄
-                    },
-                    child: const SizedBox.shrink(),
-                  ),
-                  // 패널 내부 터치 드래그로 닫기 (오른쪽으로 24px 이상)
-                  Listener(
-                    behavior: HitTestBehavior.translucent,
-                    onPointerDown: (event) {
-                      if (event.kind == PointerDeviceKind.touch || event.kind == PointerDeviceKind.stylus) {
-                        _panelTouchActive = true;
-                        _panelDragStart = event.position;
-                      }
-                    },
-                    onPointerMove: (event) {
-                      if (_panelTouchActive && _panelDragStart != null) {
-                        final dx = event.position.dx - _panelDragStart!.dx;
-                        if (dx > 24) {
-                          _setOpen(false);
-                        }
-                      }
-                    },
-                    onPointerUp: (_) {
-                      _panelTouchActive = false;
-                      _panelDragStart = null;
-                      _scheduleMaybeClose();
-                    },
-                    onPointerCancel: (_) {
-                      _panelTouchActive = false;
-                      _panelDragStart = null;
-                      _scheduleMaybeClose();
-                    },
-                    child: _MemoPanel(
-                      memosListenable: widget.memosListenable,
-                      onAddMemo: () => widget.onAddMemo(context),
-                      onEditMemo: (m) => widget.onEditMemo(context, m),
-                    ),
+                  _MemoPanel(
+                    memosListenable: widget.memosListenable,
+                    onAddMemo: () => widget.onAddMemo(context),
+                    onEditMemo: (m) => widget.onEditMemo(context, m),
+                    onRequestClose: () => _setOpen(false),
                   ),
                 ],
               ),
@@ -3234,148 +3167,29 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
     }
   }
 
-  void _scheduleMaybeClose() {
-    _closeTimer?.cancel();
-    _closeTimer = Timer(const Duration(milliseconds: 220), () {
-      if (!_hoveringEdge && !_panelHovered) {
-        _setOpen(false);
-      }
-    });
-  }
-
-  void _cancelCloseTimer() {
-    _closeTimer?.cancel();
-    _closeTimer = null;
-  }
+  // NOTE: 닫힘은 사이드시트 상단의 화살표 버튼으로만 허용 (자동 닫힘 제거)
 }
 
 class _MemoPanel extends StatelessWidget {
   final ValueListenable<List<Memo>> memosListenable;
   final VoidCallback onAddMemo;
   final void Function(Memo item) onEditMemo;
-  const _MemoPanel({required this.memosListenable, required this.onAddMemo, required this.onEditMemo});
+  final VoidCallback onRequestClose;
+  const _MemoPanel({
+    required this.memosListenable,
+    required this.onAddMemo,
+    required this.onEditMemo,
+    required this.onRequestClose,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final double screenW = MediaQuery.of(context).size.width;
-    // 최소창(≈1430)에서 12, 넓을수록 16까지 선형 증가
-    const double minW = 1430;
-    const double maxW = 2200;
-    const double fsMin = 12;
-    const double fsMax = 16;
-    final double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
-    final double memoFontSize = fsMin + (fsMax - fsMin) * t;
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF18181A),
-        border: Border(left: BorderSide(color: Color(0xFF2A2A2A), width: 1)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 40,
-            child: IconButton(
-              onPressed: onAddMemo,
-              icon: const Icon(Icons.add, color: Colors.white, size: 22),
-              tooltip: '+ 메모 추가',
-            ),
-          ),
-          const Divider(height: 1, color: Colors.white10),
-          Expanded(
-            child: ValueListenableBuilder<List<Memo>>(
-              valueListenable: memosListenable,
-              builder: (context, memos, _) {
-                if (memos.isEmpty) {
-                  return const Center(child: Text('메모 없음', style: TextStyle(color: Colors.white24, fontSize: 12)));
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: memos.length,
-                  itemBuilder: (context, index) {
-                    final m = memos[index];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
-                      child: _MemoItemWidget(memo: m, memoFontSize: memoFontSize, onEdit: () => onEditMemo(m)),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          const Divider(height: 1, color: Colors.white10),
-          SizedBox(
-            height: 40,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: TextButton.icon(
-                  onPressed: () async {
-                    final dlgCtx = rootNavigatorKey.currentContext ?? context;
-                    await showDialog(
-                      context: dlgCtx,
-                      builder: (context) {
-                        return AlertDialog(
-                          backgroundColor: const Color(0xFF18181A),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          title: const Text('메모 목록', style: TextStyle(color: Colors.white)),
-                          content: SizedBox(
-                            width: 520,
-                            height: 420,
-                            child: ValueListenableBuilder<List<Memo>>(
-                              valueListenable: memosListenable,
-                              builder: (context, memos, _) {
-                                if (memos.isEmpty) return const Center(child: Text('메모 없음', style: TextStyle(color: Colors.white54)));
-                                return ListView.separated(
-                                  itemCount: memos.length,
-                                  separatorBuilder: (_, __) => const Divider(color: Colors.white10),
-                                  itemBuilder: (context, i) {
-                                    final m = memos[i];
-                                    return ListTile(
-                                      dense: true,
-                                      title: Text(m.summary.isNotEmpty ? m.summary : m.original, style: const TextStyle(color: Colors.white)),
-                                      subtitle: Row(
-                                        children: [
-                                          Text('${m.createdAt.month}/${m.createdAt.day}', style: const TextStyle(color: Colors.white54)),
-                                          if (m.scheduledAt != null) ...[
-                                            const SizedBox(width: 12),
-                                            Text('일정 ${m.scheduledAt!.month}/${m.scheduledAt!.day} ${m.scheduledAt!.hour.toString().padLeft(2,'0')}:${m.scheduledAt!.minute.toString().padLeft(2,'0')}', style: const TextStyle(color: Colors.white38)),
-                                          ]
-                                        ],
-                                      ),
-                                      trailing: IconButton(
-                                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                                        onPressed: () async {
-                                          await DataManager.instance.deleteMemo(m.id);
-                                        },
-                                      ),
-                                      onTap: () => onEditMemo(m),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                          ),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.of(dlgCtx).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                  icon: const Icon(Icons.list, color: Colors.white70, size: 18),
-                  label: const Text('list', style: TextStyle(color: Colors.white70)),
-                  style: TextButton.styleFrom(foregroundColor: Colors.white70),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ));
+    // NOTE: 사이드시트 UI는 파일 커짐 방지를 위해 별도 컴포넌트로 분리
+    // (기존 memosListenable/onAddMemo/onEditMemo는 추후 필요한 기능 연결 시 재사용 가능)
+    return RightSideSheet(
+      onClose: onRequestClose,
+      dialogContext: rootNavigatorKey.currentContext,
+    );
   }
 }
 

@@ -29,6 +29,7 @@ import 'tenant_service.dart';
 import 'tag_preset_service.dart';
 import 'memo_service.dart';
 import 'resource_service.dart';
+import 'answer_key_service.dart';
 import 'attendance_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase, AuthState, AuthChangeEvent;
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
@@ -3762,6 +3763,26 @@ DateTime? _lastClassesOrderSaveStart;
       ResourceService.instance.setResourceGradeIcon(name, icon);
   Future<void> deleteResourceGradeIcon(String name) =>
       ResourceService.instance.deleteResourceGradeIcon(name);
+
+  // ======== ANSWER KEY (우측 사이드시트: 책 리스트) ========
+  Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() =>
+      AnswerKeyService.instance.loadAnswerKeyBooks();
+  Future<void> saveAnswerKeyBook(Map<String, dynamic> row) =>
+      AnswerKeyService.instance.saveAnswerKeyBook(row);
+  Future<void> saveAnswerKeyBooks(List<Map<String, dynamic>> rows) =>
+      AnswerKeyService.instance.saveAnswerKeyBooks(rows);
+  Future<void> deleteAnswerKeyBook(String id) =>
+      AnswerKeyService.instance.deleteAnswerKeyBook(id);
+
+  Future<List<Map<String, dynamic>>> loadAnswerKeyBookPdfs() =>
+      AnswerKeyService.instance.loadAnswerKeyBookPdfs();
+  Future<void> saveAnswerKeyBookPdf(Map<String, dynamic> row) =>
+      AnswerKeyService.instance.saveAnswerKeyBookPdf(row);
+  Future<void> deleteAnswerKeyBookPdf({
+    required String bookId,
+    required String gradeKey,
+  }) =>
+      AnswerKeyService.instance.deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
 
   // ===== EXAM (persisted) =====
   Future<void> saveExamFor(String school, EducationLevel level, int grade, Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {

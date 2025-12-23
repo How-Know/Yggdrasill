@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../models/student.dart';
 import '../models/group_info.dart';
 // removed student_details_dialog
@@ -461,72 +462,87 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
       return cardCore;
     }
 
-    return LongPressDraggable<StudentWithInfo>(
-      data: widget.studentWithInfo,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      hapticFeedbackOnStart: true,
-      feedback: Material(
-        color: Colors.transparent,
-        child: Opacity(
-          opacity: 0.9,
-          child: SizedBox(
-            width: widget.showCheckbox ? 135 : 100,
-            height: 50,
-            child: Card(
-              color: const Color(0xFF1F1F1F),
-              margin: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    if (student.groupInfo != null)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          width: 5,
-                          height: 26,
-                          decoration: BoxDecoration(
-                            color: student.groupInfo!.color,
-                            borderRadius: BorderRadius.circular(2.5),
-                          ),
+    // 데스크톱(마우스)에서는 "클릭+이동" 즉시 드래그로, 모바일/터치에서는 롱프레스 드래그로 유지.
+    final bool useImmediateDrag = kIsWeb ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.linux;
+
+    final feedbackWidget = Material(
+      color: Colors.transparent,
+      child: Opacity(
+        opacity: 0.9,
+        child: SizedBox(
+          width: widget.showCheckbox ? 135 : 100,
+          height: 50,
+          child: Card(
+            color: const Color(0xFF1F1F1F),
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8.0),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (student.groupInfo != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 5,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: student.groupInfo!.color,
+                          borderRadius: BorderRadius.circular(2.5),
                         ),
                       ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        '',
-                      ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        student.name,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(''),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      student.name,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: false,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
         ),
       ),
-      childWhenDragging: Opacity(
-        opacity: 0.3,
+    );
+
+    if (useImmediateDrag) {
+      return Draggable<StudentWithInfo>(
+        data: widget.studentWithInfo,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        maxSimultaneousDrags: 1,
+        feedback: feedbackWidget,
+        childWhenDragging: Opacity(opacity: 0.3, child: cardCore),
         child: cardCore,
-      ),
+      );
+    }
+
+    return LongPressDraggable<StudentWithInfo>(
+      data: widget.studentWithInfo,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      maxSimultaneousDrags: 1,
+      hapticFeedbackOnStart: true,
+      feedback: feedbackWidget,
+      childWhenDragging: Opacity(opacity: 0.3, child: cardCore),
       child: cardCore,
     );
   }

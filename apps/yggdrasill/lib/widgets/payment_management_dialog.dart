@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../services/data_manager.dart';
-import '../models/payment_record.dart';
+
+const Color _pmBg = Color(0xFF0B1112);
+const Color _pmPanelBg = Color(0xFF10171A);
+const Color _pmCardBg = Color(0xFF15171C);
+const Color _pmBorder = Color(0xFF223131);
+const Color _pmText = Color(0xFFEAF2F2);
+const Color _pmTextSub = Color(0xFF9FB3B3);
+const Color _pmAccent = Color(0xFF33A373);
+const Color _pmDanger = Color(0xFFF04747);
 
 class PaymentManagementDialog extends StatefulWidget {
   final VoidCallback? onClose;
@@ -17,10 +25,17 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   List<StudentWithInfo> _upcomingStudents = [];
   List<StudentWithInfo> _paidThisMonthStudents = [];
   int _totalThisMonthCount = 0;
+  bool _didNotifyClosed = false;
+  late final ScrollController _overdueScrollCtrl;
+  late final ScrollController _upcomingScrollCtrl;
+  late final ScrollController _paidListScrollCtrl;
 
   @override
   void initState() {
     super.initState();
+    _overdueScrollCtrl = ScrollController();
+    _upcomingScrollCtrl = ScrollController();
+    _paidListScrollCtrl = ScrollController();
     _loadPaymentData();
     DataManager.instance.paymentRecordsNotifier.addListener(_loadPaymentData);
   }
@@ -73,7 +88,17 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   @override
   void dispose() {
     DataManager.instance.paymentRecordsNotifier.removeListener(_loadPaymentData);
+    _overdueScrollCtrl.dispose();
+    _upcomingScrollCtrl.dispose();
+    _paidListScrollCtrl.dispose();
+    _notifyClosed();
     super.dispose();
+  }
+
+  void _notifyClosed() {
+    if (_didNotifyClosed) return;
+    _didNotifyClosed = true;
+    widget.onClose?.call();
   }
 
   DateTime _getActualPaymentDateForMonth(String studentId, DateTime registrationDate, DateTime targetMonth) {
@@ -115,74 +140,344 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   void _showPaidStudentsList() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('이번달 결제 완료 명단', style: TextStyle(color: Colors.white)),
-        content: SizedBox(
-          width: 400,
-          height: 300,
-          child: Column(
-            children: [
-              // 헤더
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(8),
-                    topRight: Radius.circular(8),
+      builder: (context) {
+        return Dialog(
+          backgroundColor: _pmBg,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          insetPadding: const EdgeInsets.all(24),
+          child: Container(
+            width: 720,
+            height: 560,
+            padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
+            decoration: BoxDecoration(
+              color: _pmBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _pmBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: 48,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: IconButton(
+                          tooltip: '닫기',
+                          icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                          padding: EdgeInsets.zero,
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                      const Text(
+                        '이번달 결제 완료 명단',
+                        style: TextStyle(
+                          color: _pmText,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: const Row(
-                  children: [
-                    Expanded(flex: 2, child: Text('학생명', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold))),
-                    Expanded(flex: 2, child: Text('결제 예정일', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold))),
-                    Expanded(flex: 2, child: Text('실제 결제일', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold))),
-                  ],
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: _pmPanelBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _pmBorder),
+                  ),
+                  child: const Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Text('학생명', style: TextStyle(color: _pmTextSub, fontWeight: FontWeight.w700)),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Text('결제 예정일', style: TextStyle(color: _pmTextSub, fontWeight: FontWeight.w700)),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Text('실제 결제일', style: TextStyle(color: _pmTextSub, fontWeight: FontWeight.w700)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: _paidThisMonthStudents.isEmpty
+                      ? const Center(
+                          child: Text('완료된 결제가 없습니다.', style: TextStyle(color: Colors.white24, fontSize: 13)),
+                        )
+                      : Scrollbar(
+                          thumbVisibility: true,
+                          controller: _paidListScrollCtrl,
+                          child: ListView.separated(
+                            controller: _paidListScrollCtrl,
+                            primary: false,
+                            itemCount: _paidThisMonthStudents.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final studentWithInfo = _paidThisMonthStudents[index];
+                              final student = studentWithInfo.student;
+                              final registrationDate = studentWithInfo.basicInfo.registrationDate!;
+                              final now = DateTime.now();
+                              final currentMonth = DateTime(now.year, now.month);
+
+                              final paymentDate = _getActualPaymentDateForMonth(student.id, registrationDate, currentMonth);
+                              final cycle = _calculateCycleNumber(registrationDate, paymentDate);
+                              final record = DataManager.instance.getPaymentRecord(student.id, cycle);
+                              final paid = record?.paidDate;
+
+                              return Container(
+                                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                                decoration: BoxDecoration(
+                                  color: _pmCardBg,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: _pmBorder.withOpacity(0.9)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      flex: 3,
+                                      child: Text(
+                                        student.name,
+                                        style: const TextStyle(color: _pmText, fontSize: 15, fontWeight: FontWeight.w600),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      flex: 2,
+                                      child: Text(
+                                        '${paymentDate.month}/${paymentDate.day}',
+                                        style: const TextStyle(color: _pmTextSub, fontSize: 14, fontWeight: FontWeight.w600),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      flex: 2,
+                                      child: Text(
+                                        paid != null ? '${paid.month}/${paid.day}' : '-',
+                                        style: const TextStyle(color: _pmAccent, fontSize: 14, fontWeight: FontWeight.w700),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    final completed = _paidThisMonthStudents.length;
+    final total = _totalThisMonthCount;
+    return SizedBox(
+      height: 48,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                margin: const EdgeInsets.only(right: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: IconButton(
+                  tooltip: '닫기',
+                  icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _notifyClosed();
+                  },
                 ),
               ),
-              // 리스트
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _paidThisMonthStudents.length,
-                  itemBuilder: (context, index) {
-                    final studentWithInfo = _paidThisMonthStudents[index];
-                    final student = studentWithInfo.student;
-                    final registrationDate = studentWithInfo.basicInfo.registrationDate!;
-                    final now = DateTime.now();
-                    final currentMonth = DateTime(now.year, now.month);
-                    
-                    final paymentDate = _getActualPaymentDateForMonth(student.id, registrationDate, currentMonth);
-                    final cycle = _calculateCycleNumber(registrationDate, paymentDate);
-                    final record = DataManager.instance.getPaymentRecord(student.id, cycle);
-
-                    return Container(
-                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: index.isEven ? const Color(0xFF1F1F1F) : const Color(0xFF2A2A2A),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(flex: 2, child: Text(student.name, style: const TextStyle(color: Colors.white))),
-                          Expanded(flex: 2, child: Text('${paymentDate.month}/${paymentDate.day}', style: const TextStyle(color: Colors.white70))),
-                          Expanded(flex: 2, child: Text(
-                            record?.paidDate != null ? '${record!.paidDate!.month}/${record.paidDate!.day}' : '-',
-                            style: const TextStyle(color: Color(0xFF4CAF50))
-                          )),
-                        ],
-                      ),
-                    );
-                  },
+              const Text(
+                '수강료 결제 관리',
+                style: TextStyle(
+                  color: _pmText,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],
           ),
+          Positioned(
+            right: 0,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '완료 $completed/$total',
+                  style: const TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: _paidThisMonthStudents.isEmpty ? null : _showPaidStudentsList,
+                  icon: const Icon(Icons.list_alt, size: 18),
+                  label: const Text('완료 명단'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: const BorderSide(color: _pmBorder),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '새로 고침',
+                  onPressed: () async {
+                    try {
+                      await DataManager.instance.loadPaymentRecords();
+                    } catch (_) {}
+                    if (mounted) _loadPaymentData();
+                  },
+                  icon: const Icon(Icons.refresh, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryBar() {
+    Text metric(String label, int count, Color color) {
+      return Text(
+        '$label $count',
+        style: TextStyle(
+          color: color.withOpacity(0.92),
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: _pmPanelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _pmBorder),
+      ),
+      child: Row(
+        children: [
+          const Text('이번달', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 10),
+          metric('연체', _overdueStudents.length, _pmDanger),
+          const SizedBox(width: 10),
+          const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 10),
+          metric('예정', _upcomingStudents.length, const Color(0xFF1976D2)),
+          const SizedBox(width: 10),
+          const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 10),
+          metric('완료', _paidThisMonthStudents.length, _pmAccent),
+          const Spacer(),
+          Text(
+            '총 ${_totalThisMonthCount}명',
+            style: const TextStyle(color: _pmTextSub, fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPanel({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+    required List<StudentWithInfo> students,
+    required bool isOverdue,
+    required ScrollController scrollController,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _pmPanelBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _pmBorder),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: iconColor.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: iconColor.withOpacity(0.35)),
+                ),
+                child: Icon(icon, color: iconColor, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$title (${students.length}명)',
+                      style: const TextStyle(color: _pmText, fontSize: 16, fontWeight: FontWeight.w800),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(subtitle, style: const TextStyle(color: _pmTextSub, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: students.isEmpty
+                ? const Center(
+                    child: Text('대상이 없습니다.', style: TextStyle(color: Colors.white24, fontSize: 13)),
+                  )
+                : Scrollbar(
+                    thumbVisibility: true,
+                    controller: scrollController,
+                    child: GridView.builder(
+                      controller: scrollController,
+                      primary: false,
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 2.55,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: students.length,
+                      itemBuilder: (context, index) {
+                        return _buildPaymentStudentCard(students[index], isOverdue: isOverdue);
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -192,173 +487,54 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF1F1F1F), // 학생등록 다이얼로그와 동일한 배경색
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: _pmBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      insetPadding: const EdgeInsets.all(24),
       child: Container(
-        width: 800,
-        height: 600,
-        padding: const EdgeInsets.all(24),
+        width: 920,
+        height: 680,
+        padding: const EdgeInsets.fromLTRB(26, 26, 26, 18),
+        decoration: BoxDecoration(
+          color: _pmBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _pmBorder),
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 제목
-            const Text(
-              '수강료 결제 관리',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 24),
-            
-            // 메인 컨테이너
+            _buildHeader(context),
+            const SizedBox(height: 14),
+            _buildSummaryBar(),
+            const SizedBox(height: 14),
             Expanded(
               child: Row(
                 children: [
-                  // 왼쪽 컨테이너 (연체자 - 파란색)
                   Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF212A31), // 슬라이드시트 파란 컨테이너와 같은 색
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.warning, color: Colors.red, size: 20),
-                              const SizedBox(width: 8),
-                              Text(
-                                '결제 예정일 지남 (${_overdueStudents.length}명)',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Expanded(
-                            child: GridView.builder(
-                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2, // 2열로 배치
-                                childAspectRatio: 2.5, // 카드 비율
-                                crossAxisSpacing: 8,
-                                mainAxisSpacing: 8,
-                              ),
-                              itemCount: _overdueStudents.length,
-                              itemBuilder: (context, index) {
-                                return _buildPaymentStudentCard(_overdueStudents[index], isOverdue: true);
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
+                    child: _buildPanel(
+                      title: '결제 예정일 지남',
+                      subtitle: '카드를 클릭하면 납부 기록이 저장됩니다',
+                      icon: Icons.warning_amber_rounded,
+                      iconColor: _pmDanger,
+                      students: _overdueStudents,
+                      isOverdue: true,
+                      scrollController: _overdueScrollCtrl,
                     ),
                   ),
-                  
-                  const SizedBox(width: 16),
-                  
-                  // 오른쪽 컨테이너 (예정자 - 일반)
+                  const SizedBox(width: 14),
                   Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1F1F1F),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.schedule, color: Colors.blue, size: 20),
-                              const SizedBox(width: 8),
-                              Text(
-                                '결제 예정 (${_upcomingStudents.length}명)',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Expanded(
-                            child: GridView.builder(
-                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2, // 2열로 배치
-                                childAspectRatio: 2.5, // 카드 비율
-                                crossAxisSpacing: 8,
-                                mainAxisSpacing: 8,
-                              ),
-                              itemCount: _upcomingStudents.length,
-                              itemBuilder: (context, index) {
-                                return _buildPaymentStudentCard(_upcomingStudents[index]);
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
+                    child: _buildPanel(
+                      title: '결제 예정',
+                      subtitle: '예정일 전 미결제 학생 목록입니다',
+                      icon: Icons.schedule_rounded,
+                      iconColor: const Color(0xFF1976D2),
+                      students: _upcomingStudents,
+                      isOverdue: false,
+                      scrollController: _upcomingScrollCtrl,
                     ),
                   ),
                 ],
               ),
             ),
-            
-            const SizedBox(height: 16),
-            
-            // 하단 통계 및 더보기 버튼
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '이번달 결제 현황: ${_paidThisMonthStudents.length}/${_totalThisMonthCount}명 완료',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  ElevatedButton(
-                    onPressed: _showPaidStudentsList,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1976D2),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    child: const Text('더보기'),
-                  ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-                          // 닫기 버튼
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      widget.onClose?.call(); // FAB 닫기 콜백 호출
-                    },
-                    child: const Text('닫기', style: TextStyle(color: Colors.white70)),
-                  ),
-                ],
-              ),
           ],
         ),
       ),
@@ -388,63 +564,88 @@ class _PaymentStudentCard extends StatefulWidget {
 
 class _PaymentStudentCardState extends State<_PaymentStudentCard> {
   bool _isHovered = false;
+  bool _processing = false;
 
   @override
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
-    
+
+    final due = widget.paymentDate;
+    final borderColor = widget.isOverdue
+        ? _pmDanger.withOpacity(_isHovered ? 0.9 : 0.55)
+        : (_isHovered ? _pmAccent : _pmBorder.withOpacity(0.9));
+
     return Tooltip(
-      message: '결제 사이클: ${widget.cycle}번째\n결제 예정일: ${widget.paymentDate.month}/${widget.paymentDate.day}',
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      textStyle: const TextStyle(color: Colors.white, fontSize: 14),
-      waitDuration: const Duration(milliseconds: 300),
+      message: '결제 사이클: ${widget.cycle}번째\n결제 예정일: ${due.month}/${due.day}',
+      decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8)),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 13),
+      waitDuration: const Duration(milliseconds: 250),
       child: MouseRegion(
         onEnter: (_) => setState(() => _isHovered = true),
         onExit: (_) => setState(() => _isHovered = false),
         child: GestureDetector(
-          onTap: () => _handlePaymentTap(context),
-          child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          decoration: BoxDecoration(
-            color: widget.isOverdue ? Colors.transparent : const Color(0xFF2A2A2A),
-            border: widget.isOverdue 
-              ? Border.all(color: Colors.red.withOpacity(0.5), width: 2)
-              : (_isHovered 
-                ? Border.all(color: const Color(0xFF1976D2), width: 2)
-                : Border.all(color: Colors.transparent, width: 2)),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Stack(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    student.name,
-                    style: const TextStyle(
-                      color: Color(0xFFE0E0E0), // 연체자도 같은 색상
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
+          onTap: _processing ? null : () => _handlePaymentTap(context),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+            decoration: BoxDecoration(
+              color: _pmCardBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: borderColor, width: 2),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        student.name,
+                        style: const TextStyle(color: _pmText, fontSize: 15, fontWeight: FontWeight.w700),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${widget.paymentDate.month}/${widget.paymentDate.day} 예정',
-                    style: const TextStyle(
-                      color: Colors.white54, // 연체자도 같은 색상
-                      fontSize: 12,
+                    const SizedBox(width: 8),
+                    Text(
+                      '${due.month}/${due.day}',
+                      style: const TextStyle(
+                        color: _pmTextSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-
-            ],
-          ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      widget.isOverdue ? '연체' : '예정',
+                      style: TextStyle(
+                        color: (widget.isOverdue ? _pmDanger : _pmTextSub).withOpacity(0.95),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('·', style: TextStyle(color: _pmTextSub, fontSize: 11, fontWeight: FontWeight.w700)),
+                    const SizedBox(width: 8),
+                    Text(
+                      '사이클 ${widget.cycle}',
+                      style: const TextStyle(color: _pmTextSub, fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
+                    const Spacer(),
+                    if (_processing)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: _pmAccent),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -452,47 +653,62 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
   }
 
   void _handlePaymentTap(BuildContext context) async {
-    // 바로 결제 처리
-    await _processPayment();
-    
-    // 결제 완료 메시지
-    if (context.mounted) {
+    if (_processing) return;
+    final due = widget.paymentDate;
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(due.year - 1, 1, 1),
+      lastDate: DateTime(due.year + 2, 12, 31),
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1B6B63),
+              onPrimary: Colors.white,
+              surface: Color(0xFF151C21),
+              onSurface: Colors.white,
+            ),
+            dialogBackgroundColor: const Color(0xFF151C21),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null) return;
+
+    setState(() => _processing = true);
+    try {
+      await DataManager.instance.recordPayment(
+        widget.studentWithInfo.student.id,
+        widget.cycle,
+        picked,
+      );
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${widget.studentWithInfo.student.name} 학생의 수강료 납부가 완료되었습니다.'),
-          backgroundColor: const Color(0xFF4CAF50),
+          content: Text('${widget.studentWithInfo.student.name} 학생의 수강료 납부를 기록했습니다.'),
+          backgroundColor: _pmAccent,
           behavior: SnackBarBehavior.floating,
         ),
       );
-      
-      // 부모 다이얼로그 새로고침을 위해 pop 후 재로드
-      Navigator.of(context).pop();
-      showDialog(
-        context: context,
-        builder: (context) => PaymentManagementDialog(onClose: widget.onClose),
-      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('수강료 납부 기록 실패: $e'),
+            backgroundColor: const Color(0xFFE53E3E),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _processing = false);
     }
   }
 
   Future<void> _processPayment() async {
     final now = DateTime.now();
-    final registrationDate = widget.studentWithInfo.basicInfo.registrationDate!;
-    
-    // 기존 레코드 확인
-    final existingRecord = DataManager.instance.getPaymentRecord(
-      widget.studentWithInfo.student.id, 
-      widget.cycle
-    );
-
-    final paymentRecord = PaymentRecord(
-      id: existingRecord?.id,
-      studentId: widget.studentWithInfo.student.id,
-      cycle: widget.cycle,
-      dueDate: widget.paymentDate,
-      paidDate: now, // 현재 시간을 납부일로 설정
-    );
-
-    // 서버-우선 모드에서는 RPC를 사용하여 결제 처리
     await DataManager.instance.recordPayment(
       widget.studentWithInfo.student.id,
       widget.cycle,

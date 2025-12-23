@@ -12,6 +12,14 @@ import '../models/operating_hours.dart';
 import '../screens/timetable/views/classes_view.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+const Color _mkBg = Color(0xFF0B1112);
+const Color _mkPanelBg = Color(0xFF10171A);
+const Color _mkFieldBg = Color(0xFF15171C);
+const Color _mkBorder = Color(0xFF223131);
+const Color _mkText = Color(0xFFEAF2F2);
+const Color _mkTextSub = Color(0xFF9FB3B3);
+const Color _mkAccent = Color(0xFF33A373);
+
 class MakeupQuickDialog extends StatefulWidget {
   const MakeupQuickDialog({super.key});
 
@@ -77,13 +85,45 @@ class _StudentScheduleListDialogState extends State<StudentScheduleListDialog> {
     final visible = (_sessions.length < 8 ? _sessions.length : 8);
     final dialogHeight = (visible * itemHeight) + 40;
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: Text('수업 일정 - ${widget.studentWithInfo.student.name}', style: const TextStyle(color: Colors.white)),
+      backgroundColor: _mkBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _mkBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: IconButton(
+              tooltip: '닫기',
+              icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+              padding: EdgeInsets.zero,
+              onPressed: () => Navigator.of(context).pop<DateTime?>(null),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              '수업 일정 · ${widget.studentWithInfo.student.name}',
+              style: const TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
       content: SizedBox(
         width: 560,
         height: dialogHeight,
         child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: CircularProgressIndicator(color: _mkAccent))
             : ListView.separated(
                 itemCount: _sessions.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -91,12 +131,41 @@ class _StudentScheduleListDialogState extends State<StudentScheduleListDialog> {
                   final s = _sessions[i];
                   final date = s.dateTime;
                   final label = '${date.year}.${date.month.toString().padLeft(2, '0')}.${date.day.toString().padLeft(2, '0')} (${_dayKo(date.weekday)}) ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-                  return ListTile(
-                    tileColor: const Color(0xFF2A2A2A),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    title: Text(label, style: const TextStyle(color: Colors.white)),
-                    subtitle: Text(s.className, style: const TextStyle(color: Colors.white70)),
+                  return InkWell(
                     onTap: () => Navigator.of(context).pop<DateTime>(s.dateTime),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _mkFieldBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _mkBorder.withOpacity(0.9)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.event, color: _mkTextSub, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  label,
+                                  style: const TextStyle(color: _mkText, fontSize: 14, fontWeight: FontWeight.w700),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  s.className,
+                                  style: const TextStyle(color: _mkTextSub, fontSize: 12, fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   );
                 },
               ),
@@ -104,7 +173,11 @@ class _StudentScheduleListDialogState extends State<StudentScheduleListDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop<DateTime?>(null),
-          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+          style: TextButton.styleFrom(
+            foregroundColor: _mkTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
         ),
       ],
     );
@@ -132,6 +205,52 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
   void initState() {
     super.initState();
     _refresh();
+  }
+
+  DateTime _today() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  bool _isActive(StudentTimeBlock b, DateTime refDate) {
+    final s = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+    final e = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+    return !s.isAfter(refDate) && (e == null || !e.isBefore(refDate));
+  }
+
+  Color? _resolveStudentClassColor(String studentId) {
+    // 활성 시간블록 → sessionTypeId → ClassInfo.color
+    final ref = _today();
+    final blocks = DataManager.instance.studentTimeBlocks
+        .where((b) => b.studentId == studentId && _isActive(b, ref))
+        .toList();
+    if (blocks.isEmpty) return null;
+
+    // 정렬: weeklyOrder 우선(있으면), 그 다음 요일/시간
+    blocks.sort((a, b) {
+      final ao = a.weeklyOrder ?? 1 << 30;
+      final bo = b.weeklyOrder ?? 1 << 30;
+      if (ao != bo) return ao.compareTo(bo);
+      if (a.dayIndex != b.dayIndex) return a.dayIndex.compareTo(b.dayIndex);
+      final at = a.startHour * 60 + a.startMinute;
+      final bt = b.startHour * 60 + b.startMinute;
+      return at.compareTo(bt);
+    });
+
+    String? sessionTypeId;
+    for (final b in blocks) {
+      final id = b.sessionTypeId;
+      if (id != null && id.isNotEmpty) {
+        sessionTypeId = id;
+        break;
+      }
+    }
+    if (sessionTypeId == null) return null;
+
+    for (final c in DataManager.instance.classes) {
+      if (c.id == sessionTypeId) return c.color;
+    }
+    return null;
   }
 
   void _refresh() {
@@ -226,31 +345,77 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('빠른 보강 등록', style: TextStyle(color: Colors.white)),
+      backgroundColor: _mkBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _mkBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: IconButton(
+              tooltip: '닫기',
+              icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+              padding: EdgeInsets.zero,
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+          const Expanded(
+            child: Text(
+              '빠른 보강 등록',
+              style: TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 640,
-        height: 520,
+        width: 720,
+        height: 560,
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const Divider(color: _mkBorder, height: 1),
+            const SizedBox(height: 16),
             TextField(
               controller: _searchController,
               onChanged: _onQueryChanged,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: _mkText),
               decoration: InputDecoration(
                 labelText: '학생 검색',
-                labelStyle: const TextStyle(color: Colors.white70),
-                prefixIcon: const Icon(Icons.search, color: Colors.white70),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white.withOpacity(0.3))),
-                focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+                labelStyle: const TextStyle(color: _mkTextSub, fontWeight: FontWeight.w700),
+                hintText: '이름/학교로 검색',
+                hintStyle: const TextStyle(color: Colors.white38),
+                prefixIcon: const Icon(Icons.search, color: _mkTextSub),
+                filled: true,
+                fillColor: _mkFieldBg,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _mkAccent, width: 2),
+                ),
               ),
             ),
             const SizedBox(height: 12),
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(8),
+                  color: _mkPanelBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _mkBorder),
                 ),
                 child: ValueListenableBuilder<List<AttendanceRecord>>(
                   valueListenable: DataManager.instance.attendanceRecordsNotifier,
@@ -283,15 +448,52 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
                     }
                     return ListView.separated(
                       itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                      separatorBuilder: (_, __) => const Divider(color: Color(0x22FFFFFF), height: 1),
                       itemBuilder: (context, i) {
                         final s = items[i];
                         final sub = subtitles[i];
                         final absentId = isSearching ? null : _recentAbsentByStudentId[s.student.id]?.id;
-                        return ListTile(
-                          title: Text(s.student.name, style: const TextStyle(color: Colors.white)),
-                          subtitle: Text(sub, style: const TextStyle(color: Colors.white70)),
+                        final Color? classColor = _resolveStudentClassColor(s.student.id);
+                        return InkWell(
                           onTap: () => _openSchedule(s, absentRecordId: absentId),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            child: Row(
+                              children: [
+                                classColor == null
+                                    ? const SizedBox(width: 10, height: 38)
+                                    : Container(
+                                        width: 10,
+                                        height: 38,
+                                        decoration: BoxDecoration(
+                                          color: classColor,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                      ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        s.student.name,
+                                        style: const TextStyle(color: _mkText, fontSize: 15, fontWeight: FontWeight.w700),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        sub,
+                                        style: const TextStyle(color: _mkTextSub, fontSize: 12, fontWeight: FontWeight.w600),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.chevron_right, color: _mkTextSub),
+                              ],
+                            ),
+                          ),
                         );
                       },
                     );
@@ -305,7 +507,11 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+          style: TextButton.styleFrom(
+            foregroundColor: _mkTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
         )
       ],
     );
@@ -373,16 +579,24 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          title: const Text('보강 등록 확인', style: TextStyle(color: Colors.white)),
+          backgroundColor: _mkBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _mkBorder),
+          ),
+          title: const Text('보강 등록 확인', style: TextStyle(color: _mkText, fontWeight: FontWeight.w800)),
           content: Text(
             '$studentName 학생의 "$classLabel"을\n$src → $dst 로 보강 예약했습니다.',
-            style: const TextStyle(color: Colors.white70),
+            style: const TextStyle(color: _mkTextSub, height: 1.4),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('확인', style: TextStyle(color: Colors.white)),
+              style: TextButton.styleFrom(
+                foregroundColor: _mkTextSub,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              ),
+              child: const Text('확인'),
             ),
           ],
         ),
@@ -401,8 +615,19 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: Text('${widget.studentWithInfo.student.name} 보강 시간 선택', style: const TextStyle(color: Colors.white)),
+      backgroundColor: _mkBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _mkBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Text(
+        '${widget.studentWithInfo.student.name} 보강 시간 선택',
+        style: const TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
+        overflow: TextOverflow.ellipsis,
+      ),
       content: SizedBox(
         width: 1032, // 860 * 1.2
         height: 672, // 560 * 1.2
@@ -454,7 +679,11 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+          style: TextButton.styleFrom(
+            foregroundColor: _mkTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
         ),
       ],
     );

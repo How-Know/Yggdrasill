@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import 'package:intl/intl.dart';
@@ -62,6 +63,61 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   bool _showDeleteZone = false;
   StudentWithInfo? _detailsStudent;
 
+  bool get _useImmediateDrag {
+    if (kIsWeb) return true;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.windows:
+      case TargetPlatform.macOS:
+      case TargetPlatform.linux:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Widget _buildStudentDraggable({
+    required StudentWithInfo student,
+    required Widget feedback,
+    required Widget childWhenDragging,
+    required Widget child,
+  }) {
+    void onDragStarted() {
+      setState(() => _showDeleteZone = true);
+      print('[STUDENT][drag] delete zone opened by ${student.student.name}');
+    }
+
+    void onDragEnd(_) {
+      setState(() => _showDeleteZone = false);
+      print('[STUDENT][drag] delete zone closed');
+    }
+
+    if (_useImmediateDrag) {
+      // 데스크톱(마우스) UX: 시간표 탭과 동일하게 "클릭+이동" 즉시 드래그
+      return Draggable<StudentWithInfo>(
+        data: student,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        maxSimultaneousDrags: 1,
+        onDragStarted: onDragStarted,
+        onDragEnd: onDragEnd,
+        feedback: feedback,
+        childWhenDragging: childWhenDragging,
+        child: child,
+      );
+    }
+
+    // 모바일/터치 UX: 스크롤/탭과 충돌을 피하려고 기존 롱프레스 드래그 유지
+    return LongPressDraggable<StudentWithInfo>(
+      data: student,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      maxSimultaneousDrags: 1,
+      onDragStarted: onDragStarted,
+      onDragEnd: onDragEnd,
+      feedback: feedback,
+      childWhenDragging: childWhenDragging,
+      child: child,
+    );
+  }
+
   void _onShowDetails(StudentWithInfo s) {
     setState(() {
       _detailsStudent = s;
@@ -113,6 +169,100 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     if (_hasGroupFilter) {
       _clearGroupFilter();
     }
+  }
+
+  Widget _buildRemoveFromGroupDropZone() {
+    return IgnorePointer(
+      ignoring: !_showDeleteZone,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 120),
+        opacity: _showDeleteZone ? 1.0 : 0.0,
+        child: SizedBox(
+          width: double.infinity,
+          height: 72,
+          child: DragTarget<StudentWithInfo>(
+            onWillAccept: (student) => student != null,
+            onAccept: (student) async {
+              final studentCopy = student.student.copyWith(
+                clearGroupInfo: true,
+                clearGroupId: true,
+              );
+              final basicInfoCopy = student.basicInfo.copyWith(
+                clearGroupId: true,
+              );
+              final result = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  backgroundColor: const Color(0xFF232326),
+                  shape:
+                      RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  title:
+                      const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
+                  content: Text(
+                    '${student.student.name} 학생을 그룹에서 삭제하시겠습니까?',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child:
+                          const Text('취소', style: TextStyle(color: Colors.white70)),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.red,
+                      ),
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: const Text('확인'),
+                    ),
+                  ],
+                ),
+              );
+              if (result == true) {
+                print(
+                    '[STUDENT][drop] attempting to remove ${student.student.name} from group ${student.student.groupInfo?.name}');
+                await DataManager.instance.updateStudent(
+                  studentCopy,
+                  basicInfoCopy,
+                );
+                print(
+                    '[STUDENT][drop] updateStudent complete for ${student.student.id}, loading students...');
+                await DataManager.instance.loadStudents();
+                setState(() {
+                  _showDeleteZone = false;
+                });
+                showAppSnackBar(context, '그룹에서 제외되었습니다.');
+              } else {
+                print('[STUDENT][drop] remove cancelled for ${student.student.name}');
+              }
+            },
+            builder: (context, candidateData, rejectedData) {
+              final isHover = candidateData.isNotEmpty;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: double.infinity,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: Colors.grey[900],
+                  border: Border.all(
+                    color: isHover ? Colors.red : Colors.grey[700]!,
+                    width: isHover ? 3 : 2,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Icon(
+                    Icons.delete_outline,
+                    color: isHover ? Colors.red : Colors.white70,
+                    size: 36,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   List<StudentWithInfo> _applyFilter(List<StudentWithInfo> students) {
@@ -379,12 +529,15 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         const SizedBox(height: 12),
                         Expanded(
                           flex: 1,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: ReorderableListView.builder(
+                          child: Stack(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: ReorderableListView.builder(
                               physics: const AlwaysScrollableScrollPhysics(),
                               buildDefaultDragHandles: false,
-                              padding: EdgeInsets.zero,
+                              // 삭제 드롭존이 나타나도 그룹 리스트가 "밀리지" 않도록 하단 여백을 확보
+                              padding: const EdgeInsets.only(bottom: 90),
                               proxyDecorator: (child, index, animation) {
                                 return AnimatedBuilder(
                                   animation: animation,
@@ -571,89 +724,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           onReorder: widget.onReorder,
                         ),
                       ),
-                    ),
-                      const SizedBox(height: 12),
-                      if (_showDeleteZone)
-                        SizedBox(
-                          width: double.infinity,
-                          height: 72,
-                          child: DragTarget<StudentWithInfo>(
-                            onWillAccept: (student) => student != null,
-                            onAccept: (student) async {
-                              final studentCopy = student.student.copyWith(
-                                clearGroupInfo: true,
-                                clearGroupId: true,
-                              );
-                              final basicInfoCopy = student.basicInfo.copyWith(
-                                clearGroupId: true,
-                              );
-                              final result = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  backgroundColor: const Color(0xFF232326),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  title: const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
-                                  content: Text('${student.student.name} 학생을 그룹에서 삭제하시겠습니까?',
-                                      style: const TextStyle(color: Colors.white70)),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.of(context).pop(false),
-                                      child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                    ),
-                                    FilledButton(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.red,
-                                      ),
-                                      onPressed: () => Navigator.of(context).pop(true),
-                                      child: const Text('확인'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (result == true) {
-                                print('[STUDENT][drop] attempting to remove ${student.student.name} from group ${student.student.groupInfo?.name}');
-                                await DataManager.instance.updateStudent(
-                                  studentCopy,
-                                  basicInfoCopy,
-                                );
-                                print('[STUDENT][drop] updateStudent complete for ${student.student.id}, loading students...');
-                                await DataManager.instance.loadStudents();
-                                setState(() {
-                                  _showDeleteZone = false;
-                                });
-                                showAppSnackBar(context, '그룹에서 제외되었습니다.');
-                              } else {
-                                print('[STUDENT][drop] remove cancelled for ${student.student.name}');
-                              }
-                            },
-                            builder: (context, candidateData, rejectedData) {
-                              final isHover = candidateData.isNotEmpty;
-                              return AnimatedContainer(
-                                duration: const Duration(milliseconds: 150),
-                                width: double.infinity,
-                                height: 72,
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[900],
-                                  border: Border.all(
-                                    color: isHover ? Colors.red : Colors.grey[700]!,
-                                    width: isHover ? 3 : 2,
-                                  ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Center(
-                                  child: Icon(
-                                    Icons.delete_outline,
-                                    color: isHover ? Colors.red : Colors.white70,
-                                    size: 36,
-                                  ),
-                                ),
-                              );
-                            },
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                child: _buildRemoveFromGroupDropZone(),
+                              ),
+                            ],
                           ),
                         ),
-                      if (_showDeleteZone) const SizedBox(height: 10)
-                      else
-                        const SizedBox(height: 0),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 );
@@ -689,7 +769,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 child: Text(
                   '${entry.key}학년',
                   style: const TextStyle(
-                    color: _studentListPrimaryTextColor,
+                    color: _studentListMutedTextColor,
                     fontSize: 18,
                     fontWeight: FontWeight.w500,
                   ),
@@ -699,16 +779,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 spacing: 4,
                 runSpacing: 8,
                 children: gradeStudents.map((student) =>
-                  LongPressDraggable<StudentWithInfo>(
-                    data: student,
-                    onDragStarted: () {
-                      setState(() => _showDeleteZone = true);
-                      print('[STUDENT][drag] delete zone opened by ${student.student.name}');
-                    },
-                    onDragEnd: (_) {
-                      setState(() => _showDeleteZone = false);
-                      print('[STUDENT][drag] delete zone closed');
-                    },
+                  _buildStudentDraggable(
+                    student: student,
                     feedback: Material(
                       color: Colors.transparent,
                       child: Opacity(
@@ -858,7 +930,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                   child: Text(
                     '${grade}학년',
                     style: const TextStyle(
-                      color: Colors.white70,
+                      color: _studentListMutedTextColor,
                       fontSize: 18,
                       fontWeight: FontWeight.w500,
                     ),

@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'package:uuid/uuid.dart';
+import '../models/memo.dart';
+import '../services/ai_summary.dart';
+import '../services/data_manager.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 
@@ -118,13 +123,13 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  // 위에서부터: 상담 -> 보강 -> 수강
+                  // 위에서부터: 메모 -> 보강 -> 수강
                   _buildMenuButton(
-                    label: '상담',
-                    icon: Icons.chat_outlined,
+                    label: '메모',
+                    icon: Icons.edit_note,
                     slideAnimation: _slideAnimation3,
                     onTap: () {
-                      _showFloatingSnackBar(context, '상담 기능');
+                      _openMemoAddDialog(context);
                     },
                   ),
                   _buildMenuButton(
@@ -289,6 +294,146 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _openMemoAddDialog(BuildContext context) async {
+    // 메뉴는 즉시 접고 다이얼로그를 띄운다(레이어 겹침/오작동 방지)
+    if (mounted) {
+      setState(() {
+        _isFabExpanded = false;
+        _fabController.reverse();
+        _removeMenuOverlay();
+      });
+    }
+
+    final String? text = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      useRootNavigator: true,
+      builder: (_) => const _MemoQuickAddDialog(),
+    );
+    final trimmed = (text ?? '').trim();
+    if (trimmed.isEmpty) return;
+
+    try {
+      final now = DateTime.now();
+      final memo = Memo(
+        id: const Uuid().v4(),
+        original: trimmed,
+        summary: '요약 중...',
+        scheduledAt: await AiSummaryService.extractDateTime(trimmed),
+        dismissed: false,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await DataManager.instance.addMemo(memo);
+      // 요약은 비동기 업데이트 (실패 시 무시)
+      try {
+        final summary = await AiSummaryService.summarize(trimmed, maxChars: 60);
+        await DataManager.instance.updateMemo(
+          memo.copyWith(summary: summary, updatedAt: DateTime.now()),
+        );
+      } catch (_) {}
+      if (mounted) {
+        _showFloatingSnackBar(context, '메모가 추가되었습니다.');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('메모 추가 실패: $e'),
+            backgroundColor: const Color(0xFFE53E3E),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+}
+
+class _MemoQuickAddDialog extends StatefulWidget {
+  const _MemoQuickAddDialog();
+
+  @override
+  State<_MemoQuickAddDialog> createState() => _MemoQuickAddDialogState();
+}
+
+class _MemoQuickAddDialogState extends State<_MemoQuickAddDialog> {
+  final TextEditingController _controller = ImeAwareTextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF0B1112),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFF223131)),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      title: const Text(
+        '메모 추가',
+        style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.bold),
+      ),
+      content: SizedBox(
+        width: 520,
+        child: TextField(
+          controller: _controller,
+          minLines: 4,
+          maxLines: 8,
+          style: const TextStyle(color: Color(0xFFEAF2F2)),
+          decoration: InputDecoration(
+            hintText: '메모를 입력하세요',
+            hintStyle: const TextStyle(color: Colors.white38),
+            filled: true,
+            fillColor: const Color(0xFF15171C),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF33A373)),
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF9FB3B3),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: _saving
+              ? null
+              : () {
+                  final text = _controller.text.trim();
+                  if (text.isEmpty) return;
+                  setState(() => _saving = true);
+                  Navigator.of(context).pop(text);
+                },
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF33A373),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+      ],
     );
   }
 }
