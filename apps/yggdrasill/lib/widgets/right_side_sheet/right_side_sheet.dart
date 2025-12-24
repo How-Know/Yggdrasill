@@ -1,13 +1,21 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
+import '../../models/memo.dart';
+import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
+import '../memo_dialogs.dart';
 
 const Color _rsBg = Color(0xFF0B1112);
 const Color _rsPanelBg = Color(0xFF10171A);
@@ -17,7 +25,7 @@ const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
 
-enum RightSideSheetMode { none, answerKey, fileShortcut, pdfEdit }
+enum RightSideSheetMode { none, answerKey, fileShortcut, pdfEdit, memo }
 
 class RightSideSheet extends StatefulWidget {
   final VoidCallback onClose;
@@ -48,6 +56,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
   bool _pdfsLoaded = false;
   bool _pdfsLoading = false;
 
+  // pdf 편집(범위 입력은 시트, 미리보기는 다이얼로그) 상태
+  final TextEditingController _pdfEditInputCtrl = ImeAwareTextEditingController();
+  final TextEditingController _pdfEditRangesCtrl = ImeAwareTextEditingController();
+  final TextEditingController _pdfEditFileNameCtrl = ImeAwareTextEditingController();
+  String? _pdfEditLastOutputPath;
+  bool _pdfEditBusy = false;
+
   bool _looksLikeUuid(String s) {
     // uuid v4 뿐 아니라 일반 UUID 형식만 체크 (서버 컬럼이 uuid 타입)
     final re = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
@@ -59,6 +74,173 @@ class _RightSideSheetState extends State<RightSideSheet> {
     super.initState();
     unawaited(_loadBooks());
     unawaited(_loadPdfs());
+  }
+
+  @override
+  void dispose() {
+    _pdfEditInputCtrl.dispose();
+    _pdfEditRangesCtrl.dispose();
+    _pdfEditFileNameCtrl.dispose();
+    super.dispose();
+  }
+
+  String _currentGradeLabelForPdfEdit() {
+    if (_grades.isEmpty) return '';
+    final idx = _defaultGradeIndex.clamp(0, _grades.length - 1);
+    return _grades[idx].label;
+  }
+
+  String _basenameWithoutExtension(String path) {
+    final b = _basename(path);
+    final dot = b.lastIndexOf('.');
+    if (dot <= 0) return b;
+    return b.substring(0, dot);
+  }
+
+  void _syncPdfEditDefaultFileName({required String inPath}) {
+    final trimmed = inPath.trim();
+    if (trimmed.isEmpty) return;
+    // 사용자가 이미 파일명을 입력했다면 덮어쓰지 않음
+    if (_pdfEditFileNameCtrl.text.trim().isNotEmpty) return;
+    final base = _basenameWithoutExtension(trimmed);
+    final grade = _currentGradeLabelForPdfEdit();
+    _pdfEditFileNameCtrl.text = '${base}_${grade}_본문.pdf';
+  }
+
+  Future<void> _pickPdfEditInput() async {
+    final typeGroup = XTypeGroup(label: 'PDF', extensions: const ['pdf']);
+    final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
+    if (file == null) return;
+    _pdfEditInputCtrl.text = file.path;
+    _syncPdfEditDefaultFileName(inPath: file.path);
+    if (mounted) setState(() {});
+  }
+
+  List<int> _parseRanges(String input, int maxPages) {
+    final Set<int> pages = <int>{};
+    for (final part in input.split(',')) {
+      final t = part.trim();
+      if (t.isEmpty) continue;
+      if (t.contains('-')) {
+        final sp = t.split('-');
+        if (sp.length != 2) continue;
+        final a = int.tryParse(sp[0].trim());
+        final b = int.tryParse(sp[1].trim());
+        if (a == null || b == null) continue;
+        final start = a < 1 ? 1 : a;
+        final end = b > maxPages ? maxPages : b;
+        for (int i = start; i <= end; i++) pages.add(i);
+      } else {
+        final v = int.tryParse(t);
+        if (v != null && v >= 1 && v <= maxPages) pages.add(v);
+      }
+    }
+    final list = pages.toList()..sort();
+    return list;
+  }
+
+  Future<void> _generatePdfFromRangesInSheet() async {
+    if (_pdfEditBusy) return;
+    final inPath = _pdfEditInputCtrl.text.trim();
+    final ranges = _pdfEditRangesCtrl.text.trim();
+    var outName = _pdfEditFileNameCtrl.text.trim();
+    if (inPath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
+      return;
+    }
+    if (!inPath.toLowerCase().endsWith('.pdf')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+      return;
+    }
+    if (ranges.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('페이지 범위를 입력하세요.')));
+      return;
+    }
+    if (outName.isEmpty) {
+      final base = _basenameWithoutExtension(inPath);
+      final grade = _currentGradeLabelForPdfEdit();
+      outName = '${base}_${grade}_본문.pdf';
+    }
+
+    setState(() => _pdfEditBusy = true);
+    try {
+      final saveLoc = await getSaveLocation(suggestedName: outName);
+      if (saveLoc == null) return;
+      var outPath = saveLoc.path;
+      if (!outPath.toLowerCase().endsWith('.pdf')) {
+        outPath = '$outPath.pdf';
+      }
+
+      final inputBytes = await File(inPath).readAsBytes();
+      final src = sf.PdfDocument(inputBytes: inputBytes);
+      final selected = _parseRanges(ranges, src.pages.count);
+      if (selected.isEmpty) {
+        src.dispose();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('유효한 페이지 범위가 없습니다.')));
+        }
+        return;
+      }
+
+      final dst = sf.PdfDocument();
+      try {
+        dst.pageSettings.size = src.pageSettings.size;
+        dst.pageSettings.orientation = src.pageSettings.orientation;
+        dst.pageSettings.margins.all = 0;
+      } catch (_) {}
+
+      for (final pageNum in selected) {
+        if (pageNum < 1 || pageNum > src.pages.count) continue;
+        final srcPage = src.pages[pageNum - 1];
+        final tmpl = srcPage.createTemplate();
+        final newPage = dst.pages.add();
+        try {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+        } catch (_) {}
+      }
+
+      final outBytes = await dst.save();
+      src.dispose();
+      dst.dispose();
+      await File(outPath).writeAsBytes(outBytes, flush: true);
+      if (!mounted) return;
+      setState(() => _pdfEditLastOutputPath = outPath);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+    } finally {
+      if (mounted) setState(() => _pdfEditBusy = false);
+    }
+  }
+
+  Future<void> _openPdfPreviewSelectDialogFromSheet() async {
+    final dlgCtx = widget.dialogContext ?? context;
+    final inPath = _pdfEditInputCtrl.text.trim();
+    if (inPath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
+      return;
+    }
+    if (!inPath.toLowerCase().endsWith('.pdf')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+      return;
+    }
+    var outName = _pdfEditFileNameCtrl.text.trim();
+    if (outName.isEmpty) {
+      final base = _basenameWithoutExtension(inPath);
+      final grade = _currentGradeLabelForPdfEdit();
+      outName = '${base}_${grade}_본문.pdf';
+    }
+
+    final out = await showDialog<String>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      builder: (_) => PdfPreviewSelectDialog(
+        inputPath: inPath,
+        suggestedOutputName: outName,
+      ),
+    );
+    if (!mounted) return;
+    if (out != null && out.trim().isNotEmpty) {
+      setState(() => _pdfEditLastOutputPath = out.trim());
+    }
   }
 
   Future<void> _loadBooks() async {
@@ -570,6 +752,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
                     unawaited(_loadBooks());
                     unawaited(_loadPdfs());
                   }
+                  if (m == RightSideSheetMode.memo) {
+                    unawaited(DataManager.instance.loadMemos());
+                  }
                 },
                 onClose: widget.onClose,
               ),
@@ -605,12 +790,317 @@ class _RightSideSheetState extends State<RightSideSheet> {
           onEditPdfs: () => unawaited(_onEditPdfsPressed()),
           onDeleteBook: () => unawaited(_onDeleteBookPressed()),
         );
+      case RightSideSheetMode.memo:
+        return _MemoExplorer(
+          memosListenable: DataManager.instance.memosNotifier,
+          onAddMemo: () => unawaited(_onAddMemoPressed()),
+          onEditMemo: (m) => unawaited(_onEditMemoPressed(m)),
+        );
       case RightSideSheetMode.fileShortcut:
+        return const SizedBox.expand();
       case RightSideSheetMode.pdfEdit:
+        final inputPath = _pdfEditInputCtrl.text.trim();
+        final hasPdf = inputPath.isNotEmpty && inputPath.toLowerCase().endsWith('.pdf');
+        final hasRanges = _pdfEditRangesCtrl.text.trim().isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'PDF 편집',
+                style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _rsPanelBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _rsBorder),
+                ),
+                child: const Text(
+                  '범위 입력(시트)에서 페이지를 지정하고, 필요하면 아래 “미리보기 선택”으로 검수/순서조정 후 생성하세요.',
+                  style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700, height: 1.35),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('입력 PDF', style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _pdfEditInputCtrl,
+                        onChanged: (v) {
+                          if (_pdfEditBusy) return;
+                          setState(() {});
+                          if (v.trim().toLowerCase().endsWith('.pdf')) {
+                            _syncPdfEditDefaultFileName(inPath: v);
+                          }
+                        },
+                        style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                        decoration: InputDecoration(
+                          hintText: '원본 PDF 경로',
+                          hintStyle: const TextStyle(color: _rsTextSub),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: _rsBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                          ),
+                          filled: true,
+                          fillColor: _rsFieldBg,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      DropTarget(
+                        onDragDone: (detail) {
+                          if (_pdfEditBusy) return;
+                          if (detail.files.isEmpty) return;
+                          final xf = detail.files.first;
+                          final path = xf.path;
+                          if (path != null && path.toLowerCase().endsWith('.pdf')) {
+                            setState(() {
+                              _pdfEditInputCtrl.text = path;
+                              _syncPdfEditDefaultFileName(inPath: path);
+                            });
+                          }
+                        },
+                        child: Container(
+                          height: 67,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: _rsFieldBg,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: _rsBorder),
+                          ),
+                          child: const Text(
+                            '여기로 PDF를 드래그하여 선택',
+                            style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _pdfEditBusy ? null : _pickPdfEditInput,
+                              icon: const Icon(Icons.folder_open, size: 16),
+                              label: const Text('찾기'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _rsTextSub,
+                                side: const BorderSide(color: _rsBorder),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (hasPdf) ...[
+                        const SizedBox(height: 14),
+                        const Text(
+                          '페이지 범위 (예: 1-3,5,7-9)',
+                          style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _pdfEditRangesCtrl,
+                          onChanged: (_) {
+                            if (_pdfEditBusy) return;
+                            setState(() {});
+                          },
+                          style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                          decoration: InputDecoration(
+                            hintText: '쉼표로 구분, 범위는 하이픈',
+                            hintStyle: const TextStyle(color: _rsTextSub),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: _rsBorder),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                            ),
+                            filled: true,
+                            fillColor: _rsFieldBg,
+                          ),
+                        ),
+                      ],
+                      if (hasPdf && hasRanges) ...[
+                        const SizedBox(height: 14),
+                        const Text('파일명', style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _pdfEditFileNameCtrl,
+                          style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                          decoration: InputDecoration(
+                            hintText: '원본명_과정_본문.pdf',
+                            hintStyle: const TextStyle(color: _rsTextSub),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: _rsBorder),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                            ),
+                            filled: true,
+                            fillColor: _rsFieldBg,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: 48,
+                          child: FilledButton.icon(
+                            onPressed: _pdfEditBusy ? null : _generatePdfFromRangesInSheet,
+                            icon: _pdfEditBusy
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.save_outlined, size: 16),
+                            label: const Text('범위로 생성'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _rsAccent,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      if (_pdfEditLastOutputPath != null && _pdfEditLastOutputPath!.trim().isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _rsFieldBg,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('마지막 생성', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                              const SizedBox(height: 6),
+                              Text(
+                                _basename(_pdfEditLastOutputPath!),
+                                style: const TextStyle(color: _rsText, fontSize: 13, fontWeight: FontWeight.w800),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  OutlinedButton(
+                                    onPressed: () async {
+                                      try {
+                                        await OpenFilex.open(_pdfEditLastOutputPath!);
+                                      } catch (_) {}
+                                    },
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.white70,
+                                      side: BorderSide(color: _rsBorder.withOpacity(0.9)),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    child: const Text('열기'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '과정: ${_currentGradeLabelForPdfEdit()}',
+                                    style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 48,
+                child: OutlinedButton.icon(
+                  onPressed: (!_pdfEditBusy && hasPdf) ? _openPdfPreviewSelectDialogFromSheet : null,
+                  icon: const Icon(Icons.preview_outlined, size: 16),
+                  label: const Text('미리보기로 편집'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _rsTextSub,
+                    side: const BorderSide(color: _rsBorder),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
       case RightSideSheetMode.none:
       default:
         return const SizedBox.expand();
     }
+  }
+
+  Future<void> _onAddMemoPressed() async {
+    final dlgCtx = widget.dialogContext ?? context;
+    final text = await showDialog<String>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      builder: (_) => const MemoInputDialog(),
+    );
+    if (text == null || text.trim().isEmpty) return;
+
+    final now = DateTime.now();
+    final trimmed = text.trim();
+    final memo = Memo(
+      id: const Uuid().v4(),
+      original: trimmed,
+      summary: '요약 중...',
+      scheduledAt: await AiSummaryService.extractDateTime(trimmed),
+      dismissed: false,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await DataManager.instance.addMemo(memo);
+
+    try {
+      final summary = await AiSummaryService.summarize(memo.original);
+      await DataManager.instance.updateMemo(memo.copyWith(summary: summary, updatedAt: DateTime.now()));
+    } catch (_) {}
+  }
+
+  Future<void> _onEditMemoPressed(Memo item) async {
+    final dlgCtx = widget.dialogContext ?? context;
+    final edited = await showDialog<MemoEditResult>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      builder: (_) => MemoEditDialog(initial: item.original, initialScheduledAt: item.scheduledAt),
+    );
+    if (edited == null) return;
+    if (edited.action == MemoEditAction.delete) {
+      await DataManager.instance.deleteMemo(item.id);
+      return;
+    }
+
+    final newOriginal = edited.text.trim();
+    if (newOriginal.isEmpty) return;
+
+    var updated = item.copyWith(
+      original: newOriginal,
+      summary: '요약 중...',
+      scheduledAt: edited.scheduledAt,
+      updatedAt: DateTime.now(),
+    );
+    await DataManager.instance.updateMemo(updated);
+
+    try {
+      final summary = await AiSummaryService.summarize(newOriginal);
+      updated = updated.copyWith(summary: summary, updatedAt: DateTime.now());
+      await DataManager.instance.updateMemo(updated);
+    } catch (_) {}
   }
 }
 
@@ -658,6 +1148,12 @@ class _TopIconBar extends StatelessWidget {
                   icon: const Icon(Icons.border_color_outlined),
                   color: _colorFor(RightSideSheetMode.pdfEdit),
                 ),
+                IconButton(
+                  tooltip: '메모',
+                  onPressed: () => onModeSelected(RightSideSheetMode.memo),
+                  icon: const Icon(Icons.sticky_note_2_outlined),
+                  color: _colorFor(RightSideSheetMode.memo),
+                ),
               ],
             ),
           ),
@@ -689,6 +1185,168 @@ class _BottomAddBar extends StatelessWidget {
             ),
             icon: const Icon(Icons.add, size: 18),
             label: const Text('추가', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// -------------------- 메모 --------------------
+
+class _MemoExplorer extends StatelessWidget {
+  final ValueListenable<List<Memo>> memosListenable;
+  final VoidCallback onAddMemo;
+  final void Function(Memo memo) onEditMemo;
+
+  const _MemoExplorer({
+    required this.memosListenable,
+    required this.onAddMemo,
+    required this.onEditMemo,
+  });
+
+  String _displayText(Memo m) {
+    final summary = m.summary.trim();
+    if (summary.isNotEmpty && summary != '요약 중...') return summary;
+    return m.original.trim().isEmpty ? '(내용 없음)' : m.original.trim();
+  }
+
+  String _scheduleLabel(DateTime? s) {
+    if (s == null) return '';
+    final hh = s.hour.toString().padLeft(2, '0');
+    final mm = s.minute.toString().padLeft(2, '0');
+    return '${s.month}/${s.day} $hh:$mm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '메모',
+            style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          _ExplorerHeader(
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: '메모 추가',
+                  onPressed: onAddMemo,
+                  icon: const Icon(Icons.add, color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: ValueListenableBuilder<List<Memo>>(
+              valueListenable: memosListenable,
+              builder: (context, memos, _) {
+                if (memos.isEmpty) {
+                  return const Center(
+                    child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                  );
+                }
+
+                final list = [...memos]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+                return ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: list.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final m = list[index];
+                    final when = _scheduleLabel(m.scheduledAt);
+                    return _MemoCard(
+                      key: ValueKey(m.id),
+                      dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
+                      scheduleLabel: when,
+                      text: _displayText(m),
+                      onTap: () => onEditMemo(m),
+                      onDelete: () => unawaited(DataManager.instance.deleteMemo(m.id)),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MemoCard extends StatelessWidget {
+  final String dateLabel;
+  final String scheduleLabel;
+  final String text;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _MemoCard({
+    super.key,
+    required this.dateLabel,
+    required this.scheduleLabel,
+    required this.text,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _rsFieldBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _rsBorder.withOpacity(0.9)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    dateLabel,
+                    style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                  if (scheduleLabel.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '· $scheduleLabel',
+                      style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '삭제',
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline, color: _rsTextSub, size: 18),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                text,
+                maxLines: 6,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800, height: 1.3),
+              ),
+            ],
           ),
         ),
       ),

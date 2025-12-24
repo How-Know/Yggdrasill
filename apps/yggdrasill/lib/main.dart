@@ -37,6 +37,7 @@ import 'services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
+import 'widgets/memo_dialogs.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -736,7 +737,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
             final dlgCtx = rootNavigatorKey.currentContext ?? context;
             final text = await showDialog<String>(
               context: dlgCtx,
-              builder: (_) => const _MemoInputDialog(),
+              builder: (_) => const MemoInputDialog(),
             );
             if (text == null || text.trim().isEmpty) return;
             final now = DateTime.now();
@@ -757,12 +758,12 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
           },
           onEditMemo: (ctx, item) async {
             final dlgCtx = rootNavigatorKey.currentContext ?? context;
-            final edited = await showDialog<_MemoEditResult>(
+            final edited = await showDialog<MemoEditResult>(
               context: dlgCtx,
-              builder: (_) => _MemoEditDialog(initial: item.original, initialScheduledAt: item.scheduledAt),
+              builder: (_) => MemoEditDialog(initial: item.original, initialScheduledAt: item.scheduledAt),
             );
             if (edited == null) return;
-            if (edited.action == _MemoEditAction.delete) {
+            if (edited.action == MemoEditAction.delete) {
               await DataManager.instance.deleteMemo(item.id);
               return;
             }
@@ -3085,12 +3086,13 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       const double panelWidth = 238; // 기존(198)에서 +20% 확장
+      const double edgeOpenZoneWidth = 16.8; // 기존 24px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return Stack(children: [
         Positioned(
           right: 0,
           top: 0,
           bottom: 0,
-          width: 24,
+          width: edgeOpenZoneWidth,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -3115,8 +3117,8 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
                 onPointerMove: (event) {
                   if (_edgeTouchActive && _edgeDragStart != null) {
                     final dx = event.position.dx - _edgeDragStart!.dx;
-                    // 오른쪽 엣지에서 왼쪽으로 24px 이상 드래그 시 오픈
-                    if (dx < -24) {
+                    // 오른쪽 엣지에서 왼쪽으로 edgeOpenZoneWidth 이상 드래그 시 오픈
+                    if (dx < -edgeOpenZoneWidth) {
                       _setOpen(true);
                     }
                   }

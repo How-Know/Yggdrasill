@@ -14,6 +14,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../widgets/pdf/pdf_editor_dialog.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -1983,7 +1984,7 @@ class _LinkActionButtons extends StatelessWidget {
           onPressed: () async {
             final out = await showDialog<String>(
               context: context,
-              builder: (ctx) => _PdfEditorDialog(
+              builder: (ctx) => PdfEditorDialog(
                 initialInputPath: controller.text.trim().isEmpty ? null : controller.text.trim(),
                 grade: grade,
                 kindKey: kindKey,
@@ -4582,7 +4583,7 @@ class _BookmarkCreateDialogState extends State<_BookmarkCreateDialog> {
                 onPressed: () async {
                   final result = await showDialog<String>(
                     context: context,
-                    builder: (ctx) => _PdfEditorDialog(
+                    builder: (ctx) => PdfEditorDialog(
                       initialInputPath: _path.text.trim().isEmpty ? null : _path.text.trim(),
                       grade: '',
                       kindKey: 'body',
@@ -4693,7 +4694,7 @@ class _BookmarkEditDialogState extends State<_BookmarkEditDialog> {
                 onPressed: () async {
                   final result = await showDialog<String>(
                     context: context,
-                    builder: (ctx) => _PdfEditorDialog(
+                    builder: (ctx) => PdfEditorDialog(
                       initialInputPath: _path.text.trim().isEmpty ? null : _path.text.trim(),
                       grade: '',
                       kindKey: 'body',
