@@ -9,8 +9,17 @@ const Color _dlgText = Color(0xFFEAF2F2);
 const Color _dlgTextSub = Color(0xFF9FB3B3);
 const Color _dlgAccent = Color(0xFF33A373);
 
+class MemoCreateResult {
+  final String text;
+  /// null이면 "자동 분류"를 의미
+  final String? categoryKey; // schedule|inquiry|null(auto)
+  const MemoCreateResult(this.text, {this.categoryKey});
+}
+
 class MemoInputDialog extends StatefulWidget {
-  const MemoInputDialog({super.key});
+  /// null이면 "자동"으로 시작
+  final String? initialCategoryKey; // schedule|inquiry|null(auto)
+  const MemoInputDialog({super.key, this.initialCategoryKey});
 
   @override
   State<MemoInputDialog> createState() => _MemoInputDialogState();
@@ -19,6 +28,18 @@ class MemoInputDialog extends StatefulWidget {
 class _MemoInputDialogState extends State<MemoInputDialog> {
   final TextEditingController _controller = ImeAwareTextEditingController();
   bool _saving = false;
+  String? _categoryKey; // null=자동, schedule, inquiry
+
+  @override
+  void initState() {
+    super.initState();
+    final k = widget.initialCategoryKey;
+    if (k == 'schedule' || k == 'inquiry') {
+      _categoryKey = k;
+    } else {
+      _categoryKey = null;
+    }
+  }
 
   @override
   void dispose() {
@@ -63,6 +84,46 @@ class _MemoInputDialogState extends State<MemoInputDialog> {
           children: [
             const Divider(color: _dlgBorder, height: 1),
             const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('자동', style: TextStyle(fontWeight: FontWeight.w800)),
+                    selected: _categoryKey == null,
+                    onSelected: (_) => setState(() => _categoryKey = null),
+                    selectedColor: _dlgAccent,
+                    backgroundColor: _dlgPanelBg,
+                    labelStyle: TextStyle(color: _categoryKey == null ? Colors.white : _dlgTextSub),
+                    side: BorderSide(color: _categoryKey == null ? _dlgAccent : _dlgBorder, width: _categoryKey == null ? 2 : 1),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                  ),
+                  ChoiceChip(
+                    label: const Text('일정', style: TextStyle(fontWeight: FontWeight.w800)),
+                    selected: _categoryKey == 'schedule',
+                    onSelected: (_) => setState(() => _categoryKey = 'schedule'),
+                    selectedColor: _dlgAccent,
+                    backgroundColor: _dlgPanelBg,
+                    labelStyle: TextStyle(color: _categoryKey == 'schedule' ? Colors.white : _dlgTextSub),
+                    side: BorderSide(color: _categoryKey == 'schedule' ? _dlgAccent : _dlgBorder, width: _categoryKey == 'schedule' ? 2 : 1),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                  ),
+                  ChoiceChip(
+                    label: const Text('문의', style: TextStyle(fontWeight: FontWeight.w800)),
+                    selected: _categoryKey == 'inquiry',
+                    onSelected: (_) => setState(() => _categoryKey = 'inquiry'),
+                    selectedColor: _dlgAccent,
+                    backgroundColor: _dlgPanelBg,
+                    labelStyle: TextStyle(color: _categoryKey == 'inquiry' ? Colors.white : _dlgTextSub),
+                    side: BorderSide(color: _categoryKey == 'inquiry' ? _dlgAccent : _dlgBorder, width: _categoryKey == 'inquiry' ? 2 : 1),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _controller,
               minLines: 5,
@@ -87,7 +148,9 @@ class _MemoInputDialogState extends State<MemoInputDialog> {
               ? null
               : () {
                   setState(() => _saving = true);
-                  Navigator.of(context).pop(_controller.text);
+                  Navigator.of(context).pop(
+                    MemoCreateResult(_controller.text, categoryKey: _categoryKey),
+                  );
                 },
           style: FilledButton.styleFrom(
             backgroundColor: _dlgAccent,

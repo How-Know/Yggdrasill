@@ -658,6 +658,7 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
     id: const Uuid().v4(),
     original: text,
     summary: summary,
+    categoryKey: MemoCategory.schedule,
     scheduledAt: scheduled,
     dismissed: false,
     createdAt: DateTime.now(),

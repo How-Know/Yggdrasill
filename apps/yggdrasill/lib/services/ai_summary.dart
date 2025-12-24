@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../models/memo.dart';
 
 class AiSummaryService {
   // platform_config에서 API 키 가져오기
@@ -65,6 +66,144 @@ class AiSummaryService {
         : '';
     if (content.isEmpty) return toSingleSentence(text, maxChars: maxChars);
     return toSingleSentence(content, maxChars: maxChars);
+  }
+
+  static String _guessMemoCategoryKey(String text, {DateTime? scheduledAt}) {
+    final t = text.toLowerCase();
+    // 1) 상담(신규 등록/체험/문의전화 등) 우선
+    final consultKeywords = [
+      '신규',
+      '등록',
+      '입학',
+      '체험',
+      '상담',
+      '문의전화',
+      '전화문의',
+      '학원 문의',
+      '수업료',
+      '비용',
+      '커리큘럼 문의',
+      '레벨 테스트',
+      '레벨테스트',
+      '테스트 예약',
+    ];
+    if (consultKeywords.any((k) => t.contains(k))) return MemoCategory.consult;
+
+    // 2) 문의(재원생/학부모) 키워드
+    final inquiryKeywords = [
+      '학부모',
+      '보호자',
+      '엄마',
+      '아빠',
+      '부모',
+      '원생',
+      '학생',
+      '보강',
+      '시간변경',
+      '시간 변경',
+      '요일변경',
+      '요일 변경',
+      '결석',
+      '지각',
+      '조퇴',
+      '숙제',
+      '시험',
+      '수업',
+      '과제',
+    ];
+    if (inquiryKeywords.any((k) => t.contains(k))) return MemoCategory.inquiry;
+
+    // 3) 일정(운영 일정/할 일)
+    if (scheduledAt != null) return MemoCategory.schedule;
+    return MemoCategory.inquiry;
+  }
+
+  /// 메모 요약 + 카테고리 분류를 한 번에 수행.
+  /// - categoryKey는 `schedule|consult|inquiry` 중 하나로만 반환
+  static Future<({String summary, String categoryKey})> summarizeMemoWithCategory(
+    String text, {
+    int maxChars = 60,
+    DateTime? scheduledAt,
+  }) async {
+    // AI 기능 활성화 확인
+    final prefs = await SharedPreferences.getInstance();
+    final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
+
+    // AI 비활성/키 없음: 폴백
+    final apiKey = isEnabled ? await _getApiKey() : '';
+    if (!isEnabled || apiKey.isEmpty) {
+      return (
+        summary: toSingleSentence(text, maxChars: maxChars),
+        categoryKey: _guessMemoCategoryKey(text, scheduledAt: scheduledAt),
+      );
+    }
+
+    try {
+      final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+      final body = jsonEncode({
+        'model': 'gpt-4o-mini',
+        'messages': [
+          {
+            'role': 'system',
+            'content': [
+              '너는 학원 운영 메모를 (1) 한 줄 키워드 요약하고 (2) 카테고리를 분류한다.',
+              '반드시 JSON만 출력하라. 다른 텍스트/코드블록/설명 금지.',
+              '형식: {"summary":"...","category":"schedule|consult|inquiry"}',
+              'summary: 한국어, 명사/명사구 중심 한 줄, 줄바꿈 금지, 문장부호(.,!?) 최소, ${maxChars}자 이내.',
+              'category 정의:',
+              '- schedule: 일정/해야할 일/내부 운영 스케줄 메모',
+              '- consult: 신규 등록/체험/상담 관련 메모(아직 재원생이 아닌 경우 포함)',
+              '- inquiry: 기존 재원생/학부모 문의/요청 메모(시간변경, 보강, 결석 등)',
+            ].join('\n'),
+          },
+          {
+            'role': 'user',
+            'content': '메모 원문:\n$text',
+          }
+        ],
+        'temperature': 0.2,
+        'max_tokens': 120,
+      });
+      final res = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $apiKey',
+        },
+        body: body,
+      );
+      if (res.statusCode != 200) {
+        return (
+          summary: toSingleSentence(text, maxChars: maxChars),
+          categoryKey: _guessMemoCategoryKey(text, scheduledAt: scheduledAt),
+        );
+      }
+      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final choices = json['choices'] as List<dynamic>?;
+      final content = choices != null && choices.isNotEmpty
+          ? (choices.first['message']?['content'] as String? ?? '')
+          : '';
+      final raw = content.trim();
+      if (raw.isEmpty) {
+        return (
+          summary: toSingleSentence(text, maxChars: maxChars),
+          categoryKey: _guessMemoCategoryKey(text, scheduledAt: scheduledAt),
+        );
+      }
+      // JSON 파싱
+      final parsed = jsonDecode(raw) as Map<String, dynamic>;
+      final summaryRaw = (parsed['summary'] as String?) ?? '';
+      final categoryRaw = (parsed['category'] as String?) ?? '';
+
+      final summary = toSingleSentence(summaryRaw.isEmpty ? text : summaryRaw, maxChars: maxChars);
+      final categoryKey = MemoCategory.normalize(categoryRaw);
+      return (summary: summary, categoryKey: categoryKey);
+    } catch (_) {
+      return (
+        summary: toSingleSentence(text, maxChars: maxChars),
+        categoryKey: _guessMemoCategoryKey(text, scheduledAt: scheduledAt),
+      );
+    }
   }
 
   static String toSingleSentence(String raw, {int maxChars = 60}) {

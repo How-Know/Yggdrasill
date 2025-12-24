@@ -22,13 +22,25 @@ class MemoService {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final rows = await supa
-            .from('memos')
-            .select(
-              'id,original,summary,scheduled_at,dismissed,created_at,updated_at,recurrence_type,weekdays,recurrence_end,recurrence_count',
-            )
-            .eq('academy_id', academyId)
-            .order('scheduled_at', ascending: true);
+        dynamic rows;
+        // category 컬럼은 구버전 서버에 없을 수 있어 2단계로 시도
+        try {
+          rows = await supa
+              .from('memos')
+              .select(
+                'id,original,summary,category,scheduled_at,dismissed,created_at,updated_at,recurrence_type,weekdays,recurrence_end,recurrence_count',
+              )
+              .eq('academy_id', academyId)
+              .order('scheduled_at', ascending: true);
+        } catch (_) {
+          rows = await supa
+              .from('memos')
+              .select(
+                'id,original,summary,scheduled_at,dismissed,created_at,updated_at,recurrence_type,weekdays,recurrence_end,recurrence_count',
+              )
+              .eq('academy_id', academyId)
+              .order('scheduled_at', ascending: true);
+        }
         final List<dynamic> list = rows as List<dynamic>;
         _memos = list.map<Memo>((m) {
           final String? schedStr = m['scheduled_at'] as String?;
@@ -36,10 +48,12 @@ class MemoService {
           final String? updatedStr = m['updated_at'] as String?;
           final String? weekdaysStr = m['weekdays'] as String?;
           final String? recurEndStr = m['recurrence_end'] as String?;
+          final String? category = m['category'] as String?;
           return Memo(
             id: m['id'] as String,
             original: (m['original'] as String?) ?? '',
             summary: (m['summary'] as String?) ?? '',
+            categoryKey: MemoCategory.normalize(category),
             scheduledAt:
                 (schedStr != null && schedStr.isNotEmpty) ? DateTime.parse(schedStr) : null,
             dismissed: (m['dismissed'] as bool?) ?? false,
@@ -85,6 +99,7 @@ class MemoService {
           'academy_id': academyId,
           'original': memo.original,
           'summary': memo.summary,
+          'category': memo.categoryKey,
           'scheduled_at': memo.scheduledAt?.toIso8601String(),
           'dismissed': memo.dismissed,
           'recurrence_type': memo.recurrenceType,
@@ -92,7 +107,13 @@ class MemoService {
           'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0, 10),
           'recurrence_count': memo.recurrenceCount,
         }..removeWhere((k, v) => v == null);
-        await supa.from('memos').upsert(row, onConflict: 'id');
+        try {
+          await supa.from('memos').upsert(row, onConflict: 'id');
+        } catch (_) {
+          // 구버전 서버(category 컬럼 없음) 대비: category 제거 후 재시도
+          final retry = Map<String, dynamic>.from(row)..remove('category');
+          await supa.from('memos').upsert(retry, onConflict: 'id');
+        }
         _memos.insert(0, memo);
         memosNotifier.value = List.unmodifiable(_memos);
         return;
@@ -118,6 +139,7 @@ class MemoService {
           'academy_id': academyId,
           'original': memo.original,
           'summary': memo.summary,
+          'category': memo.categoryKey,
           'scheduled_at': memo.scheduledAt?.toIso8601String(),
           'dismissed': memo.dismissed,
           'recurrence_type': memo.recurrenceType,
@@ -125,7 +147,12 @@ class MemoService {
           'recurrence_end': memo.recurrenceEnd?.toIso8601String().substring(0, 10),
           'recurrence_count': memo.recurrenceCount,
         }..removeWhere((k, v) => v == null);
-        await supa.from('memos').upsert(row, onConflict: 'id');
+        try {
+          await supa.from('memos').upsert(row, onConflict: 'id');
+        } catch (_) {
+          final retry = Map<String, dynamic>.from(row)..remove('category');
+          await supa.from('memos').upsert(retry, onConflict: 'id');
+        }
         final idx = _memos.indexWhere((m) => m.id == memo.id);
         if (idx != -1) _memos[idx] = memo;
         memosNotifier.value = List.unmodifiable(_memos);

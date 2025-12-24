@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'package:mneme_flutter/widgets/dark_panel_route.dart';
 import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -55,6 +56,10 @@ class _RightSideSheetState extends State<RightSideSheet> {
   bool _booksLoading = false;
   bool _pdfsLoaded = false;
   bool _pdfsLoading = false;
+
+  // 메모 필터(전체 + 카테고리 3종)
+  static const String _memoFilterAll = 'all';
+  String _memoFilterKey = _memoFilterAll;
 
   // pdf 편집(범위 입력은 시트, 미리보기는 다이얼로그) 상태
   final TextEditingController _pdfEditInputCtrl = ImeAwareTextEditingController();
@@ -347,8 +352,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     await DataManager.instance.saveAnswerKeyBooks(rows);
   }
 
-  Future<int?> _selectBookIndexForAttach(BuildContext ctx) async {
-    return await showDialog<int>(
+  Future<_BookPickResult?> _selectBookIndexForAttach(BuildContext ctx) async {
+    return await showDialog<_BookPickResult>(
       context: ctx,
       useRootNavigator: true,
       builder: (context) => _BookSelectDialog(
@@ -413,18 +418,24 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (file == null) return;
 
     final dlgCtx = widget.dialogContext ?? context;
-    final int? bookIndex = (_books.length == 1) ? 0 : await _selectBookIndexForAttach(dlgCtx);
-    if (bookIndex == null) return;
+    final _BookPickResult? pick = await _selectBookIndexForAttach(dlgCtx);
+    if (pick == null) return;
 
-    // uuid 정규화/서버 반영 (pdf link는 book_id가 uuid여야 함)
+    // 선택 결과 반영(학년 포함) + uuid 정규화/서버 반영
+    if (!mounted) return;
+    final idx = pick.bookIndex.clamp(0, _books.length - 1);
+    final gradeIdx = _grades.isEmpty ? 0 : pick.gradeIndex.clamp(0, _grades.length - 1);
+    setState(() {
+      _books[idx] = _books[idx].copyWith(gradeIndex: gradeIdx);
+      _defaultGradeIndex = gradeIdx;
+    });
     try { await _saveAllBooks(); } catch (_) {}
 
     if (!mounted) return;
-    final idx = bookIndex.clamp(0, _books.length - 1);
     final book = _books[idx];
     setState(() => _selectedBookId = book.id);
     if (_grades.isEmpty) return;
-    final grade = _grades[book.gradeIndex.clamp(0, _grades.length - 1)];
+    final grade = _grades[gradeIdx];
 
     final existing = _pdfPathByBookAndGrade[book.id]?[grade.key];
     if (existing != null && existing.isNotEmpty && existing != file.path) {
@@ -462,14 +473,52 @@ class _RightSideSheetState extends State<RightSideSheet> {
       setState(() => _selectedBookId = book.id);
     }
     if (_grades.isEmpty) return;
-    final grade = _grades[book.gradeIndex.clamp(0, _grades.length - 1)];
-    final path = _pdfPathByBookAndGrade[book.id]?[grade.key];
+    final paths = _pdfPathByBookAndGrade[book.id];
+    if (paths == null || paths.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('연결된 PDF가 없습니다: -')),
+      );
+      return;
+    }
+
+    // 요청: "연결된 PDF가 있는 학년만" 보여주기 위해,
+    // 선택 학년이 미연결이면 자동으로 연결된 첫 학년으로 보정하여 연다.
+    final linkedIndices = <int>[];
+    for (int i = 0; i < _grades.length; i++) {
+      final k = _grades[i].key;
+      final p = paths[k];
+      if (p != null && p.trim().isNotEmpty) linkedIndices.add(i);
+    }
+    if (linkedIndices.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('연결된 PDF가 없습니다: -')),
+      );
+      return;
+    }
+
+    final current = book.gradeIndex.clamp(0, _grades.length - 1);
+    final effective = linkedIndices.contains(current) ? current : linkedIndices.first;
+    final grade = _grades[effective];
+    final path = paths[grade.key];
     if (path == null || path.trim().isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('연결된 PDF가 없습니다: ${grade.label}')),
       );
       return;
+    }
+
+    // 상태와 UI 동기화: 유효한(연결된) 학년으로 보정
+    if (mounted && effective != book.gradeIndex) {
+      final bi = _books.indexWhere((b) => b.id == book.id);
+      if (bi != -1) {
+        setState(() {
+          _books[bi] = _books[bi].copyWith(gradeIndex: effective);
+          _defaultGradeIndex = effective;
+        });
+      }
     }
     await OpenFilex.open(path);
   }
@@ -490,9 +539,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
       if (mounted) setState(() => _selectedBookId = b.id);
       return b;
     }
-    final idx = await _selectBookIndexForAttach(dlgCtx);
-    if (idx == null) return null;
-    final safe = idx.clamp(0, _books.length - 1);
+    final pick = await _selectBookIndexForAttach(dlgCtx);
+    if (pick == null) return null;
+    final safe = pick.bookIndex.clamp(0, _books.length - 1);
     final b = _books[safe];
     if (mounted) setState(() => _selectedBookId = b.id);
     return b;
@@ -706,8 +755,23 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (_grades.isEmpty) return;
     final idx = _books.indexWhere((b) => b.id == bookId);
     if (idx == -1) return;
-    final before = _books[idx].gradeIndex;
-    final next = (before + delta).clamp(0, _grades.length - 1) as int;
+    final paths = _pdfPathByBookAndGrade[bookId];
+    if (paths == null || paths.isEmpty) return;
+
+    // 요청: "연결된 PDF가 있는 학년만" 보여주기 위해, 학년 이동도 연결된 것만 순회
+    final linkedIndices = <int>[];
+    for (int i = 0; i < _grades.length; i++) {
+      final k = _grades[i].key;
+      final p = paths[k];
+      if (p != null && p.trim().isNotEmpty) linkedIndices.add(i);
+    }
+    if (linkedIndices.isEmpty) return;
+
+    final before = _books[idx].gradeIndex.clamp(0, _grades.length - 1);
+    var pos = linkedIndices.indexOf(before);
+    if (pos == -1) pos = 0;
+    final nextPos = (pos + delta).clamp(0, linkedIndices.length - 1) as int;
+    final next = linkedIndices[nextPos];
     if (before == next) return;
 
     setState(() {
@@ -795,6 +859,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
           memosListenable: DataManager.instance.memosNotifier,
           onAddMemo: () => unawaited(_onAddMemoPressed()),
           onEditMemo: (m) => unawaited(_onEditMemoPressed(m)),
+          selectedFilterKey: _memoFilterKey,
+          onFilterChanged: (k) => setState(() => _memoFilterKey = k),
+          onOpenConsult: () => unawaited(_openConsultPage()),
         );
       case RightSideSheetMode.fileShortcut:
         return const SizedBox.expand();
@@ -1046,20 +1113,27 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
   Future<void> _onAddMemoPressed() async {
     final dlgCtx = widget.dialogContext ?? context;
-    final text = await showDialog<String>(
+    final initialCat = (_memoFilterKey == MemoCategory.schedule || _memoFilterKey == MemoCategory.inquiry)
+        ? _memoFilterKey
+        : null;
+    final result = await showDialog<MemoCreateResult>(
       context: dlgCtx,
       useRootNavigator: true,
-      builder: (_) => const MemoInputDialog(),
+      builder: (_) => MemoInputDialog(initialCategoryKey: initialCat),
     );
-    if (text == null || text.trim().isEmpty) return;
+    if (result == null) return;
+    final text = result.text.trim();
+    if (text.isEmpty) return;
 
     final now = DateTime.now();
-    final trimmed = text.trim();
+    final trimmed = text;
+    final String? pickedCategoryKey = result.categoryKey;
     final memo = Memo(
       id: const Uuid().v4(),
       original: trimmed,
       summary: '요약 중...',
       scheduledAt: await AiSummaryService.extractDateTime(trimmed),
+      categoryKey: pickedCategoryKey ?? MemoCategory.inquiry,
       dismissed: false,
       createdAt: now,
       updatedAt: now,
@@ -1067,8 +1141,28 @@ class _RightSideSheetState extends State<RightSideSheet> {
     await DataManager.instance.addMemo(memo);
 
     try {
-      final summary = await AiSummaryService.summarize(memo.original);
-      await DataManager.instance.updateMemo(memo.copyWith(summary: summary, updatedAt: DateTime.now()));
+      if (pickedCategoryKey != null && pickedCategoryKey.trim().isNotEmpty) {
+        final summary = await AiSummaryService.summarize(memo.original);
+        await DataManager.instance.updateMemo(
+          memo.copyWith(
+            summary: summary,
+            categoryKey: MemoCategory.normalize(pickedCategoryKey),
+            updatedAt: DateTime.now(),
+          ),
+        );
+      } else {
+        final r = await AiSummaryService.summarizeMemoWithCategory(
+          memo.original,
+          scheduledAt: memo.scheduledAt,
+        );
+        await DataManager.instance.updateMemo(
+          memo.copyWith(
+            summary: r.summary,
+            categoryKey: r.categoryKey,
+            updatedAt: DateTime.now(),
+          ),
+        );
+      }
     } catch (_) {}
   }
 
@@ -1101,6 +1195,39 @@ class _RightSideSheetState extends State<RightSideSheet> {
       updated = updated.copyWith(summary: summary, updatedAt: DateTime.now());
       await DataManager.instance.updateMemo(updated);
     } catch (_) {}
+  }
+
+  Future<void> _openConsultPage() async {
+    final ctx = widget.dialogContext ?? context;
+    try {
+      await Navigator.of(ctx, rootNavigator: true).push(
+        DarkPanelRoute<void>(child: const _ConsultPlaceholderPage()),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('상담 페이지 이동을 사용할 수 없습니다.')));
+      }
+    }
+  }
+}
+
+class _ConsultPlaceholderPage extends StatelessWidget {
+  const _ConsultPlaceholderPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _rsBg,
+      appBar: AppBar(
+        backgroundColor: _rsBg,
+        foregroundColor: _rsText,
+        elevation: 0,
+        title: const Text('상담', style: TextStyle(fontWeight: FontWeight.w900)),
+      ),
+      body: const Center(
+        child: Text('상담 페이지(준비 중)', style: TextStyle(color: _rsTextSub, fontSize: 14, fontWeight: FontWeight.w800)),
+      ),
+    );
   }
 }
 
@@ -1198,11 +1325,17 @@ class _MemoExplorer extends StatelessWidget {
   final ValueListenable<List<Memo>> memosListenable;
   final VoidCallback onAddMemo;
   final void Function(Memo memo) onEditMemo;
+  final String selectedFilterKey; // 'all' | MemoCategory.*
+  final ValueChanged<String> onFilterChanged;
+  final VoidCallback onOpenConsult;
 
   const _MemoExplorer({
     required this.memosListenable,
     required this.onAddMemo,
     required this.onEditMemo,
+    required this.selectedFilterKey,
+    required this.onFilterChanged,
+    required this.onOpenConsult,
   });
 
   String _displayText(Memo m) {
@@ -1220,6 +1353,13 @@ class _MemoExplorer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final filters = <MapEntry<String, String>>[
+      const MapEntry(_RightSideSheetState._memoFilterAll, '전체'),
+      MapEntry(MemoCategory.schedule, '일정'),
+      MapEntry(MemoCategory.consult, '상담'),
+      MapEntry(MemoCategory.inquiry, '문의'),
+    ];
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
       child: Column(
@@ -1241,8 +1381,31 @@ class _MemoExplorer extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
                 ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '상담 메모 추가',
+                  onPressed: onOpenConsult,
+                  icon: const Icon(Icons.support_agent_outlined, color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                ),
               ],
             ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              for (int i = 0; i < filters.length; i++) ...[
+                Expanded(
+                  child: _MemoFilterPill(
+                    label: filters[i].value,
+                    selected: selectedFilterKey == filters[i].key,
+                    onTap: () => onFilterChanged(filters[i].key),
+                  ),
+                ),
+                if (i != filters.length - 1) const SizedBox(width: 8),
+              ],
+            ],
           ),
           const SizedBox(height: 14),
           Expanded(
@@ -1255,7 +1418,15 @@ class _MemoExplorer extends StatelessWidget {
                   );
                 }
 
-                final list = [...memos]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+                var list = [...memos]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+                if (selectedFilterKey != _RightSideSheetState._memoFilterAll) {
+                  list = list.where((m) => m.categoryKey == selectedFilterKey).toList();
+                }
+                if (list.isEmpty) {
+                  return const Center(
+                    child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                  );
+                }
 
                 return ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1268,6 +1439,7 @@ class _MemoExplorer extends StatelessWidget {
                       key: ValueKey(m.id),
                       dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
                       scheduleLabel: when,
+                      categoryLabel: MemoCategory.labelOf(m.categoryKey),
                       text: _displayText(m),
                       onTap: () => onEditMemo(m),
                       onDelete: () => unawaited(DataManager.instance.deleteMemo(m.id)),
@@ -1286,6 +1458,7 @@ class _MemoExplorer extends StatelessWidget {
 class _MemoCard extends StatelessWidget {
   final String dateLabel;
   final String scheduleLabel;
+  final String categoryLabel;
   final String text;
   final VoidCallback onTap;
   final VoidCallback onDelete;
@@ -1294,6 +1467,7 @@ class _MemoCard extends StatelessWidget {
     super.key,
     required this.dateLabel,
     required this.scheduleLabel,
+    required this.categoryLabel,
     required this.text,
     required this.onTap,
     required this.onDelete,
@@ -1301,10 +1475,115 @@ class _MemoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> openMenu(Offset globalPos) async {
+      // RightSideSheet는 MaterialApp.builder의 최상위 OverlayEntry 위에서 렌더링된다.
+      // showMenu()는 Navigator Overlay에 붙어 사이드시트 뒤로 깔릴 수 있어,
+      // 최상위 Overlay에 OverlayEntry로 메뉴를 직접 띄운다.
+      final overlayState = Overlay.of(context, rootOverlay: true);
+      if (overlayState == null) return;
+      final overlayBox = overlayState.context.findRenderObject() as RenderBox?;
+      if (overlayBox == null) return;
+
+      final overlaySize = overlayBox.size;
+      final local = overlayBox.globalToLocal(globalPos);
+      const double menuW = 118;
+      const double itemH = 36;
+      const double pad = 6;
+      final menuH = itemH * 2;
+
+      double left = local.dx;
+      double top = local.dy;
+      // 화면 밖으로 나가지 않도록 보정
+      left = left.clamp(pad, overlaySize.width - menuW - pad);
+      top = top.clamp(pad, overlaySize.height - menuH - pad);
+
+      final completer = Completer<_MemoContextAction?>();
+      late final OverlayEntry entry;
+      void close(_MemoContextAction? action) {
+        if (!completer.isCompleted) completer.complete(action);
+        entry.remove();
+      }
+
+      Widget menuItem({required String text, required Color color, required _MemoContextAction action}) {
+        return SizedBox(
+          height: itemH,
+          child: InkWell(
+            onTap: () => close(action),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(text, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w800)),
+              ),
+            ),
+          ),
+        );
+      }
+
+      entry = OverlayEntry(
+        builder: (ctx) {
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (_) => close(null),
+                ),
+              ),
+              Positioned(
+                left: left,
+                top: top,
+                width: menuW,
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _rsPanelBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _rsBorder),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.22), blurRadius: 12, offset: const Offset(0, 8))],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          menuItem(text: '수정', color: _rsText, action: _MemoContextAction.edit),
+                          Divider(height: 1, color: _rsBorder.withOpacity(0.7)),
+                          menuItem(text: '삭제', color: const Color(0xFFB74C4C), action: _MemoContextAction.delete),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+
+      overlayState.insert(entry);
+      final action = await completer.future;
+      if (action == _MemoContextAction.edit) {
+        onTap();
+      } else if (action == _MemoContextAction.delete) {
+        onDelete();
+      }
+    }
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
+        onSecondaryTapDown: (d) => openMenu(d.globalPosition),
+        onLongPress: () {
+          // 롱프레스에서는 카드 중앙 기준으로 메뉴를 열어준다.
+          final box = context.findRenderObject() as RenderBox?;
+          if (box == null) return;
+          final center = box.localToGlobal(box.size.center(Offset.zero));
+          openMenu(center);
+        },
         borderRadius: BorderRadius.circular(14),
         child: Container(
           padding: const EdgeInsets.all(12),
@@ -1318,24 +1597,40 @@ class _MemoCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    dateLabel,
-                    style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
-                  ),
-                  if (scheduleLabel.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      '· $scheduleLabel',
-                      style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Text(
+                          dateLabel,
+                          style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _rsPanelBg,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: _rsBorder),
+                          ),
+                          child: Text(
+                            categoryLabel,
+                            style: const TextStyle(color: _rsTextSub, fontSize: 11, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        if (scheduleLabel.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              '· $scheduleLabel',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
-                  const Spacer(),
-                  IconButton(
-                    tooltip: '삭제',
-                    onPressed: onDelete,
-                    icon: const Icon(Icons.delete_outline, color: _rsTextSub, size: 18),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                   ),
                 ],
               ),
@@ -1347,6 +1642,43 @@ class _MemoCard extends StatelessWidget {
                 style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800, height: 1.3),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _MemoContextAction { edit, delete }
+
+class _MemoFilterPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _MemoFilterPill({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? _rsAccent : _rsPanelBg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? _rsAccent : _rsBorder, width: 1),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : _rsTextSub,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
           ),
         ),
       ),
@@ -1559,9 +1891,24 @@ class _BooksSection extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final b = books[index];
                   final gradeIdx = grades.isEmpty ? 0 : b.gradeIndex.clamp(0, grades.length - 1);
-                  final gradeKey = grades.isEmpty ? '' : grades[gradeIdx].key;
-                  final linked = gradeKey.isNotEmpty &&
-                      (pdfPathByBookAndGrade[b.id]?[gradeKey]?.isNotEmpty ?? false);
+
+                  // 요청: 연결된 PDF가 있는 학년만 보이도록(순회/표시) "연결된 학년"을 먼저 산출
+                  final paths = pdfPathByBookAndGrade[b.id];
+                  final linkedIndices = <int>[];
+                  if (paths != null && paths.isNotEmpty && grades.isNotEmpty) {
+                    for (int i = 0; i < grades.length; i++) {
+                      final k = grades[i].key;
+                      final p = paths[k];
+                      if (p != null && p.trim().isNotEmpty) linkedIndices.add(i);
+                    }
+                  }
+
+                  final hasAnyLinked = linkedIndices.isNotEmpty;
+                  final effectiveIdx = hasAnyLinked
+                      ? (linkedIndices.contains(gradeIdx) ? gradeIdx : linkedIndices.first)
+                      : 0;
+                  final gradeLabel = hasAnyLinked ? grades[effectiveIdx].label : '-';
+                  final linked = hasAnyLinked;
 
                   return ReorderableDelayedDragStartListener(
                     key: ValueKey(b.id),
@@ -1570,7 +1917,7 @@ class _BooksSection extends StatelessWidget {
                       padding: EdgeInsets.only(bottom: (index == books.length - 1) ? 0 : 8),
                       child: _BookCard(
                         item: b,
-                        gradeLabel: grades.isEmpty ? '-' : grades[gradeIdx].label,
+                        gradeLabel: gradeLabel,
                         onGradeDelta: (delta) => onBookGradeDelta(bookId: b.id, delta: delta),
                         linked: linked,
                         onOpen: () => onOpenBook(b),
@@ -1886,22 +2233,53 @@ class _BookSelectDialog extends StatelessWidget {
       content: SizedBox(
         width: 520,
         height: 420,
-        child: Column(
+        child: _BookSelectDialogBody(books: books, grades: grades),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop<_BookPickResult?>(null),
+          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+          child: const Text('취소'),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookSelectDialogBody extends StatefulWidget {
+  final List<_BookItem> books;
+  final List<_GradeOption> grades;
+  const _BookSelectDialogBody({required this.books, required this.grades});
+
+  @override
+  State<_BookSelectDialogBody> createState() => _BookSelectDialogBodyState();
+}
+
+class _BookSelectDialogBodyState extends State<_BookSelectDialogBody> {
+  late final Map<String, int> _gradeIndexByBookId = <String, int>{
+    for (int i = 0; i < widget.books.length; i++)
+      widget.books[i].id: (widget.grades.isEmpty ? 0 : widget.books[i].gradeIndex.clamp(0, widget.grades.length - 1)),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Divider(height: 1, color: Color(0x22FFFFFF)),
             const SizedBox(height: 12),
             Expanded(
               child: ListView.separated(
-                itemCount: books.length,
+                itemCount: widget.books.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
-                  final b = books[index];
-                  final gradeLabel = grades.isEmpty
-                      ? '-'
-                      : grades[b.gradeIndex.clamp(0, grades.length - 1)].label;
+                  final b = widget.books[index];
+                  final gradeIdx = _gradeIndexByBookId[b.id] ?? 0;
+                  final gradeLabel = widget.grades.isEmpty ? '-' : widget.grades[gradeIdx].label;
                   return InkWell(
-                    onTap: () => Navigator.of(context).pop<int>(index),
+                    onTap: () => Navigator.of(context).pop<_BookPickResult>(
+                      _BookPickResult(bookIndex: index, gradeIndex: gradeIdx),
+                    ),
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
                       padding: const EdgeInsets.all(12),
@@ -1932,22 +2310,11 @@ class _BookSelectDialog extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          SizedBox(
-                            width: 54,
-                            height: 30,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: _rsPanelBg,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.transparent),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  gradeLabel,
-                                  style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                            ),
+                          _GradePickBadge(
+                            label: gradeLabel,
+                            grades: widget.grades,
+                            selectedIndex: gradeIdx,
+                            onSelected: (i) => setState(() => _gradeIndexByBookId[b.id] = i),
                           ),
                         ],
                       ),
@@ -1957,17 +2324,76 @@ class _BookSelectDialog extends StatelessWidget {
               ),
             ),
           ],
+        );
+  }
+}
+
+class _GradePickBadge extends StatelessWidget {
+  final String label;
+  final List<_GradeOption> grades;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  const _GradePickBadge({
+    required this.label,
+    required this.grades,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 66,
+      height: 30,
+      child: PopupMenuButton<int>(
+        tooltip: '학년 선택',
+        onSelected: onSelected,
+        color: _rsPanelBg,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _rsBorder)),
+        itemBuilder: (_) => [
+          for (int i = 0; i < grades.length; i++)
+            PopupMenuItem<int>(
+              value: i,
+              child: Text(
+                grades[i].label,
+                style: TextStyle(
+                  color: i == selectedIndex ? _rsText : _rsTextSub,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+        ],
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: _rsPanelBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(width: 2),
+                const Icon(Icons.keyboard_arrow_down, size: 16, color: _rsTextSub),
+              ],
+            ),
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop<int?>(null),
-          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
-          child: const Text('취소'),
-        ),
-      ],
     );
   }
+}
+
+class _BookPickResult {
+  final int bookIndex;
+  final int gradeIndex;
+  const _BookPickResult({required this.bookIndex, required this.gradeIndex});
 }
 
 class _BookPdfEditDialog extends StatefulWidget {

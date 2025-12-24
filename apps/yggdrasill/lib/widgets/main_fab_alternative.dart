@@ -6,6 +6,7 @@ import '../services/ai_summary.dart';
 import '../services/data_manager.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
+import '../app_overlays.dart';
 
 class MainFabAlternative extends StatefulWidget {
   const MainFabAlternative({Key? key}) : super(key: key);
@@ -107,7 +108,10 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   }
 
   void _insertMenuOverlay(BuildContext context) {
-    _menuOverlay?.remove();
+    // 삽입되지 않은 OverlayEntry에 remove()를 호출하면 assert가 발생하므로 mounted 체크
+    if (_menuOverlay != null && _menuOverlay!.mounted) {
+      _menuOverlay!.remove();
+    }
     _menuOverlay = OverlayEntry(
       builder: (ctx) {
         // FAB 위치 기준: 오른쪽 16, 아래쪽(_fabBottomPadding + FAB 높이 56 + 간격 12)
@@ -176,12 +180,33 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
         );
       },
     );
-    // 루트 오버레이에 삽입하여 전역 오버레이(플로팅 메모 등)보다 위에 올라오도록 함
-    Overlay.of(context, rootOverlay: true).insert(_menuOverlay!);
+    // 전용 레이어에 삽입:
+    // - 플로팅 메모 배너보다 위
+    // - 오른쪽 사이드시트(메모 슬라이드)보다 아래
+    //
+    // rootOverlay로 fallback하면 다시 사이드시트 "위"에 뜨므로 fallback 금지.
+    final overlay = fabDropdownOverlayKey.currentState;
+    if (overlay == null) {
+      // 첫 프레임/리빌드 타이밍에 아직 레이어가 준비되지 않았을 수 있어 다음 프레임에 재시도
+      final entry = _menuOverlay!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isFabExpanded) return;
+        final overlay2 = fabDropdownOverlayKey.currentState;
+        if (overlay2 == null) return;
+        if (!entry.mounted) {
+          overlay2.insert(entry);
+        }
+      });
+      return;
+    }
+    overlay.insert(_menuOverlay!);
   }
 
   void _removeMenuOverlay() {
-    _menuOverlay?.remove();
+    // 삽입되지 않은 OverlayEntry에 remove()를 호출하면 assert가 발생하므로 mounted 체크
+    if (_menuOverlay != null && _menuOverlay!.mounted) {
+      _menuOverlay!.remove();
+    }
     _menuOverlay = null;
   }
 

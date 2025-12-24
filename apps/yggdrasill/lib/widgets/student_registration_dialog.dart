@@ -146,6 +146,12 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
+  String _courseGradeLabel(Grade g) {
+    final levelName = _getEducationLevelName(g.level);
+    final gradeName = g.isRepeater ? 'N수생' : g.name;
+    return '$levelName $gradeName';
+  }
+
   List<int> _getGradeRange(EducationLevel level) {
     switch (level) {
       case EducationLevel.elementary:
@@ -400,6 +406,25 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
               Row(
                 children: [
                   Expanded(
+                    child: CustomFormDropdown<Grade>(
+                      label: '과정/학년',
+                      value: _grade,
+                      items: gradesByLevel.values.expand((e) => e).toList(),
+                      itemLabelBuilder: (g) => _courseGradeLabel(g),
+                      onChanged: (value) {
+                        setState(() {
+                          _grade = value;
+                          _educationLevel = value.level;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
                     flex: 3,
                     child: TextField(
                       controller: _nameController,
@@ -428,42 +453,6 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                         blink: _blinkSchool,
                         forceError: _forceErrorSchool,
                       ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: CustomFormDropdown<EducationLevel>(
-                      label: '과정',
-                      value: _educationLevel,
-                      items: EducationLevel.values,
-                      itemLabelBuilder: (level) => _getEducationLevelName(level),
-                      onChanged: (value) {
-                        setState(() {
-                          _educationLevel = value;
-                          final grades = gradesByLevel[value] ?? [];
-                          _grade = grades.isNotEmpty ? grades.first : null;
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: CustomFormDropdown<Grade>(
-                      label: '학년',
-                      value: _grade,
-                      items: gradesByLevel[_educationLevel] ?? [],
-                      itemLabelBuilder: (grade) => grade.name,
-                      onChanged: (value) {
-                        setState(() {
-                          _grade = value;
-                        });
-                      },
                     ),
                   ),
                 ],

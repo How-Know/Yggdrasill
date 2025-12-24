@@ -38,6 +38,7 @@ import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
 import 'widgets/memo_dialogs.dart';
+import 'app_overlays.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_AUTOFOCUS', defaultValue: false);
@@ -495,6 +496,15 @@ class MyApp extends StatelessWidget {
               return Overlay(initialEntries: [
                 OverlayEntry(builder: (ctx) => child ?? const SizedBox.shrink()),
                 OverlayEntry(builder: (ctx) => const _GlobalMemoFloatingBanners()),
+                // FAB 드롭다운 전용 레이어(플로팅 메모보다 위, 오른쪽 사이드시트보다 아래)
+                OverlayEntry(
+                  builder: (ctx) => Positioned.fill(
+                    child: Overlay(
+                      key: fabDropdownOverlayKey,
+                      initialEntries: const <OverlayEntry>[],
+                    ),
+                  ),
+                ),
                 OverlayEntry(builder: (ctx) => const _GlobalExamOverlay()),
                 OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
                 OverlayEntry(builder: (ctx) => const _GlobalStartupUpdateCard()),
@@ -735,25 +745,51 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
           memosListenable: DataManager.instance.memosNotifier,
           onAddMemo: (ctx) async {
             final dlgCtx = rootNavigatorKey.currentContext ?? context;
-            final text = await showDialog<String>(
+            final result = await showDialog<MemoCreateResult>(
               context: dlgCtx,
               builder: (_) => const MemoInputDialog(),
             );
-            if (text == null || text.trim().isEmpty) return;
+            if (result == null) return;
+            final text = result.text.trim();
+            if (text.isEmpty) return;
             final now = DateTime.now();
+            final trimmed = text.trim();
+            final scheduledAt = await AiSummaryService.extractDateTime(trimmed);
             final memo = Memo(
               id: const Uuid().v4(),
-              original: text.trim(),
+              original: trimmed,
               summary: '요약 중...',
-              scheduledAt: await AiSummaryService.extractDateTime(text.trim()),
+              categoryKey: (result.categoryKey != null && result.categoryKey!.trim().isNotEmpty)
+                  ? MemoCategory.normalize(result.categoryKey)
+                  : MemoCategory.inquiry,
+              scheduledAt: scheduledAt,
               dismissed: false,
               createdAt: now,
               updatedAt: now,
             );
             await DataManager.instance.addMemo(memo);
             try {
-              final summary = await AiSummaryService.summarize(memo.original);
-              await DataManager.instance.updateMemo(memo.copyWith(summary: summary, updatedAt: DateTime.now()));
+              if (result.categoryKey != null && result.categoryKey!.trim().isNotEmpty) {
+                final summary = await AiSummaryService.summarize(memo.original);
+                await DataManager.instance.updateMemo(
+                  memo.copyWith(
+                    summary: summary,
+                    updatedAt: DateTime.now(),
+                  ),
+                );
+              } else {
+                final r = await AiSummaryService.summarizeMemoWithCategory(
+                  memo.original,
+                  scheduledAt: scheduledAt,
+                );
+                await DataManager.instance.updateMemo(
+                  memo.copyWith(
+                    summary: r.summary,
+                    categoryKey: r.categoryKey,
+                    updatedAt: DateTime.now(),
+                  ),
+                );
+              }
             } catch (_) {}
           },
           onEditMemo: (ctx, item) async {
