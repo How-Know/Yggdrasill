@@ -13,7 +13,11 @@ import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import '../../models/education_level.dart';
+import '../../models/consult_note.dart';
 import '../../models/memo.dart';
+import '../../screens/consult/consult_notes_screen.dart';
+import '../../services/consult_note_controller.dart';
+import '../../services/consult_note_service.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../memo_dialogs.dart';
@@ -862,6 +866,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
           selectedFilterKey: _memoFilterKey,
           onFilterChanged: (k) => setState(() => _memoFilterKey = k),
           onOpenConsult: () => unawaited(_openConsultPage()),
+          onCloseSheet: widget.onClose,
         );
       case RightSideSheetMode.fileShortcut:
         return const SizedBox.expand();
@@ -1200,34 +1205,20 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _openConsultPage() async {
     final ctx = widget.dialogContext ?? context;
     try {
-      await Navigator.of(ctx, rootNavigator: true).push(
-        DarkPanelRoute<void>(child: const _ConsultPlaceholderPage()),
+      // 상담 노트로 진입할 때는 우측 사이드 시트를 닫는다.
+      // (닫힌 상태에서 별도 패널로 상담 노트를 사용하는 UX)
+      final nav = Navigator.of(ctx, rootNavigator: true);
+      try {
+        widget.onClose();
+      } catch (_) {}
+      await nav.push(
+        DarkPanelRoute<void>(child: const ConsultNotesScreen()),
       );
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('상담 페이지 이동을 사용할 수 없습니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('상담 노트 페이지를 열 수 없습니다.')));
       }
     }
-  }
-}
-
-class _ConsultPlaceholderPage extends StatelessWidget {
-  const _ConsultPlaceholderPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _rsBg,
-      appBar: AppBar(
-        backgroundColor: _rsBg,
-        foregroundColor: _rsText,
-        elevation: 0,
-        title: const Text('상담', style: TextStyle(fontWeight: FontWeight.w900)),
-      ),
-      body: const Center(
-        child: Text('상담 페이지(준비 중)', style: TextStyle(color: _rsTextSub, fontSize: 14, fontWeight: FontWeight.w800)),
-      ),
-    );
   }
 }
 
@@ -1328,6 +1319,7 @@ class _MemoExplorer extends StatelessWidget {
   final String selectedFilterKey; // 'all' | MemoCategory.*
   final ValueChanged<String> onFilterChanged;
   final VoidCallback onOpenConsult;
+  final VoidCallback onCloseSheet;
 
   const _MemoExplorer({
     required this.memosListenable,
@@ -1336,6 +1328,7 @@ class _MemoExplorer extends StatelessWidget {
     required this.selectedFilterKey,
     required this.onFilterChanged,
     required this.onOpenConsult,
+    required this.onCloseSheet,
   });
 
   String _displayText(Memo m) {
@@ -1383,7 +1376,7 @@ class _MemoExplorer extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  tooltip: '상담 메모 추가',
+                  tooltip: '상담 노트 열기',
                   onPressed: onOpenConsult,
                   icon: const Icon(Icons.support_agent_outlined, color: Colors.white70, size: 20),
                   padding: EdgeInsets.zero,
@@ -1412,16 +1405,104 @@ class _MemoExplorer extends StatelessWidget {
             child: ValueListenableBuilder<List<Memo>>(
               valueListenable: memosListenable,
               builder: (context, memos, _) {
-                if (memos.isEmpty) {
-                  return const Center(
-                    child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
-                  );
-                }
-
                 var list = [...memos]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
                 if (selectedFilterKey != _RightSideSheetState._memoFilterAll) {
                   list = list.where((m) => m.categoryKey == selectedFilterKey).toList();
                 }
+
+                // 문의 탭에서는: 상담 노트 목록(다이얼로그 내용) + 문의 메모를 같은 리스트 스타일로 제공
+                if (selectedFilterKey == MemoCategory.inquiry) {
+                  return FutureBuilder<List<ConsultNoteMeta>>(
+                    future: ConsultNoteService.instance.listMetas(),
+                    builder: (context, snap) {
+                      final notes = snap.data ?? const <ConsultNoteMeta>[];
+                      if (notes.isEmpty && list.isEmpty) {
+                        return const Center(
+                          child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                        );
+                      }
+
+                      final items = <Widget>[];
+                      if (notes.isNotEmpty) {
+                        items.add(const Padding(
+                          padding: EdgeInsets.fromLTRB(2, 6, 2, 8),
+                          child: Text('상담 노트', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                        ));
+                        for (final n in notes) {
+                          final dt = n.updatedAt.toLocal();
+                          final hh = dt.hour.toString().padLeft(2, '0');
+                          final mm = dt.minute.toString().padLeft(2, '0');
+                          final subtitle = '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
+                          items.add(
+                            InkWell(
+                              onTap: () {
+                                ConsultNoteController.instance.requestOpen(n.id);
+                                // 상담 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
+                                if (!ConsultNoteController.instance.isScreenOpen) {
+                                  onOpenConsult();
+                                } else {
+                                  onCloseSheet();
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F171A),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0x22223131)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.note_outlined, color: Colors.white70, size: 18),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(n.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
+                                          const SizedBox(height: 3),
+                                          Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700)),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                          items.add(const SizedBox(height: 10));
+                        }
+                      }
+
+                      if (list.isNotEmpty) {
+                        items.add(const Padding(
+                          padding: EdgeInsets.fromLTRB(2, 10, 2, 8),
+                          child: Text('문의 메모', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                        ));
+                        for (final m in list) {
+                          final when = _scheduleLabel(m.scheduledAt);
+                          items.add(_MemoCard(
+                            key: ValueKey(m.id),
+                            dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
+                            scheduleLabel: when,
+                            categoryLabel: MemoCategory.labelOf(m.categoryKey),
+                            text: _displayText(m),
+                            onTap: () => onEditMemo(m),
+                            onDelete: () => unawaited(DataManager.instance.deleteMemo(m.id)),
+                          ));
+                          items.add(const SizedBox(height: 10));
+                        }
+                      }
+
+                      return ListView(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        children: items,
+                      );
+                    },
+                  );
+                }
+
                 if (list.isEmpty) {
                   return const Center(
                     child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
@@ -1455,7 +1536,7 @@ class _MemoExplorer extends StatelessWidget {
   }
 }
 
-class _MemoCard extends StatelessWidget {
+class _MemoCard extends StatefulWidget {
   final String dateLabel;
   final String scheduleLabel;
   final String categoryLabel;
@@ -1474,182 +1555,207 @@ class _MemoCard extends StatelessWidget {
   });
 
   @override
+  State<_MemoCard> createState() => _MemoCardState();
+}
+
+class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixin {
+  // 삭제 액션 패널 너비를 30% 축소 (108 -> 75.6)
+  static const double _actionPaneWidth = 108 * 0.7;
+  static const double _minCardHeight = 96;
+  static const Duration _snapDuration = Duration(milliseconds: 160);
+
+  late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
+
+  bool get _isOpen => _ctrl.value > 0.01;
+
+  void _open() => _ctrl.animateTo(1, curve: Curves.easeOutCubic);
+  void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails d) {
+    // 왼쪽으로 드래그(delta.dx < 0)하면 열림 진행도(value)가 증가한다.
+    final next = _ctrl.value + (-d.delta.dx / _actionPaneWidth);
+    _ctrl.value = next.clamp(0.0, 1.0);
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0.0; // +: 오른쪽, -: 왼쪽
+    if (v < -250) {
+      _open();
+      return;
+    }
+    if (v > 250) {
+      _close();
+      return;
+    }
+    if (_ctrl.value >= 0.5) {
+      _open();
+    } else {
+      _close();
+    }
+  }
+
+  void _handleTapFront() {
+    // 액션 패널이 열려 있으면 탭은 닫기 동작으로 처리한다.
+    if (_isOpen) {
+      _close();
+      return;
+    }
+    widget.onTap();
+  }
+
+  void _handleDelete() {
+    _ctrl.value = 0;
+    widget.onDelete();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    Future<void> openMenu(Offset globalPos) async {
-      // RightSideSheet는 MaterialApp.builder의 최상위 OverlayEntry 위에서 렌더링된다.
-      // showMenu()는 Navigator Overlay에 붙어 사이드시트 뒤로 깔릴 수 있어,
-      // 최상위 Overlay에 OverlayEntry로 메뉴를 직접 띄운다.
-      final overlayState = Overlay.of(context, rootOverlay: true);
-      if (overlayState == null) return;
-      final overlayBox = overlayState.context.findRenderObject() as RenderBox?;
-      if (overlayBox == null) return;
+    final radius = BorderRadius.circular(14);
 
-      final overlaySize = overlayBox.size;
-      final local = overlayBox.globalToLocal(globalPos);
-      const double menuW = 118;
-      const double itemH = 36;
-      const double pad = 6;
-      final menuH = itemH * 2;
-
-      double left = local.dx;
-      double top = local.dy;
-      // 화면 밖으로 나가지 않도록 보정
-      left = left.clamp(pad, overlaySize.width - menuW - pad);
-      top = top.clamp(pad, overlaySize.height - menuH - pad);
-
-      final completer = Completer<_MemoContextAction?>();
-      late final OverlayEntry entry;
-      void close(_MemoContextAction? action) {
-        if (!completer.isCompleted) completer.complete(action);
-        entry.remove();
-      }
-
-      Widget menuItem({required String text, required Color color, required _MemoContextAction action}) {
-        return SizedBox(
-          height: itemH,
+    Widget frontCard() {
+      // Stack의 non-positioned child는 loosened constraints를 받기 때문에,
+      // 최소 높이를 직접 강제해서(삭제 액션 영역이 항상 확보되게) 버튼 비침/오버플로우를 방지한다.
+      return ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: _minCardHeight),
+        child: Material(
+          color: _rsFieldBg,
           child: InkWell(
-            onTap: () => close(action),
+            onTap: _handleTapFront,
+            borderRadius: radius,
+            splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.white.withOpacity(0.05),
+            hoverColor: Colors.white.withOpacity(0.03),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(text, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w800)),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Text(
+                              widget.dateLabel,
+                              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _rsPanelBg,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: _rsBorder),
+                              ),
+                              child: Text(
+                                widget.categoryLabel,
+                                style: const TextStyle(color: _rsTextSub, fontSize: 11, fontWeight: FontWeight.w900),
+                              ),
+                            ),
+                            if (widget.scheduleLabel.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  '· ${widget.scheduleLabel}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.text,
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800, height: 1.3),
+                  ),
+                ],
               ),
             ),
           ),
-        );
-      }
-
-      entry = OverlayEntry(
-        builder: (ctx) {
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: Listener(
-                  behavior: HitTestBehavior.translucent,
-                  onPointerDown: (_) => close(null),
-                ),
-              ),
-              Positioned(
-                left: left,
-                top: top,
-                width: menuW,
-                child: Material(
-                  color: Colors.transparent,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: _rsPanelBg,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _rsBorder),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.22), blurRadius: 12, offset: const Offset(0, 8))],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Material(
-                      color: Colors.transparent,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          menuItem(text: '수정', color: _rsText, action: _MemoContextAction.edit),
-                          Divider(height: 1, color: _rsBorder.withOpacity(0.7)),
-                          menuItem(text: '삭제', color: const Color(0xFFB74C4C), action: _MemoContextAction.delete),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
+        ),
       );
-
-      overlayState.insert(entry);
-      final action = await completer.future;
-      if (action == _MemoContextAction.edit) {
-        onTap();
-      } else if (action == _MemoContextAction.delete) {
-        onDelete();
-      }
     }
 
     return Material(
       color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        onSecondaryTapDown: (d) => openMenu(d.globalPosition),
-        onLongPress: () {
-          // 롱프레스에서는 카드 중앙 기준으로 메뉴를 열어준다.
-          final box = context.findRenderObject() as RenderBox?;
-          if (box == null) return;
-          final center = box.localToGlobal(box.size.center(Offset.zero));
-          openMenu(center);
-        },
-        borderRadius: BorderRadius.circular(14),
+      child: GestureDetector(
+        onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+        onHorizontalDragEnd: _handleHorizontalDragEnd,
+        onHorizontalDragCancel: _close,
         child: Container(
-          padding: const EdgeInsets.all(12),
+          constraints: const BoxConstraints(minHeight: _minCardHeight),
           decoration: BoxDecoration(
             color: _rsFieldBg,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: radius,
             border: Border.all(color: _rsBorder.withOpacity(0.9)),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Text(
-                          dateLabel,
-                          style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _rsPanelBg,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: _rsBorder),
-                          ),
-                          child: Text(
-                            categoryLabel,
-                            style: const TextStyle(color: _rsTextSub, fontSize: 11, fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                        if (scheduleLabel.isNotEmpty) ...[
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              '· $scheduleLabel',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              softWrap: false,
-                              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+          child: ClipRRect(
+            borderRadius: radius,
+            child: Stack(
+              children: [
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: _actionPaneWidth,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                    child: Material(
+                      color: const Color(0xFFB74C4C),
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        onTap: _handleDelete,
+                        borderRadius: BorderRadius.circular(12),
+                        splashFactory: NoSplash.splashFactory,
+                        highlightColor: Colors.white.withOpacity(0.08),
+                        hoverColor: Colors.white.withOpacity(0.04),
+                        child: SizedBox.expand(
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: const [
+                                Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
+                                SizedBox(height: 6),
+                                Text('삭제', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+                              ],
                             ),
                           ),
-                        ],
-                      ],
+                        ),
+                      ),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                text,
-                maxLines: 6,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800, height: 1.3),
-              ),
-            ],
+                ),
+                // Stack에 non-positioned child가 있어야(높이 제약이 무한대일 때) RenderStack이 정상적으로 크기를 계산한다.
+                AnimatedBuilder(
+                  animation: _ctrl,
+                  builder: (context, child) {
+                    final dx = -_actionPaneWidth * _ctrl.value;
+                    return Transform.translate(offset: Offset(dx, 0), child: child);
+                  },
+                  child: frontCard(),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
-
-enum _MemoContextAction { edit, delete }
 
 class _MemoFilterPill extends StatelessWidget {
   final String label;

@@ -16,3 +16,5 @@ alter table public.memos
   alter column category set not null;
 
 
+
+
