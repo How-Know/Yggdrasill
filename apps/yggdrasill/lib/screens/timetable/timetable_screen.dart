@@ -32,6 +32,9 @@ import '../../services/schedule_store.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'components/timetable_top_bar.dart';
 import 'components/timetable_search_field.dart';
+import '../consult/consult_notes_screen.dart';
+import '../../services/consult_note_controller.dart';
+import '../../widgets/dark_panel_route.dart';
 
 
 enum TimetableViewType {
@@ -125,6 +128,22 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+
+  Future<void> _openInquiryNote(String noteId) async {
+    final id = noteId.trim();
+    if (id.isEmpty) return;
+    // 문의 노트 화면이 열려있으면 "노트 전환"만 요청한다.
+    ConsultNoteController.instance.requestOpen(id);
+    if (ConsultNoteController.instance.isScreenOpen) return;
+    try {
+      final nav = Navigator.of(context, rootNavigator: true);
+      await nav.push(DarkPanelRoute<void>(child: const ConsultNotesScreen()));
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, '문의 노트를 열 수 없습니다.', useRoot: true);
+      }
+    }
+  }
 
   Future<_BlockRange?> _pickBlockEffectiveRange(BuildContext context) async {
     final today = DateTime.now();
@@ -1650,6 +1669,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
                         : null,
                     filteredClassIds: filteredClassIds.isEmpty ? null : filteredClassIds,
+                    onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
                     onTimeSelected: (dayIdx, startTime) {
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
@@ -2027,6 +2047,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
                 ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
                 : null,
+            onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
             onTimeSelected: (int dayIdx, DateTime startTime) {
               print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
               setState(() {

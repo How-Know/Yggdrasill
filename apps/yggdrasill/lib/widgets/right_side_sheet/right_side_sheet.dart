@@ -18,6 +18,8 @@ import '../../models/memo.dart';
 import '../../screens/consult/consult_notes_screen.dart';
 import '../../services/consult_note_controller.dart';
 import '../../services/consult_note_service.dart';
+import '../../services/consult_inquiry_demand_service.dart';
+import '../../services/consult_trial_lesson_service.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../memo_dialogs.dart';
@@ -1205,8 +1207,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _openConsultPage() async {
     final ctx = widget.dialogContext ?? context;
     try {
-      // 상담 노트로 진입할 때는 우측 사이드 시트를 닫는다.
-      // (닫힌 상태에서 별도 패널로 상담 노트를 사용하는 UX)
+      // 문의 노트로 진입할 때는 우측 사이드 시트를 닫는다.
+      // (닫힌 상태에서 별도 패널로 문의 노트를 사용하는 UX)
       final nav = Navigator.of(ctx, rootNavigator: true);
       try {
         widget.onClose();
@@ -1216,7 +1218,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
       );
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('상담 노트 페이지를 열 수 없습니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('문의 노트 페이지를 열 수 없습니다.')));
       }
     }
   }
@@ -1376,7 +1378,7 @@ class _MemoExplorer extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  tooltip: '상담 노트 열기',
+                  tooltip: '문의 노트 열기',
                   onPressed: onOpenConsult,
                   icon: const Icon(Icons.support_agent_outlined, color: Colors.white70, size: 20),
                   padding: EdgeInsets.zero,
@@ -1410,7 +1412,7 @@ class _MemoExplorer extends StatelessWidget {
                   list = list.where((m) => m.categoryKey == selectedFilterKey).toList();
                 }
 
-                // 문의 탭에서는: 상담 노트 목록(다이얼로그 내용) + 문의 메모를 같은 리스트 스타일로 제공
+                // 문의 탭에서는: 등록 문의(필기 노트) 목록 + 문의 메모를 같은 리스트 스타일로 제공
                 if (selectedFilterKey == MemoCategory.inquiry) {
                   return FutureBuilder<List<ConsultNoteMeta>>(
                     future: ConsultNoteService.instance.listMetas(),
@@ -1426,51 +1428,36 @@ class _MemoExplorer extends StatelessWidget {
                       if (notes.isNotEmpty) {
                         items.add(const Padding(
                           padding: EdgeInsets.fromLTRB(2, 6, 2, 8),
-                          child: Text('상담 노트', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                          child: Text('등록 문의', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
                         ));
                         for (final n in notes) {
                           final dt = n.updatedAt.toLocal();
                           final hh = dt.hour.toString().padLeft(2, '0');
                           final mm = dt.minute.toString().padLeft(2, '0');
                           final subtitle = '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
-                          items.add(
-                            InkWell(
-                              onTap: () {
-                                ConsultNoteController.instance.requestOpen(n.id);
-                                // 상담 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
-                                if (!ConsultNoteController.instance.isScreenOpen) {
-                                  onOpenConsult();
-                                } else {
-                                  onCloseSheet();
-                                }
-                              },
-                              borderRadius: BorderRadius.circular(12),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF0F171A),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0x22223131)),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.note_outlined, color: Colors.white70, size: 18),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(n.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
-                                          const SizedBox(height: 3),
-                                          Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700)),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
+                          items.add(_InquiryNoteCard(
+                            key: ValueKey('note:${n.id}'),
+                            title: n.title,
+                            subtitle: subtitle,
+                            onTap: () {
+                              ConsultNoteController.instance.requestOpen(n.id);
+                              // 문의 노트 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
+                              if (!ConsultNoteController.instance.isScreenOpen) {
+                                onOpenConsult();
+                              } else {
+                                onCloseSheet();
+                              }
+                            },
+                            onDelete: () {
+                              unawaited(() async {
+                                await ConsultNoteService.instance.delete(n.id);
+                                await ConsultInquiryDemandService.instance.removeForNote(n.id);
+                                await ConsultTrialLessonService.instance.removeForNote(n.id);
+                                // 동일 탭으로 setState 유도(노트 목록 갱신)
+                                onFilterChanged(selectedFilterKey);
+                              }());
+                            },
+                          ));
                           items.add(const SizedBox(height: 10));
                         }
                       }
@@ -1556,6 +1543,194 @@ class _MemoCard extends StatefulWidget {
 
   @override
   State<_MemoCard> createState() => _MemoCardState();
+}
+
+class _InquiryNoteCard extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _InquiryNoteCard({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  State<_InquiryNoteCard> createState() => _InquiryNoteCardState();
+}
+
+class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerProviderStateMixin {
+  // 메모 카드와 동일한 슬라이드 삭제 UX
+  static const double _actionPaneWidth = 108 * 0.7;
+  static const double _minCardHeight = 84;
+  static const Duration _snapDuration = Duration(milliseconds: 160);
+
+  late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
+
+  bool get _isOpen => _ctrl.value > 0.01;
+
+  void _open() => _ctrl.animateTo(1, curve: Curves.easeOutCubic);
+  void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails d) {
+    final next = _ctrl.value + (-d.delta.dx / _actionPaneWidth);
+    _ctrl.value = next.clamp(0.0, 1.0);
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0.0;
+    if (v < -250) {
+      _open();
+      return;
+    }
+    if (v > 250) {
+      _close();
+      return;
+    }
+    if (_ctrl.value >= 0.5) {
+      _open();
+    } else {
+      _close();
+    }
+  }
+
+  void _handleTapFront() {
+    if (_isOpen) {
+      _close();
+      return;
+    }
+    widget.onTap();
+  }
+
+  void _handleDelete() {
+    _ctrl.value = 0;
+    widget.onDelete();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(14);
+
+    Widget frontCard() {
+      return ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: _minCardHeight),
+        child: Material(
+          color: _rsFieldBg,
+          child: InkWell(
+            onTap: _handleTapFront,
+            borderRadius: radius,
+            splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.white.withOpacity(0.05),
+            hoverColor: Colors.white.withOpacity(0.03),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  const Icon(Icons.note_outlined, color: Colors.white70, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: GestureDetector(
+        onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+        onHorizontalDragEnd: _handleHorizontalDragEnd,
+        onHorizontalDragCancel: _close,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: _minCardHeight),
+          decoration: BoxDecoration(
+            color: _rsFieldBg,
+            borderRadius: radius,
+            border: Border.all(color: _rsBorder.withOpacity(0.9)),
+          ),
+          child: ClipRRect(
+            borderRadius: radius,
+            child: Stack(
+              children: [
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: _actionPaneWidth,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                    child: Material(
+                      color: const Color(0xFFB74C4C),
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        onTap: _handleDelete,
+                        borderRadius: BorderRadius.circular(12),
+                        splashFactory: NoSplash.splashFactory,
+                        highlightColor: Colors.white.withOpacity(0.08),
+                        hoverColor: Colors.white.withOpacity(0.04),
+                        child: const SizedBox.expand(
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
+                                SizedBox(height: 6),
+                                Text('삭제', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                AnimatedBuilder(
+                  animation: _ctrl,
+                  builder: (context, child) {
+                    final dx = -_actionPaneWidth * _ctrl.value;
+                    return Transform.translate(offset: Offset(dx, 0), child: child);
+                  },
+                  child: frontCard(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixin {

@@ -14,6 +14,8 @@ import '../../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
 import '../../../models/session_override.dart';
+import '../../../services/consult_inquiry_demand_service.dart';
+import '../../../services/consult_trial_lesson_service.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -35,6 +37,8 @@ class ClassesView extends StatefulWidget {
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
+  /// 문의(희망수업) 오버레이 라벨 클릭 시 호출 (예: 문의 노트로 이동)
+  final void Function(String noteId)? onInquiryNoteTap;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
   final Set<String>? filteredClassIds; // 추가: 필터된 수업 id 리스트(__default_class__ 포함)
@@ -42,6 +46,9 @@ class ClassesView extends StatefulWidget {
   final StudentWithInfo? selectedSelfStudyStudent;
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
   final DateTime weekStartDate; // 월요일 날짜(해당 주 시작)
+  /// 다중 선택(예: 희망 수업시간 선택 다이얼로그)에서 선택된 슬롯 하이라이트용
+  /// 키 포맷: '$dayIdx-$hour:$minute' (dayIdx: 0=월..6=일)
+  final Set<String>? selectedSlotKeys;
 
   const ClassesView({
     super.key,
@@ -55,6 +62,7 @@ class ClassesView extends StatefulWidget {
     this.onTimeSelected,
     this.onCellStudentsSelected,
     this.onCellSelfStudyStudentsChanged,
+    this.onInquiryNoteTap,
     required this.scrollController,
     this.filteredStudentIds, // 추가
     this.filteredClassIds, // 추가
@@ -62,6 +70,7 @@ class ClassesView extends StatefulWidget {
     this.selectedSelfStudyStudent,
     this.onSelectModeChanged, // 추가
     required this.weekStartDate,
+    this.selectedSlotKeys,
   });
 
   @override
@@ -77,6 +86,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   // 변경: widget.scrollController 사용
   String? _hoveredCellKey;
   bool _hasScrolledToCurrentTime = false;
+  int _lastOverlayTapMs = 0; // 오버레이(희망/시범) 라벨 탭 후 셀 탭 로직이 같이 타지 않도록 가드
+  late final VoidCallback _inquiryDemandListener;
+  late final VoidCallback _trialLessonListener;
 
   bool _isClassAllowed(String? sessionTypeId) {
     final cids = widget.filteredClassIds;
@@ -365,6 +377,20 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     );
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _inquiryDemandListener = () {
+      if (mounted) setState(() {});
+    };
+    ConsultInquiryDemandService.instance.slotsNotifier.addListener(_inquiryDemandListener);
+
+    _trialLessonListener = () {
+      if (mounted) setState(() {});
+    };
+    ConsultTrialLessonService.instance.slotsNotifier.addListener(_trialLessonListener);
+  }
+
   Set<String> get dragHighlightKeys {
     if (!isDragging || dragDayIdx == null || dragStartIdx == null || dragEndIdx == null) return {};
     final start = dragStartIdx!;
@@ -605,6 +631,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
   @override
   void dispose() {
+    ConsultInquiryDemandService.instance.slotsNotifier.removeListener(_inquiryDemandListener);
+    ConsultTrialLessonService.instance.slotsNotifier.removeListener(_trialLessonListener);
     for (var controller in _animationControllers.values) {
       controller.dispose();
     }
@@ -629,6 +657,17 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
           child: ValueListenableBuilder<List<StudentTimeBlock>>(
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
+              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              final inquiryCountBySlot = ConsultInquiryDemandService.instance.countMapForWeekExpanded(
+                widget.weekStartDate,
+                lessonDurationMinutes: lessonDuration,
+              );
+              final inquirySlotsBySlotKey = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(widget.weekStartDate);
+              final trialCountBySlot = ConsultTrialLessonService.instance.countMapForWeekExpanded(
+                widget.weekStartDate,
+                lessonDurationMinutes: lessonDuration,
+              );
+              final trialSlotsBySlotKey = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(widget.weekStartDate);
               final selfStudyTimeBlocks = DataManager.instance.selfStudyTimeBlocks;
               // 디버깅용 프린트 추가
               //print('[DEBUG][필터] filteredStudentIds=${widget.filteredStudentIds}');
@@ -652,7 +691,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               //print('[DEBUG][ValueListenableBuilder] studentTimeBlocks.length= [33m${studentTimeBlocks.length} [0m, selfStudyTimeBlocks.length= [33m${selfStudyTimeBlocks.length} [0m, allBlocks.length= [33m${allBlocks.length} [0m');
               final studentsWithInfo = DataManager.instance.students;
               final groups = DataManager.instance.groups;
-              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               // 인원수 카운트 등 공통 필드만 쓸 때 allBlocks 사용, StudentTimeBlock만 필요한 곳에는 filteredStudentBlocks만 넘김
               // 정원/표시에는 수업 필터 적용하지만, 학생 필터만 있을 때는 자습 포함
               final filteredBlocks = allBlocks.where((b) {
@@ -905,10 +943,19 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
-                              final bool isSelectedCell = widget.selectedCellDayIndex == dayIdx &&
-                                  widget.selectedCellStartTime != null &&
-                                  widget.selectedCellStartTime!.hour == timeBlocks[blockIdx].startTime.hour &&
-                                  widget.selectedCellStartTime!.minute == timeBlocks[blockIdx].startTime.minute;
+                              final bool isSelectedCell =
+                                  (widget.selectedCellDayIndex == dayIdx &&
+                                      widget.selectedCellStartTime != null &&
+                                      widget.selectedCellStartTime!.hour == timeBlocks[blockIdx].startTime.hour &&
+                                      widget.selectedCellStartTime!.minute == timeBlocks[blockIdx].startTime.minute) ||
+                                  (widget.selectedSlotKeys?.contains(
+                                        ConsultInquiryDemandService.slotKey(
+                                          dayIdx,
+                                          timeBlocks[blockIdx].startTime.hour,
+                                          timeBlocks[blockIdx].startTime.minute,
+                                        ),
+                                      ) ??
+                                      false);
                               bool isBreakTime = false;
                               // 휴식시간 표시 로직 (dayIdx == dayOfWeek로 정확히 매핑)
                               final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
@@ -971,6 +1018,27 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   }
                                 }
                               }
+                              // 문의(희망시간) 예약 인원 가산: startWeek(해당 주 월요일) 이후의 모든 주차에 반영
+                              final slotKey = ConsultInquiryDemandService.slotKey(
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime.hour,
+                                timeBlocks[blockIdx].startTime.minute,
+                              );
+                              final inquiryCount = inquiryCountBySlot[slotKey] ?? 0;
+                              if (inquiryCount > 0) {
+                                activeStudentCount += inquiryCount;
+                              }
+                              // 시범수업(일회성) 인원 가산: 선택한 주에서만 반영 + lessonDuration 범위로 확장된 map 사용
+                              final trialCount = trialCountBySlot[slotKey] ?? 0;
+                              if (trialCount > 0) {
+                                activeStudentCount += trialCount;
+                              }
+                              final inquiryOverlays = (inquirySlotsBySlotKey[slotKey] ?? const <ConsultInquiryDemandSlot>[])
+                                  .map((s) => InquiryOverlayLabel(noteId: s.sourceNoteId, text: s.title))
+                                  .toList();
+                              final trialOverlays = (trialSlotsBySlotKey[slotKey] ?? const <ConsultTrialLessonSlot>[])
+                                  .map((s) => TrialOverlayLabel(noteId: s.sourceNoteId, text: s.title))
+                                  .toList();
                               // // BLIND 진단 로그(요약) - 필요 시만 활성화
                               // if (_hiddenOriginalStudentIds.isNotEmpty || _hiddenStudentSetPairs.isNotEmpty || activeStudentIds.length < beforeIds.length) {
                               //   // ignore: avoid_print
@@ -1015,6 +1083,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   },
                                   child: GestureDetector(
                                     onTap: () async {
+                                      // 오버레이(희망/시범) 라벨 탭과 셀 탭이 중복으로 처리되는 것을 방지
+                                      final nowMs = DateTime.now().millisecondsSinceEpoch;
+                                      if (nowMs - _lastOverlayTapMs < 250) return;
                                       // 기존 클릭 등록 로직
                                       final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                                       final selectedStudentWithInfo = widget.selectedStudentWithInfo;
@@ -1099,6 +1170,14 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       registrationModeType: widget.registrationModeType,
                                       operatingHours: widget.operatingHours,
                                        makeupOverlays: makeupOverlays,
+                                      inquiryOverlays: inquiryOverlays,
+                                      trialOverlays: trialOverlays,
+                                      onInquiryOverlayTap: widget.onInquiryNoteTap == null
+                                          ? null
+                                          : (noteId) {
+                                              _lastOverlayTapMs = DateTime.now().millisecondsSinceEpoch;
+                                              widget.onInquiryNoteTap?.call(noteId);
+                                            },
                                     ),
                                   ),
                                 ),
@@ -1431,11 +1510,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
   }
 
-  @override
-  void initState() {
-    super.initState();
-    // 더 이상 setter 할당 없이, 콜백 분기만 사용
-  }
 }
 
 class _StudentTimeBlockCard extends StatelessWidget {

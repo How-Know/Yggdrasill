@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -6,8 +7,14 @@ import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/consult_note.dart';
+import '../../models/operating_hours.dart';
 import '../../services/consult_note_controller.dart';
 import '../../services/consult_note_service.dart';
+import '../../services/consult_inquiry_demand_service.dart';
+import '../../services/consult_trial_lesson_service.dart';
+import '../../services/data_manager.dart';
+import '../timetable/components/timetable_header.dart';
+import '../timetable/views/classes_view.dart';
 
 const Color _bg = Color(0xFF0B1112);
 const Color _panelBg = Color(0xFF10171A);
@@ -33,9 +40,21 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
   List<HandwritingStroke> _strokes = <HandwritingStroke>[];
   HandwritingStroke? _inProgress;
 
+  // 시범 수업(일회성) 일정 선택 상태 (노트 저장 시점에 로컬 시간표에 반영)
+  DateTime? _trialWeekStart; // 월요일(date-only)
+  Set<String> _trialSlotKeys = <String>{}; // '$dayIdx-$hour:$minute'
+
+  Future<void> _saveAndExitFlow() async {
+    final ok = await _saveWithTitlePrompt();
+    if (!ok || !mounted) return;
+    // 진입 전 페이지로 복귀
+    unawaited(Navigator.of(context, rootNavigator: true).maybePop());
+  }
+
   // 펜 설정
   Color _penColor = Colors.white;
   double _penWidth = 3.6;
+  double _eraserWidth = 40.0;
   bool _eraser = false;
 
   int? _activePointer;
@@ -73,6 +92,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       _inProgress = null;
       _dirty = false;
     });
+    unawaited(_loadTrialSelectionForNote(note.id));
   }
 
   Future<void> _boot() async {
@@ -87,25 +107,45 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     if (note == null && metas.isNotEmpty) {
       note = await ConsultNoteService.instance.load(metas.first.id);
     }
-    note ??= _newBlankNote();
+    final ConsultNote bootNote = note ?? _newBlankNote();
     setState(() {
-      _note = note;
-      _strokes = [...note!.strokes];
+      _note = bootNote;
+      _strokes = [...bootNote.strokes];
       _inProgress = null;
       _dirty = false;
       _loading = false;
     });
+    unawaited(_loadTrialSelectionForNote(bootNote.id));
   }
 
   ConsultNote _newBlankNote({String? title}) {
     final now = DateTime.now();
     return ConsultNote(
       id: const Uuid().v4(),
-      title: (title == null || title.trim().isEmpty) ? '상담 노트' : title.trim(),
+      title: (title == null || title.trim().isEmpty) ? '문의 노트' : title.trim(),
       createdAt: now,
       updatedAt: now,
       strokes: const <HandwritingStroke>[],
     );
+  }
+
+  Future<void> _loadTrialSelectionForNote(String noteId) async {
+    try {
+      await ConsultTrialLessonService.instance.load();
+    } catch (_) {}
+    if (!mounted) return;
+    if (_note?.id != noteId) return;
+    final slots = ConsultTrialLessonService.instance.slots.where((s) => s.sourceNoteId == noteId).toList();
+    setState(() {
+      if (slots.isEmpty) {
+        _trialWeekStart = null;
+        _trialSlotKeys = <String>{};
+      } else {
+        final wk = slots.first.weekStart;
+        _trialWeekStart = DateTime(wk.year, wk.month, wk.day);
+        _trialSlotKeys = slots.map((s) => ConsultTrialLessonService.slotKey(s.dayIndex, s.hour, s.minute)).toSet();
+      }
+    });
   }
 
   Future<bool> _confirmHandleDirtyIfNeeded() async {
@@ -114,68 +154,50 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       context: context,
       barrierDismissible: true,
       builder: (ctx) {
-        final shape = RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: Color(0xFF2A2A2A)),
-        );
-        final btnShape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape: shape,
-          titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-          contentPadding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-          actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
-          title: const Row(
-            children: [
-              Icon(Icons.save_outlined, color: Colors.white70, size: 22),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '저장하지 않은 변경사항',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
-                ),
-              ),
-            ],
+          backgroundColor: _bg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _border),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text(
+            '저장하지 않은 변경사항',
+            style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w900),
           ),
           content: const Text(
             '현재 노트에 저장하지 않은 내용이 있습니다.\n저장할까요?',
-            style: TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w700),
+            style: TextStyle(color: Colors.white70, height: 1.4, fontWeight: FontWeight.w700),
           ),
           actions: [
-            SizedBox(
-              height: 44,
-              child: FilledButton.tonal(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white10,
-                  foregroundColor: Colors.white70,
-                  shape: btnShape,
-                ),
-                onPressed: () => Navigator.of(ctx).pop(_DirtyAction.cancel),
-                child: const Text('취소', style: TextStyle(fontWeight: FontWeight.w900)),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(_DirtyAction.cancel),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF9FB3B3),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               ),
+              child: const Text('취소'),
             ),
-            SizedBox(
-              height: 44,
-              child: FilledButton.tonal(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.redAccent.withValues(alpha: 64),
-                  foregroundColor: Colors.white,
-                  shape: btnShape,
-                ),
-                onPressed: () => Navigator.of(ctx).pop(_DirtyAction.discard),
-                child: const Text('버리기', style: TextStyle(fontWeight: FontWeight.w900)),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(_DirtyAction.discard),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               ),
+              child: const Text('버리기'),
             ),
-            SizedBox(
-              height: 44,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1976D2),
-                  foregroundColor: Colors.white,
-                  shape: btnShape,
-                ),
-                onPressed: () => Navigator.of(ctx).pop(_DirtyAction.save),
-                child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent, // 0xFF33A373
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(_DirtyAction.save),
+              child: const Text(
+                '저장',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -184,8 +206,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     );
 
     if (action == _DirtyAction.save) {
-      await _save();
-      return true;
+      return await _saveWithTitlePrompt();
     }
     return action == _DirtyAction.discard;
   }
@@ -202,13 +223,61 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
         strokes: List<HandwritingStroke>.unmodifiable(_strokes),
       );
       await ConsultNoteService.instance.save(updated);
+      // 희망 수업시간(다중선택) → 시간표 오버레이/정원 카운트에 반영(노트 저장 시점)
+      final slotKeys = updated.desiredSlots.map((s) => s.slotKey).toSet();
+      var startWeek = updated.desiredStartWeek;
+      if (slotKeys.isNotEmpty && startWeek == null) {
+        // 레거시/예외 케이스 대비: 시작 주가 비어있으면 "이번 주"로 간주
+        final now2 = DateTime.now();
+        startWeek = DateTime(now2.year, now2.month, now2.day).subtract(Duration(days: now2.weekday - 1));
+      }
+      if (slotKeys.isNotEmpty && startWeek != null) {
+        await ConsultInquiryDemandService.instance.upsertForNote(
+          noteId: updated.id,
+          title: updated.title,
+          startWeek: startWeek,
+          slotKeys: slotKeys,
+        );
+      } else {
+        // 선택이 없다면 기존 반영분이 있을 수 있으므로 정리
+        await ConsultInquiryDemandService.instance.removeForNote(updated.id);
+      }
+
+      // 시범 수업(일회성) 일정 → 선택한 주차(weekStart)에서만 시간표에 반영
+      final trialKeys = _trialSlotKeys;
+      var trialWeek = _trialWeekStart;
+      if (trialKeys.isNotEmpty && trialWeek == null) {
+        final now2 = DateTime.now();
+        trialWeek = DateTime(now2.year, now2.month, now2.day).subtract(Duration(days: now2.weekday - 1));
+      }
+      if (trialKeys.isNotEmpty && trialWeek != null) {
+        await ConsultTrialLessonService.instance.upsertForNote(
+          noteId: updated.id,
+          title: updated.title,
+          weekStart: trialWeek,
+          slotKeys: trialKeys,
+        );
+      } else {
+        await ConsultTrialLessonService.instance.removeForNote(updated.id);
+      }
+
       if (!mounted) return;
       setState(() {
         _note = updated;
         _dirty = false;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('저장되었습니다.')));
+        final bool hasDesired = slotKeys.isNotEmpty && startWeek != null;
+        final bool hasTrial = trialKeys.isNotEmpty && trialWeek != null;
+        if (hasDesired && hasTrial) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('저장되었습니다. (희망/시범 일정이 시간표에 반영됨)')));
+        } else if (hasDesired) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('저장되었습니다. (희망 수업 일정이 시간표에 반영됨)')));
+        } else if (hasTrial) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('저장되었습니다. (시범 수업 일정이 시간표에 반영됨)')));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('저장되었습니다.')));
+        }
       }
     } catch (_) {
       if (mounted) {
@@ -219,6 +288,104 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     }
   }
 
+  Future<bool> _saveWithTitlePrompt() async {
+    if (_saving) return false;
+    final n = _note;
+    if (n == null) return false;
+
+    final ctrl = TextEditingController(text: n.title);
+    String? result;
+    result = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx2, setSB) {
+          final canSave = ctrl.text.trim().isNotEmpty;
+          return AlertDialog(
+            backgroundColor: _bg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: _border),
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+            contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+            title: const Text(
+              '제목 입력',
+              style: TextStyle(color: _text, fontSize: 18, fontWeight: FontWeight.w900),
+            ),
+            content: SizedBox(
+              // 기존(520) 대비 약 -30%
+              width: 360,
+              child: TextField(
+                controller: ctrl,
+                autofocus: true,
+                onChanged: (_) => setSB(() {}),
+                style: const TextStyle(color: _text, fontWeight: FontWeight.w700),
+                decoration: InputDecoration(
+                  labelText: '제목',
+                  labelStyle: const TextStyle(color: Color(0xFF9FB3B3)),
+                  hintText: '예: 등록 문의 - 김OO',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: const Color(0xFF3A3F44).withValues(alpha: 153)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: _accent, width: 1.4),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFF15171C),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx2).pop(null),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF9FB3B3),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent, // 0xFF33A373
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: canSave ? () => Navigator.of(ctx2).pop(ctrl.text) : null,
+                child: const Text(
+                  '저장',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          );
+        });
+      },
+    );
+    ctrl.dispose();
+
+    if (result == null) return false;
+    final title = result.trim();
+    if (title.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('제목을 입력하세요.')));
+      }
+      return false;
+    }
+
+    setState(() {
+      _note = _note!.copyWith(title: title);
+      _dirty = true;
+    });
+    await _save();
+    return true;
+  }
+
   Future<void> _newNoteFlow() async {
     final ok = await _confirmHandleDirtyIfNeeded();
     if (!ok) return;
@@ -227,6 +394,8 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       _note = created;
       _strokes = <HandwritingStroke>[];
       _inProgress = null;
+      _trialWeekStart = null;
+      _trialSlotKeys = <String>{};
       _dirty = false;
     });
   }
@@ -305,19 +474,22 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     if (ok != true) return;
 
     await ConsultNoteService.instance.delete(n.id);
+    await ConsultInquiryDemandService.instance.removeForNote(n.id);
+    await ConsultTrialLessonService.instance.removeForNote(n.id);
     final metas = await ConsultNoteService.instance.listMetas();
     ConsultNote? next;
     if (metas.isNotEmpty) {
       next = await ConsultNoteService.instance.load(metas.first.id);
     }
-    next ??= _newBlankNote();
+    final ConsultNote nextNote = next ?? _newBlankNote();
     if (!mounted) return;
     setState(() {
-      _note = next;
-      _strokes = [...next!.strokes];
+      _note = nextNote;
+      _strokes = [...nextNote.strokes];
       _inProgress = null;
       _dirty = false;
     });
+    unawaited(_loadTrialSelectionForNote(nextNote.id));
   }
 
   // 노트 선택(열기) UI는 상단 버튼에서 제거됨.
@@ -340,8 +512,98 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     });
   }
 
-  void _onCheckSchedulePressed() {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('일정 확인 기능은 준비 중입니다.')));
+  Future<void> _onCheckSchedulePressed() async {
+    final n = _note;
+    if (n == null) return;
+    if (!mounted) return;
+    final picked = await showDialog<_InquirySchedulePickResult>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _ConsultTimetablePickerDialog(
+        titleText: '희망 수업시간 선택',
+        initialWeekStart: n.desiredStartWeek,
+        initialSlotKeys: n.desiredSlots.map((s) => s.slotKey).toSet(),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    // 문의 노트 저장 시점에(상단 저장 버튼) 희망시간이 시간표에 반영되도록
+    // 여기서는 선택값만 노트에 저장해 둔다.
+    final List<ConsultDesiredSlot> slots = <ConsultDesiredSlot>[];
+    for (final key in picked.slotKeys) {
+      final parts = key.split('-');
+      if (parts.length != 2) continue;
+      final dayIdx = int.tryParse(parts[0]);
+      final hm = parts[1].split(':');
+      if (dayIdx == null || hm.length != 2) continue;
+      final hh = int.tryParse(hm[0]);
+      final mm = int.tryParse(hm[1]);
+      if (hh == null || mm == null) continue;
+      slots.add(ConsultDesiredSlot(dayIndex: dayIdx, hour: hh, minute: mm));
+    }
+    slots.sort((a, b) {
+      final da = a.dayIndex.compareTo(b.dayIndex);
+      if (da != 0) return da;
+      final ha = a.hour.compareTo(b.hour);
+      if (ha != 0) return ha;
+      return a.minute.compareTo(b.minute);
+    });
+
+    // 레거시 단일값도 함께 업데이트(선택이 있으면 첫 슬롯을 대표값으로 기록)
+    int? legacyW;
+    int? legacyH;
+    int? legacyM;
+    if (slots.isNotEmpty) {
+      legacyW = slots.first.dayIndex + 1; // 1..7
+      legacyH = slots.first.hour;
+      legacyM = slots.first.minute;
+    }
+
+    setState(() {
+      _note = n.copyWith(
+        desiredStartWeek: DateTime(picked.weekStart.year, picked.weekStart.month, picked.weekStart.day),
+        desiredSlots: List<ConsultDesiredSlot>.unmodifiable(slots),
+        desiredWeekday: legacyW,
+        desiredHour: legacyH,
+        desiredMinute: legacyM,
+      );
+      _dirty = true;
+    });
+  }
+
+  void _onTrialLessonPressed() {
+    unawaited(_onTrialSchedulePressed());
+  }
+
+  Future<void> _onTrialSchedulePressed() async {
+    final n = _note;
+    if (n == null) return;
+    if (!mounted) return;
+    final picked = await showDialog<_InquirySchedulePickResult>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _ConsultTimetablePickerDialog(
+        titleText: '시범 수업시간 선택',
+        initialWeekStart: _trialWeekStart,
+        initialSlotKeys: _trialSlotKeys,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _trialWeekStart = DateTime(picked.weekStart.year, picked.weekStart.month, picked.weekStart.day);
+      _trialSlotKeys = <String>{...picked.slotKeys};
+      _dirty = true;
+    });
+  }
+
+  void _setEraser(bool value) {
+    setState(() {
+      _eraser = value;
+      if (value) {
+        // 요구사항: 지우개 선택 시 기본 두께는 40
+        _eraserWidth = 40.0;
+      }
+    });
   }
 
   Future<void> _pickPenColor() async {
@@ -381,25 +643,29 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
   }
 
   Future<void> _pickPenWidth() async {
-    double temp = _penWidth;
+    final isEraser = _eraser;
+    double temp = isEraser ? _eraserWidth : _penWidth;
+    final double min = isEraser ? 10.0 : 1.0;
+    final double max = isEraser ? 80.0 : 18.0;
+    final int divisions = isEraser ? 70 : 17;
     final picked = await showDialog<double>(
       context: context,
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1F1F1F),
-          title: const Text('펜 두께', style: TextStyle(color: Colors.white)),
+          title: Text(isEraser ? '지우개 두께' : '펜 두께', style: const TextStyle(color: Colors.white)),
           content: StatefulBuilder(builder: (ctx2, setSB) {
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Slider(
-                  value: temp.clamp(1.0, 18.0),
-                  min: 1.0,
-                  max: 18.0,
-                  divisions: 17,
-                  activeColor: const Color(0xFF1976D2),
-                  label: temp.toStringAsFixed(1),
+                  value: temp.clamp(min, max),
+                  min: min,
+                  max: max,
+                  divisions: divisions,
+                  activeColor: isEraser ? const Color(0xFFB74C4C) : _accent,
+                  label: isEraser ? temp.toStringAsFixed(0) : temp.toStringAsFixed(1),
                   onChanged: (v) => setSB(() => temp = v),
                 ),
                 const SizedBox(height: 8),
@@ -417,7 +683,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
                       height: 1,
                       color: Colors.transparent,
                       child: CustomPaint(
-                        painter: _LinePreviewPainter(color: _eraser ? _bg : _penColor, width: temp),
+                        painter: _LinePreviewPainter(color: isEraser ? Colors.white70 : _penColor, width: temp),
                       ),
                     ),
                   ),
@@ -440,7 +706,13 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
       },
     );
     if (picked == null) return;
-    setState(() => _penWidth = picked);
+    setState(() {
+      if (isEraser) {
+        _eraserWidth = picked;
+      } else {
+        _penWidth = picked;
+      }
+    });
   }
 
   bool _canDraw(PointerDeviceKind kind) {
@@ -458,7 +730,7 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
     setState(() {
       _inProgress = HandwritingStroke(
         colorArgb: color.toARGB32(),
-        width: _penWidth,
+        width: _eraser ? _eraserWidth : _penWidth,
         isEraser: _eraser,
         points: <HandwritingPoint>[p],
       );
@@ -531,7 +803,8 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final title = _note?.title ?? '상담 노트';
+    final bool hasDesiredSelection = (_note?.desiredSlots.isNotEmpty ?? false);
+    final bool hasTrialSelection = _trialSlotKeys.isNotEmpty;
     return WillPopScope(
       onWillPop: () async {
         final ok = await _confirmHandleDirtyIfNeeded();
@@ -543,47 +816,130 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
           backgroundColor: _bg,
           foregroundColor: _text,
           elevation: 0,
-          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-          actions: [
-            IconButton(
-              tooltip: '새 노트',
-              onPressed: _loading ? null : () => unawaited(_newNoteFlow()),
-              icon: const Icon(Icons.note_add_outlined),
-            ),
-            PopupMenuButton<_MoreAction>(
-              tooltip: '더보기',
-              color: const Color(0xFF1F1F1F),
-              onSelected: (v) {
-                switch (v) {
-                  case _MoreAction.rename:
-                    unawaited(_renameFlow());
-                    break;
-                  case _MoreAction.delete:
-                    unawaited(_deleteFlow());
-                    break;
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: _MoreAction.rename,
-                  child: Text('이름 변경', style: TextStyle(color: Colors.white)),
+          titleSpacing: 0,
+          title: SizedBox(
+            width: double.infinity,
+            height: 44,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('문의 노트', style: TextStyle(fontWeight: FontWeight.w900)),
+                      const SizedBox(width: 10),
+                      IconButton(
+                        tooltip: '새 노트',
+                        onPressed: _loading ? null : () => unawaited(_newNoteFlow()),
+                        icon: const Icon(Icons.note_add_outlined),
+                        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                        padding: EdgeInsets.zero,
+                      ),
+                      PopupMenuButton<_MoreAction>(
+                        tooltip: '더보기',
+                        color: const Color(0xFF1F1F1F),
+                        onSelected: (v) {
+                          switch (v) {
+                            case _MoreAction.rename:
+                              unawaited(_renameFlow());
+                              break;
+                            case _MoreAction.delete:
+                              unawaited(_deleteFlow());
+                              break;
+                          }
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: _MoreAction.rename,
+                            child: Text('이름 변경', style: TextStyle(color: Colors.white)),
+                          ),
+                          PopupMenuItem(
+                            value: _MoreAction.delete,
+                            child: Text('삭제', style: TextStyle(color: Colors.redAccent)),
+                          ),
+                        ],
+                        child: const SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: Center(child: Icon(Icons.more_horiz, color: Colors.white70)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                PopupMenuItem(
-                  value: _MoreAction.delete,
-                  child: Text('삭제', style: TextStyle(color: Colors.redAccent)),
+                Align(
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _TopOutlineActionButton(
+                        label: '희망 수업 일정',
+                        icon: hasDesiredSelection ? Icons.check_rounded : Icons.event_note_outlined,
+                        onPressed: _loading ? null : _onCheckSchedulePressed,
+                      ),
+                      const SizedBox(width: 10),
+                      _TopOutlineActionButton(
+                        label: '시범 수업 일정',
+                        icon: hasTrialSelection ? Icons.check_rounded : Icons.play_lesson_outlined,
+                        onPressed: _loading ? null : _onTrialLessonPressed,
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-            const SizedBox(width: 6),
+          ),
+          actions: [
+            IconButton(
+              tooltip: '되돌리기',
+              onPressed: _strokes.isNotEmpty ? _undo : null,
+              icon: const Icon(Icons.undo),
+            ),
+            IconButton(
+              tooltip: '전체삭제',
+              onPressed: _strokes.isNotEmpty ? _clearAll : null,
+              icon: const Icon(Icons.delete_sweep_outlined),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 6, right: 2),
+              child: SizedBox(
+                height: 36,
+                child: FilledButton(
+                  onPressed: (_saving || _note == null) ? null : () => unawaited(_saveAndExitFlow()),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _accent,
+                    padding: const EdgeInsets.symmetric(horizontal: 27), // +50%
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text('저장', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
           ],
         ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+        floatingActionButton: _loading
+            ? null
+            : _BottomDrawFabBar(
+                eraser: _eraser,
+                penColor: _penColor,
+                penWidth: _penWidth,
+                eraserWidth: _eraserWidth,
+                onSelectPen: () => _setEraser(false),
+                onSelectEraser: () => _setEraser(true),
+                onPickColor: () => unawaited(_pickPenColor()),
+                onPickWidth: () => unawaited(_pickPenWidth()),
+              ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 96),
                       child: Container(
                         decoration: BoxDecoration(
                           color: _panelBg,
@@ -612,20 +968,6 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
                       ),
                     ),
                   ),
-                  _ToolBar(
-                    penColor: _penColor,
-                    eraser: _eraser,
-                    penWidth: _penWidth,
-                    canUndo: _strokes.isNotEmpty,
-                    canClear: _strokes.isNotEmpty,
-                    onPickColor: () => unawaited(_pickPenColor()),
-                    onPickWidth: () => unawaited(_pickPenWidth()),
-                    onSetEraser: (v) => setState(() => _eraser = v),
-                    onCheckSchedule: _onCheckSchedulePressed,
-                    onUndo: _undo,
-                    onClear: _clearAll,
-                    onSave: (_saving || _note == null) ? null : () => unawaited(_save()),
-                  ),
                 ],
               ),
       ),
@@ -636,195 +978,449 @@ class _ConsultNotesScreenState extends State<ConsultNotesScreen> {
 enum _DirtyAction { save, discard, cancel }
 enum _MoreAction { rename, delete }
 
-class _ToolBar extends StatelessWidget {
-  final Color penColor;
-  final bool eraser;
-  final double penWidth;
-  final bool canUndo;
-  final bool canClear;
-  final VoidCallback onPickColor;
-  final VoidCallback onPickWidth;
-  final ValueChanged<bool> onSetEraser;
-  final VoidCallback onCheckSchedule;
-  final VoidCallback onUndo;
-  final VoidCallback onClear;
-  final VoidCallback? onSave;
+class _TopOutlineActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
 
-  const _ToolBar({
-    required this.penColor,
-    required this.eraser,
-    required this.penWidth,
-    required this.canUndo,
-    required this.canClear,
-    required this.onPickColor,
-    required this.onPickWidth,
-    required this.onSetEraser,
-    required this.onCheckSchedule,
-    required this.onUndo,
-    required this.onClear,
-    required this.onSave,
+  const _TopOutlineActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
   });
 
-  Widget _bigPill({
-    required VoidCallback? onPressed,
-    required Widget child,
-    Color? bg,
-    Color? fg,
-  }) {
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
-      height: 52,
-      child: FilledButton.tonal(
-        style: FilledButton.styleFrom(
-          backgroundColor: bg ?? Colors.white10,
-          foregroundColor: fg ?? Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+      width: 180,
+      height: 44,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFF1B6B63),
+          side: const BorderSide(color: Color(0xFF1B6B63), width: 1.6),
+          backgroundColor: Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
-        onPressed: onPressed,
-        child: child,
+        icon: Icon(icon, size: 20),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
       ),
     );
+  }
+}
+
+class _BottomDrawFabBar extends StatelessWidget {
+  final bool eraser;
+  final Color penColor;
+  final double penWidth;
+  final double eraserWidth;
+  final VoidCallback onSelectPen;
+  final VoidCallback onSelectEraser;
+  final VoidCallback onPickColor;
+  final VoidCallback onPickWidth;
+
+  const _BottomDrawFabBar({
+    required this.eraser,
+    required this.penColor,
+    required this.penWidth,
+    required this.eraserWidth,
+    required this.onSelectPen,
+    required this.onSelectEraser,
+    required this.onPickColor,
+    required this.onPickWidth,
+  });
+
+  double _previewWidth(double w) {
+    // 표시용은 너무 두꺼우면 버튼을 꽉 채워보이므로 상한을 둔다.
+    return w.clamp(2.0, 8.0);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 78,
-      decoration: const BoxDecoration(
-        color: _bg,
-        border: Border(top: BorderSide(color: Color(0x22223131))),
+    final currentWidth = eraser ? eraserWidth : penWidth;
+    final previewW = _previewWidth(currentWidth);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(28),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+            child: Container(
+              height: 56,
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              decoration: BoxDecoration(
+                color: const Color(0xCC10171A),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: const Color(0x22223131)),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black45, blurRadius: 16, offset: Offset(0, 6)),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _BottomToolToggle(
+                    selected: !eraser,
+                    label: '펜',
+                    width: 78,
+                    bg: _accent,
+                    icon: Icons.edit_rounded,
+                    onTap: onSelectPen,
+                  ),
+                  const SizedBox(width: 8),
+                  _BottomToolToggle(
+                    selected: eraser,
+                    label: '지우개',
+                    width: 92,
+                    bg: const Color(0xFFB74C4C),
+                    icon: Icons.cleaning_services_rounded,
+                    onTap: onSelectEraser,
+                  ),
+                  const SizedBox(width: 10),
+                  // 색상: 아이콘 없이 현재 색상 인디케이터만
+                  _BottomToolIcon(
+                    tooltip: '색상',
+                    onTap: onPickColor,
+                    padding: const EdgeInsets.fromLTRB(6, 6, 3, 6), // 오른쪽 여백 축소
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: penColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24, width: 1.2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 5), // 색상-두께 간격 절반
+                  // 두께: 고정 폭으로 유지(펜/지우개 전환 시 전체 폭이 변하지 않게)
+                  _BottomToolIcon(
+                    tooltip: eraser ? '지우개 두께' : '펜 두께',
+                    onTap: onPickWidth,
+                    padding: const EdgeInsets.fromLTRB(6, 6, 4, 6),
+                    child: SizedBox(
+                      width: 58,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          width: 42,
+                          height: 22,
+                          child: CustomPaint(
+                            painter: _LinePreviewPainter(
+                              color: eraser ? Colors.white70 : penColor,
+                              width: previewW,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-      child: Row(children: [
-        // 펜 / 지우개 토글
-        Container(
-          height: 52,
+    );
+  }
+}
+
+class _BottomToolIcon extends StatelessWidget {
+  final String tooltip;
+  final VoidCallback onTap;
+  final Widget child;
+  final EdgeInsets padding;
+
+  const _BottomToolIcon({
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+    this.padding = const EdgeInsets.all(6),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        splashFactory: NoSplash.splashFactory,
+        highlightColor: Colors.white.withValues(alpha: 16),
+        child: Tooltip(
+          message: tooltip,
+          waitDuration: const Duration(milliseconds: 200),
+          child: Padding(
+            padding: padding,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomToolToggle extends StatelessWidget {
+  final bool selected;
+  final String label;
+  final double width;
+  final Color bg;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _BottomToolToggle({
+    required this.selected,
+    required this.label,
+    required this.width,
+    required this.bg,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : Colors.white70;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        splashFactory: NoSplash.splashFactory,
+        highlightColor: Colors.white.withValues(alpha: 16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          width: width,
+          height: 40,
           decoration: BoxDecoration(
-            color: Colors.white10,
-            borderRadius: BorderRadius.circular(14),
+            color: selected ? bg : Colors.white10,
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(color: Colors.white12),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _bigPill(
-                onPressed: () => onSetEraser(false),
-                bg: !eraser ? _accent : Colors.transparent,
-                fg: !eraser ? Colors.white : Colors.white70,
-                child: const Row(
-                  children: [
-                    Icon(Icons.edit, size: 18),
-                    SizedBox(width: 6),
-                    Text('펜', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ],
-                ),
-              ),
+              Icon(icon, size: 18, color: fg),
               const SizedBox(width: 6),
-              _bigPill(
-                onPressed: () => onSetEraser(true),
-                bg: eraser ? Colors.redAccent.withValues(alpha: 96) : Colors.transparent,
-                fg: eraser ? Colors.white : Colors.white70,
-                child: const Row(
-                  children: [
-                    Icon(Icons.auto_fix_off, size: 18),
-                    SizedBox(width: 6),
-                    Text('지우개', style: TextStyle(fontWeight: FontWeight.w900)),
-                  ],
-                ),
+              Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w900)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InquirySchedulePickResult {
+  final DateTime weekStart; // 월요일(해당 주 시작)
+  final Set<String> slotKeys; // '$dayIdx-$hour:$minute'
+  const _InquirySchedulePickResult({required this.weekStart, required this.slotKeys});
+}
+
+class _ConsultTimetablePickerDialog extends StatefulWidget {
+  final DateTime? initialWeekStart; // 월요일(date-only)
+  final Set<String>? initialSlotKeys; // '$dayIdx-$hour:$minute'
+  final String titleText;
+
+  const _ConsultTimetablePickerDialog({
+    this.titleText = '희망 수업시간 선택',
+    this.initialWeekStart,
+    this.initialSlotKeys,
+  });
+
+  @override
+  State<_ConsultTimetablePickerDialog> createState() => _ConsultTimetablePickerDialogState();
+}
+
+class _ConsultTimetablePickerDialogState extends State<_ConsultTimetablePickerDialog> {
+  bool _loading = true;
+  List<OperatingHours> _hours = <OperatingHours>[];
+  late DateTime _weekStart; // 월요일(해당 주 시작)
+  final ScrollController _scrollController = ScrollController();
+  final Set<String> _selected = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    final init = widget.initialWeekStart;
+    _weekStart = (init == null)
+        ? DateTime(now.year, now.month, now.day).subtract(Duration(days: now.weekday - 1))
+        : DateTime(init.year, init.month, init.day);
+    final initKeys = widget.initialSlotKeys;
+    if (initKeys != null && initKeys.isNotEmpty) {
+      _selected.addAll(initKeys);
+    }
+    unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final hours = await DataManager.instance.getOperatingHours();
+      if (!mounted) return;
+      setState(() {
+        _hours = hours;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _hours = <OperatingHours>[];
+        _loading = false;
+      });
+    }
+  }
+
+  void _toggleFromGrid(int dayIdx, DateTime startTime) {
+    final k = ConsultInquiryDemandService.slotKey(dayIdx, startTime.hour, startTime.minute);
+    setState(() {
+      if (_selected.contains(k)) {
+        _selected.remove(k);
+      } else {
+        _selected.add(k);
+      }
+    });
+  }
+
+  String _selectedLabel() {
+    if (_selected.isEmpty) return '선택 없음';
+    String dayKo(int dayIdx) {
+      const days = ['월', '화', '수', '목', '금', '토', '일'];
+      return (dayIdx >= 0 && dayIdx < days.length) ? days[dayIdx] : '$dayIdx';
+    }
+
+    String two(int n) => n.toString().padLeft(2, '0');
+    final items = _selected
+        .map((k) {
+          final parts = k.split('-');
+          if (parts.length != 2) return null;
+          final dayIdx = int.tryParse(parts[0]);
+          final hm = parts[1].split(':');
+          if (dayIdx == null || hm.length != 2) return null;
+          final hh = int.tryParse(hm[0]);
+          final mm = int.tryParse(hm[1]);
+          if (hh == null || mm == null) return null;
+          return '${dayKo(dayIdx)} ${two(hh)}:${two(mm)}';
+        })
+        .whereType<String>()
+        .toList();
+    items.sort();
+    return items.join(', ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasSelection = _selected.isNotEmpty;
+    return AlertDialog(
+      backgroundColor: _bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _border),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            widget.titleText,
+            style: const TextStyle(color: _text, fontSize: 20, fontWeight: FontWeight.w800),
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '선택: ${_selectedLabel()}',
+            style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w700, fontSize: 12),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 1032,
+        height: 874, // +30%
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: _accent))
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 시간탭과 동일한 헤더 사용
+                  TimetableHeader(
+                    selectedDate: _weekStart,
+                    onDateChanged: (newDate) {
+                      final monday = newDate.subtract(Duration(days: newDate.weekday - 1));
+                      setState(() {
+                        _weekStart = DateTime(monday.year, monday.month, monday.day);
+                      });
+                    },
+                    selectedDayIndex: null,
+                    onDaySelected: (_) {},
+                    isRegistrationMode: false,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: _hours.isEmpty
+                        ? const Center(
+                            child: Text(
+                              '운영시간 정보를 불러오지 못했습니다.',
+                              style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w700),
+                            ),
+                          )
+                        : ClassesView(
+                            scrollController: _scrollController,
+                            operatingHours: _hours,
+                            breakTimeColor: const Color(0xFF424242),
+                            registrationModeType: null,
+                            isRegistrationMode: false,
+                            selectedDayIndex: null,
+                            selectedCellDayIndex: null,
+                            selectedCellStartTime: null,
+                            selectedSlotKeys: _selected,
+                            weekStartDate: _weekStart,
+                            selectedStudentWithInfo: null,
+                            onTimeSelected: (dayIdx, startTime) => _toggleFromGrid(dayIdx, startTime),
+                          ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 6),
-            ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          style: TextButton.styleFrom(
+            foregroundColor: _templateInk,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           ),
+          child: const Text('닫기'),
         ),
-        const SizedBox(width: 10),
-        _bigPill(
-          onPressed: onPickColor,
-          child: Row(
-            children: [
-              const Icon(Icons.palette_outlined, size: 20),
-              const SizedBox(width: 8),
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: penColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Text('색상', style: TextStyle(fontWeight: FontWeight.w900)),
-            ],
+        FilledButton(
+          onPressed: hasSelection
+              ? () => Navigator.of(context).pop<_InquirySchedulePickResult>(
+                    _InquirySchedulePickResult(
+                      weekStart: _weekStart,
+                      slotKeys: Set<String>.unmodifiable(_selected),
+                    ),
+                  )
+              : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: _accent,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
+          child: const Text('선택', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
         ),
-        const SizedBox(width: 10),
-        _bigPill(
-          onPressed: onPickWidth,
-          child: Row(
-            children: [
-              const Icon(Icons.line_weight, size: 20),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 46,
-                height: 18,
-                child: CustomPaint(
-                  painter: _LinePreviewPainter(color: penColor, width: penWidth),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text('두께 ${penWidth.toStringAsFixed(1)}', style: const TextStyle(fontWeight: FontWeight.w900)),
-            ],
-          ),
-        ),
-        const Spacer(),
-        _bigPill(
-          onPressed: onCheckSchedule,
-          child: const Row(
-            children: [
-              Icon(Icons.event_note_outlined, size: 20),
-              SizedBox(width: 8),
-              Text('일정', style: TextStyle(fontWeight: FontWeight.w900)),
-            ],
-          ),
-        ),
-        const Spacer(),
-        _bigPill(
-          onPressed: canUndo ? onUndo : null,
-          child: const Row(
-            children: [
-              Icon(Icons.undo, size: 20),
-              SizedBox(width: 8),
-              Text('되돌리기', style: TextStyle(fontWeight: FontWeight.w900)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        _bigPill(
-          onPressed: canClear ? onClear : null,
-          child: const Row(
-            children: [
-              Icon(Icons.delete_sweep_outlined, size: 20),
-              SizedBox(width: 8),
-              Text('전체삭제', style: TextStyle(fontWeight: FontWeight.w900)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          height: 52,
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: _accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            onPressed: onSave,
-            icon: const Icon(Icons.save, size: 20),
-            label: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
-          ),
-        ),
-      ]),
+      ],
     );
   }
 }
@@ -852,6 +1448,7 @@ class _HandwritingPainter extends CustomPainter {
 
   void _paintTemplate(Canvas canvas, Size size) {
     const pad = 18.0;
+    const leftPad = pad * 2;
     // 요청사항:
     // - 템플릿의 "줄"은 모두 제거(구분선/밑줄/줄노트/박스 테두리 등).
     // - 1행: 연락처, 학교, 학년
@@ -862,7 +1459,8 @@ class _HandwritingPainter extends CustomPainter {
     const double labelFont = 36.0; // 12 * 3
     const double labelGapX = 18.0;
     // 세로 배치 비율: 1 : 1 : 2 (총 4등분)
-    const top = pad;
+    // 템플릿 상단 여백(조금 더 내려서 시작)
+    const top = pad + 12.0;
     final bottom = size.height - pad;
     final totalH = (bottom - top).clamp(1.0, 999999.0);
     final unit = totalH / 4.0;
@@ -871,7 +1469,7 @@ class _HandwritingPainter extends CustomPainter {
     final y3 = top + unit * 2.0;
 
     final w = size.width;
-    final avail = (w - pad * 2).clamp(1.0, 999999.0);
+    final avail = (w - leftPad - pad).clamp(1.0, 999999.0);
     final colW = ((avail - labelGapX * 2) / 3).clamp(1.0, 999999.0);
 
     TextPainter tp(String text) {
@@ -923,17 +1521,17 @@ class _HandwritingPainter extends CustomPainter {
       ellipsis: '…',
     )..layout(maxWidth: avail);
 
-    final x2 = pad + colW + labelGapX;
-    final x3 = pad + colW * 2 + labelGapX * 2;
-    tContact.paint(canvas, const Offset(pad, y1));
+    final x2 = leftPad + colW + labelGapX;
+    final x3 = leftPad + colW * 2 + labelGapX * 2;
+    tContact.paint(canvas, const Offset(leftPad, y1));
     tSchool.paint(canvas, Offset(x2, y1));
     tGrade.paint(canvas, Offset(x3, y1));
 
     // 2행: 진도
-    tProgress.paint(canvas, Offset(pad, y2));
+    tProgress.paint(canvas, Offset(leftPad, y2));
 
     // 3행: 상담 내용 (3번째 블록 시작점)
-    tContent.paint(canvas, Offset(pad, y3));
+    tContent.paint(canvas, Offset(leftPad, y3));
   }
 
   void _paintStroke(Canvas canvas, Size size, HandwritingStroke s) {

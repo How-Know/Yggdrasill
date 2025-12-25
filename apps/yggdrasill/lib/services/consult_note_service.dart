@@ -67,6 +67,9 @@ class ConsultNoteService {
             title: note.title,
             createdAt: note.createdAt,
             updatedAt: note.updatedAt,
+            desiredWeekday: note.desiredWeekday,
+            desiredHour: note.desiredHour,
+            desiredMinute: note.desiredMinute,
             strokeCount: note.strokes.length,
           ));
         } catch (_) {}
@@ -101,6 +104,9 @@ class ConsultNoteService {
       title: note.title,
       createdAt: note.createdAt,
       updatedAt: note.updatedAt,
+      desiredWeekday: note.desiredWeekday,
+      desiredHour: note.desiredHour,
+      desiredMinute: note.desiredMinute,
       strokeCount: note.strokes.length,
     );
     final next = [...metas];

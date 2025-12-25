@@ -228,6 +228,18 @@ class OverlayLabel {
   const OverlayLabel({required this.text, required this.type, this.isCompleted = false});
 }
 
+class InquiryOverlayLabel {
+  final String noteId;
+  final String text;
+  const InquiryOverlayLabel({required this.noteId, required this.text});
+}
+
+class TrialOverlayLabel {
+  final String noteId;
+  final String text;
+  const TrialOverlayLabel({required this.noteId, required this.text});
+}
+
 class TimetableCell extends StatelessWidget {
   final int dayIdx;
   final int blockIdx;
@@ -250,6 +262,10 @@ class TimetableCell extends StatelessWidget {
   final String? registrationModeType;
   final List<OperatingHours> operatingHours;
   final List<OverlayLabel> makeupOverlays; // 보강/추가수업 오버레이 항목들
+  final List<InquiryOverlayLabel> inquiryOverlays; // 문의(희망시간) 오버레이 항목들
+  final List<TrialOverlayLabel> trialOverlays; // 시범수업(일회성) 오버레이 항목들
+  /// 문의(희망수업) 오버레이 라벨 클릭 시 호출 (셀 선택/학생리스트와 분리)
+  final void Function(String noteId)? onInquiryOverlayTap;
 
   const TimetableCell({
     super.key,
@@ -274,6 +290,9 @@ class TimetableCell extends StatelessWidget {
     this.registrationModeType,
     required this.operatingHours,
     this.makeupOverlays = const [],
+    this.inquiryOverlays = const [],
+    this.trialOverlays = const [],
+    this.onInquiryOverlayTap,
   });
 
   // [추가] 운영시간/휴식시간 체크 함수 (ClassesViewState에서 복사)
@@ -643,43 +662,113 @@ class TimetableCell extends StatelessWidget {
                     )).toList(),
                   ),
                 ),
-              if (makeupOverlays.isNotEmpty)
+              if (makeupOverlays.isNotEmpty || trialOverlays.isNotEmpty || inquiryOverlays.isNotEmpty)
                 Positioned(
                   left: 21, // 좌측 카운트 바를 피해서 표시 (5px 더 확장)
                   top: 4,
                   right: 4,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: makeupOverlays.map((item) {
-                      final bool isReplace = item.type == OverrideType.replace;
-                      final Color bg = item.isCompleted
-                          ? const Color(0xFF212A31).withOpacity(0.6)
-                          : (isReplace
-                              ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
-                              : const Color(0xFF4CAF50).withOpacity(0.18)); // 초록 형광펜 (추가수업)
-                      return Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 2.0),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: bg,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Center(
-                          child: Text(
-                            item.text,
-                            style: TextStyle(
-                              color: item.isCompleted ? Colors.white70 : const Color(0xFFEAF2F2),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              height: 1.1,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                    children: [
+                      ...makeupOverlays.map((item) {
+                        final bool isReplace = item.type == OverrideType.replace;
+                        final Color bg = item.isCompleted
+                            ? const Color(0xFF212A31).withOpacity(0.6)
+                            : (isReplace
+                                ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
+                                : const Color(0xFF4CAF50).withOpacity(0.18)); // 초록 형광펜 (추가수업)
+                        return Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 2.0),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: bg,
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        ),
-                      );
-                    }).toList(),
+                          child: Center(
+                            child: Text(
+                              item.text,
+                              style: TextStyle(
+                                color: item.isCompleted ? Colors.white70 : const Color(0xFFEAF2F2),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                height: 1.1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        );
+                      }),
+                      ...trialOverlays.map((item) {
+                        // 추가수업(add)과 동일한 노출/색상으로 표시
+                        final Color bg = const Color(0xFF4CAF50).withValues(alpha: 0.18);
+                        final bool canTap = (onInquiryOverlayTap != null) && item.noteId.trim().isNotEmpty;
+                        final Widget chip = Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 2.0),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: bg,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Center(
+                            child: Text(
+                              item.text,
+                              style: const TextStyle(
+                                color: Color(0xFFEAF2F2),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                height: 1.1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        );
+                        if (!canTap) return chip;
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => onInquiryOverlayTap?.call(item.noteId),
+                          child: chip,
+                        );
+                      }),
+                      ...inquiryOverlays.map((item) {
+                        // 희망수업(문의): #F2B45B
+                        // 색이 잘 보이도록 투명도 낮춤(=더 불투명하게)
+                        final Color bg = const Color(0xFFF2B45B).withValues(alpha: 0.38);
+                        final bool canTap = (onInquiryOverlayTap != null) && item.noteId.trim().isNotEmpty;
+                        final Widget chip = Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 2.0),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: bg,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Center(
+                            child: Text(
+                              item.text,
+                              style: const TextStyle(
+                                color: Color(0xFFEAF2F2),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                height: 1.1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        );
+                        if (!canTap) return chip;
+                        // 라벨 탭은 셀 탭(학생리스트/선택)과 분리되어야 하므로 별도 제스처로 소비한다.
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => onInquiryOverlayTap?.call(item.noteId),
+                          child: chip,
+                        );
+                      }),
+                    ],
                   ),
                 ),
             ],
