@@ -49,13 +49,14 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       _students = DataManager.instance.getSelfStudyEligibleStudents();
       print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
     } else {
-      _students = _getRecommendedStudentsByActualClassCount();
-      // weekly_class_count 값 확인용 로그 (0으로 표시되는지 추적)
-      for (final s in _students) {
-        final weekly = DataManager.instance.getStudentWeeklyClassCount(s.student.id);
-        final actual = _getActualClassCount(s.student.id);
-        print('[DEBUG][StudentSearchDialog] 추천: ${s.student.name}, weekly=$weekly, actual=$actual');
-      }
+      // 추천 기준 통일: 수업시간블록이 없는 학생
+      _students = DataManager.instance.getLessonEligibleStudents();
+    }
+    // 제외 대상 반영
+    if (widget.excludedStudentIds.isNotEmpty) {
+      _students = _students
+          .where((s) => !widget.excludedStudentIds.contains(s.student.id))
+          .toList();
     }
     _filteredStudents = _students;
     setState(() {});
@@ -98,23 +99,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     return total;
   }
 
-  /// 추천 학생: weekly_class_count > 실제 수업 개수 인 학생들
-  List<StudentWithInfo> _getRecommendedStudentsByActualClassCount() {
-    final dm = DataManager.instance;
-    final list = dm.students.where((s) {
-      final actual = _getActualClassCount(s.student.id);
-      final weekly = dm.getStudentWeeklyClassCount(s.student.id);
-      return actual < weekly;
-    }).toList();
-    // remaining 내림차순 → 이름순
-    list.sort((a, b) {
-      final ra = dm.getStudentWeeklyClassCount(a.student.id) - _getActualClassCount(a.student.id);
-      final rb = dm.getStudentWeeklyClassCount(b.student.id) - _getActualClassCount(b.student.id);
-      if (rb != ra) return rb.compareTo(ra);
-      return a.student.name.compareTo(b.student.name);
-    });
-    return list;
-  }
+  // 기존 weekly 기반 추천 로직은 사용하지 않음(검색 결과 표시용 actualCount 계산은 유지)
 
   @override
   void didChangeDependencies() {

@@ -7,6 +7,9 @@ import '../../../services/data_manager.dart';
 
 class TimetableGroupedStudentPanel extends StatelessWidget {
   final List<StudentWithInfo> students;
+  /// 셀/요일 선택 시 라벨(보강/추가수업/희망수업/시범수업) 등을 학생카드 형태로 추가 표시하기 위한 슬롯
+  // hot reload 중에는 기존 인스턴스에 새 필드가 null로 남는 경우가 있어 nullable로 둔다.
+  final List<Widget>? extraCards;
   final String dayTimeLabel;
   final double? maxHeight;
   final bool isSelectMode;
@@ -30,6 +33,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   const TimetableGroupedStudentPanel({
     super.key,
     required this.students,
+    this.extraCards,
     required this.dayTimeLabel,
     this.maxHeight,
     this.isSelectMode = false,
@@ -58,6 +62,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final extras = extraCards ?? const <Widget>[];
     final stbRev = DataManager.instance.studentTimeBlocksRevision.value;
     final assignRev = DataManager.instance.classAssignmentsRevision.value;
 
@@ -103,7 +108,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
     final bool useExpanded = maxHeight != null;
 
-    if (students.isEmpty) {
+    if (students.isEmpty && extras.isEmpty) {
       Widget emptyBody() => Container(
             padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
             alignment: Alignment.center,
@@ -155,6 +160,21 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     }
 
     Widget body() {
+      final List<Widget> contentChildren = <Widget>[];
+      if (extras.isNotEmpty) {
+        contentChildren.add(Padding(
+          padding: const EdgeInsets.only(left: 14),
+          child: Wrap(
+            spacing: 6.4,
+            runSpacing: 6.4,
+            children: extras,
+          ),
+        ));
+        contentChildren.add(const SizedBox(height: 16));
+      }
+      if (students.isNotEmpty) {
+        contentChildren.add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
+      }
       return Container(
         padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
         decoration: BoxDecoration(
@@ -165,10 +185,16 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         child: useExpanded
             ? Scrollbar(
                 child: SingleChildScrollView(
-                  child: _buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: contentChildren,
+                  ),
                 ),
               )
-            : _buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor),
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: contentChildren,
+              ),
       );
     }
 

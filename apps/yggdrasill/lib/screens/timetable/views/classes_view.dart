@@ -407,9 +407,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final timeBlocks = _generateTimeBlocks();
     final blockTime = timeBlocks[blockIdx].startTime;
     print('[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
-    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
-      return;
-    }
     setState(() {
       dragStartIdx = blockIdx;
       dragEndIdx = blockIdx;
@@ -424,9 +421,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final blockTime = timeBlocks[blockIdx].startTime;
     print('[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
     if (!isDragging || dragDayIdx != dayIdx) return;
-    if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [blockTime])) {
-      return;
-    }
     if (dragEndIdx != blockIdx) {
       setState(() {
         dragEndIdx = blockIdx;
@@ -462,49 +456,25 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     print('[DEBUG][_onCellPanEnd] mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, startTimes.length=${startTimes.length}');
     print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
+      // 단일 슬롯은 "기준 수업시간(lessonDuration)"만큼 블록을 생성하는 클릭 로직과 동일해야 하므로
+      // 상위 콜백으로 위임한다(등록모드에서는 콜백 쪽에서 pending 누적).
+      if (startTimes.length <= 1) {
+        if (widget.onCellStudentsSelected != null) {
+          widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+        } else {
+          await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+        }
+        return;
+      }
+
+      // 드래그(복수 슬롯) 등록은 사용자가 직접 선택한 셀들만 생성
       range = await _pickBlockRange(context);
       if (range == null) {
         showAppSnackBar(context, '등록이 취소되었습니다.');
         return;
       }
-      final refDate = range.start;
       final studentId = widget.selectedStudentWithInfo!.student.id;
-      if (startTimes.length > 1) {
-        print('[DEBUG][_onCellPanEnd] 드래그 등록 분기 진입');
-        final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
-          studentIds: [studentId],
-          dayIndex: dayIdx,
-          startTimes: startTimes,
-          duration: const Duration(minutes: 30),
-          startDate: range.start,
-          endDate: range.end,
-        );
-        print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
-        await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
-        // 자동 종료(작은 경우): 현재 등록 set 수가 weekly_class_count에 도달하면 상위에서 ESC를 유도할 수 있도록 스낵바만 안내
-        if (widget.onSelectModeChanged != null && widget.selectedStudentWithInfo != null) {
-          final sid = widget.selectedStudentWithInfo!.student.id;
-          final registered = DataManager.instance.getStudentLessonSetCount(sid);
-          final total = DataManager.instance.getStudentWeeklyClassCount(sid);
-          if (registered >= total) {
-            showAppSnackBar(context, '목표 수업횟수에 도달했습니다. ESC로 종료하세요.', useRoot: true);
-          }
-        }
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 드래그 등록 setState 직전: isRegistrationMode=${widget.isRegistrationMode}');
-        setState(() {
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
-        });
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: isRegistrationMode=${widget.isRegistrationMode}');
-        // 자동 종료는 지원하지 않음. 상위(ESC)로 종료.
-        if (widget.onCellStudentsSelected != null) {
-          print('[DEBUG][_onCellPanEnd] 드래그 등록 콜백 호출');
-          widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
-        }
-        print('[DEBUG][_onCellPanEnd] 드래그 등록 return');
-        return;
-      }
-      print('[DEBUG][_onCellPanEnd] 클릭 등록 분기 진입');
-      // range는 상단에서 이미 구했으므로 null일 경우 반환 처리
+      print('[DEBUG][_onCellPanEnd] 드래그 등록 분기 진입');
       final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
         studentIds: [studentId],
         dayIndex: dayIdx,
@@ -513,56 +483,15 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         startDate: range.start,
         endDate: range.end,
       );
-      print('[DEBUG][_onCellPanEnd] 클릭 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
-      await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
-      if (widget.onSelectModeChanged != null && widget.selectedStudentWithInfo != null) {
-        final sid = widget.selectedStudentWithInfo!.student.id;
-        final registered = DataManager.instance.getStudentLessonSetCount(sid);
-        final total = DataManager.instance.getStudentWeeklyClassCount(sid);
-        if (registered >= total) {
-          showAppSnackBar(context, '목표 수업횟수에 도달했습니다. ESC로 종료하세요.', useRoot: true);
-        }
-      }
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 클릭 등록 setState 직전: isRegistrationMode=${widget.isRegistrationMode}');
-      setState(() {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
-      });
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: isRegistrationMode=${widget.isRegistrationMode}');
-      // 자동 종료는 지원하지 않음. 상위(ESC)로 종료.
+      print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
+      // 등록모드: 저장은 ESC/우클릭 종료 시 한 번에 upsert
+      await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
       if (widget.onCellStudentsSelected != null) {
-        print('[DEBUG][_onCellPanEnd] 클릭 등록 콜백 호출');
         widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
-      } else {
-        print('[DEBUG][_onCellPanEnd] 클릭 등록 내부 핸들러 호출');
-        await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!], refDate: refDate);
       }
-      print('[DEBUG][_onCellPanEnd] 클릭 등록 return');
       return;
     }
     print('[DEBUG][_onCellPanEnd] 방어로직 진입');
-    bool hasInvalidTime = false;
-    if (mode == 'student') {
-      range ??= await _pickBlockRange(context);
-      if (range == null) {
-        showAppSnackBar(context, '등록이 취소되었습니다.');
-        return;
-      }
-      for (final t in startTimes) {
-        if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [t])) {
-          print('[DEBUG][_onCellPanEnd] 방어로직: 운영시간/휴식시간 벗어남 t=$t');
-          hasInvalidTime = true;
-          break;
-        }
-      }
-    }
-    if (hasInvalidTime) {
-      if (mounted) {
-        print('[DEBUG][_onCellPanEnd] 방어로직: 스낵바 호출');
-        showAppSnackBar(context, '운영시간 외 또는 휴식시간에는 수업을 등록할 수 없습니다.', useRoot: true);
-        if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
-      }
-      return;
-    }
     print('[DEBUG][_onCellPanEnd] 중복 체크 진입');
     bool hasConflict = false;
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
@@ -600,7 +529,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         startDate: range!.start,
         endDate: range!.end,
       );
-      await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+      // 등록모드: 저장은 ESC/우클릭 종료 시 한 번에 upsert
+      await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
       print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] bulkAddStudentTimeBlocks 완료');
       setState(() {
         print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
@@ -658,6 +588,22 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             valueListenable: DataManager.instance.studentTimeBlocksNotifier,
             builder: (context, studentTimeBlocks, _) {
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+              final String? _pendingStudentId = (widget.isRegistrationMode &&
+                      widget.registrationModeType == 'student' &&
+                      widget.selectedStudentWithInfo != null)
+                  ? widget.selectedStudentWithInfo!.student.id
+                  : null;
+              final Set<String> _pendingSlotKeys = <String>{};
+              if (_pendingStudentId != null) {
+                for (final b in DataManager.instance.pendingStudentTimeBlocks) {
+                  if (b.studentId != _pendingStudentId) continue;
+                  _pendingSlotKeys.add(ConsultInquiryDemandService.slotKey(
+                    b.dayIndex,
+                    b.startHour,
+                    b.startMinute,
+                  ));
+                }
+              }
               final inquiryCountBySlot = ConsultInquiryDemandService.instance.countMapForWeekExpanded(
                 widget.weekStartDate,
                 lessonDurationMinutes: lessonDuration,
@@ -943,19 +889,21 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
 
                               final isExpanded = _expandedCellKey == cellKey;
                               final isDragHighlight = dragHighlightKeys.contains(cellKey);
+                              final String _slotKey = ConsultInquiryDemandService.slotKey(
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime.hour,
+                                timeBlocks[blockIdx].startTime.minute,
+                              );
                               final bool isSelectedCell =
                                   (widget.selectedCellDayIndex == dayIdx &&
                                       widget.selectedCellStartTime != null &&
                                       widget.selectedCellStartTime!.hour == timeBlocks[blockIdx].startTime.hour &&
                                       widget.selectedCellStartTime!.minute == timeBlocks[blockIdx].startTime.minute) ||
                                   (widget.selectedSlotKeys?.contains(
-                                        ConsultInquiryDemandService.slotKey(
-                                          dayIdx,
-                                          timeBlocks[blockIdx].startTime.hour,
-                                          timeBlocks[blockIdx].startTime.minute,
-                                        ),
+                                        _slotKey,
                                       ) ??
                                       false);
+                              final bool isPendingHighlight = _pendingSlotKeys.contains(_slotKey);
                               bool isBreakTime = false;
                               // 휴식시간 표시 로직 (dayIdx == dayOfWeek로 정확히 매핑)
                               final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
@@ -1096,16 +1044,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       // lessonDuration만큼 생성될 모든 블록의 startTime 리스트 생성
                                       final blockCount = (lessonDuration / 30).ceil();
                                       final allStartTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: 30 * i)));
-                                      // 셀 클릭 onTap 내부
-                                      if (widget.registrationModeType == 'student') {
-                                        if (allStartTimes.any((t) => !_areAllTimesWithinOperatingAndBreak(dayIdx, [t]))) {
-                                          if (mounted) {
-                                            showAppSnackBar(context, '운영시간 또는 휴식시간에는 수업을 등록할 수 없습니다.');
-                                            if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
-                                          }
-                                          return;
-                                        }
-                                      }
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
                                         print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');
                                         Future.microtask(() {
@@ -1160,7 +1098,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       isBreakTime: isBreakTime,
                                       isExpanded: isExpanded,
                                       isDragHighlight: isDragHighlight,
-                                      isSelected: isSelectedCell,
+                                      // 등록모드에서는 pending 하이라이트만 사용(셀 선택 하이라이트 제거)
+                                      isSelected: widget.isRegistrationMode ? false : isSelectedCell,
+                                      isPendingHighlight: isPendingHighlight,
                                       onTap: null,
                                       countColor: countColor,
                                       activeStudentCount: activeStudentCount,
@@ -1507,7 +1447,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       endDate: range.end,
     );
     // DataManager를 통해 일관된 UI 업데이트 처리
-    await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+    if (widget.isRegistrationMode && widget.registrationModeType == 'student') {
+      await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
+    } else {
+      await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
+    }
   }
 
 }

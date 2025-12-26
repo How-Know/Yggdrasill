@@ -251,6 +251,7 @@ class TimetableCell extends StatelessWidget {
   final bool isExpanded;
   final bool isDragHighlight;
   final bool isSelected;
+  final bool isPendingHighlight;
   final VoidCallback? onTap;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
@@ -279,6 +280,7 @@ class TimetableCell extends StatelessWidget {
     required this.isExpanded,
     required this.isDragHighlight,
     this.isSelected = false,
+    this.isPendingHighlight = false,
     this.onTap,
     this.onDragStart,
     this.onDragEnd,
@@ -431,28 +433,6 @@ class TimetableCell extends StatelessWidget {
               failedStudents.add(studentWithInfo);
             }
           }
-          bool hasInvalidTime = false;
-          for (final block in toAdd) {
-            final blockStart = DateTime(0, 1, 1, block.startHour, block.startMinute);
-            final blockEnd = blockStart.add(block.duration);
-            for (var t = blockStart; t.isBefore(blockEnd); t = t.add(const Duration(minutes: 30))) {
-              if (!_areAllTimesWithinOperatingAndBreak(dayIdx, [t])) {
-                hasInvalidTime = true;
-                break;
-              }
-            }
-            if (hasInvalidTime) break;
-          }
-          if (hasInvalidTime) {
-            Future.microtask(() {
-              try {
-                showAppSnackBar(context, '운영시간 외 또는 휴식시간에는 수업을 등록할 수 없습니다.', useRoot: true);
-              } catch (e, st) {
-                print('[DEBUG][showAppSnackBar 예외] $e\n$st');
-              }
-            });
-            return;
-          }
           if (toAdd.isEmpty) {
             showAppSnackBar(context, '이미 등록된 시간입니다.');
             return;
@@ -588,6 +568,9 @@ class TimetableCell extends StatelessWidget {
                         ? const Color(0xFF1976D2).withOpacity(0.18)
                         : showSelected
                             ? const Color(0xFF33A373).withOpacity(0.12)
+                            : isPendingHighlight
+                                // 등록모드 pending 하이라이트는 일반 셀 선택 하이라이트와 동일 색상/강도 사용
+                                ? const Color(0xFF33A373).withOpacity(0.12)
                             : Colors.transparent;
                 final Border border = Border(
                   left: BorderSide(

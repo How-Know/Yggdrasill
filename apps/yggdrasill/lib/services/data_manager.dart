@@ -2078,6 +2078,8 @@ class DataManager {
     _bumpStudentTimeBlocksRevision();
   }
 
+  List<StudentTimeBlock> get pendingStudentTimeBlocks => List.unmodifiable(_pendingTimeBlocks);
+
   Future<void> discardPendingTimeBlocks(String studentId, {Set<String>? setIds}) async {
     _pendingTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
     _studentTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
@@ -2739,10 +2741,41 @@ class DataManager {
     return setIds.length;
   }
 
-  /// 수업 등록 가능 학생 리스트 반환 (수업이 등록되지 않은 학생들)
-  List<StudentWithInfo> getLessonEligibleStudents() {
-    // 기존 함수는 더 이상 사용하지 않음. 주석 유지하되, 추천 로직을 사용하도록 변경
-    return getRecommendedStudentsForWeeklyClassCount();
+  bool _hasAnyOpenOrFutureLessonBlocks(String studentId, DateTime refDate) {
+    final date = DateTime(refDate.year, refDate.month, refDate.day);
+    return _studentTimeBlocks.any((b) {
+      if (b.studentId != studentId) return false;
+      final end = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
+      // 종료일이 오늘보다 이전이면(완전히 끝난 이력) 추천 기준에서는 "없음"으로 본다.
+      if (end != null && end.isBefore(date)) return false;
+      // end가 null이거나 오늘 이후면(현재/미래에 유효한 블록) 존재로 간주
+      return true;
+    });
+  }
+
+  /// 추천 학생(수업시간 등록 대상): "수업시간블록이 없는 학생"으로 통일
+  /// - 기준: 오늘 기준으로 end_date가 지나지 않은 블록이 0개 (미래 시작 블록도 제외)
+  /// - 정렬: 등록일(registration_date) 최신순 → 이름순
+  List<StudentWithInfo> getLessonEligibleStudents({DateTime? refDate}) {
+    final date = refDate != null
+        ? DateTime(refDate.year, refDate.month, refDate.day)
+        : _todayDateOnly();
+    final result = students
+        .where((s) => !_hasAnyOpenOrFutureLessonBlocks(s.student.id, date))
+        .toList();
+    result.sort((a, b) {
+      final pa = getStudentPaymentInfo(a.student.id);
+      final pb = getStudentPaymentInfo(b.student.id);
+      final da = pa?.registrationDate;
+      final db = pb?.registrationDate;
+      if (da != null && db != null) return db.compareTo(da);
+      if (da != null) return -1;
+      if (db != null) return 1;
+      return a.student.name.compareTo(b.student.name);
+    });
+    return result;
   }
 
   int getStudentWeeklyClassCount(String studentId) {

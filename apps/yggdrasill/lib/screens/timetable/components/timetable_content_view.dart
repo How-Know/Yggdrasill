@@ -14,6 +14,8 @@ import 'package:uuid/uuid.dart';
 import '../views/makeup_view.dart';
 import '../../../models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../../services/consult_inquiry_demand_service.dart';
+import '../../../services/consult_trial_lesson_service.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -128,6 +130,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
   bool isClassRegisterMode = false;
   // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
   late final VoidCallback _revListener;
+  VoidCallback? _inquirySlotsListener;
+  VoidCallback? _trialSlotsListener;
+
+  static const Color _kOverlayAddColor = Color(0xFF4CAF50); // 추가수업/시범수업
+  static const Color _kOverlayReplaceColor = Color(0xFF1976D2); // 보강
+  static const Color _kOverlayInquiryColor = Color(0xFFF2B45B); // 희망수업
 
   bool _isBlockAllowed(StudentTimeBlock b) {
     final cids = widget.filteredClassIds;
@@ -189,6 +197,24 @@ class TimetableContentViewState extends State<TimetableContentView> {
     DataManager.instance.studentTimeBlocksRevision.addListener(_revListener);
     DataManager.instance.classAssignmentsRevision.addListener(_revListener);
     DataManager.instance.classesRevision.addListener(_revListener);
+
+    // 문의(희망수업)/시범수업 슬롯 변경 시 셀 패널 캐시를 무효화하고 즉시 갱신
+    _inquirySlotsListener = () {
+      if (!mounted) return;
+      setState(() {
+        _cachedCellPanelKey = null;
+        _cachedCellPanelWidget = null;
+      });
+    };
+    _trialSlotsListener = () {
+      if (!mounted) return;
+      setState(() {
+        _cachedCellPanelKey = null;
+        _cachedCellPanelWidget = null;
+      });
+    };
+    ConsultInquiryDemandService.instance.slotsNotifier.addListener(_inquirySlotsListener!);
+    ConsultTrialLessonService.instance.slotsNotifier.addListener(_trialSlotsListener!);
     // 🧹 앱 시작 시 삭제된 수업의 sessionTypeId를 가진 블록들 정리
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _diagnoseOrphanedSessionTypeIds(); // 진단 먼저
@@ -211,10 +237,119 @@ class TimetableContentViewState extends State<TimetableContentView> {
     DataManager.instance.studentTimeBlocksRevision.removeListener(_revListener);
     DataManager.instance.classAssignmentsRevision.removeListener(_revListener);
     DataManager.instance.classesRevision.removeListener(_revListener);
+    final a = _inquirySlotsListener;
+    if (a != null) {
+      ConsultInquiryDemandService.instance.slotsNotifier.removeListener(a);
+    }
+    final b = _trialSlotsListener;
+    if (b != null) {
+      ConsultTrialLessonService.instance.slotsNotifier.removeListener(b);
+    }
     // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
     _removeDropdownMenu(false);
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  StudentWithInfo _pseudoStudent({
+    required String id,
+    required String name,
+    required String schoolLabel,
+  }) {
+    return StudentWithInfo(
+      student: Student(
+        id: id,
+        name: name,
+        school: schoolLabel,
+        grade: 0,
+        educationLevel: EducationLevel.elementary,
+      ),
+      basicInfo: StudentBasicInfo(studentId: id),
+    );
+  }
+
+  List<Widget> _buildOverlayCardsForCell({
+    required int dayIdx,
+    required DateTime cellDate,
+    required DateTime weekStart,
+  }) {
+    final out = <Widget>[];
+
+    // 1) 보강/추가수업(세션 오버라이드)
+    for (final ov in DataManager.instance.sessionOverrides) {
+      if (ov.reason != OverrideReason.makeup) continue;
+      if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final rep = ov.replacementClassDateTime;
+      if (rep == null) continue;
+      if (!(rep.year == cellDate.year &&
+          rep.month == cellDate.month &&
+          rep.day == cellDate.day &&
+          rep.hour == cellDate.hour &&
+          rep.minute == cellDate.minute)) {
+        continue;
+      }
+      final info = DataManager.instance.students.firstWhere(
+        (s) => s.student.id == ov.studentId,
+        orElse: () => StudentWithInfo(
+          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+          basicInfo: StudentBasicInfo(studentId: ''),
+        ),
+      );
+      if (info.student.id.isEmpty) continue;
+      final color = (ov.overrideType == OverrideType.add) ? _kOverlayAddColor : _kOverlayReplaceColor;
+      out.add(_buildSelectableStudentCard(
+        info,
+        key: ValueKey('ov:${ov.id}'),
+        selected: false,
+        isSelectMode: false,
+        indicatorColorOverride: color,
+      ));
+    }
+
+    // 2) 희망수업(문의)
+    try {
+      final slotKey = ConsultInquiryDemandService.slotKey(dayIdx, cellDate.hour, cellDate.minute);
+      final byKey = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
+      final slots = byKey[slotKey] ?? const <ConsultInquiryDemandSlot>[];
+      for (final s in slots) {
+        final pseudo = _pseudoStudent(
+          id: '__inquiry__:${s.sourceNoteId}',
+          name: s.title,
+          schoolLabel: '희망수업',
+        );
+        out.add(_buildSelectableStudentCard(
+          pseudo,
+          key: ValueKey('inquiry:${s.id}'),
+          selected: false,
+          isSelectMode: false,
+          indicatorColorOverride: _kOverlayInquiryColor,
+        ));
+      }
+    } catch (_) {}
+
+    // 3) 시범수업(일회성)
+    try {
+      final slotKey = ConsultTrialLessonService.slotKey(dayIdx, cellDate.hour, cellDate.minute);
+      final byKey = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
+      final slots = byKey[slotKey] ?? const <ConsultTrialLessonSlot>[];
+      for (final s in slots) {
+        final pseudo = _pseudoStudent(
+          id: '__trial__:${s.sourceNoteId}',
+          name: s.title,
+          schoolLabel: '시범수업',
+        );
+        out.add(_buildSelectableStudentCard(
+          pseudo,
+          key: ValueKey('trial:${s.id}'),
+          selected: false,
+          isSelectMode: false,
+          indicatorColorOverride: _kOverlayAddColor,
+        ));
+      }
+    } catch (_) {}
+
+    return out;
   }
 
   void _showDropdownMenu() {
@@ -359,6 +494,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final int dayIdx = widget.selectedCellDayIndex!; // 0=월
     final DateTime dayDate = widget.selectedDayDate!;
     final DateTime refDate = DateTime(dayDate.year, dayDate.month, dayDate.day);
+    final DateTime weekStartDate =
+        DateTime(dayDate.year, dayDate.month, dayDate.day).subtract(Duration(days: dayDate.weekday - DateTime.monday));
 
     return ValueListenableBuilder<int>(
       valueListenable: DataManager.instance.studentTimeBlocksRevision,
@@ -411,7 +548,100 @@ class TimetableContentViewState extends State<TimetableContentView> {
           }
         }
 
-        // 키 정렬: HH:mm 오름차순
+        // === 라벨(보강/추가수업/희망수업/시범수업) 카드 구성 ===
+        final Map<String, List<Widget>> overlayCardsByTime = {};
+        String hhmm(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+
+        // 보강/추가수업(세션 오버라이드): 선택한 날짜의 replacement 시간 기준
+        for (final ov in DataManager.instance.sessionOverrides) {
+          if (ov.reason != OverrideReason.makeup) continue;
+          if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+          if (ov.status == OverrideStatus.canceled) continue;
+          final rep = ov.replacementClassDateTime;
+          if (rep == null) continue;
+          if (!(rep.year == dayDate.year && rep.month == dayDate.month && rep.day == dayDate.day)) continue;
+          final info = DataManager.instance.students.firstWhere(
+            (s) => s.student.id == ov.studentId,
+            orElse: () => StudentWithInfo(
+              student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
+              basicInfo: StudentBasicInfo(studentId: ''),
+            ),
+          );
+          if (info.student.id.isEmpty) continue;
+          final key = hhmm(rep.hour, rep.minute);
+          final color = (ov.overrideType == OverrideType.add) ? _kOverlayAddColor : _kOverlayReplaceColor;
+          (overlayCardsByTime[key] ??= <Widget>[]).add(_buildSelectableStudentCard(
+            info,
+            key: ValueKey('ov-day:${ov.id}'),
+            selected: false,
+            isSelectMode: false,
+            indicatorColorOverride: color,
+          ));
+        }
+
+        // 희망수업(문의): 주차 기준으로 적용되는 슬롯들 중 해당 요일만
+        try {
+          final byKey = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStartDate);
+          for (final entry in byKey.entries) {
+            final k = entry.key; // '$dayIdx-$hour:$minute'
+            final parts = k.split('-');
+            if (parts.length != 2) continue;
+            final d = int.tryParse(parts[0]);
+            final hm = parts[1].split(':');
+            if (d == null || hm.length != 2) continue;
+            if (d != dayIdx) continue;
+            final h = int.tryParse(hm[0]) ?? 0;
+            final m = int.tryParse(hm[1]) ?? 0;
+            final timeKey = hhmm(h, m);
+            for (final s in entry.value) {
+              final pseudo = _pseudoStudent(
+                id: '__inquiry__:${s.sourceNoteId}',
+                name: s.title,
+                schoolLabel: '희망수업',
+              );
+              (overlayCardsByTime[timeKey] ??= <Widget>[]).add(_buildSelectableStudentCard(
+                pseudo,
+                key: ValueKey('inquiry-day:${s.id}'),
+                selected: false,
+                isSelectMode: false,
+                indicatorColorOverride: _kOverlayInquiryColor,
+              ));
+            }
+          }
+        } catch (_) {}
+
+        // 시범수업(일회성): 해당 주차에서만 표시되는 슬롯들 중 해당 요일만
+        try {
+          final byKey = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStartDate);
+          for (final entry in byKey.entries) {
+            final k = entry.key;
+            final parts = k.split('-');
+            if (parts.length != 2) continue;
+            final d = int.tryParse(parts[0]);
+            final hm = parts[1].split(':');
+            if (d == null || hm.length != 2) continue;
+            if (d != dayIdx) continue;
+            final h = int.tryParse(hm[0]) ?? 0;
+            final m = int.tryParse(hm[1]) ?? 0;
+            final timeKey = hhmm(h, m);
+            for (final s in entry.value) {
+              final pseudo = _pseudoStudent(
+                id: '__trial__:${s.sourceNoteId}',
+                name: s.title,
+                schoolLabel: '시범수업',
+              );
+              (overlayCardsByTime[timeKey] ??= <Widget>[]).add(_buildSelectableStudentCard(
+                pseudo,
+                key: ValueKey('trial-day:${s.id}'),
+                selected: false,
+                isSelectMode: false,
+                indicatorColorOverride: _kOverlayAddColor,
+              ));
+            }
+          }
+        } catch (_) {}
+
+        // 키 정렬: HH:mm 오름차순 (학생/라벨 모두 포함)
         int toMinutes(String hhmm) {
           final parts = hhmm.split(':');
           final h = int.tryParse(parts[0]) ?? 0;
@@ -419,9 +649,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
           return h * 60 + m;
         }
 
-        final sortedKeys = groups.keys.toList()
+        final sortedKeys = <String>{...groups.keys, ...overlayCardsByTime.keys}.toList()
           ..sort((a, b) => toMinutes(a).compareTo(toMinutes(b)));
-        final totalCount = groups.values.fold<int>(0, (p, c) => p + c.length);
+        final totalCount = groups.values.fold<int>(0, (p, c) => p + c.length) +
+            overlayCardsByTime.values.fold<int>(0, (p, c) => p + c.length);
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -493,13 +724,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 ...sortedKeys.map((k) {
-                                  final list = groups[k]!;
+                                  final list = groups[k] ?? <StudentWithInfo>[];
                                   list.sort((a, b) =>
                                       a.student.name.compareTo(b.student.name));
                                   final parts = k.split(':');
                                   final int hour = int.tryParse(parts[0]) ?? 0;
                                   final int minute =
                                       int.tryParse(parts[1]) ?? 0;
+                                  final overlayCards =
+                                      overlayCardsByTime[k] ?? const <Widget>[];
                                   return Padding(
                                     padding:
                                         const EdgeInsets.only(bottom: 16.0),
@@ -536,20 +769,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                           child: Wrap(
                                             spacing: 6.4,
                                             runSpacing: 6.4,
-                                            children: list
-                                                .map((info) =>
-                                                    _buildDraggableStudentCard(
-                                                      info,
-                                                      dayIndex: dayIdx,
-                                                      startTime: DateTime(
-                                                          dayDate.year,
-                                                          dayDate.month,
-                                                          dayDate.day,
-                                                          hour,
-                                                          minute),
-                                                      cellStudents: list,
-                                                    ))
-                                                .toList(),
+                                            children: [
+                                              ...list.map(
+                                                (info) => _buildDraggableStudentCard(
+                                                  info,
+                                                  dayIndex: dayIdx,
+                                                  startTime: DateTime(dayDate.year, dayDate.month, dayDate.day, hour, minute),
+                                                  cellStudents: list,
+                                                ),
+                                              ),
+                                              ...overlayCards,
+                                            ],
                                           ),
                                         ),
                                       ],
@@ -1814,6 +2044,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                               _buildCellPanelCached(
                                                             students:
                                                                 cellStudents,
+                                                            extraCards:
+                                                                _buildOverlayCardsForCell(
+                                                              dayIdx: selDayIdx,
+                                                              cellDate: cellDate,
+                                                              weekStart: weekStart,
+                                                            ),
                                                             dayIdx: widget
                                                                 .selectedCellDayIndex,
                                                             startTime: widget
@@ -2933,6 +3169,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   Widget _buildCellPanelCached({
     required List<StudentWithInfo> students,
+    required List<Widget> extraCards,
     required int? dayIdx,
     required DateTime? startTime,
     required double maxHeight,
@@ -2953,6 +3190,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final canDrag = dayIdx != null && startTime != null;
     final built = TimetableGroupedStudentPanel(
       students: students,
+      extraCards: extraCards,
       dayTimeLabel: _getDayTimeString(dayIdx, startTime),
       maxHeight: maxHeight,
       isSelectMode: isSelectMode,
