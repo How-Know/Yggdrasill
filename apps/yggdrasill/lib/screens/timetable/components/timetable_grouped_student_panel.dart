@@ -4,12 +4,20 @@ import '../../../models/education_level.dart';
 import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
 import '../../../services/data_manager.dart';
+import '../../../widgets/swipe_action_reveal.dart';
 
 class TimetableGroupedStudentPanel extends StatelessWidget {
   final List<StudentWithInfo> students;
   /// 셀/요일 선택 시 라벨(보강/추가수업/희망수업/시범수업) 등을 학생카드 형태로 추가 표시하기 위한 슬롯
   // hot reload 중에는 기존 인스턴스에 새 필드가 null로 남는 경우가 있어 nullable로 둔다.
   final List<Widget>? extraCards;
+  /// 스와이프(수정/삭제) 액션에서 "선택한 셀 날짜" 기준으로 동작하기 위한 refDate(=date-only).
+  /// null이면 스와이프 액션은 비활성화된다.
+  final DateTime? refDateForActions;
+  /// 학생 카드 스와이프 액션: 기간 수정
+  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
+  /// 학생 카드 스와이프 액션: 삭제(해당 refDate부터 제거)
+  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
   final String dayTimeLabel;
   final double? maxHeight;
   final bool isSelectMode;
@@ -34,6 +42,9 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     super.key,
     required this.students,
     this.extraCards,
+    this.refDateForActions,
+    this.onEditTimeBlock,
+    this.onDeleteTimeBlock,
     required this.dayTimeLabel,
     this.maxHeight,
     this.isSelectMode = false,
@@ -161,7 +172,22 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
     Widget body() {
       final List<Widget> contentChildren = <Widget>[];
+      if (students.isNotEmpty) {
+        contentChildren.add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
+      }
+      // ✅ 셀 선택 리스트에서는 보강/추가/희망/시범 카드가 하단에 정렬되어야 한다.
       if (extras.isNotEmpty) {
+        if (students.isNotEmpty) {
+          contentChildren.add(const SizedBox(height: 1));
+        }
+        // 원래 "학년 라벨"이 있던 자리 스타일로 '기타' 라벨을 추가해 시각적 간격을 맞춤
+        contentChildren.add(const Padding(
+          padding: EdgeInsets.only(bottom: 6, left: 14),
+          child: Text(
+            '기타',
+            style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w500),
+          ),
+        ));
         contentChildren.add(Padding(
           padding: const EdgeInsets.only(left: 14),
           child: Wrap(
@@ -170,10 +196,6 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
             children: extras,
           ),
         ));
-        contentChildren.add(const SizedBox(height: 16));
-      }
-      if (students.isNotEmpty) {
-        contentChildren.add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
       }
       return Container(
         padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
@@ -371,6 +393,12 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               onDragStart: onDragStart,
                               onDragEnd: onDragEnd,
                               blockOverride: blockOverrides?[s.student.id],
+                              enableSwipeActions: !isSelectMode &&
+                                  refDateForActions != null &&
+                                  (onEditTimeBlock != null || onDeleteTimeBlock != null),
+                              refDateForActions: refDateForActions,
+                              onEditTimeBlock: onEditTimeBlock,
+                              onDeleteTimeBlock: onDeleteTimeBlock,
                             );
                           }).toList(),
                         ),
@@ -425,9 +453,13 @@ class _PanelStudentCard extends StatelessWidget {
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeInOut,
       decoration: BoxDecoration(
-        color: selected ? const Color(0xFF33A373).withOpacity(0.18) : const Color(0xFF15171C),
+        color: selected
+            ? const Color(0xFF33A373).withOpacity(0.18)
+            : const Color(0xFF15171C),
         borderRadius: BorderRadius.circular(12),
-        border: selected ? Border.all(color: const Color(0xFF33A373), width: 1) : Border.all(color: Colors.transparent, width: 1),
+        border: selected
+            ? Border.all(color: const Color(0xFF33A373), width: 1)
+            : Border.all(color: Colors.transparent, width: 1),
       ),
       child: Material(
         color: Colors.transparent,
@@ -505,6 +537,10 @@ class _DraggablePanelCard extends StatelessWidget {
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
   final StudentTimeBlock? blockOverride;
+  final bool enableSwipeActions;
+  final DateTime? refDateForActions;
+  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
+  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
 
   const _DraggablePanelCard({
     required this.card,
@@ -517,6 +553,10 @@ class _DraggablePanelCard extends StatelessWidget {
     this.onDragStart,
     this.onDragEnd,
     this.blockOverride,
+    this.enableSwipeActions = false,
+    this.refDateForActions,
+    this.onEditTimeBlock,
+    this.onDeleteTimeBlock,
   });
 
   String? _findSetId(StudentWithInfo s) {
@@ -552,10 +592,11 @@ class _DraggablePanelCard extends StatelessWidget {
       'isSelfStudy': false,
     };
 
-    return Draggable<Map<String, dynamic>>(
+    final core = LongPressDraggable<Map<String, dynamic>>(
       data: dragData,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       maxSimultaneousDrags: 1,
+      hapticFeedbackOnStart: true,
       onDragStarted: onDragStart,
       onDragEnd: (details) {
         onDragEnd?.call();
@@ -570,6 +611,67 @@ class _DraggablePanelCard extends StatelessWidget {
         child: card,
       ),
       child: card,
+    );
+
+    if (!enableSwipeActions) return core;
+    final ref = refDateForActions;
+    final target = blockOverride;
+    if (ref == null || target == null) return core;
+    if (onEditTimeBlock == null && onDeleteTimeBlock == null) return core;
+
+    const double paneW = 140;
+    final radius = BorderRadius.circular(12);
+    final actionPane = Padding(
+      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: const Color(0xFF223131),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: onEditTimeBlock == null ? null : () async => onEditTimeBlock!(context, student, target, ref),
+                borderRadius: BorderRadius.circular(10),
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: Colors.white.withOpacity(0.06),
+                hoverColor: Colors.white.withOpacity(0.03),
+                child: const SizedBox.expand(
+                  child: Center(
+                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Material(
+              color: const Color(0xFFB74C4C),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: onDeleteTimeBlock == null ? null : () async => onDeleteTimeBlock!(context, student, target, ref),
+                borderRadius: BorderRadius.circular(10),
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: Colors.white.withOpacity(0.08),
+                hoverColor: Colors.white.withOpacity(0.04),
+                child: const SizedBox.expand(
+                  child: Center(
+                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return SwipeActionReveal(
+      enabled: true,
+      actionPaneWidth: paneW,
+      borderRadius: radius,
+      actionPane: actionPane,
+      child: core,
     );
   }
 }

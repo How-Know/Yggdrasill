@@ -2195,6 +2195,62 @@ class DataManager {
     }
   }
 
+  /// 특정 time block의 유효기간(start_date/end_date)을 직접 수정한다.
+  ///
+  /// - `startDate`/`endDate`는 date-only로 정규화된다.
+  /// - `endDate == null`이면 무기한(열림)으로 설정된다.
+  /// - setId가 있으면 planned attendance 재생성(다음 14일)을 수행한다.
+  Future<void> updateStudentTimeBlockDateRange(
+    String blockId, {
+    required DateTime startDate,
+    DateTime? endDate,
+    bool regeneratePlanned = true,
+  }) async {
+    final sd = DateTime(startDate.year, startDate.month, startDate.day);
+    final ed = endDate == null ? null : DateTime(endDate.year, endDate.month, endDate.day);
+    if (ed != null && ed.isBefore(sd)) {
+      throw Exception('종료일은 시작일보다 빠를 수 없습니다.');
+    }
+
+    final prevIndex = _studentTimeBlocks.indexWhere((b) => b.id == blockId);
+    if (prevIndex == -1) {
+      throw Exception('수업블록을 찾지 못했습니다. (id=$blockId)');
+    }
+    final prev = _studentTimeBlocks[prevIndex];
+    final next = prev.copyWith(startDate: sd, endDate: ed);
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('student_time_blocks').update({
+          'start_date': sd.toIso8601String().split('T').first,
+          'end_date': ed?.toIso8601String().split('T').first,
+        }).eq('id', blockId);
+      } catch (e, st) {
+        print('[SUPA][stb update range] $e\n$st');
+        rethrow;
+      }
+    } else {
+      await AcademyDbService.instance.updateStudentTimeBlock(blockId, next);
+    }
+
+    _studentTimeBlocks[prevIndex] = next;
+    _publishStudentTimeBlocks(); // 오늘 기준 active notifier 갱신(검색/리스트 등에 사용)
+    _bumpStudentTimeBlocksRevision();
+
+    if (regeneratePlanned && next.setId != null && next.setId!.isNotEmpty) {
+      try {
+        await _regeneratePlannedAttendanceForSet(
+          studentId: next.studentId,
+          setId: next.setId!,
+          days: 14,
+        );
+      } catch (e, st) {
+        // planned regen 실패는 UI 편집 자체를 막지 않음
+        print('[WARN][stb update range planned regen] $e\n$st');
+      }
+    }
+  }
+
   // 특정 학생의 set_id 목록에 해당하는 모든 수업 블록 삭제
   Future<void> removeStudentTimeBlocksBySetIds(String studentId, Set<String> setIds) async {
     if (setIds.isEmpty) return;
