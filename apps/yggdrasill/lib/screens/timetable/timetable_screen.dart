@@ -91,7 +91,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
   String _registrationButtonText = '등록';
   GroupInfo? _selectedGroup;
   GroupSchedule? _currentGroupSchedule;
-  bool _showOperatingHoursAlert = false;
   // SplitButton 관련 상태 추가
   String _splitButtonSelected = '학생';
   bool _isDropdownOpen = false;
@@ -611,53 +610,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
             print('[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
           }
         }
-      }
-    }
-    // 운영시간 외 학생 시간 삭제 및 안내
-    final allHours = hours;
-    final toRemove = <StudentTimeBlock>[];
-    for (final block in DataManager.instance.studentTimeBlocks) {
-      final op = allHours.firstWhereOrNull((o) => o.dayOfWeek == block.dayIndex);
-      if (op == null) {
-        toRemove.add(block);
-        continue;
-      }
-      final blockMinutes = block.startHour * 60 + block.startMinute;
-      final startMinutes = op.startHour * 60 + op.startMinute;
-      final endMinutes = op.endHour * 60 + op.endMinute;
-      if (blockMinutes < startMinutes || blockMinutes > endMinutes) {
-        toRemove.add(block);
-      }
-    }
-    if (toRemove.isNotEmpty) {
-      for (final block in toRemove) {
-        await DataManager.instance.removeStudentTimeBlock(block.id);
-      }
-      if (!_showOperatingHoursAlert) {
-        _showOperatingHoursAlert = true;
-        final studentNames = toRemove.map((b) {
-          final s = DataManager.instance.students.firstWhere((s) => s.student.id == b.studentId, orElse: () => StudentWithInfo(
-            student: Student(id: '', name: '알 수 없음', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-            basicInfo: StudentBasicInfo(studentId: ''),
-          ));
-          return s.student.name;
-        }).toSet().join(', ');
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          await showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              backgroundColor: Colors.black,
-              title: const Text('운영시간 외 학생 시간 삭제', style: TextStyle(color: Colors.white)),
-              content: Text('운영시간이 변경되어 운영시간 외 학생 시간표가 삭제되었습니다.\n삭제된 학생: $studentNames', style: const TextStyle(color: Colors.white70)),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('확인', style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          );
-        });
       }
     }
   }

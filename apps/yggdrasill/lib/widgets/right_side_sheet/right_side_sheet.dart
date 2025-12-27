@@ -1430,36 +1430,63 @@ class _MemoExplorer extends StatelessWidget {
                           padding: EdgeInsets.fromLTRB(2, 6, 2, 8),
                           child: Text('등록 문의', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
                         ));
-                        for (final n in notes) {
-                          final dt = n.updatedAt.toLocal();
-                          final hh = dt.hour.toString().padLeft(2, '0');
-                          final mm = dt.minute.toString().padLeft(2, '0');
-                          final subtitle = '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
-                          items.add(_InquiryNoteCard(
-                            key: ValueKey('note:${n.id}'),
-                            title: n.title,
-                            subtitle: subtitle,
-                            onTap: () {
-                              ConsultNoteController.instance.requestOpen(n.id);
-                              // 문의 노트 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
-                              if (!ConsultNoteController.instance.isScreenOpen) {
-                                onOpenConsult();
-                              } else {
-                                onCloseSheet();
-                              }
-                            },
-                            onDelete: () {
-                              unawaited(() async {
-                                await ConsultNoteService.instance.delete(n.id);
-                                await ConsultInquiryDemandService.instance.removeForNote(n.id);
-                                await ConsultTrialLessonService.instance.removeForNote(n.id);
-                                // 동일 탭으로 setState 유도(노트 목록 갱신)
-                                onFilterChanged(selectedFilterKey);
-                              }());
-                            },
-                          ));
-                          items.add(const SizedBox(height: 10));
-                        }
+                        items.add(ValueListenableBuilder<List<ConsultTrialLessonSlot>>(
+                          valueListenable: ConsultTrialLessonService.instance.slotsNotifier,
+                          builder: (context, trialSlots, _) {
+                            final trialNoteIds = trialSlots
+                                .map((s) => s.sourceNoteId)
+                                .where((id) => id.isNotEmpty)
+                                .toSet();
+                            final arrivedNoteIds = trialSlots
+                                .where((s) => s.arrivalTime != null)
+                                .map((s) => s.sourceNoteId)
+                                .where((id) => id.isNotEmpty)
+                                .toSet();
+
+                            final children = <Widget>[];
+                            for (final n in notes) {
+                              final dt = n.updatedAt.toLocal();
+                              final hh = dt.hour.toString().padLeft(2, '0');
+                              final mm = dt.minute.toString().padLeft(2, '0');
+                              final subtitle = '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
+
+                              final bool hasDesired = n.desiredWeekday != null && n.desiredHour != null && n.desiredMinute != null;
+                              final bool hasTrial = trialNoteIds.contains(n.id);
+                              final bool hasArrived = arrivedNoteIds.contains(n.id);
+                              final int stage = (hasArrived && hasDesired) ? 3 : (hasTrial ? 2 : 1);
+
+                              children.add(_InquiryNoteCard(
+                                key: ValueKey('note:${n.id}'),
+                                title: n.title,
+                                subtitle: subtitle,
+                                stage: stage,
+                                onTap: () {
+                                  ConsultNoteController.instance.requestOpen(n.id);
+                                  // 문의 노트 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
+                                  if (!ConsultNoteController.instance.isScreenOpen) {
+                                    onOpenConsult();
+                                  } else {
+                                    onCloseSheet();
+                                  }
+                                },
+                                onDelete: () {
+                                  unawaited(() async {
+                                    await ConsultNoteService.instance.delete(n.id);
+                                    await ConsultInquiryDemandService.instance.removeForNote(n.id);
+                                    await ConsultTrialLessonService.instance.removeForNote(n.id);
+                                    // 동일 탭으로 setState 유도(노트 목록 갱신)
+                                    onFilterChanged(selectedFilterKey);
+                                  }());
+                                },
+                              ));
+                              children.add(const SizedBox(height: 10));
+                            }
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: children,
+                            );
+                          },
+                        ));
                       }
 
                       if (list.isNotEmpty) {
@@ -1548,6 +1575,11 @@ class _MemoCard extends StatefulWidget {
 class _InquiryNoteCard extends StatefulWidget {
   final String title;
   final String subtitle;
+  /// 문의 노트 진행 단계:
+  /// 1 = 상담/문의 생성
+  /// 2 = 시범수업 완료
+  /// 3 = 시범수업 + 희망수업 기록(등록 직전)
+  final int stage;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
@@ -1555,6 +1587,7 @@ class _InquiryNoteCard extends StatefulWidget {
     super.key,
     required this.title,
     required this.subtitle,
+    this.stage = 1,
     required this.onTap,
     required this.onDelete,
   });
@@ -1621,6 +1654,28 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(14);
 
+    Color stageColor(int stage) {
+      switch (stage) {
+        case 3:
+          return _rsAccent;
+        case 2:
+          return const Color(0xFFF2B45B); // 예정(노랑)
+        default:
+          return _rsTextSub;
+      }
+    }
+
+    String stageLabel(int stage) {
+      switch (stage) {
+        case 3:
+          return '3대기';
+        case 2:
+          return '2예정';
+        default:
+          return '1문의';
+      }
+    }
+
     Widget frontCard() {
       return ConstrainedBox(
         constraints: const BoxConstraints(minHeight: _minCardHeight),
@@ -1636,8 +1691,6 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  const Icon(Icons.note_outlined, color: Colors.white70, size: 18),
-                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1657,6 +1710,23 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
                           style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: stageColor(widget.stage).withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: stageColor(widget.stage).withOpacity(0.28)),
+                    ),
+                    child: Text(
+                      stageLabel(widget.stage),
+                      style: TextStyle(
+                        color: stageColor(widget.stage),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
                 ],

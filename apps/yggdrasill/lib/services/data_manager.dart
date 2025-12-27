@@ -13,6 +13,7 @@ import '../models/self_study_time_block.dart';
 import '../models/class_info.dart';
 import '../models/payment_record.dart';
 import '../models/attendance_record.dart';
+import '../models/cycle_attendance_summary.dart';
 import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import 'package:flutter/foundation.dart';
@@ -246,29 +247,78 @@ class DataManager {
   Future<void> regeneratePlannedWithSnapshot({
     required String studentId,
     required Set<String> setIds,
+    DateTime? effectiveStart,
     int days = 14,
     double? billedAmount,
     double? unitPrice,
     String? note,
   }) async {
-    final snapshotId = await createLessonSnapshotForStudent(
-      studentId: studentId,
-      effectiveStart: _todayDateOnly(),
-      effectiveEnd: null,
-      source: 'plan-regenerate',
-      billedAmount: billedAmount,
-      unitPrice: unitPrice,
-      note: note,
-    );
-    final activeBlocks = _activeBlocks(_todayDateOnly())
+    final today = _todayDateOnly();
+    final baseStart = effectiveStart != null
+        ? DateTime(effectiveStart.year, effectiveStart.month, effectiveStart.day)
+        : today;
+    // ✅ planned 생성/재생성에는 "미래 세그먼트"까지 포함된 전체 블록이 필요하다.
+    // (오늘 활성 블록만 넘기면 미래 시작 예약/세그먼트가 planned에 반영되지 않음)
+    final blocksForSets = _studentTimeBlocks
         .where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId))
         .toList();
+
+    // 스냅샷은 기본적으로 effectiveStart(없으면 today) 기준으로 찍되,
+    // 해당 날짜에 활성 블록이 0개(예: 시작일이 더 미래)면 today → 가장 이른 start_date 순으로 폴백한다.
+    String snapshotId;
+    try {
+      snapshotId = await createLessonSnapshotForStudent(
+        studentId: studentId,
+        effectiveStart: baseStart,
+        effectiveEnd: null,
+        source: 'plan-regenerate',
+        billedAmount: billedAmount,
+        unitPrice: unitPrice,
+        note: note,
+      );
+    } catch (e) {
+      try {
+        snapshotId = await createLessonSnapshotForStudent(
+          studentId: studentId,
+          effectiveStart: today,
+          effectiveEnd: null,
+          source: 'plan-regenerate',
+          billedAmount: billedAmount,
+          unitPrice: unitPrice,
+          note: note,
+        );
+      } catch (_) {
+        if (blocksForSets.isEmpty) rethrow;
+        DateTime minStart = DateTime(2999, 1, 1);
+        for (final b in blocksForSets) {
+          final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+          if (sd.isBefore(minStart)) minStart = sd;
+        }
+        snapshotId = await createLessonSnapshotForStudent(
+          studentId: studentId,
+          effectiveStart: minStart,
+          effectiveEnd: null,
+          source: 'plan-regenerate',
+          billedAmount: billedAmount,
+          unitPrice: unitPrice,
+          note: note,
+        );
+      }
+    }
+
+    // planned cancel anchor:
+    // - effectiveStart가 미래면 해당 날짜부터만 재생성
+    // - 오늘/과거면 "지금" 이후만(오늘 과거 시간대 planned 기록 보존)
+    final nowUtc = DateTime.now().toUtc();
+    final startUtc = baseStart.toUtc();
+    final anchorUtc = startUtc.isAfter(nowUtc) ? startUtc : nowUtc;
     await AttendanceService.instance.replanRemainingForStudentSets(
       studentId: studentId,
       setIds: setIds,
       days: days,
+      anchor: anchorUtc,
       snapshotId: snapshotId,
-      blocksOverride: activeBlocks,
+      blocksOverride: blocksForSets,
     );
   }
 
@@ -1717,7 +1767,11 @@ class DataManager {
           await _recalculateWeeklyOrderForStudent(normalized.studentId);
         }
         if (normalized.setId != null) {
-          _schedulePlannedRegen(normalized.studentId, normalized.setId!);
+          _schedulePlannedRegen(
+            normalized.studentId,
+            normalized.setId!,
+            effectiveStart: normalized.startDate,
+          );
         }
         return;
       } catch (e, st) {
@@ -1732,7 +1786,11 @@ class DataManager {
       await _recalculateWeeklyOrderForStudent(normalized.studentId);
     }
     if (normalized.setId != null) {
-      _schedulePlannedRegen(normalized.studentId, normalized.setId!);
+      _schedulePlannedRegen(
+        normalized.studentId,
+        normalized.setId!,
+        effectiveStart: normalized.startDate,
+      );
     }
   }
 
@@ -1775,6 +1833,7 @@ class DataManager {
   Timer? _uiUpdateTimer;
   Timer? _plannedRegenTimer;
   final Map<String, Set<String>> _pendingRegenSetIdsByStudent = {};
+  final Map<String, DateTime> _pendingRegenEffectiveStartByStudent = {};
   final List<StudentTimeBlock> _pendingTimeBlocks = [];
   RealtimeChannel? _rtStudentTimeBlocks;
   StreamSubscription<AuthState>? _authSub;
@@ -2038,7 +2097,11 @@ class DataManager {
     }
     // 예정 출석 재생성 (setId가 있는 블록) - 학생별로 setId를 모아서 한 번씩만 수행
     for (final b in normalizedBlocks.where((e) => e.setId != null)) {
-      _schedulePlannedRegen(b.studentId, b.setId!);
+      _schedulePlannedRegen(
+        b.studentId,
+        b.setId!,
+        effectiveStart: b.startDate,
+      );
     }
   }
 
@@ -3399,6 +3462,16 @@ DateTime? _lastClassesOrderSaveStart;
       AttendanceService.instance.getAttendanceRecordsForStudent(studentId);
   AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) =>
       AttendanceService.instance.getAttendanceRecord(studentId, classDateTime);
+  Future<void> ensurePlannedAttendanceForNextDays({int days = 14}) =>
+      AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
+  CycleAttendanceSummary? getCycleAttendanceSummary({
+    required String studentId,
+    required int cycle,
+  }) =>
+      AttendanceService.instance.getCycleAttendanceSummary(
+        studentId: studentId,
+        cycle: cycle,
+      );
   Future<void> _generatePlannedAttendanceForNextDays({int days = 14}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
   Future<void> _regeneratePlannedAttendanceForSet({
@@ -3431,8 +3504,20 @@ DateTime? _lastClassesOrderSaveStart;
         studentId: studentId,
         days: days,
       );
-  void _schedulePlannedRegen(String studentId, String setId, {bool immediate = false}) {
+  void _schedulePlannedRegen(
+    String studentId,
+    String setId, {
+    DateTime? effectiveStart,
+    bool immediate = false,
+  }) {
     _pendingRegenSetIdsByStudent.putIfAbsent(studentId, () => <String>{}).add(setId);
+    if (effectiveStart != null) {
+      final d = DateTime(effectiveStart.year, effectiveStart.month, effectiveStart.day);
+      final prev = _pendingRegenEffectiveStartByStudent[studentId];
+      if (prev == null || d.isBefore(prev)) {
+        _pendingRegenEffectiveStartByStudent[studentId] = d;
+      }
+    }
     if (immediate) {
       _flushPlannedRegen();
       return;
@@ -3445,12 +3530,15 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> _flushPlannedRegen() async {
     final pending = Map<String, Set<String>>.from(_pendingRegenSetIdsByStudent);
     _pendingRegenSetIdsByStudent.clear();
+    final pendingStart = Map<String, DateTime>.from(_pendingRegenEffectiveStartByStudent);
+    _pendingRegenEffectiveStartByStudent.clear();
     _plannedRegenTimer?.cancel();
     _plannedRegenTimer = null;
     for (final entry in pending.entries) {
       await regeneratePlannedWithSnapshot(
         studentId: entry.key,
         setIds: entry.value,
+        effectiveStart: pendingStart[entry.key],
         days: 14,
       );
     }

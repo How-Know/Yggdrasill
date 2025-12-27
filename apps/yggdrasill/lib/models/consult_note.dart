@@ -96,6 +96,68 @@ class ConsultDesiredSlot {
   String get slotKey => '$dayIndex-$hour:$minute';
 }
 
+/// 타자로 입력한 텍스트 박스(0~1 정규화 좌표/크기)
+class ConsultTextBox {
+  final String id;
+  final double nx; // left 0..1
+  final double ny; // top 0..1
+  final double nw; // width 0..1
+  final double nh; // height 0..1
+  final String text;
+  final int colorArgb;
+
+  const ConsultTextBox({
+    required this.id,
+    required this.nx,
+    required this.ny,
+    required this.nw,
+    required this.nh,
+    required this.text,
+    required this.colorArgb,
+  });
+
+  ConsultTextBox copyWith({
+    double? nx,
+    double? ny,
+    double? nw,
+    double? nh,
+    String? text,
+    int? colorArgb,
+  }) {
+    return ConsultTextBox(
+      id: id,
+      nx: nx ?? this.nx,
+      ny: ny ?? this.ny,
+      nw: nw ?? this.nw,
+      nh: nh ?? this.nh,
+      text: text ?? this.text,
+      colorArgb: colorArgb ?? this.colorArgb,
+    );
+  }
+
+  factory ConsultTextBox.fromJson(Map<String, dynamic> j) {
+    return ConsultTextBox(
+      id: (j['id'] as String?) ?? '',
+      nx: (j['x'] as num?)?.toDouble() ?? 0,
+      ny: (j['y'] as num?)?.toDouble() ?? 0,
+      nw: (j['w'] as num?)?.toDouble() ?? 0,
+      nh: (j['h'] as num?)?.toDouble() ?? 0,
+      text: (j['t'] as String?) ?? '',
+      colorArgb: (j['c'] as num?)?.toInt() ?? const Color(0xFFEAF2F2).toARGB32(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'x': nx,
+        'y': ny,
+        'w': nw,
+        'h': nh,
+        't': text,
+        'c': colorArgb,
+      };
+}
+
 class ConsultNote {
   final int version;
   final String id;
@@ -111,6 +173,8 @@ class ConsultNote {
   /// "해당 주차 이후에 모두 반영"을 위한 시작 주(월요일, date-only)
   final DateTime? desiredStartWeek;
   final List<HandwritingStroke> strokes;
+  /// 텍스트 박스(타자 입력)
+  final List<ConsultTextBox> textBoxes;
 
   const ConsultNote({
     this.version = 1,
@@ -124,6 +188,7 @@ class ConsultNote {
     this.desiredSlots = const <ConsultDesiredSlot>[],
     this.desiredStartWeek,
     required this.strokes,
+    this.textBoxes = const <ConsultTextBox>[],
   });
 
   ConsultNote copyWith({
@@ -135,6 +200,7 @@ class ConsultNote {
     List<ConsultDesiredSlot>? desiredSlots,
     DateTime? desiredStartWeek,
     List<HandwritingStroke>? strokes,
+    List<ConsultTextBox>? textBoxes,
   }) {
     return ConsultNote(
       version: version,
@@ -148,6 +214,7 @@ class ConsultNote {
       desiredSlots: desiredSlots ?? this.desiredSlots,
       desiredStartWeek: desiredStartWeek ?? this.desiredStartWeek,
       strokes: strokes ?? this.strokes,
+      textBoxes: textBoxes ?? this.textBoxes,
     );
   }
 
@@ -184,6 +251,14 @@ class ConsultNote {
         desiredStartWeek = DateTime(desiredStartWeek.year, desiredStartWeek.month, desiredStartWeek.day);
       }
     }
+
+    List<ConsultTextBox> textBoxes = const <ConsultTextBox>[];
+    try {
+      final raw = (j['tb'] as List<dynamic>?)?.cast<Map<String, dynamic>>();
+      if (raw != null) {
+        textBoxes = raw.map(ConsultTextBox.fromJson).toList();
+      }
+    } catch (_) {}
     return ConsultNote(
       version: (j['version'] as num?)?.toInt() ?? 1,
       id: j['id'] as String,
@@ -196,6 +271,7 @@ class ConsultNote {
       desiredSlots: desiredSlots,
       desiredStartWeek: desiredStartWeek,
       strokes: strokesList.map(HandwritingStroke.fromJson).toList(),
+      textBoxes: textBoxes,
     );
   }
 
@@ -211,6 +287,7 @@ class ConsultNote {
         if (desiredSlots.isNotEmpty) 'ds': desiredSlots.map((s) => s.toJson()).toList(),
         if (desiredStartWeek != null) 'dsw': DateTime(desiredStartWeek!.year, desiredStartWeek!.month, desiredStartWeek!.day).toIso8601String(),
         'strokes': strokes.map((s) => s.toJson()).toList(),
+        if (textBoxes.isNotEmpty) 'tb': textBoxes.map((b) => b.toJson()).toList(),
       };
 }
 

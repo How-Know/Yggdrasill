@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:material_symbols_icons/symbols.dart';
 import '../widgets/navigation_rail.dart';
-import '../widgets/student_registration_dialog.dart';
 import '../services/data_manager.dart';
 import '../models/attendance_record.dart';
 import 'student/student_screen.dart';
@@ -18,7 +16,6 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
-import '../widgets/makeup_quick_dialog.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -27,6 +24,7 @@ import 'dart:math' as math;
 import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
+import '../services/consult_trial_lesson_service.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
@@ -65,6 +63,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Map<DateTime, List<_AttendanceTarget>> _waitingByTimeCache = SplayTreeMap();
   late final ScrollController _attendedScrollCtrl;
   late final ScrollController _waitingScrollCtrl;
+  DateTime? _lastPlannedEnsureDay; // 날짜가 바뀔 때만 오늘 planned를 보강 생성
   
   // StudentScreen 관련 상태
   final GlobalKey<StudentScreenState> _studentScreenKey = GlobalKey<StudentScreenState>();
@@ -116,12 +115,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final anchor = DateTime(now.year, now.month, now.day);
     // setId별로 "가장 이른 수업 시간" 하나만 대표로 사용 (실제 등원 기록이 있으면 우선 선택)
     final Map<String, AttendanceRecord> earliestBySet = {};
+    int todayTotal = 0;
+    int directSetId = 0;
+    int resolvedSetId = 0;
+    int failedSetId = 0;
     for (final r in source) {
       final dt = r.classDateTime;
       if (dt.year != anchor.year || dt.month != anchor.month || dt.day != anchor.day) continue;
-      final effectiveSetId = (r.setId != null && r.setId!.isNotEmpty)
-          ? r.setId!
-          : _resolveSetIdFromTime(r.studentId, dt) ?? '';
+      todayTotal++;
+      String effectiveSetId = '';
+      if (r.setId != null && r.setId!.isNotEmpty) {
+        effectiveSetId = r.setId!;
+        directSetId++;
+      } else {
+        final resolved = _resolveSetIdFromTime(r.studentId, dt);
+        if (resolved != null && resolved.isNotEmpty) {
+          effectiveSetId = resolved;
+          resolvedSetId++;
+        } else {
+          failedSetId++;
+          effectiveSetId = '';
+        }
+      }
       if (effectiveSetId.isEmpty) {
         if (_sideSheetDebug) {
           debugPrint('[SIDE][skip] setId null student=${r.studentId} dt=$dt recId=${r.id}');
@@ -153,6 +168,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     if (_sideSheetDebug) {
       debugPrint('[SIDE][map] earliestBySet=${earliestBySet.length}');
+      debugPrint(
+        '[SIDE][setid] today=$todayTotal direct=$directSetId resolved=$resolvedSetId fail=$failedSetId',
+      );
     }
     if (outRecordBySet != null) {
       outRecordBySet.clear();
@@ -187,18 +205,45 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   String? _resolveSetIdFromTime(String studentId, DateTime classDateTime) {
     final blocks = DataManager.instance.studentTimeBlocks;
     final dayIdx = classDateTime.weekday - 1;
-    final block = blocks.firstWhereOrNull(
-      (b) =>
-          b.studentId == studentId &&
-          b.dayIndex == dayIdx &&
-          b.startHour == classDateTime.hour &&
-          b.startMinute == classDateTime.minute,
-    );
-    return block?.setId;
+    final targetDate = DateTime(classDateTime.year, classDateTime.month, classDateTime.day);
+
+    bool isActiveOnDate(StudentTimeBlock b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      return !sd.isAfter(targetDate) && (ed == null || !ed.isBefore(targetDate));
+    }
+
+    final candidates = blocks
+        .where((b) =>
+            b.studentId == studentId &&
+            b.dayIndex == dayIdx &&
+            b.startHour == classDateTime.hour &&
+            b.startMinute == classDateTime.minute &&
+            isActiveOnDate(b) &&
+            b.setId != null &&
+            b.setId!.isNotEmpty)
+        .toList();
+    if (candidates.isEmpty) return null;
+
+    // 같은 시간대에 여러 세그먼트가 있더라도, 가장 최근 시작(start_date가 가장 큰) 블록을 우선한다.
+    candidates.sort((a, b) => a.startDate.compareTo(b.startDate));
+    return candidates.last.setId;
   }
 
   void _markSideSheetDirty() {
+    final wasDirty = _sideSheetDataDirty;
     _sideSheetDataDirty = true;
+    if (_sideSheetDebug && !wasDirty) {
+      final now = DateTime.now();
+      final len = DataManager.instance.attendanceRecords.length;
+      String anim = 'n/a';
+      try {
+        anim = _rotationAnimation.status.toString();
+      } catch (_) {}
+      debugPrint('[SIDE][dirty] t=${now.toIso8601String()} len=$len anim=$anim');
+    }
   }
 
   void _recomputeSideSheetCache(List<AttendanceRecord> records) {
@@ -487,11 +532,35 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _toggleSideSheet() {
-    
     if (_rotationAnimation.status == AnimationStatus.completed) {
+      if (_sideSheetDebug) {
+        debugPrint('[SIDE][toggle] close');
+      }
       _rotationAnimation.reverse();
     } else {
       _sideSheetDataDirty = true;
+      // ✅ planned가 없으면 사이드 시트가 비어보일 수 있으므로,
+      // 날짜가 바뀌어 처음 열 때 한 번만 planned 보강 생성(누락분만 추가됨).
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      if (_lastPlannedEnsureDay == null ||
+          _lastPlannedEnsureDay!.year != today.year ||
+          _lastPlannedEnsureDay!.month != today.month ||
+          _lastPlannedEnsureDay!.day != today.day) {
+        _lastPlannedEnsureDay = today;
+        if (_sideSheetDebug) {
+          debugPrint(
+            '[SIDE][toggle] open -> ensurePlanned(days=2) recordsLen=${DataManager.instance.attendanceRecords.length}',
+          );
+        }
+        unawaited(DataManager.instance.ensurePlannedAttendanceForNextDays(days: 2));
+      } else {
+        if (_sideSheetDebug) {
+          debugPrint('[SIDE][toggle] open (ensure skipped - already ran today)');
+        }
+      }
+      // 시범 수업(문의 노트) 슬롯도 사이드 시트에서 사용할 수 있도록 lazy-load
+      unawaited(ConsultTrialLessonService.instance.load());
       _rotationAnimation.forward();
     }
   }
@@ -780,6 +849,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // 파생 리스트 로그는 ValueListenableBuilder 내부에서 출력합니다.
 
               // 애니메이션 진행 중에는 내용 위젯을 전혀 생성하지 않고, 빈 컨테이너만 렌더링
+              if (isComplete != _sideSheetWasComplete) {
+                if (_sideSheetDebug) {
+                  debugPrint(
+                    '[SIDE][sheet] complete=$isComplete progress=${progress.toStringAsFixed(3)} status=${_rotationAnimation.status} width=${containerWidth.toStringAsFixed(1)}',
+                  );
+                }
+                _sideSheetWasComplete = isComplete;
+              }
               if (!isComplete) {
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
@@ -793,28 +870,70 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 valueListenable: DataManager.instance.attendanceRecordsNotifier,
                 builder: (context, _records, _) {
                   if (_sideSheetDataDirty) {
+                    if (_sideSheetDebug) {
+                      debugPrint('[SIDE][recompute-start] recordsLen=${_records.length}');
+                    }
                     _recomputeSideSheetCache(_records);
                     if (_sideSheetDebug) {
                       debugPrint('[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}');
                     }
                   }
-                  final waiting = _cachedWaiting;
                   final attended = _cachedAttended;
                   final leaved = _cachedLeaved;
                   final arrivalBySet = _arrivalBySetCache;
                   final departureBySet = _departureBySetCache;
                   final waitingByTime = _waitingByTimeCache;
 
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeInOut,
-                    width: containerWidth,
-                    color: const Color(0xFF0B1112),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Column(
-                            children: [
+                  return ValueListenableBuilder<List<ConsultTrialLessonSlot>>(
+                    valueListenable: ConsultTrialLessonService.instance.slotsNotifier,
+                    builder: (context, trialSlots, _) {
+                      final now2 = DateTime.now();
+                      final todayDate = DateTime(now2.year, now2.month, now2.day);
+                      DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+                      final trialToday = trialSlots.where((s) {
+                        final wk = _dateOnly(s.weekStart);
+                        final slotDate = _dateOnly(wk.add(Duration(days: s.dayIndex)));
+                        return slotDate == todayDate;
+                      }).toList();
+
+                      final trialAttended = trialToday
+                          .where((s) => s.arrivalTime != null && s.departureTime == null)
+                          .toList()
+                        ..sort((a, b) {
+                          final ta = a.hour * 60 + a.minute;
+                          final tb = b.hour * 60 + b.minute;
+                          final t = ta.compareTo(tb);
+                          if (t != 0) return t;
+                          return a.title.compareTo(b.title);
+                        });
+                      final trialWaiting = trialToday
+                          .where((s) => s.arrivalTime == null)
+                          .toList()
+                        ..sort((a, b) {
+                          final ta = a.hour * 60 + a.minute;
+                          final tb = b.hour * 60 + b.minute;
+                          final t = ta.compareTo(tb);
+                          if (t != 0) return t;
+                          return a.title.compareTo(b.title);
+                        });
+
+                      final trialWaitingByTime = SplayTreeMap<DateTime, List<ConsultTrialLessonSlot>>();
+                      for (final s in trialWaiting) {
+                        final k = DateTime(todayDate.year, todayDate.month, todayDate.day, s.hour, s.minute);
+                        (trialWaitingByTime[k] ??= <ConsultTrialLessonSlot>[]).add(s);
+                      }
+
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeInOut,
+                        width: containerWidth,
+                        color: const Color(0xFF0B1112),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Column(
+                                children: [
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
                                 child: SizedBox(
@@ -890,7 +1009,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         mainAxisSize: MainAxisSize.min,
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          if (attended.isEmpty)
+                                          if (attended.isEmpty && trialAttended.isEmpty)
                                             const Center(
                                               child: Text(
                                                 '출석',
@@ -918,6 +1037,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 ]
                                               ],
                                             ),
+                                          if (trialAttended.isNotEmpty) ...[
+                                            if (attended.isNotEmpty) const SizedBox(height: 8),
+                                            for (int i = 0; i < trialAttended.length; i++) ...[
+                                              _buildTrialLessonAttendanceCard(
+                                                trialAttended[i],
+                                                status: 'attended',
+                                                key: ValueKey('trial_attended_${trialAttended[i].id}'),
+                                                scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                              ),
+                                              if (i != trialAttended.length - 1)
+                                                SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                            ],
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -925,7 +1057,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 ),
                               ),
                               // 출석 전 학생 리스트
-                              if (waitingByTime.isNotEmpty)
+                              if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
                                 Expanded(
                                   child: Padding(
                                     padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
@@ -936,12 +1068,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         controller: _waitingScrollCtrl,
                                         padding: EdgeInsets.zero,
                                         children: [
-                                          for (final entry in waitingByTime.entries) ...[
+                                          for (final t in (<DateTime>{
+                                            ...waitingByTime.keys,
+                                            ...trialWaitingByTime.keys,
+                                          }.toList()
+                                            ..sort((a, b) => a.compareTo(b)))) ...[
                                             Padding(
                                               padding: const EdgeInsets.only(bottom: 4.0),
                                               child: Center(
                                                 child: Text(
-                                                  _formatTime(entry.key),
+                                                  _formatTime(t),
                                                   style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
                                                 ),
                                               ),
@@ -951,16 +1087,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 alignment: WrapAlignment.center,
                                                 spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                                 runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                children: entry.value
-                                                    .map((t) => _buildAttendanceCard(
-                                                          t,
-                                                          status: 'waiting',
-                                                          key: ValueKey('waiting_${t.setId}'),
-                                                          scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                          arrival: arrivalBySet[t.setId],
-                                                          departure: departureBySet[t.setId],
-                                                        ))
-                                                    .toList(),
+                                                children: [
+                                                  for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
+                                                    _buildAttendanceCard(
+                                                      w,
+                                                      status: 'waiting',
+                                                      key: ValueKey('waiting_${w.setId}'),
+                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                      arrival: arrivalBySet[w.setId],
+                                                      departure: departureBySet[w.setId],
+                                                    ),
+                                                  for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
+                                                    _buildTrialLessonAttendanceCard(
+                                                      s,
+                                                      status: 'waiting',
+                                                      key: ValueKey('trial_waiting_${s.id}'),
+                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                    ),
+                                                ],
                                               ),
                                             ),
                                             const SizedBox(height: 8),
@@ -977,6 +1121,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         ],
                       ),
                     );
+                    },
+                  );
                 },
               );
             },
@@ -1025,6 +1171,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final Color? underlineColor = t.overrideType == OverrideType.replace
         ? const Color(0xFF1976D2)
         : (t.overrideType == OverrideType.add ? const Color(0xFF4CAF50) : null);
+    final bool isSpecialOverride = t.overrideType == OverrideType.replace || t.overrideType == OverrideType.add;
     switch (status) {
       case 'attended':
         borderColor = const Color(0xFF33A373);
@@ -1086,18 +1233,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
         break;
       default:
-        // waiting(등원 예정): 수업이 있으면 수업 색상 테두리 사용
-        borderColor = t.classInfo?.color ?? Colors.grey;
-        textColor = Colors.white70;
+        // waiting(등원 예정)
+        // - 기본: 테두리=회색(통일)
+        // - 수업이 있으면: 이름만 수업 색상
+        // - 보강/추가수업: 테두리만 해당 색상(보강=파랑, 추가=초록)
+        borderColor = isSpecialOverride
+            ? (t.overrideType == OverrideType.replace
+                ? const Color(0xFF1976D2)
+                : const Color(0xFF4CAF50))
+            : Colors.grey;
+        final Color? classColor = t.classInfo?.color;
+        textColor = (!isSpecialOverride && classColor != null) ? classColor : Colors.white70;
         nameWidget = Text(
           t.student.name,
           style: TextStyle(
             color: textColor,
             fontSize: 16,
             fontWeight: FontWeight.w500,
-            decoration: underlineColor != null ? TextDecoration.underline : null,
-            decorationColor: underlineColor,
-            decorationThickness: underlineColor != null ? 2 : null,
+            // waiting에서는 underline을 쓰지 않고(이질감/중복) 테두리/이름색 규칙으로만 표현한다.
           ),
         );
     }
@@ -1214,18 +1367,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               setState(() {
                 _leavedSetIds.add(t.setId);
                 _leaveTimes[t.setId] = now;
+                _sideSheetDataDirty = true;
               });
               try {
                 final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
                 final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
-                if (existing != null) {
-                  final updated = existing.copyWith(departureTime: now);
-                  try {
-                    await DataManager.instance.updateAttendanceRecord(updated);
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.')));
-                  }
-                }
+                final DateTime arrival2 = existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
+                await DataManager.instance.saveOrUpdateAttendance(
+                  studentId: t.student.id,
+                  classDateTime: classDateTime,
+                  classEndTime: classDateTime.add(t.duration),
+                  className: t.classInfo?.name ?? '수업',
+                  isPresent: true,
+                  arrivalTime: arrival2,
+                  departureTime: now,
+                  setId: t.setId,
+                  sessionTypeId: t.classInfo?.id,
+                );
                 // 하원 시 미완료 과제들을 숙제로 표시
                 HomeworkStore.instance.markIncompleteAsHomework(t.student.id);
               } catch (e) {
@@ -1237,7 +1395,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               margin: EdgeInsets.zero,
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               decoration: BoxDecoration(
-              color: const Color(0xFF15171C),
+              // 등원 완료(출석) 카드: 내부 배경색 없이 통일
+              color: Colors.transparent,
                 border: Border.all(color: borderColor, width: 2),
               borderRadius: BorderRadius.circular(12),
               ),
@@ -1269,9 +1428,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             if (status == 'waiting') {
               _attendedSetIds.add(t.setId);
               _attendTimes[t.setId] = now;
+              _sideSheetDataDirty = true;
             } else if (status == 'attended') {
               _leavedSetIds.add(t.setId);
               _leaveTimes[t.setId] = now;
+              _sideSheetDataDirty = true;
             }
           });
           try {
@@ -1284,6 +1445,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 className: t.classInfo?.name ?? '수업',
                 isPresent: true,
                 arrivalTime: now,
+                setId: t.setId,
+                sessionTypeId: t.classInfo?.id,
               );
             } else if (status == 'attended') {
               final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
@@ -1313,6 +1476,86 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       );
     }
+  }
+
+  Widget _buildTrialLessonAttendanceCard(
+    ConsultTrialLessonSlot s, {
+    required String status, // 'waiting' | 'attended'
+    Key? key,
+    double scale = 1.0,
+  }) {
+    // 색상 규칙:
+    // - waiting: 테두리만 시범(추가수업과 동일) 색상
+    // - attended: 테두리는 시범 색상, 내부 배경 없음 (배지 없음)
+    const trialGreen = Color(0xFF4CAF50);
+
+    final nameStyle = TextStyle(
+      color: status == 'attended' ? const Color(0xFFEAF2F2) : Colors.white70,
+      // 기존 출석카드와 크기 통일
+      fontSize: 16,
+      fontWeight: FontWeight.w500,
+    );
+
+    if (status == 'attended') {
+      // 기존 출석 카드(왼쪽 컨테이너 + 오른쪽 칩 영역) 레이아웃을 그대로 맞춘다.
+      return Row(
+        key: key,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          GestureDetector(
+            onTap: () {
+              // 하원 처리
+              unawaited(ConsultTrialLessonService.instance.setLeaved(slotId: s.id, leaved: true));
+            },
+            onSecondaryTap: () {
+              // 실수 취소: 등원/하원 기록 제거
+              unawaited(ConsultTrialLessonService.instance.setArrived(slotId: s.id, arrived: false));
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                border: Border.all(color: trialGreen, width: 2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(s.title, style: nameStyle, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(child: SizedBox.shrink()),
+        ],
+      );
+    }
+
+    // waiting(등원 예정) 카드: 기존 waiting 카드(캡슐) 디자인을 그대로 사용
+    return GestureDetector(
+      key: key,
+      onTap: () {
+        unawaited(ConsultTrialLessonService.instance.setArrived(slotId: s.id, arrived: true));
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: EdgeInsets.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          border: Border.all(color: trialGreen, width: 2),
+          borderRadius: BorderRadius.circular(25),
+        ),
+        child: Text(
+          s.title,
+          style: nameStyle,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
   }
 
   List<Widget> _buildHomeworkChipsReactive(_AttendanceTarget t) {

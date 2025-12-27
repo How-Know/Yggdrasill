@@ -5,15 +5,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/attendance_record.dart';
 import '../models/class_info.dart';
+import '../models/cycle_attendance_summary.dart';
 import '../models/payment_record.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../models/academy_settings.dart';
-import 'runtime_flags.dart';
 import 'tenant_service.dart';
-import 'academy_db.dart';
-import 'tag_preset_service.dart';
 
 // 하루/세트 단위로 블록을 집계하기 위한 구조체 (가장 빠른 시작/가장 늦은 종료)
 class _PlannedDailyAgg {
@@ -85,6 +83,9 @@ class AttendanceService {
 
   void reset() {
     _attendanceRecords = [];
+    if (_sideDebug) {
+      print('[ATT][reset] attendanceRecords cleared');
+    }
     attendanceRecordsNotifier.value = [];
   }
 
@@ -146,6 +147,9 @@ class AttendanceService {
     } catch (e, st) {
       print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
       _attendanceRecords = [];
+      if (_sideDebug) {
+        print('[ATT][loadAttendanceRecords][error] publish empty');
+      }
       attendanceRecordsNotifier.value = [];
     }
   }
@@ -546,6 +550,30 @@ class AttendanceService {
   }) async {
     final DateTime dateAnchor = anchor ?? DateTime.now().toUtc();
     final supa = Supabase.instance.client;
+    if (_sideDebug) {
+      final before = _attendanceRecords.length;
+      int willRemove = 0;
+      DateTime? minDt;
+      DateTime? maxDt;
+      final nowL = DateTime.now();
+      final todayL = DateTime(nowL.year, nowL.month, nowL.day);
+      bool touchesToday = false;
+      for (final r in _attendanceRecords) {
+        if (!r.isPlanned) continue;
+        if (r.isPresent || r.arrivalTime != null) continue;
+        if (r.setId == null || !setIds.contains(r.setId)) continue;
+        if (r.classDateTime.toUtc().isBefore(dateAnchor)) continue;
+        willRemove++;
+        final dt = r.classDateTime;
+        if (minDt == null || dt.isBefore(minDt)) minDt = dt;
+        if (maxDt == null || dt.isAfter(maxDt)) maxDt = dt;
+        final dOnly = DateTime(dt.year, dt.month, dt.day);
+        if (dOnly == todayL) touchesToday = true;
+      }
+      print(
+        '[PLAN][cancel-start] student=$studentId sets=${setIds.length} anchorUtc=$dateAnchor localBefore=$before localWillRemove=$willRemove touchesToday=$touchesToday min=${minDt?.toIso8601String()} max=${maxDt?.toIso8601String()}',
+      );
+    }
     try {
       await supa
           .from('attendance_records')
@@ -559,6 +587,7 @@ class AttendanceService {
     } catch (e, st) {
       print('[PLAN][WARN] planned 삭제 실패(student=$studentId sets=$setIds): $e\n$st');
     }
+    final beforeLocal = _attendanceRecords.length;
     _attendanceRecords.removeWhere((r) {
       if (!r.isPlanned) return false;
       if (r.isPresent || r.arrivalTime != null) return false;
@@ -566,6 +595,10 @@ class AttendanceService {
       return !r.classDateTime.toUtc().isBefore(dateAnchor);
     });
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    if (_sideDebug) {
+      final afterLocal = _attendanceRecords.length;
+      print('[PLAN][cancel-done] student=$studentId removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+    }
 
     // 배치 세션: planned 상태인 동일 세트의 미래 세션 삭제
     try {
@@ -585,11 +618,12 @@ class AttendanceService {
     required String studentId,
     required Set<String> setIds,
     int days = 60,
+    DateTime? anchor,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
   }) async {
-    final DateTime anchor = DateTime.now().toUtc();
-    await _cancelPlannedForSets(studentId: studentId, setIds: setIds, anchor: anchor);
+    final DateTime effectiveAnchor = anchor ?? DateTime.now().toUtc();
+    await _cancelPlannedForSets(studentId: studentId, setIds: setIds, anchor: effectiveAnchor);
     await regeneratePlannedAttendanceForStudentSets(
       studentId: studentId,
       setIds: setIds,
@@ -631,31 +665,35 @@ class AttendanceService {
     final anchor = DateTime(now.year, now.month, now.day);
     final supa = Supabase.instance.client;
 
-    // 기존 순수 planned(출석/도착 없는) 오늘 이후 데이터 정리 → 중복/증식 방지
-    try {
-      final delRes = await supa
-          .from('attendance_records')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('is_planned', true)
-          .eq('is_present', false)
-          .isFilter('arrival_time', null)
-          .gte('class_date_time', anchor.toUtc().toIso8601String());
-      if (_sideDebug) {
-        print('[PLAN][init-clean] deleted=${delRes.runtimeType == List ? (delRes as List).length : delRes}');
-      }
-    } catch (e, st) {
-      print('[PLAN][init-clean][WARN] $e\n$st');
-    }
-    _attendanceRecords.removeWhere((r) =>
-        r.isPlanned == true &&
-        r.isPresent == false &&
-        r.arrivalTime == null &&
-        !r.classDateTime.isBefore(anchor));
+    // ✅ 글로벌 planned 생성기는 "삭제"하지 않는다.
+    // - 변경/예약/휴강 등으로 인한 planned 정리는 set_id 단위 regen에서만 수행(범위/스냅샷 유지)
+    // - 여기서는 누락된 planned만 추가 생성하여 중복/증식을 방지한다.
 
     try {
       await _d.loadPaymentRecords();
     } catch (_) {}
+
+    String minKey(DateTime dt) =>
+        '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+
+    // ===== SessionOverride 반영 =====
+    // - skip/replace(원래 회차): 해당 분(minute)에 planned 생성 제외
+    // - add/replace(대체/추가 회차): replacement 분(minute)에 planned 생성 추가
+    final Map<String, SessionOverride> overrideByOriginalKey = {};
+    final Map<String, List<SessionOverride>> overridesByReplacementDate = {};
+    for (final o in _d.getSessionOverrides()) {
+      if (o.status != OverrideStatus.planned) continue;
+      final orig = o.originalClassDateTime;
+      if ((o.overrideType == OverrideType.skip || o.overrideType == OverrideType.replace) &&
+          orig != null) {
+        overrideByOriginalKey['${o.studentId}|${minKey(orig)}'] = o;
+      }
+      final rep = o.replacementClassDateTime;
+      if ((o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace) &&
+          rep != null) {
+        overridesByReplacementDate.putIfAbsent(_dateKey(rep), () => <SessionOverride>[]).add(o);
+      }
+    }
 
     final List<Map<String, dynamic>> rows = [];
     final List<AttendanceRecord> localAdds = [];
@@ -669,7 +707,6 @@ class AttendanceService {
 
     // 기존 planned (출석/도착 없는 순수 예정) 중 오늘 이후를 키로 보관하여 중복 생성 방지
     final Set<String> existingPlannedKeys = {};
-    final todayKey = _dateKey(anchor);
     for (final r in _attendanceRecords) {
       if (!r.isPlanned) continue;
       if (r.isPresent || r.arrivalTime != null) continue;
@@ -695,12 +732,6 @@ class AttendanceService {
         final classEnd = classStart.add(b.duration);
         final setId = b.setId!;
 
-        final existing = getAttendanceRecord(b.studentId, classStart);
-        if (existing != null &&
-            (existing.arrivalTime != null || existing.isPresent || existing.isPlanned)) {
-          continue;
-        }
-
         final agg = aggBySet.putIfAbsent(
           '${b.studentId}|$setId',
           () => _PlannedDailyAgg(
@@ -723,6 +754,25 @@ class AttendanceService {
         final classEndTime = agg.end;
         final keyBase = '${agg.studentId}|${agg.setId}';
         final dateKey = _dateKey(classDateTime);
+
+        // ✅ 휴강/대체(원래 회차)면 base planned는 만들지 않는다.
+        final ov = overrideByOriginalKey['${agg.studentId}|${minKey(classDateTime)}'];
+        if (ov != null &&
+            (ov.overrideType == OverrideType.skip || ov.overrideType == OverrideType.replace)) {
+          if (_sideDebug) {
+            print('[PLAN][skip-base-by-override] type=${ov.overrideType} student=${agg.studentId} dt=$classDateTime');
+          }
+          continue;
+        }
+
+        // ✅ 이미 실제 기록(출석/등원 등)이 있으면 planned 생성하지 않음
+        final existingAtStart = getAttendanceRecord(agg.studentId, classDateTime);
+        if (existingAtStart != null &&
+            (!existingAtStart.isPlanned ||
+                existingAtStart.arrivalTime != null ||
+                existingAtStart.isPresent)) {
+          continue;
+        }
 
         int? cycle = _resolveCycleByDueDate(agg.studentId, classDateTime);
         int sessionOrder;
@@ -819,6 +869,101 @@ class AttendanceService {
               '[PLAN][init-add] setId=${record.setId} student=${record.studentId} dt=${record.classDateTime} cycle=${record.cycle} order=${record.sessionOrder} end=${record.classEndTime}');
         }
         localAdds.add(record);
+      }
+
+      // ✅ add/replace(대체/추가 회차) planned 생성
+      final repList = overridesByReplacementDate[_dateKey(date)] ?? const <SessionOverride>[];
+      for (final o in repList) {
+        final rep = o.replacementClassDateTime;
+        if (rep == null) continue;
+        if (rep.year != date.year || rep.month != date.month || rep.day != date.day) continue;
+
+        final start = DateTime(rep.year, rep.month, rep.day, rep.hour, rep.minute);
+        // 이미 실제 기록이 있으면 planned 생성 불필요
+        final existing = getAttendanceRecord(o.studentId, start);
+        if (existing != null &&
+            (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
+          continue;
+        }
+
+        // set_id: replace는 원래 세트로, add는 override id(또는 명시 set_id)
+        final String setId = () {
+          if (o.overrideType == OverrideType.replace) {
+            return o.setId ??
+                _resolveSetId(o.studentId, o.originalClassDateTime ?? start) ??
+                o.id;
+          }
+          return o.setId ?? o.id;
+        }();
+
+        final plannedKey = '${o.studentId}|$setId|${_dateKey(start)}';
+        if (existingPlannedKeys.contains(plannedKey)) continue;
+
+        final durMin = o.durationMinutes ?? _d.getAcademySettings().lessonDuration;
+        final end = start.add(Duration(minutes: durMin));
+
+        int? cycle = _resolveCycleByDueDate(o.studentId, start);
+        int sessionOrder;
+        if (cycle == null) {
+          final monthDate = _monthKey(start);
+          final keyBase = '${o.studentId}|$setId';
+          cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
+        }
+        final studentCycleKey = '${o.studentId}|$cycle';
+        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
+        final dateKey = _dateKey(start);
+        if (m.containsKey(dateKey)) {
+          sessionOrder = m[dateKey]!;
+        } else {
+          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
+          m[dateKey] = next;
+          counterByStudentCycle[studentCycleKey] = next;
+          sessionOrder = next;
+        }
+        if (cycle == null || cycle == 0) cycle = 1;
+        if (sessionOrder <= 0) sessionOrder = 1;
+
+        final record = AttendanceRecord.create(
+          studentId: o.studentId,
+          classDateTime: start,
+          classEndTime: end,
+          className: _resolveClassName(o.sessionTypeId),
+          isPresent: false,
+          arrivalTime: null,
+          departureTime: null,
+          notes: null,
+          sessionTypeId: o.sessionTypeId,
+          setId: setId,
+          cycle: cycle,
+          sessionOrder: sessionOrder,
+          isPlanned: true,
+          snapshotId: null,
+        );
+
+        rows.add({
+          'id': record.id,
+          'academy_id': academyId,
+          'student_id': record.studentId,
+          'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+          'class_end_time': record.classEndTime.toUtc().toIso8601String(),
+          'class_name': record.className,
+          'is_present': record.isPresent,
+          'arrival_time': null,
+          'departure_time': null,
+          'notes': null,
+          'session_type_id': record.sessionTypeId,
+          'set_id': record.setId,
+          'cycle': record.cycle,
+          'session_order': record.sessionOrder,
+          'is_planned': record.isPlanned,
+          'snapshot_id': null,
+          'batch_session_id': record.batchSessionId,
+          'created_at': record.createdAt.toUtc().toIso8601String(),
+          'updated_at': record.updatedAt.toUtc().toIso8601String(),
+          'version': record.version,
+        });
+        localAdds.add(record);
+        existingPlannedKeys.add(plannedKey);
       }
     }
 
@@ -1036,7 +1181,10 @@ class AttendanceService {
             b.studentId == studentId &&
             b.setId != null &&
             b.setId!.isNotEmpty &&
-            _isBlockActiveOnDate(b, today))
+            // 오늘 활성뿐 아니라 "미래 시작" 세트도 포함해야 예정 생성이 누락되지 않는다.
+            (b.endDate == null ||
+                !DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+                    .isBefore(DateTime(today.year, today.month, today.day))))
         .map((b) => b.setId!)
         .toSet();
     if (allSetIds.isEmpty) {
@@ -1059,6 +1207,28 @@ class AttendanceService {
     final end = anchor.add(Duration(days: days));
     final academyId =
         await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+    if (_sideDebug) {
+      final before = _attendanceRecords.length;
+      int willRemove = 0;
+      DateTime? minDt;
+      DateTime? maxDt;
+      bool touchesToday = false;
+      for (final r in _attendanceRecords) {
+        if (r.studentId != studentId) continue;
+        if (r.isPlanned != true) continue;
+        if (r.arrivalTime != null || r.isPresent) continue;
+        if (r.classDateTime.isBefore(anchor) || r.classDateTime.isAfter(end)) continue;
+        willRemove++;
+        final dt = r.classDateTime;
+        if (minDt == null || dt.isBefore(minDt)) minDt = dt;
+        if (maxDt == null || dt.isAfter(maxDt)) maxDt = dt;
+        final dOnly = DateTime(dt.year, dt.month, dt.day);
+        if (dOnly == anchor) touchesToday = true;
+      }
+      print(
+        '[PLAN][delete-student-start] student=$studentId range=${anchor.toIso8601String()}..${end.toIso8601String()} localBefore=$before localWillRemove=$willRemove touchesToday=$touchesToday min=${minDt?.toIso8601String()} max=${maxDt?.toIso8601String()}',
+      );
+    }
     try {
       await Supabase.instance.client
           .from('attendance_records')
@@ -1066,8 +1236,12 @@ class AttendanceService {
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .eq('is_planned', true)
+          // ⚠️ 순수 planned(출석/등원 기록 없는 것)만 삭제해야 실제 기록이 날아가지 않는다.
+          .eq('is_present', false)
+          .isFilter('arrival_time', null)
           .gte('class_date_time', anchor.toUtc().toIso8601String())
           .lte('class_date_time', end.toUtc().toIso8601String());
+      final beforeLocal = _attendanceRecords.length;
       _attendanceRecords.removeWhere((r) {
         if (r.studentId != studentId) return false;
         if (r.isPlanned != true) return false;
@@ -1075,6 +1249,10 @@ class AttendanceService {
         return !r.classDateTime.isBefore(anchor) && !r.classDateTime.isAfter(end);
       });
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      if (_sideDebug) {
+        final afterLocal = _attendanceRecords.length;
+        print('[PLAN][delete-student-done] student=$studentId removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+      }
     } catch (e, st) {
       print('[WARN] deletePlannedAttendanceForStudent 실패 student=$studentId: $e\n$st');
     }
@@ -1112,6 +1290,9 @@ class AttendanceService {
           .eq('student_id', studentId)
           .inFilter('set_id', setIds.toList())
           .eq('is_planned', true)
+          // ⚠️ 순수 planned만 삭제 (실제 출석/등원 기록 보호)
+          .eq('is_present', false)
+          .isFilter('arrival_time', null)
           .gte('class_date_time', anchor.toUtc().toIso8601String());
       print('[PLAN] deleted planned rows (student): $delRes');
       _attendanceRecords.removeWhere((r) =>
@@ -1146,25 +1327,97 @@ class AttendanceService {
     final Map<String, int> counterByStudentCycle = {};
     _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
 
+    String minKey(DateTime dt) =>
+        '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+
+    // ===== SessionOverride 반영(학생 단위) =====
+    final Map<String, SessionOverride> overrideByOriginalKey = {};
+    final Map<String, List<SessionOverride>> overridesByReplacementDate = {};
+    for (final o in _d.getSessionOverrides()) {
+      if (o.studentId != studentId) continue;
+      if (o.status != OverrideStatus.planned) continue;
+      final orig = o.originalClassDateTime;
+      if ((o.overrideType == OverrideType.skip || o.overrideType == OverrideType.replace) &&
+          orig != null) {
+        overrideByOriginalKey['$studentId|${minKey(orig)}'] = o;
+      }
+      final rep = o.replacementClassDateTime;
+      if ((o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace) &&
+          rep != null) {
+        overridesByReplacementDate.putIfAbsent(_dateKey(rep), () => <SessionOverride>[]).add(o);
+      }
+    }
+
+    // 중복 생성 방지: 하루/세트 키 (동일 학생)
+    final Set<String> existingPlannedKeys = {};
+    for (final r in _attendanceRecords) {
+      if (r.studentId != studentId) continue;
+      if (!r.isPlanned) continue;
+      if (r.isPresent || r.arrivalTime != null) continue;
+      if (r.setId == null || r.setId!.isEmpty) continue;
+      if (!setIds.contains(r.setId)) continue;
+      // anchor(오늘 00:00) 이후만 고려
+      final classDate = DateTime(r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
+      if (classDate.isBefore(anchor)) continue;
+      existingPlannedKeys.add('$studentId|${r.setId}|${_dateKey(r.classDateTime)}');
+    }
+
     bool samplePrinted = false;
     int decisionLogCount = 0;
     for (int i = 0; i < days; i++) {
       final date = anchor.add(Duration(days: i));
       final int dayIdx = date.weekday - 1;
+
+      // 하루/세트(set_id) 단위로 묶어 1회 수업=1레코드 생성
+      final Map<String, _PlannedDailyAgg> aggBySet = {};
       for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
         if (!_isBlockActiveOnDate(b, date)) continue;
-        final classDateTime =
-            DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
-        final classEndTime = classDateTime.add(b.duration);
+        final setId = b.setId;
+        if (setId == null || setId.isEmpty) continue;
+        final classStart = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
+        final classEnd = classStart.add(b.duration);
 
-        final existing = getAttendanceRecord(studentId, classDateTime);
-        if (existing != null &&
-            (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
+        final agg = aggBySet.putIfAbsent(
+          '$studentId|$setId',
+          () => _PlannedDailyAgg(
+            studentId: studentId,
+            setId: setId,
+            start: classStart,
+            end: classEnd,
+            sessionTypeId: b.sessionTypeId,
+          ),
+        );
+        if (classStart.isBefore(agg.start)) agg.start = classStart;
+        if (classEnd.isAfter(agg.end)) agg.end = classEnd;
+        if (agg.sessionTypeId == null && b.sessionTypeId != null) {
+          agg.sessionTypeId = b.sessionTypeId;
+        }
+      }
+
+      for (final agg in aggBySet.values) {
+        final classDateTime = agg.start;
+        final classEndTime = agg.end;
+        final keyBase = '$studentId|${agg.setId}';
+        final dateKey = _dateKey(classDateTime);
+
+        // ✅ 휴강/대체(원래 회차)면 base planned는 만들지 않는다.
+        final ov = overrideByOriginalKey['$studentId|${minKey(classDateTime)}'];
+        if (ov != null &&
+            (ov.overrideType == OverrideType.skip || ov.overrideType == OverrideType.replace)) {
+          if (_sideDebug) {
+            print('[PLAN-student][skip-base-by-override] type=${ov.overrideType} student=$studentId dt=$classDateTime');
+          }
           continue;
         }
 
-        final keyBase = '$studentId|${b.setId}';
-        final dateKey = _dateKey(classDateTime);
+        // ✅ 이미 실제 기록(출석/등원 등)이 있으면 planned 생성하지 않음
+        final existingAtStart = getAttendanceRecord(studentId, classDateTime);
+        if (existingAtStart != null &&
+            (!existingAtStart.isPlanned ||
+                existingAtStart.arrivalTime != null ||
+                existingAtStart.isPresent)) {
+          continue;
+        }
 
         int? cycle = _resolveCycleByDueDate(studentId, classDateTime);
         int sessionOrder;
@@ -1184,19 +1437,19 @@ class AttendanceService {
         }
         if (cycle == null || cycle == 0) {
           print(
-              '[WARN][PLAN-student] cycle null/0 → 1 set=${b.setId} student=$studentId date=$classDateTime (payment_records miss?)');
+              '[WARN][PLAN-student] cycle null/0 → 1 set=${agg.setId} student=$studentId date=$classDateTime (payment_records miss?)');
           _logCycleDebug(studentId, classDateTime);
           cycle = 1;
         }
         if (sessionOrder <= 0) {
           print(
-              '[WARN][PLAN-student] sessionOrder<=0 → 1 set=${b.setId} student=$studentId date=$classDateTime');
+              '[WARN][PLAN-student] sessionOrder<=0 → 1 set=${agg.setId} student=$studentId date=$classDateTime');
           sessionOrder = 1;
         }
         if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
           _logCycleDecision(
             studentId: studentId,
-            setId: b.setId ?? '',
+            setId: agg.setId,
             classDateTime: classDateTime,
             resolvedCycle: cycle,
             sessionOrderCandidate: sessionOrder,
@@ -1206,24 +1459,34 @@ class AttendanceService {
         }
         if (!samplePrinted) {
           print(
-              '[PLAN][SAMPLE-student] set=${b.setId} student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
+              '[PLAN][SAMPLE-student] set=${agg.setId} student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
           samplePrinted = true;
         }
+
+        final plannedKey = '$studentId|${agg.setId}|${_dateKey(classDateTime)}';
+        if (existingPlannedKeys.contains(plannedKey)) {
+          if (_sideDebug) {
+            print('[PLAN-student][skip-dup] setId=${agg.setId} student=$studentId date=$classDateTime');
+          }
+          continue;
+        }
+        existingPlannedKeys.add(plannedKey);
 
         final record = AttendanceRecord.create(
           studentId: studentId,
           classDateTime: classDateTime,
           classEndTime: classEndTime,
-          className: _resolveClassName(b.sessionTypeId),
+          className: _resolveClassName(agg.sessionTypeId),
           isPresent: false,
           arrivalTime: null,
           departureTime: null,
           notes: null,
-          sessionTypeId: b.sessionTypeId,
-          setId: b.setId,
+          sessionTypeId: agg.sessionTypeId,
+          setId: agg.setId,
           cycle: cycle,
           sessionOrder: sessionOrder,
           isPlanned: true,
+          snapshotId: snapshotId,
         );
 
         rows.add({
@@ -1249,6 +1512,100 @@ class AttendanceService {
           'version': record.version,
         });
         localAdds.add(record);
+      }
+
+      // ✅ add/replace(대체/추가 회차) planned 생성 (단, 이번 regen 대상 setIds에 속하는 것만)
+      final repList = overridesByReplacementDate[_dateKey(date)] ?? const <SessionOverride>[];
+      for (final o in repList) {
+        final rep = o.replacementClassDateTime;
+        if (rep == null) continue;
+        if (rep.year != date.year || rep.month != date.month || rep.day != date.day) continue;
+
+        final start = DateTime(rep.year, rep.month, rep.day, rep.hour, rep.minute);
+        final String setId = () {
+          if (o.overrideType == OverrideType.replace) {
+            return o.setId ??
+                _resolveSetId(studentId, o.originalClassDateTime ?? start) ??
+                o.id;
+          }
+          return o.setId ?? o.id;
+        }();
+        if (!setIds.contains(setId)) continue;
+
+        final plannedKey = '$studentId|$setId|${_dateKey(start)}';
+        if (existingPlannedKeys.contains(plannedKey)) continue;
+
+        final existing = getAttendanceRecord(studentId, start);
+        if (existing != null &&
+            (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
+          continue;
+        }
+
+        final durMin = o.durationMinutes ?? _d.getAcademySettings().lessonDuration;
+        final end = start.add(Duration(minutes: durMin));
+
+        int? cycle = _resolveCycleByDueDate(studentId, start);
+        int sessionOrder;
+        if (cycle == null) {
+          final monthDate = _monthKey(start);
+          final keyBase = '$studentId|$setId';
+          cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
+        }
+        final studentCycleKey = '$studentId|$cycle';
+        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
+        final dateKey = _dateKey(start);
+        if (m.containsKey(dateKey)) {
+          sessionOrder = m[dateKey]!;
+        } else {
+          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
+          m[dateKey] = next;
+          counterByStudentCycle[studentCycleKey] = next;
+          sessionOrder = next;
+        }
+        if (cycle == null || cycle == 0) cycle = 1;
+        if (sessionOrder <= 0) sessionOrder = 1;
+
+        final record = AttendanceRecord.create(
+          studentId: studentId,
+          classDateTime: start,
+          classEndTime: end,
+          className: _resolveClassName(o.sessionTypeId),
+          isPresent: false,
+          arrivalTime: null,
+          departureTime: null,
+          notes: null,
+          sessionTypeId: o.sessionTypeId,
+          setId: setId,
+          cycle: cycle,
+          sessionOrder: sessionOrder,
+          isPlanned: true,
+          snapshotId: snapshotId,
+        );
+
+        rows.add({
+          'id': record.id,
+          'academy_id': academyId,
+          'student_id': record.studentId,
+          'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+          'class_end_time': record.classEndTime.toUtc().toIso8601String(),
+          'class_name': record.className,
+          'is_present': record.isPresent,
+          'arrival_time': null,
+          'departure_time': null,
+          'notes': null,
+          'session_type_id': record.sessionTypeId,
+          'set_id': record.setId,
+          'cycle': record.cycle,
+          'session_order': record.sessionOrder,
+          'is_planned': record.isPlanned,
+          'snapshot_id': snapshotId,
+          'batch_session_id': record.batchSessionId,
+          'created_at': record.createdAt.toUtc().toIso8601String(),
+          'updated_at': record.updatedAt.toUtc().toIso8601String(),
+          'version': record.version,
+        });
+        localAdds.add(record);
+        existingPlannedKeys.add(plannedKey);
       }
     }
 
@@ -1484,64 +1841,205 @@ class AttendanceService {
   }
 
   Future<void> regeneratePlannedAttendanceForOverride(SessionOverride ov) async {
-    if (ov.replacementClassDateTime == null) return;
-    if (ov.status == OverrideStatus.canceled) {
-      await removePlannedAttendanceForDate(
-          studentId: ov.studentId, classDateTime: ov.replacementClassDateTime!);
+    final DateTime? original = ov.originalClassDateTime;
+    final DateTime? replacement = ov.replacementClassDateTime;
+    final bool canceled = ov.status == OverrideStatus.canceled;
+
+    // 공통: 원래 회차(휴강/대체) planned 제거 (순수 planned만)
+    Future<void> _removeOriginalPlannedIfNeeded() async {
+      if (original == null) return;
+      await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: original);
+    }
+
+    // 공통: 스케줄 기반으로 원래 회차 planned를 복원(취소 시)
+    Future<void> _restoreOriginalPlannedIfPossible() async {
+      if (original == null) return;
+
+      final now = DateTime.now();
+      final anchor = DateTime(now.year, now.month, now.day);
+      final end = anchor.add(const Duration(days: 14));
+      final dateOnly = DateTime(original.year, original.month, original.day);
+      if (dateOnly.isBefore(anchor) || dateOnly.isAfter(end)) {
+        // planned 유지 범위(다음 14일) 밖은 글로벌 생성기에 맡김
+        return;
+      }
+
+      final String? inferredSetId = ov.setId ?? _resolveSetId(ov.studentId, original);
+      if (inferredSetId == null || inferredSetId.isEmpty) return;
+
+      final dayIdx = original.weekday - 1;
+      final allBlocks = _d.getStudentTimeBlocks();
+      final cand = allBlocks.where((b) =>
+          b.studentId == ov.studentId &&
+          b.setId == inferredSetId &&
+          b.dayIndex == dayIdx &&
+          _isBlockActiveOnDate(b, dateOnly)).toList();
+      if (cand.isEmpty) return;
+
+      DateTime? minStart;
+      DateTime? maxEnd;
+      String? sessionTypeId;
+      for (final b in cand) {
+        final s = DateTime(dateOnly.year, dateOnly.month, dateOnly.day, b.startHour, b.startMinute);
+        final e = s.add(b.duration);
+        if (minStart == null || s.isBefore(minStart)) minStart = s;
+        if (maxEnd == null || e.isAfter(maxEnd)) maxEnd = e;
+        sessionTypeId ??= b.sessionTypeId;
+      }
+      if (minStart == null || maxEnd == null) return;
+
+      // 이미 실제 기록이 있으면 복원하지 않음
+      final existing = getAttendanceRecord(ov.studentId, minStart);
+      if (existing != null && (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
+        return;
+      }
+
+      // 중복 방지: 같은 set_id의 같은 날짜 planned가 이미 있으면 스킵
+      final minStartDateKey = _dateKey(minStart);
+      final hasPlannedSameDay = _attendanceRecords.any((r) =>
+          r.studentId == ov.studentId &&
+          r.setId == inferredSetId &&
+          r.isPlanned &&
+          !r.isPresent &&
+          r.arrivalTime == null &&
+          _dateKey(r.classDateTime) == minStartDateKey);
+      if (hasPlannedSameDay) return;
+
+      // session_order 계산: student+cycle 기준
+      int? cycle = _resolveCycleByDueDate(ov.studentId, minStart);
+      if (cycle == null) {
+        final Map<String, DateTime> earliestMonthByKey = {};
+        final Map<String, int> monthCountByKey = {};
+        _seedCycleMaps(earliestMonthByKey, monthCountByKey);
+        cycle = _calcCycle(earliestMonthByKey, '${ov.studentId}|$inferredSetId', _monthKey(minStart));
+      }
+      final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
+      final Map<String, int> counterByStudentCycle = {};
+      _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
+      final studentCycleKey = '${ov.studentId}|$cycle';
+      final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
+      final dateKey = _dateKey(minStart);
+      final int sessionOrder = m.containsKey(dateKey)
+          ? m[dateKey]!
+          : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
+
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final record = AttendanceRecord.create(
+        studentId: ov.studentId,
+        classDateTime: minStart,
+        classEndTime: maxEnd,
+        className: _resolveClassName(sessionTypeId),
+        isPresent: false,
+        arrivalTime: null,
+        departureTime: null,
+        notes: null,
+        sessionTypeId: sessionTypeId,
+        setId: inferredSetId,
+        cycle: (cycle == null || cycle == 0) ? 1 : cycle,
+        sessionOrder: sessionOrder <= 0 ? 1 : sessionOrder,
+        isPlanned: true,
+        snapshotId: null,
+      );
+
+      final row = {
+        'id': record.id,
+        'academy_id': academyId,
+        'student_id': record.studentId,
+        'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+        'class_end_time': record.classEndTime.toUtc().toIso8601String(),
+        'class_name': record.className,
+        'is_present': record.isPresent,
+        'arrival_time': null,
+        'departure_time': null,
+        'notes': null,
+        'session_type_id': record.sessionTypeId,
+        'set_id': record.setId,
+        'cycle': record.cycle,
+        'session_order': record.sessionOrder,
+        'is_planned': record.isPlanned,
+        'snapshot_id': null,
+        'batch_session_id': record.batchSessionId,
+        'created_at': record.createdAt.toUtc().toIso8601String(),
+        'updated_at': record.updatedAt.toUtc().toIso8601String(),
+        'version': record.version,
+      };
+      try {
+        await Supabase.instance.client.from('attendance_records').upsert(row, onConflict: 'id');
+        _attendanceRecords.add(record);
+        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+        if (_sideDebug) {
+          print('[PLAN][override][restore-base] student=${ov.studentId} dt=$minStart setId=$inferredSetId');
+        }
+      } catch (e, st) {
+        print('[PLAN][override][restore-base][ERROR] $e\n$st');
+      }
+    }
+
+    // 1) 휴강(skip)
+    if (ov.overrideType == OverrideType.skip) {
+      if (original == null) return;
+      if (canceled) {
+        await _restoreOriginalPlannedIfPossible();
+      } else {
+        await _removeOriginalPlannedIfNeeded();
+      }
       return;
     }
-    final DateTime target = ov.replacementClassDateTime!;
-    await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: target);
+
+    // 2) 대체(replace)
+    if (ov.overrideType == OverrideType.replace) {
+      if (original != null) {
+        await _removeOriginalPlannedIfNeeded();
+      }
+      if (replacement == null) {
+        if (canceled) {
+          await _restoreOriginalPlannedIfPossible();
+        }
+        return;
+      }
+      if (canceled) {
+        await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: replacement);
+        await _restoreOriginalPlannedIfPossible();
+        return;
+      }
+      // planned 상태: replacement planned 생성(중복은 remove→upsert로 정리)
+      await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: replacement);
+    }
+
+    // 3) 추가(add) 또는 replace의 replacement 생성
+    if (replacement == null) return;
+    if (canceled) {
+      await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: replacement);
+      return;
+    }
+
+    final DateTime target = replacement;
+
+    // set_id: replace는 원래 세트로, add는 override id(또는 명시 set_id)
+    final String setId = () {
+      if (ov.overrideType == OverrideType.replace) {
+        return ov.setId ?? _resolveSetId(ov.studentId, ov.originalClassDateTime ?? target) ?? ov.id;
+      }
+      return ov.setId ?? ov.id;
+    }();
 
     int? cycle = _resolveCycleByDueDate(ov.studentId, target);
-    int sessionOrder;
-    if (cycle != null) {
-      final setCycleKey = '${(ov.setId ?? ov.id)}|$cycle';
-      final dateKey = _dateKey(target);
-      final Map<String, Map<String, int>> dateOrderByKey = {};
-      final Map<String, int> counterByKey = {};
-      _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-      final m = dateOrderByKey.putIfAbsent(setCycleKey, () => {});
-      if (m.containsKey(dateKey)) {
-        sessionOrder = m[dateKey]!;
-      } else {
-        final next = (counterByKey[setCycleKey] ?? 0) + 1;
-        m[dateKey] = next;
-        counterByKey[setCycleKey] = next;
-        sessionOrder = next;
-      }
-    } else {
+    if (cycle == null) {
       final Map<String, DateTime> earliestMonthByKey = {};
       final Map<String, int> monthCountByKey = {};
       _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-      final keyBase = '${ov.studentId}|${(ov.setId ?? ov.id)}';
-      final monthDate = _monthKey(target);
-      cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
-      final setCycleKey = '${(ov.setId ?? ov.id)}|$cycle';
-      final dateKey = _dateKey(target);
-      final Map<String, Map<String, int>> dateOrderByKey = {};
-      final Map<String, int> counterByKey = {};
-      _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-      final m = dateOrderByKey.putIfAbsent(setCycleKey, () => {});
-      if (m.containsKey(dateKey)) {
-        sessionOrder = m[dateKey]!;
-      } else {
-        final next = (counterByKey[setCycleKey] ?? 0) + 1;
-        m[dateKey] = next;
-        counterByKey[setCycleKey] = next;
-        sessionOrder = next;
-      }
+      cycle = _calcCycle(earliestMonthByKey, '${ov.studentId}|$setId', _monthKey(target));
     }
-    if (cycle == null || cycle == 0) {
-      print(
-          '[WARN][PLAN][OVR] cycle null/0 → 1 set=${ov.setId ?? ov.id} student=${ov.studentId} date=$target (payment_records miss?)');
-      cycle = 1;
-    }
-    if (sessionOrder <= 0) {
-      print(
-          '[WARN][PLAN][OVR] sessionOrder<=0 → 1 set=${ov.setId ?? ov.id} student=${ov.studentId} date=$target');
-      sessionOrder = 1;
-    }
+    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
+    final Map<String, int> counterByStudentCycle = {};
+    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
+    final studentCycleKey = '${ov.studentId}|$cycle';
+    final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
+    final dateKey = _dateKey(target);
+    final int sessionOrder = m.containsKey(dateKey)
+        ? m[dateKey]!
+        : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
 
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
@@ -1557,10 +2055,11 @@ class AttendanceService {
       departureTime: null,
       notes: null,
       sessionTypeId: ov.sessionTypeId,
-      setId: ov.setId ?? ov.id,
-      cycle: cycle,
-      sessionOrder: sessionOrder,
+      setId: setId,
+      cycle: (cycle == null || cycle == 0) ? 1 : cycle,
+      sessionOrder: sessionOrder <= 0 ? 1 : sessionOrder,
       isPlanned: true,
+      snapshotId: null,
     );
 
     final row = {
@@ -1579,6 +2078,8 @@ class AttendanceService {
       'cycle': record.cycle,
       'session_order': record.sessionOrder,
       'is_planned': record.isPlanned,
+      'snapshot_id': null,
+      'batch_session_id': record.batchSessionId,
       'created_at': record.createdAt.toUtc().toIso8601String(),
       'updated_at': record.updatedAt.toUtc().toIso8601String(),
       'version': record.version,
@@ -1600,6 +2101,27 @@ class AttendanceService {
   }) async {
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
+    if (_sideDebug) {
+      final before = _attendanceRecords.length;
+      int willRemove = 0;
+      for (final r in _attendanceRecords) {
+        if (r.studentId != studentId) continue;
+        if (r.isPlanned != true) continue;
+        if (r.isPresent || r.arrivalTime != null) continue;
+        if (r.classDateTime.year != classDateTime.year ||
+            r.classDateTime.month != classDateTime.month ||
+            r.classDateTime.day != classDateTime.day ||
+            r.classDateTime.hour != classDateTime.hour ||
+            r.classDateTime.minute != classDateTime.minute) continue;
+        willRemove++;
+      }
+      final nowL = DateTime.now();
+      final todayL = DateTime(nowL.year, nowL.month, nowL.day);
+      final targetL = DateTime(classDateTime.year, classDateTime.month, classDateTime.day);
+      print(
+        '[PLAN][remove-date-start] student=$studentId dt=$classDateTime isToday=${targetL == todayL} localBefore=$before localWillRemove=$willRemove',
+      );
+    }
     try {
       await Supabase.instance.client
           .from('attendance_records')
@@ -1607,16 +2129,26 @@ class AttendanceService {
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .eq('is_planned', true)
+          // ⚠️ 순수 planned만 제거 (실제 기록 보호)
+          .eq('is_present', false)
+          .isFilter('arrival_time', null)
           .eq('class_date_time', classDateTime.toUtc().toIso8601String());
+      final beforeLocal = _attendanceRecords.length;
       _attendanceRecords.removeWhere((r) =>
           r.studentId == studentId &&
           r.isPlanned == true &&
+          !r.isPresent &&
+          r.arrivalTime == null &&
           r.classDateTime.year == classDateTime.year &&
           r.classDateTime.month == classDateTime.month &&
           r.classDateTime.day == classDateTime.day &&
           r.classDateTime.hour == classDateTime.hour &&
           r.classDateTime.minute == classDateTime.minute);
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      if (_sideDebug) {
+        final afterLocal = _attendanceRecords.length;
+        print('[PLAN][remove-date-done] student=$studentId removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+      }
     } catch (e) {
       print('[WARN] planned 제거 실패(student=$studentId, dt=$classDateTime): $e');
     }
@@ -1652,6 +2184,9 @@ class AttendanceService {
           .eq('student_id', studentId)
           .eq('set_id', setId)
           .eq('is_planned', true)
+          // ⚠️ 순수 planned만 삭제 (실제 출석/등원 기록 보호)
+          .eq('is_present', false)
+          .isFilter('arrival_time', null)
           .gte('class_date_time', anchor.toUtc().toIso8601String());
       print('[PLAN] deleted planned rows: $delRes');
       _attendanceRecords.removeWhere((r) =>
@@ -1701,12 +2236,6 @@ class AttendanceService {
         final classStart = DateTime(date.year, date.month, date.day, b.startHour, b.startMinute);
         final classEnd = classStart.add(b.duration);
 
-        final existing = getAttendanceRecord(studentId, classStart);
-        if (existing != null &&
-            (!existing.isPlanned || existing.arrivalTime != null || existing.isPresent)) {
-          continue;
-        }
-
         final agg = aggBySet.putIfAbsent(
           '$studentId|$setId',
           () => _PlannedDailyAgg(
@@ -1728,6 +2257,15 @@ class AttendanceService {
         final classDateTime =
             DateTime(agg.start.year, agg.start.month, agg.start.day, agg.start.hour, agg.start.minute);
         final classEndTime = agg.end;
+
+        // ✅ 이미 실제 기록(출석/등원 등)이 있으면 planned 생성하지 않음
+        final existingAtStart = getAttendanceRecord(studentId, classDateTime);
+        if (existingAtStart != null &&
+            (!existingAtStart.isPlanned ||
+                existingAtStart.arrivalTime != null ||
+                existingAtStart.isPresent)) {
+          continue;
+        }
 
         final keyBase = '$studentId|$setId';
         final dateKey = _dateKey(classDateTime);
@@ -1798,6 +2336,7 @@ class AttendanceService {
           cycle: cycle,
           sessionOrder: sessionOrder,
           isPlanned: true,
+          snapshotId: snapshotId,
         );
 
         rows.add({
@@ -1816,6 +2355,7 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
+          'snapshot_id': snapshotId,
           'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
@@ -1838,7 +2378,7 @@ class AttendanceService {
     final Map<String, String> batchSessionByRecordId = await _createBatchSessionsForPlanned(
       studentId: studentId,
       plannedRecords: localAdds,
-      snapshotId: null,
+      snapshotId: snapshotId,
     );
     for (int i = 0; i < localAdds.length; i++) {
       final rec = localAdds[i];
@@ -1888,6 +2428,89 @@ class AttendanceService {
     } catch (e, st) {
       print('[ATT][ERROR] 미하원 자동 처리 실패: $e\n$st');
     }
+  }
+
+  /// 결제 사이클(dueDate~다음 dueDate) 기준으로 planned/actual(결석 제외) 집계를 제공한다.
+  ///
+  /// - plannedCount: cycle 구간의 출석 레코드(예정 포함) 전체
+  /// - actualCount: 출석/등원/하원 기록이 있는 회차
+  /// - absent/pending: is_planned 여부로 구분(현재 스키마 한계상 완벽하진 않음)
+  CycleAttendanceSummary? getCycleAttendanceSummary({
+    required String studentId,
+    required int cycle,
+    DateTime? now,
+  }) {
+    final paymentRecords = _d.getPaymentRecords().where((p) => p.studentId == studentId).toList();
+    PaymentRecord? cur;
+    PaymentRecord? next;
+    for (final p in paymentRecords) {
+      if (p.cycle == cycle) cur = p;
+      if (p.cycle == cycle + 1) next = p;
+    }
+    if (cur == null) return null;
+
+    final DateTime start = DateTime(cur!.dueDate.year, cur!.dueDate.month, cur!.dueDate.day);
+    final DateTime end = next != null
+        ? DateTime(next!.dueDate.year, next!.dueDate.month, next!.dueDate.day)
+        // fallback: 다음 cycle이 없으면 31일을 가정(서버에서 미래 cycles를 생성하므로 보통 발생하지 않음)
+        : start.add(const Duration(days: 31));
+
+    final DateTime nowRef = now ?? DateTime.now();
+
+    int plannedCount = 0;
+    int actualCount = 0;
+    int absentCount = 0;
+    int pendingCount = 0;
+    int plannedMinutes = 0;
+    int actualMinutes = 0;
+    int absentMinutes = 0;
+    int pendingMinutes = 0;
+
+    for (final r in _attendanceRecords) {
+      if (r.studentId != studentId) continue;
+      if (r.classDateTime.isBefore(start) || !r.classDateTime.isBefore(end)) continue;
+
+      final int minutes = r.classEndTime.difference(r.classDateTime).inMinutes;
+      plannedCount += 1;
+      plannedMinutes += minutes;
+
+      final bool isActual = r.isPresent || r.arrivalTime != null || r.departureTime != null;
+      if (isActual) {
+        actualCount += 1;
+        actualMinutes += minutes;
+        continue;
+      }
+
+      // 미래 회차는 결석/미기록으로 분류하지 않는다.
+      if (r.classDateTime.isAfter(nowRef)) {
+        continue;
+      }
+
+      // 결석은 actual 0 (요구사항). 다만 스키마상 "명시 결석"과 "미기록"을 완벽히 구분하기 어려워
+      // isPlanned를 기준으로 pending/absent로 나누어 제공한다.
+      if (r.isPlanned) {
+        pendingCount += 1;
+        pendingMinutes += minutes;
+      } else {
+        absentCount += 1;
+        absentMinutes += minutes;
+      }
+    }
+
+    return CycleAttendanceSummary(
+      studentId: studentId,
+      cycle: cycle,
+      start: start,
+      end: end,
+      plannedCount: plannedCount,
+      actualCount: actualCount,
+      absentCount: absentCount,
+      pendingCount: pendingCount,
+      plannedMinutes: plannedMinutes,
+      actualMinutes: actualMinutes,
+      absentMinutes: absentMinutes,
+      pendingMinutes: pendingMinutes,
+    );
   }
 }
 

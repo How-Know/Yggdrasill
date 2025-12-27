@@ -15,6 +15,9 @@ class ConsultTrialLessonSlot {
   final String sourceNoteId;
   final String title; // 문의 노트 제목
   final DateTime createdAt;
+  /// 시범 수업(1회성) 출석(등원/하원) 시각(로컬). null이면 미기록.
+  final DateTime? arrivalTime;
+  final DateTime? departureTime;
   final DateTime weekStart; // date-only Monday (해당 주에만 표시)
   final int dayIndex; // 0=Mon..6=Sun
   final int hour; // 0..23
@@ -26,6 +29,8 @@ class ConsultTrialLessonSlot {
     required this.sourceNoteId,
     required this.title,
     required this.createdAt,
+    this.arrivalTime,
+    this.departureTime,
     required this.weekStart,
     required this.dayIndex,
     required this.hour,
@@ -35,12 +40,50 @@ class ConsultTrialLessonSlot {
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
+  ConsultTrialLessonSlot copyWith({
+    String? title,
+    DateTime? weekStart,
+    int? dayIndex,
+    int? hour,
+    int? minute,
+    int? count,
+    DateTime? arrivalTime,
+    DateTime? departureTime,
+    bool clearArrivalTime = false,
+    bool clearDepartureTime = false,
+  }) {
+    return ConsultTrialLessonSlot(
+      id: id,
+      sourceNoteId: sourceNoteId,
+      title: title ?? this.title,
+      createdAt: createdAt,
+      arrivalTime: clearArrivalTime ? null : (arrivalTime ?? this.arrivalTime),
+      departureTime: clearDepartureTime ? null : (departureTime ?? this.departureTime),
+      weekStart: weekStart ?? this.weekStart,
+      dayIndex: dayIndex ?? this.dayIndex,
+      hour: hour ?? this.hour,
+      minute: minute ?? this.minute,
+      count: count ?? this.count,
+    );
+  }
+
   factory ConsultTrialLessonSlot.fromJson(Map<String, dynamic> j) {
+    // v1 -> v2 마이그레이션:
+    // - 예전 키: completedAt(=등원으로 취급)
+    final completedAtStr = (j['completedAt'] as String?) ?? '';
+    final completedAt = completedAtStr.isNotEmpty ? DateTime.tryParse(completedAtStr) : null;
+
+    final arrivalStr = (j['arrivalTime'] as String?) ?? '';
+    final departureStr = (j['departureTime'] as String?) ?? '';
+    final arrival = arrivalStr.isNotEmpty ? DateTime.tryParse(arrivalStr) : null;
+    final departure = departureStr.isNotEmpty ? DateTime.tryParse(departureStr) : null;
     return ConsultTrialLessonSlot(
       id: j['id'] as String,
       sourceNoteId: (j['noteId'] as String?) ?? '',
       title: (j['title'] as String?) ?? '시범 수업',
       createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '') ?? DateTime.now(),
+      arrivalTime: arrival ?? completedAt,
+      departureTime: departure,
       weekStart: _dateOnly(DateTime.tryParse(j['weekStart'] as String? ?? '') ?? DateTime.now()),
       dayIndex: (j['dayIndex'] as num).toInt(),
       hour: (j['hour'] as num).toInt(),
@@ -54,6 +97,8 @@ class ConsultTrialLessonSlot {
         'noteId': sourceNoteId,
         'title': title,
         'createdAt': createdAt.toIso8601String(),
+        if (arrivalTime != null) 'arrivalTime': arrivalTime!.toIso8601String(),
+        if (departureTime != null) 'departureTime': departureTime!.toIso8601String(),
         'weekStart': _dateOnly(weekStart).toIso8601String(),
         'dayIndex': dayIndex,
         'hour': hour,
@@ -79,6 +124,20 @@ class ConsultTrialLessonService {
   static String slotKey(int dayIndex, int hour, int minute) => '$dayIndex-$hour:$minute';
 
   List<ConsultTrialLessonSlot> get slots => List.unmodifiable(_slots);
+  bool hasArrivedForNote(String noteId) =>
+      _slots.any((s) => s.sourceNoteId == noteId && s.arrivalTime != null);
+  bool hasAnyForNote(String noteId) => _slots.any((s) => s.sourceNoteId == noteId);
+  List<ConsultTrialLessonSlot> slotsForNote(String noteId) =>
+      _slots.where((s) => s.sourceNoteId == noteId).toList();
+
+  List<ConsultTrialLessonSlot> slotsForDate(DateTime date) {
+    final d = _dateOnly(date);
+    return _slots.where((s) {
+      final wk = _dateOnly(s.weekStart);
+      final slotDate = _dateOnly(wk.add(Duration(days: s.dayIndex)));
+      return slotDate == d;
+    }).toList();
+  }
 
   Future<Directory> _resolveDir() async {
     final docs = await getApplicationDocumentsDirectory();
@@ -133,13 +192,25 @@ class ConsultTrialLessonService {
   }) async {
     await load();
 
+    // ✅ 재저장/마이그레이션 시에도 등원/하원 기록이 유지되도록,
+    // (weekStart + slotKey) 기준으로 기존 레코드를 매핑한다.
+    final existingForNoteByKey = <String, ConsultTrialLessonSlot>{};
+    for (final s in _slots) {
+      if (s.sourceNoteId != noteId) continue;
+      final wk0 = _dateOnly(s.weekStart).toIso8601String().split('T').first;
+      final k0 = slotKey(s.dayIndex, s.hour, s.minute);
+      existingForNoteByKey['$wk0:$k0'] = s;
+    }
+
     // 기존 noteId 슬롯 제거
     final next = _slots.where((s) => s.sourceNoteId != noteId).toList();
 
     // 신규 슬롯 추가 (선택한 주에만 표시)
     final now = DateTime.now();
-    int idx = 0;
-    for (final k in slotKeys) {
+    final wk = _dateOnly(weekStart);
+    final wkKey = wk.toIso8601String().split('T').first;
+    final sortedKeys = slotKeys.toList()..sort();
+    for (final k in sortedKeys) {
       final parts = k.split('-');
       if (parts.length != 2) continue;
       final dayIdx = int.tryParse(parts[0]);
@@ -148,20 +219,72 @@ class ConsultTrialLessonService {
       final hh = int.tryParse(hm[0]);
       final mm = int.tryParse(hm[1]);
       if (hh == null || mm == null) continue;
+      // ✅ ID는 결정적으로(weekStart + slotKey 기반) 만들어, 출석(등원/하원) 기록이 재저장 시에도 유지되도록 한다.
+      final id = '$noteId:$wkKey:$k';
+      final prev = existingForNoteByKey['$wkKey:$k'];
       next.add(ConsultTrialLessonSlot(
-        id: '$noteId:$idx',
+        id: id,
         sourceNoteId: noteId,
         title: title,
         createdAt: now,
-        weekStart: _dateOnly(weekStart),
+        arrivalTime: prev?.arrivalTime,
+        departureTime: prev?.departureTime,
+        weekStart: wk,
         dayIndex: dayIdx,
         hour: hh,
         minute: mm,
         count: 1,
       ));
-      idx += 1;
     }
 
+    _slots = next;
+    slotsNotifier.value = List.unmodifiable(_slots);
+    await _write();
+  }
+
+  Future<void> setArrived({
+    required String slotId,
+    required bool arrived,
+  }) async {
+    await load();
+    final idx = _slots.indexWhere((s) => s.id == slotId);
+    if (idx == -1) return;
+    final cur = _slots[idx];
+    final nextSlot = arrived
+        ? cur.copyWith(arrivalTime: DateTime.now())
+        : cur.copyWith(clearArrivalTime: true, clearDepartureTime: true);
+    final next = [..._slots];
+    next[idx] = nextSlot;
+    _slots = next;
+    slotsNotifier.value = List.unmodifiable(_slots);
+    await _write();
+  }
+
+  Future<void> setLeaved({
+    required String slotId,
+    required bool leaved,
+  }) async {
+    await load();
+    final idx = _slots.indexWhere((s) => s.id == slotId);
+    if (idx == -1) return;
+    final cur = _slots[idx];
+    if (leaved) {
+      final now = DateTime.now();
+      final nextSlot = cur.copyWith(
+        arrivalTime: cur.arrivalTime ?? now,
+        departureTime: now,
+      );
+      final next = [..._slots];
+      next[idx] = nextSlot;
+      _slots = next;
+      slotsNotifier.value = List.unmodifiable(_slots);
+      await _write();
+      return;
+    }
+    // 하원 취소: departure만 지우고, arrival은 유지
+    final nextSlot = cur.copyWith(clearDepartureTime: true);
+    final next = [..._slots];
+    next[idx] = nextSlot;
     _slots = next;
     slotsNotifier.value = List.unmodifiable(_slots);
     await _write();
