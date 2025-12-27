@@ -636,71 +636,69 @@ class _TimetableScreenState extends State<TimetableScreen> {
   void _handleRegistrationButton() async {
     print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
     // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
-    // 1. 항상 최신 데이터로 동기화
-    await DataManager.instance.loadStudentTimeBlocks();
-    await DataManager.instance.loadStudents();
-    if (_splitButtonSelected == '학생') {
-      final selectedStudent = await showDialog<dynamic>(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) => StudentSearchDialog(isSelfStudyMode: false),
-      );
-      StudentWithInfo? studentWithInfo;
-      String? preselectedClassId;
-      if (selectedStudent != null) {
-        Student? selected;
-        if (selectedStudent is Map && selectedStudent['student'] is Student) {
-          selected = selectedStudent['student'] as Student;
-          preselectedClassId = selectedStudent['classId'] as String?;
-        } else if (selectedStudent is Student) {
-          selected = selectedStudent;
-        }
-        if (selected != null) {
-          // 항상 students에서 StudentWithInfo를 찾아서 사용
+    // ✅ 상단 '+ 추가' 버튼은 "학생 수업시간 등록"만 지원한다. (드롭다운 제거)
+    // 다이얼로그 표시가 느려지는 원인: 여기서 동기화(loadStudents/loadStudentTimeBlocks)를 await 하면
+    // 네트워크/DB I/O 때문에 1~2초 이상 블로킹될 수 있다.
+    // → 다이얼로그는 즉시 띄우고, 동기화는 첫 프레임 렌더 이후 백그라운드로 돌린다.
+    final dialogFuture = showDialog<dynamic>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => StudentSearchDialog(isSelfStudyMode: false),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(DataManager.instance.loadStudentTimeBlocks());
+      unawaited(DataManager.instance.loadStudents());
+    });
+    final selectedStudent = await dialogFuture;
+    StudentWithInfo? studentWithInfo;
+    String? preselectedClassId;
+    if (selectedStudent != null) {
+      Student? selected;
+      if (selectedStudent is Map && selectedStudent['student'] is Student) {
+        selected = selectedStudent['student'] as Student;
+        preselectedClassId = selectedStudent['classId'] as String?;
+      } else if (selectedStudent is Student) {
+        selected = selectedStudent;
+      }
+      if (selected != null) {
+        // 항상 students에서 StudentWithInfo를 찾아서 사용
+        studentWithInfo = DataManager.instance.students.firstWhere(
+          (s) => s.student.id == selected!.id,
+          orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
+        );
+        // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
+        if (studentWithInfo.student.id != selected!.id) {
+          await DataManager.instance.loadStudents();
           studentWithInfo = DataManager.instance.students.firstWhere(
             (s) => s.student.id == selected!.id,
             orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
           );
-          // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
-          if (studentWithInfo.student.id != selected!.id) {
-            await DataManager.instance.loadStudents();
-            studentWithInfo = DataManager.instance.students.firstWhere(
-              (s) => s.student.id == selected!.id,
-              orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
-            );
-          }
         }
-        final studentId = studentWithInfo?.student.id;
-        setState(() {
-          _isStudentRegistrationMode = true;
-          _isClassRegistrationMode = false;
-          _selectedStudentWithInfo = studentWithInfo != null ? studentWithInfo : null;
-          // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
-          if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
-            _selectedClassId = preselectedClassId;
-            print('[DEBUG][학생선택] preselectedClassId 적용: $_selectedClassId');
-          }
-          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
-        });
-        // ESC 등 키 입력 포커스를 다시 메인 타임테이블로 돌려 등록 취소/종료가 동작하도록 한다.
-        _focusNode.requestFocus();
-        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
-      } else {
-        setState(() {
-          _isStudentRegistrationMode = false;
-          _isClassRegistrationMode = false;
-          _selectedStudentWithInfo = null;
-          
-          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
-        });
-        print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
-    } else if (_splitButtonSelected == '자습') {
-      // 자습 등록 모드 진입 막기: 아무 동작도 하지 않음
-      return;
-    } else if (_splitButtonSelected == '수업') {
-      // 새 수업 등록 다이얼로그 오픈 (TimetableContentViewState 메서드 사용)
-      _contentViewKey.currentState?.openClassRegistrationDialog();
+      final studentId = studentWithInfo?.student.id;
+      setState(() {
+        _isStudentRegistrationMode = true;
+        _isClassRegistrationMode = false;
+        _selectedStudentWithInfo = studentWithInfo != null ? studentWithInfo : null;
+        // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
+        if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
+          _selectedClassId = preselectedClassId;
+          print('[DEBUG][학생선택] preselectedClassId 적용: $_selectedClassId');
+        }
+        print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
+      });
+      // ESC 등 키 입력 포커스를 다시 메인 타임테이블로 돌려 등록 취소/종료가 동작하도록 한다.
+      _focusNode.requestFocus();
+      print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+    } else {
+      setState(() {
+        _isStudentRegistrationMode = false;
+        _isClassRegistrationMode = false;
+        _selectedStudentWithInfo = null;
+        
+        print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+      });
+      print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
     }
   }
 
@@ -779,7 +777,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Widget _buildHeaderRegisterControls() {
     const double controlHeight = 48;
-    const double mainButtonWidth = 120;
+    const double mainButtonWidth = 130; // ✅ 내부 오른쪽 여백(10)만큼 너비도 같이 증가
     return Row(
       mainAxisAlignment: MainAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -789,84 +787,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
           height: controlHeight,
           child: Material(
             color: const Color(0xFF1B6B63),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(32),
-              bottomLeft: Radius.circular(32),
-              topRight: Radius.circular(6),
-              bottomRight: Radius.circular(6),
-            ),
+            borderRadius: BorderRadius.circular(controlHeight / 2), // ✅ 알약
             child: InkWell(
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(32),
-                bottomLeft: Radius.circular(32),
-                topRight: Radius.circular(6),
-                bottomRight: Radius.circular(6),
-              ),
+              borderRadius: BorderRadius.circular(controlHeight / 2),
               onTap: _handleRegistrationButton,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.max,
-                children: const [
-                  Icon(Icons.add, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Text('추가', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Container(
-          height: controlHeight,
-          width: 3.0,
-          color: Colors.transparent,
-          child: Center(
-            child: Container(
-              width: 2,
-              height: 30,
-              color: Colors.white.withOpacity(0.1),
-            ),
-          ),
-        ),
-        const SizedBox(width: 1),
-        GestureDetector(
-          key: _registerDropdownKey,
-          onTap: () {
-            if (_registerDropdownOverlay == null) {
-              setState(() {
-                _isDropdownOpen = true;
-              });
-              _showRegisterDropdownMenu();
-            } else {
-              _removeRegisterDropdownMenu();
-            }
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 350),
-            width: controlHeight,
-            height: controlHeight,
-            decoration: ShapeDecoration(
-              color: const Color(0xFF1B6B63),
-              shape: RoundedRectangleBorder(
-                borderRadius: _isDropdownOpen
-                    ? BorderRadius.circular(50)
-                    : const BorderRadius.only(
-                        topLeft: Radius.circular(6),
-                        bottomLeft: Radius.circular(6),
-                        topRight: Radius.circular(32),
-                        bottomRight: Radius.circular(32),
-                      ),
-              ),
-            ),
-            child: Center(
-              child: AnimatedRotation(
-                turns: _isDropdownOpen ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeInOut,
-                child: const Icon(
-                  Icons.keyboard_arrow_down,
-                  color: Colors.white,
-                  size: 26,
-                  key: ValueKey('arrow'),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.max,
+                  children: const [
+                    Icon(Icons.add, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      '추가',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ],
                 ),
               ),
             ),

@@ -759,9 +759,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
               id: const Uuid().v4(),
               original: trimmed,
               summary: '요약 중...',
-              categoryKey: (result.categoryKey != null && result.categoryKey!.trim().isNotEmpty)
-                  ? MemoCategory.normalize(result.categoryKey)
-                  : MemoCategory.inquiry,
+              categoryKey: MemoCategory.normalize(result.categoryKey),
               scheduledAt: scheduledAt,
               dismissed: false,
               createdAt: now,
@@ -769,27 +767,13 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
             );
             await DataManager.instance.addMemo(memo);
             try {
-              if (result.categoryKey != null && result.categoryKey!.trim().isNotEmpty) {
-                final summary = await AiSummaryService.summarize(memo.original);
-                await DataManager.instance.updateMemo(
-                  memo.copyWith(
-                    summary: summary,
-                    updatedAt: DateTime.now(),
-                  ),
-                );
-              } else {
-                final r = await AiSummaryService.summarizeMemoWithCategory(
-                  memo.original,
-                  scheduledAt: scheduledAt,
-                );
-                await DataManager.instance.updateMemo(
-                  memo.copyWith(
-                    summary: r.summary,
-                    categoryKey: r.categoryKey,
-                    updatedAt: DateTime.now(),
-                  ),
-                );
-              }
+              final summary = await AiSummaryService.summarize(memo.original);
+              await DataManager.instance.updateMemo(
+                memo.copyWith(
+                  summary: summary,
+                  updatedAt: DateTime.now(),
+                ),
+              );
             } catch (_) {}
           },
           onEditMemo: (ctx, item) async {

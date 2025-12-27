@@ -277,19 +277,10 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
-                            width: 5,
-                      height: 22,
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: levelBarColor,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
+                    Text(
+                      _levelLabel(level),
+                      style: TextStyle(color: levelTextColor, fontSize: 21, fontWeight: FontWeight.bold),
                     ),
-                      Text(
-                        _levelLabel(level),
-                        style: TextStyle(color: levelTextColor, fontSize: 21, fontWeight: FontWeight.bold),
-                      ),
                     const Spacer(),
                   ],
                 ),
@@ -579,6 +570,7 @@ class _DraggablePanelCard extends StatelessWidget {
         : [
             {'student': student, 'setId': _findSetId(student)}
           ];
+    final bool isMultiDrag = dragStudents.length > 1;
 
     final dragData = {
       'type': isClassRegisterMode ? 'register' : 'move',
@@ -597,7 +589,10 @@ class _DraggablePanelCard extends StatelessWidget {
       dragAnchorStrategy: pointerDragAnchorStrategy,
       maxSimultaneousDrags: 1,
       hapticFeedbackOnStart: true,
-      onDragStarted: onDragStart,
+      // ✅ 단일 이동에서는 삭제 드롭존을 띄우지 않음(다중 이동에서만 필요)
+      onDragStarted: () {
+        if (isMultiDrag) onDragStart?.call();
+      },
       onDragEnd: (details) {
         onDragEnd?.call();
       },
@@ -606,10 +601,9 @@ class _DraggablePanelCard extends StatelessWidget {
         dayIndex: dayIndex,
         startTime: startTime,
       ),
-      childWhenDragging: Opacity(
-        opacity: 0.3,
-        child: card,
-      ),
+      // ✅ 드래그 중 원본 카드가 투명해지면(Opacity) 스와이프 액션 패널이 비쳐 보일 수 있어
+      // 원본은 그대로 보이되 입력만 막는다.
+      childWhenDragging: AbsorbPointer(child: card),
       child: card,
     );
 

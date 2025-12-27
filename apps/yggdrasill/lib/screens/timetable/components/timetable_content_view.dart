@@ -526,17 +526,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       children: [
                                         Row(
                                           children: [
-                                            Container(
-                                              width: 5,
-                                              height: 22,
-                                              margin: const EdgeInsets.only(
-                                                  right: 8),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF223131),
-                                                borderRadius:
-                                                    BorderRadius.circular(4),
-                                              ),
-                                            ),
                                             Text(
                                               k,
                                               style: const TextStyle(
@@ -2022,7 +2011,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       if (MediaQuery.of(context).size.width >
                                           1600) ...[
                                         const SizedBox(width: 6),
-                                        const Icon(Symbols.auto_stories,
+                                        // ✅ 수업 리스트 타이틀 아이콘: Material Design 3(비행기/Travel)
+                                        const Icon(Symbols.flight,
                                             color: Color(0xFFEAF2F2), size: 28),
                                         const SizedBox(width: 10),
                                         const Text(
@@ -2038,6 +2028,23 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                   ),
                                 ),
                                 const Spacer(),
+                                // ✅ 수업 추가 버튼: 타이틀 줄 오른쪽 정렬 + 기존 수업 등록 다이얼로그 연결
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8, right: 4),
+                                  child: SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      tooltip: '수업 추가',
+                                      onPressed: () => _showClassRegistrationDialog(),
+                                      icon: const Icon(Icons.add_rounded),
+                                      iconSize: 30,
+                                      color: const Color(0xFFEAF2F2),
+                                      padding: EdgeInsets.zero,
+                                      splashRadius: 26,
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                             const SizedBox(height: 8),
@@ -2775,9 +2782,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
             maxSimultaneousDrags: 1,
             hapticFeedbackOnStart: true,
             onDragStarted: () {
-              setState(() {
-                _showDeleteZone = true;
-              });
+              // ✅ 단일 이동에서는 삭제 드롭존을 띄우지 않음(다중 이동에서만 필요)
+              if ((studentsWithSetId).length <= 1) return;
+              setState(() => _showDeleteZone = true);
             },
             onDraggableCanceled: (_, __) {
               setState(() {
@@ -2793,8 +2800,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
               });
             },
             feedback: _buildDragFeedback(selectedStudents, info),
-            childWhenDragging: Opacity(
-              opacity: 0.3,
+            // ✅ 드래그 중 원본 카드가 투명해지면 스와이프 액션(수정/삭제)이 비쳐 보일 수 있어 입력만 막는다.
+            childWhenDragging: AbsorbPointer(
               child: _buildSelectableStudentCard(
                 info,
                 selected: widget.selectedStudentIds.contains(info.student.id),
@@ -3393,15 +3400,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
               children: [
                 Row(
                   children: [
-                    Container(
-                      width: 5,
-                      height: 22,
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF223131),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
                     Text(
                       dayTimeLabel,
                       style: const TextStyle(

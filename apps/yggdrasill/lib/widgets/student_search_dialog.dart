@@ -30,7 +30,17 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   void initState() {
     super.initState();
     _refreshStudentList();
-    DataManager.instance.studentTimeBlocksNotifier.addListener(_refreshStudentList); // 시간표 변경 시 자동 새로고침
+    // 시간표/학생 목록 변경 시 자동 새로고침
+    DataManager.instance.studentTimeBlocksNotifier.addListener(_refreshStudentList);
+    DataManager.instance.studentsNotifier.addListener(_refreshStudentList);
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.studentTimeBlocksNotifier.removeListener(_refreshStudentList);
+    DataManager.instance.studentsNotifier.removeListener(_refreshStudentList);
+    _searchController.dispose();
+    super.dispose();
   }
 
   /// 자습 등록 가능 학생 리스트 반환 (수업이 등록된 학생들)
@@ -365,12 +375,6 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
         borderRadius: BorderRadius.circular(10),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    DataManager.instance.studentTimeBlocksNotifier.removeListener(_refreshStudentList); // 리스너 해제
-    super.dispose();
   }
 } 
 

@@ -11,14 +11,13 @@ const Color _dlgAccent = Color(0xFF33A373);
 
 class MemoCreateResult {
   final String text;
-  /// null이면 "자동 분류"를 의미
-  final String? categoryKey; // schedule|inquiry|null(auto)
-  const MemoCreateResult(this.text, {this.categoryKey});
+  /// 메모 카테고리(수동 선택)
+  final String categoryKey; // schedule|consult
+  const MemoCreateResult(this.text, {required this.categoryKey});
 }
 
 class MemoInputDialog extends StatefulWidget {
-  /// null이면 "자동"으로 시작
-  final String? initialCategoryKey; // schedule|inquiry|null(auto)
+  final String? initialCategoryKey; // schedule|consult
   const MemoInputDialog({super.key, this.initialCategoryKey});
 
   @override
@@ -28,16 +27,16 @@ class MemoInputDialog extends StatefulWidget {
 class _MemoInputDialogState extends State<MemoInputDialog> {
   final TextEditingController _controller = ImeAwareTextEditingController();
   bool _saving = false;
-  String? _categoryKey; // null=자동, schedule, inquiry
+  String _categoryKey = 'schedule'; // schedule|consult
 
   @override
   void initState() {
     super.initState();
     final k = widget.initialCategoryKey;
-    if (k == 'schedule' || k == 'inquiry') {
-      _categoryKey = k;
+    if (k == 'schedule' || k == 'consult') {
+      _categoryKey = k!;
     } else {
-      _categoryKey = null;
+      _categoryKey = 'schedule';
     }
   }
 
@@ -91,16 +90,6 @@ class _MemoInputDialogState extends State<MemoInputDialog> {
                 runSpacing: 8,
                 children: [
                   ChoiceChip(
-                    label: const Text('자동', style: TextStyle(fontWeight: FontWeight.w800)),
-                    selected: _categoryKey == null,
-                    onSelected: (_) => setState(() => _categoryKey = null),
-                    selectedColor: _dlgAccent,
-                    backgroundColor: _dlgPanelBg,
-                    labelStyle: TextStyle(color: _categoryKey == null ? Colors.white : _dlgTextSub),
-                    side: BorderSide(color: _categoryKey == null ? _dlgAccent : _dlgBorder, width: _categoryKey == null ? 2 : 1),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                  ),
-                  ChoiceChip(
                     label: const Text('일정', style: TextStyle(fontWeight: FontWeight.w800)),
                     selected: _categoryKey == 'schedule',
                     onSelected: (_) => setState(() => _categoryKey = 'schedule'),
@@ -111,13 +100,13 @@ class _MemoInputDialogState extends State<MemoInputDialog> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                   ),
                   ChoiceChip(
-                    label: const Text('문의', style: TextStyle(fontWeight: FontWeight.w800)),
-                    selected: _categoryKey == 'inquiry',
-                    onSelected: (_) => setState(() => _categoryKey = 'inquiry'),
+                    label: const Text('상담', style: TextStyle(fontWeight: FontWeight.w800)),
+                    selected: _categoryKey == 'consult',
+                    onSelected: (_) => setState(() => _categoryKey = 'consult'),
                     selectedColor: _dlgAccent,
                     backgroundColor: _dlgPanelBg,
-                    labelStyle: TextStyle(color: _categoryKey == 'inquiry' ? Colors.white : _dlgTextSub),
-                    side: BorderSide(color: _categoryKey == 'inquiry' ? _dlgAccent : _dlgBorder, width: _categoryKey == 'inquiry' ? 2 : 1),
+                    labelStyle: TextStyle(color: _categoryKey == 'consult' ? Colors.white : _dlgTextSub),
+                    side: BorderSide(color: _categoryKey == 'consult' ? _dlgAccent : _dlgBorder, width: _categoryKey == 'consult' ? 2 : 1),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                   ),
                 ],

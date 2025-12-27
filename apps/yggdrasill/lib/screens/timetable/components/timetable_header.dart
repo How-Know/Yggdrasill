@@ -86,6 +86,22 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 ),
               ),
               const Spacer(),
+              SizedBox(
+                width: 48,
+                height: 48,
+                child: IconButton(
+                  tooltip: 'PDF 내보내기(준비중)',
+                  onPressed: () {
+                    // TODO: PDF 내보내기 기능 연결
+                  },
+                  // ✅ 20% 확대
+                  icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white70, size: 26),
+                  splashRadius: 22,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ),
+              const SizedBox(width: 6),
               Container(
                 height: 48,
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

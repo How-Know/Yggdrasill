@@ -1120,9 +1120,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
   Future<void> _onAddMemoPressed() async {
     final dlgCtx = widget.dialogContext ?? context;
-    final initialCat = (_memoFilterKey == MemoCategory.schedule || _memoFilterKey == MemoCategory.inquiry)
+    final initialCat = (_memoFilterKey == MemoCategory.schedule || _memoFilterKey == MemoCategory.consult)
         ? _memoFilterKey
-        : null;
+        : MemoCategory.schedule;
     final result = await showDialog<MemoCreateResult>(
       context: dlgCtx,
       useRootNavigator: true,
@@ -1134,13 +1134,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
     final now = DateTime.now();
     final trimmed = text;
-    final String? pickedCategoryKey = result.categoryKey;
+    final String pickedCategoryKey = result.categoryKey;
     final memo = Memo(
       id: const Uuid().v4(),
       original: trimmed,
       summary: '요약 중...',
       scheduledAt: await AiSummaryService.extractDateTime(trimmed),
-      categoryKey: pickedCategoryKey ?? MemoCategory.inquiry,
+      categoryKey: MemoCategory.normalize(pickedCategoryKey),
       dismissed: false,
       createdAt: now,
       updatedAt: now,
@@ -1148,28 +1148,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
     await DataManager.instance.addMemo(memo);
 
     try {
-      if (pickedCategoryKey != null && pickedCategoryKey.trim().isNotEmpty) {
-        final summary = await AiSummaryService.summarize(memo.original);
-        await DataManager.instance.updateMemo(
-          memo.copyWith(
-            summary: summary,
-            categoryKey: MemoCategory.normalize(pickedCategoryKey),
-            updatedAt: DateTime.now(),
-          ),
-        );
-      } else {
-        final r = await AiSummaryService.summarizeMemoWithCategory(
-          memo.original,
-          scheduledAt: memo.scheduledAt,
-        );
-        await DataManager.instance.updateMemo(
-          memo.copyWith(
-            summary: r.summary,
-            categoryKey: r.categoryKey,
-            updatedAt: DateTime.now(),
-          ),
-        );
-      }
+      final summary = await AiSummaryService.summarize(memo.original);
+      await DataManager.instance.updateMemo(
+        memo.copyWith(
+          summary: summary,
+          updatedAt: DateTime.now(),
+        ),
+      );
     } catch (_) {}
   }
 
@@ -1412,15 +1397,15 @@ class _MemoExplorer extends StatelessWidget {
                   list = list.where((m) => m.categoryKey == selectedFilterKey).toList();
                 }
 
-                // 문의 탭에서는: 등록 문의(필기 노트) 목록 + 문의 메모를 같은 리스트 스타일로 제공
+                // 문의 탭에서는: 등록 문의(필기 노트) 목록만 제공 (문의 메모 리스트는 제거)
                 if (selectedFilterKey == MemoCategory.inquiry) {
                   return FutureBuilder<List<ConsultNoteMeta>>(
                     future: ConsultNoteService.instance.listMetas(),
                     builder: (context, snap) {
                       final notes = snap.data ?? const <ConsultNoteMeta>[];
-                      if (notes.isEmpty && list.isEmpty) {
+                      if (notes.isEmpty) {
                         return const Center(
-                          child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                          child: Text('등록 문의 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
                         );
                       }
 
@@ -1487,26 +1472,6 @@ class _MemoExplorer extends StatelessWidget {
                             );
                           },
                         ));
-                      }
-
-                      if (list.isNotEmpty) {
-                        items.add(const Padding(
-                          padding: EdgeInsets.fromLTRB(2, 10, 2, 8),
-                          child: Text('문의 메모', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
-                        ));
-                        for (final m in list) {
-                          final when = _scheduleLabel(m.scheduledAt);
-                          items.add(_MemoCard(
-                            key: ValueKey(m.id),
-                            dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
-                            scheduleLabel: when,
-                            categoryLabel: MemoCategory.labelOf(m.categoryKey),
-                            text: _displayText(m),
-                            onTap: () => onEditMemo(m),
-                            onDelete: () => unawaited(DataManager.instance.deleteMemo(m.id)),
-                          ));
-                          items.add(const SizedBox(height: 10));
-                        }
                       }
 
                       return ListView(
