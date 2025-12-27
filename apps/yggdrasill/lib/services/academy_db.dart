@@ -279,7 +279,6 @@ class AcademyDbService {
             student_id TEXT UNIQUE,
             registration_date INTEGER,
             payment_method TEXT,
-            weekly_class_count INTEGER DEFAULT 1,
             tuition_fee INTEGER,
             lateness_threshold INTEGER DEFAULT 10,
             schedule_notification INTEGER DEFAULT 0,
@@ -324,7 +323,6 @@ class AcademyDbService {
             id TEXT PRIMARY KEY,
             original TEXT,
             summary TEXT,
-            category TEXT,
             scheduled_at TEXT,
             dismissed INTEGER,
             created_at TEXT,
@@ -935,7 +933,6 @@ class AcademyDbService {
               student_id TEXT UNIQUE,
               registration_date INTEGER,
               payment_method TEXT,
-              weekly_class_count INTEGER DEFAULT 1,
               tuition_fee INTEGER,
               lateness_threshold INTEGER DEFAULT 10,
               schedule_notification INTEGER DEFAULT 0,
@@ -1013,7 +1010,6 @@ class AcademyDbService {
               id TEXT PRIMARY KEY,
               original TEXT,
               summary TEXT,
-              category TEXT,
               scheduled_at TEXT,
               dismissed INTEGER,
               created_at TEXT,
@@ -1257,16 +1253,6 @@ class AcademyDbService {
           // 5) 백업 테이블 삭제
           await db.execute('DROP TABLE student_time_blocks_v16_backup');
           print('[DB] 버전 16 마이그레이션 완료: student_time_blocks 재구성');
-        }
-        // 버전 15: student_payment_info 테이블에 weekly_class_count 컬럼 추가
-        if (oldVersion < 15) {
-          print('[DB] 버전 15 마이그레이션 시작: student_payment_info.weekly_class_count 컬럼 추가');
-          final columns = await db.rawQuery("PRAGMA table_info(student_payment_info)");
-          final hasWeekly = columns.any((col) => col['name'] == 'weekly_class_count');
-          if (!hasWeekly) {
-            await db.execute('ALTER TABLE student_payment_info ADD COLUMN weekly_class_count INTEGER DEFAULT 1');
-          }
-          print('[DB] 버전 15 마이그레이션 완료: weekly_class_count 컬럼 추가');
         }
       },
     );
@@ -1522,34 +1508,13 @@ class AcademyDbService {
           id TEXT PRIMARY KEY,
           original TEXT,
           summary TEXT,
-          category TEXT,
           scheduled_at TEXT,
           dismissed INTEGER,
           created_at TEXT,
-          updated_at TEXT,
-          recurrence_type TEXT,
-          weekdays TEXT,
-          recurrence_end TEXT,
-          recurrence_count INTEGER
+          updated_at TEXT
         )
       ''');
     }
-    // 컬럼 보강(버전 마이그레이션 누락/테이블 재생성 케이스 대비)
-    final cols = await dbClient.rawQuery("PRAGMA table_info(memos)");
-    bool has(String name) => cols.any((c) => (c['name'] as String?) == name);
-    Future<void> addCol(String name, String ddl) async {
-      if (has(name)) return;
-      await dbClient.execute(ddl);
-    }
-    await addCol('category', 'ALTER TABLE memos ADD COLUMN category TEXT');
-    await addCol('recurrence_type', 'ALTER TABLE memos ADD COLUMN recurrence_type TEXT');
-    await addCol('weekdays', 'ALTER TABLE memos ADD COLUMN weekdays TEXT');
-    await addCol('recurrence_end', 'ALTER TABLE memos ADD COLUMN recurrence_end TEXT');
-    await addCol('recurrence_count', 'ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
-    // category 기본값 보정
-    try {
-      await dbClient.execute("UPDATE memos SET category = 'inquiry' WHERE category IS NULL OR category = ''");
-    } catch (_) {}
   }
 
   // ======== RESOURCES (FOLDERS/FILES) ========

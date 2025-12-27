@@ -443,7 +443,6 @@ class BackfillRunner {
             'student_id': _toUuid(rawStudentId, 'students'),
             'registration_date': fromMs(r['registration_date'])?.toIso8601String(),
             'payment_method': r['payment_method'],
-            'weekly_class_count': r['weekly_class_count'],
             'tuition_fee': r['tuition_fee'],
             'lateness_threshold': r['lateness_threshold'],
             'schedule_notification': intToBool(r['schedule_notification']),

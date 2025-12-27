@@ -43,8 +43,6 @@ class StudentWithInfo {
   String? get phoneNumber => student.phoneNumber;
   String? get parentPhoneNumber => student.parentPhoneNumber;
   DateTime? get registrationDate => basicInfo.registrationDate;
-  // 기본 주간 수업 횟수
-  int get weeklyClassCount => 1;
   // 호환성을 위한 추가 getter들
   String? get studentPaymentType => 'monthly';
   int? get studentSessionCycle => 1;
@@ -589,7 +587,7 @@ class DataManager {
           final paymentInfo = _studentPaymentInfos.firstWhere(
             (p) => p.studentId == s.id,
             orElse: () => StudentPaymentInfo(
-              id: '', studentId: s.id, registrationDate: DateTime.now(), paymentMethod: 'monthly', weeklyClassCount: 1,
+              id: '', studentId: s.id, registrationDate: DateTime.now(), paymentMethod: 'monthly',
               tuitionFee: 0, latenessThreshold: 10, scheduleNotification: false, attendanceNotification: false,
               departureNotification: false, latenessNotification: false, createdAt: DateTime.now(), updatedAt: DateTime.now(),
             ),
@@ -1283,7 +1281,6 @@ class DataManager {
           studentId: student.id,
           registrationDate: basicInfo.registrationDate ?? now,
           paymentMethod: 'monthly',
-          weeklyClassCount: 1,
           tuitionFee: 0,
           createdAt: now,
           updatedAt: now,
@@ -1294,7 +1291,6 @@ class DataManager {
           'student_id': paymentInfo.studentId,
           'registration_date': paymentInfo.registrationDate.toIso8601String(),
           'payment_method': paymentInfo.paymentMethod,
-          'weekly_class_count': paymentInfo.weeklyClassCount,
           'tuition_fee': paymentInfo.tuitionFee,
         }, onConflict: 'student_id');
         await Supabase.instance.client.rpc('init_first_due', params: {
@@ -1720,7 +1716,6 @@ class DataManager {
         if (normalized.setId != null) {
           await _recalculateWeeklyOrderForStudent(normalized.studentId);
         }
-        await syncWeeklyClassCount(normalized.studentId, onAdd: true);
         if (normalized.setId != null) {
           _schedulePlannedRegen(normalized.studentId, normalized.setId!);
         }
@@ -1736,7 +1731,6 @@ class DataManager {
     if (normalized.setId != null) {
       await _recalculateWeeklyOrderForStudent(normalized.studentId);
     }
-    await syncWeeklyClassCount(normalized.studentId, onAdd: true);
     if (normalized.setId != null) {
       _schedulePlannedRegen(normalized.studentId, normalized.setId!);
     }
@@ -1759,7 +1753,6 @@ class DataManager {
           final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
           final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
           print('[SYNC][remove] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
-          await syncWeeklyClassCount(sidForSync, onAdd: false);
         }
         return;
       } catch (e, st) {
@@ -1776,7 +1769,6 @@ class DataManager {
       final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
       final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
       print('[SYNC][remove-local] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
-      await syncWeeklyClassCount(sidForSync, onAdd: false);
     }
   }
 
@@ -2044,9 +2036,6 @@ class DataManager {
     for (final studentId in affectedStudents) {
       await _recalculateWeeklyOrderForStudent(studentId);
     }
-    for (final studentId in affectedStudents) {
-      await syncWeeklyClassCount(studentId, onAdd: true);
-    }
     // 예정 출석 재생성 (setId가 있는 블록) - 학생별로 setId를 모아서 한 번씩만 수행
     for (final b in normalizedBlocks.where((e) => e.setId != null)) {
       _schedulePlannedRegen(b.studentId, b.setId!);
@@ -2119,7 +2108,6 @@ class DataManager {
     final affectedStudents = pending.map((b) => b.studentId).toSet();
     for (final sid in affectedStudents) {
       await _recalculateWeeklyOrderForStudent(sid);
-      await syncWeeklyClassCount(sid, onAdd: true);
     }
 
     if (generatePlanned) {
@@ -2142,11 +2130,14 @@ class DataManager {
     bool immediate = false,
     bool skipPlannedRegen = false,
     bool publish = true, // 중간 publish를 건너뛸 수 있게 추가
+    DateTime? endDateOverride, // 기본: 오늘-1일. 예약 변경 등에서 특정 날짜로 닫기 위해 사용
   }) async {
     final removedBlocks = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
     final affectedStudents = removedBlocks.map((b) => b.studentId).toSet();
     final today = _todayDateOnly();
-    final endDate = today.subtract(const Duration(days: 1));
+    final endDate = endDateOverride != null
+        ? DateTime(endDateOverride.year, endDateOverride.month, endDateOverride.day)
+        : today.subtract(const Duration(days: 1));
 
     if (TagPresetService.preferSupabaseRead) {
       try {
@@ -2159,7 +2150,6 @@ class DataManager {
           final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
           final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
           print('[SYNC][bulkRemove] studentId=$sid blocks=${remain.length} setIds=$remainSets');
-          await syncWeeklyClassCount(sid, onAdd: false);
         }
       } catch (e, st) {
         print('[SUPA][stb bulk delete] $e\n$st');
@@ -2172,7 +2162,6 @@ class DataManager {
         final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
         final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
         print('[SYNC][bulkRemove-local] studentId=$sid blocks=${remain.length} setIds=$remainSets');
-        await syncWeeklyClassCount(sid, onAdd: false);
       }
     }
     
@@ -2778,11 +2767,6 @@ class DataManager {
     return result;
   }
 
-  int getStudentWeeklyClassCount(String studentId) {
-    final info = getStudentPaymentInfo(studentId);
-    return info?.weeklyClassCount ?? 1;
-  }
-
   /// 학생별 고유 세트 개수 반환 (setId 고유 개수, sessionTypeId 여부 무관)
   /// refDate 기준 활성 블록만 카운트한다.
   int getStudentSetCount(String studentId, {DateTime? refDate}) {
@@ -2801,48 +2785,7 @@ class DataManager {
     return cnt;
   }
 
-  /// weekly_class_count를 set 개수와 조건부 동기화
-  /// - onAdd: setCount가 weekly보다 크면 올려준다(최대값 유지), 작으면 그대로 둠
-  /// - onRemove: setCount가 weekly보다 작으면 내려준다(최소값 유지), 크거나 같으면 그대로 둠
-  Future<void> syncWeeklyClassCount(String studentId, {required bool onAdd, DateTime? refDate}) async {
-    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
-    final blocksForStudent = _studentTimeBlocks.where((b) => b.studentId == studentId).toList();
-    final detail = blocksForStudent
-        .take(50)
-        .map((b) => '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}')
-        .toList();
-    final actual = getStudentSetCount(studentId, refDate: date);
-    final current = getStudentWeeklyClassCount(studentId);
-    int next = current;
-    if (onAdd) {
-      if (actual > current) next = actual;
-    } else {
-      if (actual < current) next = actual;
-    }
-    print('[SYNC][weekly] date=$date onAdd=$onAdd studentId=$studentId actual=$actual current=$current next=$next blocks=${blocksForStudent.length} detail=$detail');
-    if (next != current) {
-      await setStudentWeeklyClassCount(studentId, next);
-    }
-  }
-
-  // 추천 학생: weekly_class_count 대비 현재 set_id 개수가 미만인 학생 목록
-  List<StudentWithInfo> getRecommendedStudentsForWeeklyClassCount() {
-    final result = students.where((s) {
-      final setCount = getStudentLessonSetCount(s.student.id);
-      final weekly = getStudentWeeklyClassCount(s.student.id);
-      return setCount < weekly;
-    }).toList();
-    // 차이(remaining) 큰 순 또는 이름순 정렬 등 정책 선택 가능; 여기서는 remaining 내림차순→이름
-    result.sort((a, b) {
-      final ra = getStudentWeeklyClassCount(a.student.id) - getStudentLessonSetCount(a.student.id);
-      final rb = getStudentWeeklyClassCount(b.student.id) - getStudentLessonSetCount(b.student.id);
-      if (rb != ra) return rb.compareTo(ra);
-      return a.student.name.compareTo(b.student.name);
-    });
-    return result;
-  }
-
-  /// 자습 등록 가능 학생 리스트 반환 (weeklyClassCount - setId 개수 <= 0)
+  /// 자습 등록 가능 학생 리스트 반환
   List<StudentWithInfo> getSelfStudyEligibleStudents() {
     final eligible = students.where((s) {
       final setCount = getStudentLessonSetCount(s.student.id);
@@ -2855,9 +2798,11 @@ class DataManager {
   }
 
   /// 특정 수업에 등록된 학생 수 반환
-  int getStudentCountForClass(String classId) {
+  /// - refDate를 주면 "보고 있는 날짜" 기준으로 start_date/end_date 활성판정 후 카운트
+  int getStudentCountForClass(String classId, {DateTime? refDate}) {
     // print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
-    final blocks = _activeBlocks(_todayDateOnly()).where((b) => b.sessionTypeId == classId).toList();
+    final d = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
+    final blocks = _activeBlocks(d).where((b) => b.sessionTypeId == classId).toList();
     //print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
     final studentIds = blocks.map((b) => b.studentId).toSet();
     //print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
@@ -3548,7 +3493,7 @@ DateTime? _lastClassesOrderSaveStart;
           final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
           final rows = await Supabase.instance.client
               .from('student_payment_info')
-              .select('id,student_id,registration_date,payment_method,weekly_class_count,tuition_fee,lateness_threshold,'
+              .select('id,student_id,registration_date,payment_method,tuition_fee,lateness_threshold,'
                       'schedule_notification,attendance_notification,departure_notification,lateness_notification,'
                       'created_at,updated_at')
               .eq('academy_id', academyId);
@@ -3557,7 +3502,6 @@ DateTime? _lastClassesOrderSaveStart;
             studentId: (m['student_id'] as String),
             registrationDate: DateTime.tryParse((m['registration_date'] as String?) ?? '') ?? DateTime.now(),
             paymentMethod: (m['payment_method'] as String?) ?? 'monthly',
-            weeklyClassCount: (m['weekly_class_count'] as int?) ?? 1,
             tuitionFee: (m['tuition_fee'] as int?) ?? 0,
             latenessThreshold: (m['lateness_threshold'] as int?) ?? 10,
             scheduleNotification: (m['schedule_notification'] as bool?) ?? false,
@@ -3619,7 +3563,6 @@ DateTime? _lastClassesOrderSaveStart;
             'student_id': paymentInfo.studentId,
             'registration_date': paymentInfo.registrationDate.toIso8601String(),
             'payment_method': paymentInfo.paymentMethod,
-            'weekly_class_count': paymentInfo.weeklyClassCount,
             'tuition_fee': paymentInfo.tuitionFee,
             'lateness_threshold': paymentInfo.latenessThreshold,
             'schedule_notification': paymentInfo.scheduleNotification,
@@ -3643,7 +3586,6 @@ DateTime? _lastClassesOrderSaveStart;
             'student_id': paymentInfo.studentId,
             'registration_date': paymentInfo.registrationDate.toIso8601String(),
             'payment_method': paymentInfo.paymentMethod,
-            'weekly_class_count': paymentInfo.weeklyClassCount,
             'tuition_fee': paymentInfo.tuitionFee,
             'lateness_threshold': paymentInfo.latenessThreshold,
             'schedule_notification': paymentInfo.scheduleNotification,
@@ -3683,7 +3625,6 @@ DateTime? _lastClassesOrderSaveStart;
             'student_id': updatedPaymentInfo.studentId,
             'registration_date': updatedPaymentInfo.registrationDate.toIso8601String(),
             'payment_method': updatedPaymentInfo.paymentMethod,
-            'weekly_class_count': updatedPaymentInfo.weeklyClassCount,
             'tuition_fee': updatedPaymentInfo.tuitionFee,
             'lateness_threshold': updatedPaymentInfo.latenessThreshold,
             'schedule_notification': updatedPaymentInfo.scheduleNotification,
@@ -3697,31 +3638,6 @@ DateTime? _lastClassesOrderSaveStart;
       print('[ERROR] 학생 결제 정보 업데이트 실패: $e');
       rethrow;
     }
-  }
-
-  // 주간 수업 횟수 설정(증가/감소 모두 포함)
-  Future<void> setStudentWeeklyClassCount(String studentId, int newWeeklyCount) async {
-    // 기존 PaymentInfo 조회
-    final existing = getStudentPaymentInfo(studentId);
-    final now = DateTime.now();
-    if (existing != null) {
-      final updated = existing.copyWith(weeklyClassCount: newWeeklyCount, updatedAt: now);
-      await updateStudentPaymentInfo(updated);
-    } else {
-      // 존재하지 않으면 기본값으로 새로 생성
-      final info = StudentPaymentInfo(
-        id: const Uuid().v4(),
-        studentId: studentId,
-        registrationDate: now,
-        paymentMethod: 'monthly',
-        weeklyClassCount: newWeeklyCount,
-        tuitionFee: 0,
-        createdAt: now,
-        updatedAt: now,
-      );
-      await addStudentPaymentInfo(info);
-    }
-    await loadStudentPaymentInfos();
   }
 
   // 학생 결제 정보 삭제

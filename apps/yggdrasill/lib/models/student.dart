@@ -78,7 +78,6 @@ class Student {
 
   // 호환성을 위한 getter들 (기본값 제공)
   DateTime get registrationDate => DateTime.now();
-  int get weeklyClassCount => 1;
 
   @override
   String toString() {
@@ -142,7 +141,6 @@ class StudentBasicInfo {
   }
 
   // 호환성을 위한 getter들 (기본값 제공)
-  int get weeklyClassCount => 1;
   String get studentPaymentType => 'monthly';
   int get studentSessionCycle => 1;
 

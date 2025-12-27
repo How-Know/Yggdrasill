@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import '../models/group_info.dart';
 import '../models/student.dart';
+import '../services/data_manager.dart';
 import 'group_registration_dialog.dart';
 import 'student_card.dart';
 
 class GroupCard extends StatelessWidget {
   final GroupInfo groupInfo;
-  final List<Student> students;
+  final List<StudentWithInfo> students;
   final List<GroupInfo> groups;
   final Function(GroupInfo, int) onEdit;
   final Function(String) onDelete;
@@ -28,10 +29,15 @@ class GroupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final groupStudents = students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
-    return DragTarget<Student>(
-      onWillAccept: (student) => student != null && student.groupInfo?.id != groupInfo.id,
-      onAccept: (student) {
+    final groupStudents = students
+        .where((s) => (s.basicInfo.groupId ?? s.student.groupId ?? s.student.groupInfo?.id) == groupInfo.id)
+        .toList();
+    return DragTarget<StudentWithInfo>(
+      onWillAccept: (studentWithInfo) =>
+          studentWithInfo != null &&
+          (studentWithInfo.basicInfo.groupId ?? studentWithInfo.student.groupId ?? studentWithInfo.student.groupInfo?.id) != groupInfo.id,
+      onAccept: (studentWithInfo) {
+        final student = studentWithInfo.student;
         final oldGroupInfo = student.groupInfo;
         onStudentMove(student, groupInfo);
         // 변경 알림 표시
@@ -172,11 +178,11 @@ class GroupCard extends StatelessWidget {
                     runSpacing: 16,
                     alignment: WrapAlignment.start,
                     children: groupStudents
-                        .map((student) => StudentCard(
-                              studentWithInfo: student,
+                        .map((studentWithInfo) => StudentCard(
+                              studentWithInfo: studentWithInfo,
                               onShowDetails: (studentWithInfo) {},
-                              onDelete: onStudentDelete != null ? (studentWithInfo) => onStudentDelete!(studentWithInfo.student) : null,
-                              onUpdate: onStudentEdit != null ? (studentWithInfo) => onStudentEdit!(studentWithInfo.student) : null,
+                              onDelete: (studentWithInfo) => onStudentDelete(studentWithInfo.student),
+                              onUpdate: (studentWithInfo) => onStudentEdit(studentWithInfo.student),
                             ))
                         .toList(),
                   ),

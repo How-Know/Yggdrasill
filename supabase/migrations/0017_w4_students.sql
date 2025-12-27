@@ -77,7 +77,6 @@ create table if not exists public.student_payment_info (
   student_id uuid not null unique references public.students(id) on delete cascade,
   registration_date timestamptz,
   payment_method text,
-  weekly_class_count integer default 1,
   tuition_fee integer,
   lateness_threshold integer default 10,
   schedule_notification boolean default false,

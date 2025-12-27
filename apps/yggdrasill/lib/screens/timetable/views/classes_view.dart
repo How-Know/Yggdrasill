@@ -584,9 +584,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       children: [
         SingleChildScrollView(
           controller: widget.scrollController,
-          child: ValueListenableBuilder<List<StudentTimeBlock>>(
-            valueListenable: DataManager.instance.studentTimeBlocksNotifier,
-            builder: (context, studentTimeBlocks, _) {
+          child: ValueListenableBuilder<int>(
+            valueListenable: DataManager.instance.studentTimeBlocksRevision,
+            builder: (context, __, ___) {
+              final studentTimeBlocks = DataManager.instance.studentTimeBlocks;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               final String? _pendingStudentId = (widget.isRegistrationMode &&
                       widget.registrationModeType == 'student' &&
@@ -757,12 +758,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             ...List.generate(7, (dayIdx) {
                               final cellKey = '$dayIdx-$blockIdx';
                               _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                              List<StudentTimeBlock> activeBlocks = _getActiveStudentBlocks(
-                                filteredStudentBlocks, // 반드시 StudentTimeBlock만!
-                                dayIdx,
-                                timeBlocks[blockIdx].startTime,
-                                lessonDuration,
-                              );
                               // 선택 주 시작/끝 및 셀 절대 시간 계산
                               final DateTime _weekStart = DateTime(
                                 widget.weekStartDate.year,
@@ -776,6 +771,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                   hours: timeBlocks[blockIdx].startTime.hour,
                                   minutes: timeBlocks[blockIdx].startTime.minute,
                                 ),
+                              );
+                              List<StudentTimeBlock> activeBlocks = _getActiveStudentBlocks(
+                                filteredStudentBlocks, // 반드시 StudentTimeBlock만!
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime,
+                                lessonDuration,
+                                _cellDate,
                               );
                               // replace 보강의 원래 회차는 "원래 수업 종료 시간"까지 가림 처리
                               final Set<String> _hiddenOriginalStudentIds = {};
@@ -1175,9 +1177,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     int dayIndex,
     DateTime checkTime,
     int lessonDurationMinutes,
+    DateTime refDate,
   ) {
     return allBlocks.where((block) {
       if (block.dayIndex != dayIndex) return false;
+      if (!_isBlockActiveOnDate(block, refDate)) return false;
       // 날짜 무시, 요일+시:분+duration만 비교
       final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;

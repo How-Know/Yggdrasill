@@ -665,6 +665,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
   void _handleDateChanged(DateTime date) {
     setState(() {
       _selectedDate = date;
+      // 주차 이동 시, 요일이 선택되어 있으면 새 주 기준으로 선택 날짜를 재계산
+      if (_selectedDayIndex != null) {
+        final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
+        _selectedDayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: _selectedDayIndex!));
+      } else {
+        _selectedDayDate = null;
+      }
     });
   }
 
@@ -1607,6 +1614,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           filteredClassIds: filteredClassIds,
           onToggleClassFilter: _toggleClassQuickFilter,
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
+          viewDate: _selectedDate,
           header: Padding(
             padding: const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
             child: Row(
@@ -1889,9 +1897,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           }
                           final usedCount = DataManager.instance.getStudentSetCount(student.id);
                           print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
-                          // weekly_class_count는 StudentPaymentInfo 기준으로 조회
-                          final maxCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
-                          print('[DEBUG][onCellStudentsSelected] weeklyClassCount(DataManager): $maxCount');
                           print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           setState(() {
                     
@@ -2002,11 +2007,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildClassView() {
-    int? totalClassCount;
-    if (_isStudentRegistrationMode && _selectedStudentWithInfo != null) {
-      final studentWithInfo = _selectedStudentWithInfo!;
-      totalClassCount = studentWithInfo.basicInfo.weeklyClassCount ?? 1;
-    }
     print('[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
     final Set<String>? filteredStudentIds = _activeFilter == null
         ? null
@@ -2083,13 +2083,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
                   final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
                   final setIds = allBlocksAfter.map((b) => b.setId).toSet();
-                  int usedCount = setIds.length;
-                  final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                    (s) => s.student.id == student.id,
-                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
-                  );
-                  final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount, maxCount=$maxCount');
+                  final usedCount = setIds.length;
+                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount');
                   print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
             
@@ -2152,13 +2147,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   await DataManager.instance.loadStudentTimeBlocks();
                   final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
                   final setIds = allBlocksAfter.map((b) => b.setId).toSet();
-                  int usedCount = setIds.length;
-                  final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-                    (s) => s.student.id == student.id,
-                    orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
-                  );
-                  final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount, maxCount=$maxCount');
+                  final usedCount = setIds.length;
+                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount');
                   print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
             
@@ -2198,20 +2188,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final studentWithInfo = _selectedStudentWithInfo;
       print('[DEBUG] _selectedStudentWithInfo: $studentWithInfo');
       if (studentWithInfo != null) {
-        // 1. 기존 등록된 블록 개수 확인
-        final existingBlocks = DataManager.instance.studentTimeBlocks
-            .where((b) => b.studentId == studentWithInfo.student.id)
-            .length;
-        final foundStudentWithInfo = DataManager.instance.students.firstWhere(
-          (s) => s.student.id == studentWithInfo.student.id,
-          orElse: () => StudentWithInfo(student: studentWithInfo.student, basicInfo: StudentBasicInfo(studentId: studentWithInfo.student.id)),
-        );
-        final maxCount = foundStudentWithInfo.basicInfo.weeklyClassCount;
-        if (existingBlocks >= maxCount) {
-          // 이미 최대 등록, 추가 불가
-          showAppSnackBar(context, '${studentWithInfo.student.name} 학생은 이미 최대 수업시간이 등록되어 있습니다.', useRoot: true);
-          return;
-        }
         // 2. 시간블록 추가 (팩토리 사용, 단일 등록도 일관성 있게)
         final range = await _pickBlockEffectiveRange(context);
         if (range == null) {

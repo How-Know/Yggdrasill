@@ -115,7 +115,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
         _filteredStudents = _students;
         return;
       }
-      // 검색 시에는 전체 학생 대상으로 필터 (weekly_class_count 충족 여부 무시)
+      // 검색 시에는 전체 학생 대상으로 필터
       final all = DataManager.instance.students;
       _filteredStudents = all.where((studentWithInfo) {
         final name = studentWithInfo.student.name.toLowerCase();
@@ -132,7 +132,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   }
 
   /// 수업 정보를 색상이 적용된 위젯으로 반환
-  Widget _buildClassInfoWidget(String studentId, {required int setCount, required int weeklyCount}) {
+  Widget _buildClassInfoWidget(String studentId, {required int setCount}) {
     final refDate = _today();
     final allTimeBlocks = DataManager.instance.studentTimeBlocks
         .where((block) =>
@@ -167,7 +167,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
     return Align(
       alignment: Alignment.centerRight,
       child: Text(
-        '등록 $setCount개 / 총 수업 $weeklyCount개',
+        '등록 $setCount개',
         style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -283,7 +283,6 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                             final student = studentWithInfo.student;
                             final int setCount = _getActualClassCount(student.id);
                             final bool hasClasses = setCount > 0;
-                            final int weeklyCount = DataManager.instance.getStudentWeeklyClassCount(student.id);
                             return InkWell(
                               onTap: () {
                                 print('[DEBUG][StudentSearchDialog] confirm -> student=${student.id}, classId=$_selectedClassId');
@@ -321,7 +320,7 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
                                       const SizedBox(width: 12),
                                       ConstrainedBox(
                                         constraints: const BoxConstraints(maxWidth: 180),
-                                        child: _buildClassInfoWidget(student.id, setCount: setCount, weeklyCount: weeklyCount),
+                                        child: _buildClassInfoWidget(student.id, setCount: setCount),
                                       ),
                                     ],
                                   ],

@@ -347,6 +347,23 @@ class TimetableCell extends StatelessWidget {
           final refDate = DateTime(startTime.year, startTime.month, startTime.day);
           final range = await _pickEffectiveRange(context, refDate);
           if (range == null) return;
+          final effectiveStart = DateTime(range.start.year, range.start.month, range.start.day);
+          final effectiveEnd = range.end == null ? null : DateTime(range.end!.year, range.end!.month, range.end!.day);
+          final closeDate = effectiveStart.subtract(const Duration(days: 1));
+          final revertStart = effectiveEnd == null ? null : effectiveEnd.add(const Duration(days: 1));
+
+          // 드래그 데이터에 포함된 setId/number(다중 선택 포함)
+          final Map<String, String?> draggedSetIdByStudent = {};
+          final Map<String, int?> draggedNumberByStudent = {};
+          for (final e in studentsRaw) {
+            if (e is StudentWithInfo) continue;
+            final s = e['student'] as StudentWithInfo?;
+            if (s == null) continue;
+            draggedSetIdByStudent[s.student.id] = e['setId']?.toString();
+            final n = e['number'];
+            draggedNumberByStudent[s.student.id] = n is int ? n : int.tryParse(n?.toString() ?? '');
+          }
+
           final ids = students.map((s) => s.student.id).join(',');
           final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
           print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
@@ -357,73 +374,196 @@ class TimetableCell extends StatelessWidget {
             if (studentWithInfo == null || oldDayIndex == null || oldStartTime == null) continue;
             final studentId = studentWithInfo.student.id;
             final allBlocks = DataManager.instance.studentTimeBlocks;
-            final activeBlocks = allBlocks.where((b) => _isBlockActiveOnDate(b, refDate)).toList();
-            final targetBlock = activeBlocks.firstWhere(
+            final activeAtStart = allBlocks.where((b) => _isBlockActiveOnDate(b, effectiveStart)).toList();
+            StudentTimeBlock? targetBlock;
+            final draggedSetId = draggedSetIdByStudent[studentId];
+            final draggedNum = draggedNumberByStudent[studentId];
+            if (draggedSetId != null && draggedSetId.isNotEmpty) {
+              final candidates = activeAtStart
+                  .where((b) => b.studentId == studentId && b.setId == draggedSetId)
+                  .toList()
+                ..sort((a, b) => (a.number ?? 0).compareTo(b.number ?? 0));
+              if (candidates.isNotEmpty) {
+                if (draggedNum != null) {
+                  targetBlock = candidates.firstWhereOrNull((b) => b.number == draggedNum) ?? candidates.first;
+                } else {
+                  targetBlock = candidates.first;
+                }
+              }
+            }
+            targetBlock ??= activeAtStart.firstWhereOrNull(
               (b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute,
-              orElse: () => StudentTimeBlock(
-                id: '', studentId: '', dayIndex: -1, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0), setId: null, number: null,
-              ),
             );
             bool studentHasConflict = false;
-            if (targetBlock.setId == null || targetBlock.number == null) {
-              final block = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == oldDayIndex && b.startHour == oldStartTime.hour && b.startMinute == oldStartTime.minute);
-              if (block != null) {
-                final conflictBlock = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == startTime.hour && b.startMinute == startTime.minute);
-                if (conflictBlock != null) {
-                  if (!((conflictBlock.setId == null && block.setId == null) || (conflictBlock.setId != null && block.setId != null && conflictBlock.setId == block.setId))) {
-                    studentHasConflict = true;
+            if (targetBlock == null) {
+              studentHasConflict = true;
+            } else if (targetBlock.setId == null || targetBlock.number == null) {
+              final block = targetBlock;
+              final conflictBlock = activeAtStart.firstWhereOrNull((b) =>
+                  b.studentId == studentId &&
+                  b.dayIndex == dayIdx &&
+                  b.startHour == startTime.hour &&
+                  b.startMinute == startTime.minute);
+              if (conflictBlock != null && conflictBlock.id != block.id) {
+                studentHasConflict = true;
+              }
+
+              // 복귀 일정 겹침 체크(복귀 시작일 기준)
+              if (!studentHasConflict && revertStart != null) {
+                final activeAtRevert = allBlocks.where((b) => _isBlockActiveOnDate(b, revertStart)).toList();
+                final conflictRevert = activeAtRevert.firstWhereOrNull((b) =>
+                    b.id != block.id &&
+                    b.studentId == studentId &&
+                    b.dayIndex == block.dayIndex &&
+                    b.startHour == block.startHour &&
+                    b.startMinute == block.startMinute);
+                if (conflictRevert != null) {
+                  studentHasConflict = true;
+                }
+              }
+
+              if (!studentHasConflict) {
+                final now = DateTime.now();
+                final newBlock = block.copyWith(
+                  id: const Uuid().v4(),
+                  dayIndex: dayIdx,
+                  startHour: startTime.hour,
+                  startMinute: startTime.minute,
+                  createdAt: now,
+                  startDate: effectiveStart,
+                  endDate: effectiveEnd ?? block.endDate,
+                );
+                toRemove.add(block);
+                toAdd.add(newBlock);
+
+                // 기간 변경(종료일 존재)면 원복 블록도 생성
+                if (revertStart != null) {
+                  final origEnd = block.endDate;
+                  if (origEnd == null || !origEnd.isBefore(revertStart)) {
+                    toAdd.add(block.copyWith(
+                      id: const Uuid().v4(),
+                      createdAt: now,
+                      startDate: revertStart,
+                      endDate: origEnd,
+                    ));
                   }
                 }
-                if (!studentHasConflict) {
-                  final now = DateTime.now();
-                  final newBlock = block.copyWith(
-                    id: const Uuid().v4(),
-                    dayIndex: dayIdx,
-                    startHour: startTime.hour,
-                    startMinute: startTime.minute,
-                    createdAt: now,
-                    startDate: DateTime(now.year, now.month, now.day),
-                    endDate: null,
-                  );
-                  toRemove.add(block);
-                  toAdd.add(newBlock);
-                }
-              } else {
-                studentHasConflict = true;
               }
             } else {
               final setId = targetBlock.setId;
               final baseNumber = targetBlock.number!;
-              final toMove = activeBlocks.where((b) => b.setId == setId && b.studentId == studentId).toList();
+              final toMove = activeAtStart.where((b) => b.setId == setId && b.studentId == studentId).toList();
               toMove.sort((a, b) => a.number!.compareTo(b.number!));
+
+              // ===== [규칙] 예약 충돌 처리 =====
+              // - 임시 변경(range.start~range.end) 기간 중 "다른 세그먼트(start_date)"가 시작되면 충돌로 간주하고 이동 불가
+              // - 임시 변경 종료 후(range.end+1)에는, 이미 예약된 다음 세그먼트가 있으면 원복 블록 end_date를 (다음 세그먼트 시작-1)로 자동 클리핑
+              // - 종료기간 없음(end=null) 이동은, 이미 예약된 다음 세그먼트가 있으면 이동 블록 end_date를 (다음 세그먼트 시작-1)로 자동 클리핑
+              final List<DateTime> segmentStarts = allBlocks
+                  .where((b) => b.studentId == studentId && b.setId == setId)
+                  .map((b) => DateTime(b.startDate.year, b.startDate.month, b.startDate.day))
+                  .toSet()
+                  .toList()
+                ..sort((a, b) => a.compareTo(b));
+
+              final DateTime? nextStartAfterStart = segmentStarts.firstWhereOrNull((d) => d.isAfter(effectiveStart));
+              final DateTime? clipEndAfterStart = nextStartAfterStart != null
+                  ? nextStartAfterStart.subtract(const Duration(days: 1))
+                  : null;
+
+              if (effectiveEnd != null) {
+                final overlapStart = segmentStarts.firstWhereOrNull(
+                  (d) => d.isAfter(effectiveStart) && !d.isAfter(effectiveEnd),
+                );
+                if (overlapStart != null) {
+                  studentHasConflict = true;
+                }
+              }
+
+              final bool hasStartAtRevert =
+                  revertStart != null && segmentStarts.contains(revertStart);
+              final DateTime? nextStartAfterRevert = revertStart == null
+                  ? null
+                  : segmentStarts.firstWhereOrNull((d) => d.isAfter(revertStart));
+              final DateTime? clipEndAfterRevert = nextStartAfterRevert != null
+                  ? nextStartAfterRevert.subtract(const Duration(days: 1))
+                  : null;
+
               final baseTime = startTime;
               final duration = targetBlock.duration;
               final newBlocks = <StudentTimeBlock>[];
               final now = DateTime.now();
-              final today = DateTime(now.year, now.month, now.day);
-              for (final block in toMove) {
+              if (!studentHasConflict) for (final block in toMove) {
                 final diff = block.number! - baseNumber;
                 final newTime = baseTime.add(Duration(minutes: duration.inMinutes * diff));
+                DateTime? newEnd = effectiveEnd ?? block.endDate;
+                if (effectiveEnd == null && clipEndAfterStart != null) {
+                  if (newEnd == null || newEnd.isAfter(clipEndAfterStart)) {
+                    newEnd = clipEndAfterStart;
+                  }
+                }
                   final newBlock = block.copyWith(
                   id: const Uuid().v4(),
                   dayIndex: dayIdx,
                   startHour: newTime.hour,
                   startMinute: newTime.minute,
                   createdAt: now,
-                    startDate: range.start,
-                    endDate: range.end,
+                    startDate: effectiveStart,
+                    endDate: newEnd,
                 );
                 newBlocks.add(newBlock);
               }
               for (final newBlock in newBlocks) {
-                final conflictBlock = activeBlocks.firstWhereOrNull((b) => b.studentId == studentId && b.dayIndex == dayIdx && b.startHour == newBlock.startHour && b.startMinute == newBlock.startMinute);
-                if (conflictBlock != null) {
-                  if (!(conflictBlock.setId != null && conflictBlock.setId == setId)) {
-                    studentHasConflict = true;
-                    break;
+                final conflictBlock = activeAtStart.firstWhereOrNull((b) =>
+                    b.studentId == studentId &&
+                    b.dayIndex == dayIdx &&
+                    b.startHour == newBlock.startHour &&
+                    b.startMinute == newBlock.startMinute);
+                if (conflictBlock != null && !toMove.any((src) => src.id == conflictBlock.id)) {
+                  studentHasConflict = true;
+                  break;
+                }
+              }
+
+              // 기간 변경(종료일 존재)면 원복 블록 생성: range.end+1일부터 원래 스케줄로 복귀
+              if (!studentHasConflict && revertStart != null && !hasStartAtRevert) {
+                final revertBlocks = <StudentTimeBlock>[];
+                for (final b in toMove) {
+                  DateTime? revertEnd = b.endDate;
+                  if (clipEndAfterRevert != null) {
+                    if (revertEnd == null || revertEnd.isAfter(clipEndAfterRevert)) {
+                      revertEnd = clipEndAfterRevert;
+                    }
+                  }
+                  if (revertEnd != null && revertEnd.isBefore(revertStart)) continue;
+                  revertBlocks.add(b.copyWith(
+                    id: const Uuid().v4(),
+                    createdAt: now,
+                    startDate: revertStart,
+                    endDate: revertEnd,
+                  ));
+                }
+
+                if (revertBlocks.isNotEmpty) {
+                  final activeAtRevert = allBlocks.where((b) => _isBlockActiveOnDate(b, revertStart)).toList();
+                  final activeRevertExcludingSource = activeAtRevert.where((b) => !toMove.any((src) => src.id == b.id)).toList();
+                  for (final rb in revertBlocks) {
+                    final conflict = activeRevertExcludingSource.firstWhereOrNull((b) =>
+                        b.studentId == studentId &&
+                        b.dayIndex == rb.dayIndex &&
+                        b.startHour == rb.startHour &&
+                        b.startMinute == rb.startMinute);
+                    if (conflict != null) {
+                      studentHasConflict = true;
+                      break;
+                    }
+                  }
+                  if (!studentHasConflict) {
+                    toAdd.addAll(revertBlocks);
                   }
                 }
               }
+
               if (!studentHasConflict) {
                 toRemove.addAll(toMove);
                 toAdd.addAll(newBlocks);
@@ -438,7 +578,12 @@ class TimetableCell extends StatelessWidget {
             return;
           }
           print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(toRemove.map((b) => b.id).toList(), skipPlannedRegen: true);
+          // 예약 이동: 기존 블록은 range.start - 1일로 닫아 "즉시 종료(어제)"를 방지
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(
+            toRemove.map((b) => b.id).toList(),
+            skipPlannedRegen: true,
+            endDateOverride: closeDate,
+          );
           await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
           await DataManager.instance.loadStudents();
           if (failedStudents.isNotEmpty) {
@@ -489,10 +634,15 @@ class TimetableCell extends StatelessWidget {
           final refDate = DateTime(startTime.year, startTime.month, startTime.day);
           final range = await _pickEffectiveRange(context, refDate);
           if (range == null) return;
+          final effectiveStart = DateTime(range.start.year, range.start.month, range.start.day);
+          final effectiveEnd = range.end == null ? null : DateTime(range.end!.year, range.end!.month, range.end!.day);
+          final closeDate = effectiveStart.subtract(const Duration(days: 1));
+          final revertStart = effectiveEnd == null ? null : effectiveEnd.add(const Duration(days: 1));
+
           final allBlocks = DataManager.instance.studentTimeBlocks;
-          final activeBlocks = allBlocks.where((b) => _isBlockActiveOnDate(b, refDate)).toList();
+          final activeAtStart = allBlocks.where((b) => _isBlockActiveOnDate(b, effectiveStart)).toList();
           final sourceBlocks = blocksRaw
-              .map((b) => activeBlocks.firstWhereOrNull((ab) => ab.id == (b['id'] as String)))
+              .map((b) => activeAtStart.firstWhereOrNull((ab) => ab.id == (b['id'] as String)))
               .whereType<StudentTimeBlock>()
               .toList();
           if (sourceBlocks.isEmpty) {
@@ -509,8 +659,40 @@ class TimetableCell extends StatelessWidget {
           final delta = targetTotal - minTotal;
           final now = DateTime.now();
           final List<StudentTimeBlock> newBlocks = [];
+          final List<StudentTimeBlock> revertBlocks = [];
           final List<String> oldIds = [];
           for (final b in sourceBlocks) {
+            // ===== [규칙] 예약 충돌 처리(클래스 이동) =====
+            // - 임시 변경(range.start~range.end) 기간 중 같은 set_id의 다른 세그먼트(start_date)가 시작되면 충돌로 간주하고 이동 불가
+            // - 임시 변경 종료 후(range.end+1)에는, 이미 예약된 다음 세그먼트가 있으면 원복 블록 end_date를 (다음 세그먼트 시작-1)로 자동 클리핑
+            // - 종료기간 없음(end=null) 이동은, 이미 예약된 다음 세그먼트가 있으면 이동 블록 end_date를 (다음 세그먼트 시작-1)로 자동 클리핑
+            DateTime? clipEndAfterStart;
+            DateTime? clipEndAfterRevert;
+            bool hasStartAtRevert = false;
+            if (b.setId != null && b.setId!.isNotEmpty) {
+              final List<DateTime> segmentStarts = allBlocks
+                  .where((x) => x.studentId == b.studentId && x.setId == b.setId)
+                  .map((x) => DateTime(x.startDate.year, x.startDate.month, x.startDate.day))
+                  .toSet()
+                  .toList()
+                ..sort((a, bb) => a.compareTo(bb));
+
+              final DateTime? nextStartAfterStart = segmentStarts.firstWhereOrNull((d) => d.isAfter(effectiveStart));
+              clipEndAfterStart = nextStartAfterStart != null ? nextStartAfterStart.subtract(const Duration(days: 1)) : null;
+
+              if (effectiveEnd != null) {
+                final overlapStart = segmentStarts.firstWhereOrNull((d) => d.isAfter(effectiveStart) && !d.isAfter(effectiveEnd));
+                if (overlapStart != null) {
+                  showAppSnackBar(context, '이미 예약된 변경이 있어 기간이 겹칩니다. (setId=${b.setId})', useRoot: true);
+                  return;
+                }
+              }
+
+              hasStartAtRevert = revertStart != null && segmentStarts.contains(revertStart);
+              final DateTime? nextStartAfterRevert = revertStart == null ? null : segmentStarts.firstWhereOrNull((d) => d.isAfter(revertStart));
+              clipEndAfterRevert = nextStartAfterRevert != null ? nextStartAfterRevert.subtract(const Duration(days: 1)) : null;
+            }
+
             final oldTotal = b.dayIndex * 24 * 60 + b.startHour * 60 + b.startMinute;
             final newTotal = oldTotal + delta;
             final newDay = newTotal ~/ (24 * 60);
@@ -519,33 +701,82 @@ class TimetableCell extends StatelessWidget {
             final newMinute = newMinuteTotal % 60;
             oldIds.add(b.id);
             // 새 레코드로 생성하여 기존 end_date가 덮어쓰이지 않게 함
+            DateTime? newEnd = effectiveEnd ?? b.endDate;
+            if (effectiveEnd == null && clipEndAfterStart != null) {
+              if (newEnd == null || newEnd.isAfter(clipEndAfterStart)) {
+                newEnd = clipEndAfterStart;
+              }
+            }
             newBlocks.add(b.copyWith(
               id: const Uuid().v4(),
               dayIndex: newDay,
               startHour: newHour,
               startMinute: newMinute,
               createdAt: now,
-              startDate: range.start,
-              endDate: range.end,
+              startDate: effectiveStart,
+              endDate: newEnd,
             ));
+
+            // 기간 변경(종료일 존재)면 원복 블록도 생성
+            if (revertStart != null && !hasStartAtRevert) {
+              DateTime? revertEnd = b.endDate;
+              if (clipEndAfterRevert != null) {
+                if (revertEnd == null || revertEnd.isAfter(clipEndAfterRevert)) {
+                  revertEnd = clipEndAfterRevert;
+                }
+              }
+              if (revertEnd == null || !revertEnd.isBefore(revertStart)) {
+                revertBlocks.add(b.copyWith(
+                  id: const Uuid().v4(),
+                  createdAt: now,
+                  startDate: revertStart,
+                  endDate: revertEnd,
+                ));
+              }
+            }
           }
           // 겹침 체크: 기존 활성 블록 중 이동 대상 외에 겹치는 것 있으면 실패
-          final activeExcludingSource = activeBlocks.where((b) => !oldIds.contains(b.id)).toList();
+          final activeExcludingSource = activeAtStart.where((b) => !oldIds.contains(b.id)).toList();
           for (final nb in newBlocks) {
             final conflict = activeExcludingSource.firstWhereOrNull((b) =>
                 b.studentId == nb.studentId &&
                 b.dayIndex == nb.dayIndex &&
                 b.startHour == nb.startHour &&
-                b.startMinute == nb.startMinute &&
-                (b.setId == null || nb.setId == null || b.setId != nb.setId));
+                b.startMinute == nb.startMinute);
             if (conflict != null) {
               showAppSnackBar(context, '이미 등록된 시간과 겹칩니다.', useRoot: true);
               return;
             }
           }
+
+          // 복귀 블록 겹침 체크(복귀 시작일 기준)
+          if (revertStart != null && revertBlocks.isNotEmpty) {
+            final activeAtRevert = allBlocks.where((b) => _isBlockActiveOnDate(b, revertStart)).toList();
+            final activeRevertExcludingSource = activeAtRevert.where((b) => !oldIds.contains(b.id)).toList();
+            for (final rb in revertBlocks) {
+              final conflict = activeRevertExcludingSource.firstWhereOrNull((b) =>
+                  b.studentId == rb.studentId &&
+                  b.dayIndex == rb.dayIndex &&
+                  b.startHour == rb.startHour &&
+                  b.startMinute == rb.startMinute);
+              if (conflict != null) {
+                showAppSnackBar(context, '복귀 일정이 기존 시간과 겹칩니다.', useRoot: true);
+                return;
+              }
+            }
+          }
+
           print('[DRAG][class-move] remove=${oldIds.length} add=${newBlocks.length} targetDay=$dayIdx targetTime=${startTime.hour}:${startTime.minute}');
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(oldIds, immediate: true, skipPlannedRegen: true);
-          await DataManager.instance.bulkAddStudentTimeBlocks(newBlocks, immediate: true);
+          await DataManager.instance.bulkDeleteStudentTimeBlocks(
+            oldIds,
+            immediate: true,
+            skipPlannedRegen: true,
+            endDateOverride: closeDate,
+          );
+          await DataManager.instance.bulkAddStudentTimeBlocks(
+            [...newBlocks, ...revertBlocks],
+            immediate: true,
+          );
           await DataManager.instance.loadStudents();
           final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
           if (timetableContentViewState != null) {
