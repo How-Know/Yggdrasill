@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
@@ -726,8 +727,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
     );
     if (confirmed == true) {
       final classId = classes[idx].id;
-      await clearSessionTypeIdForClass(classId);
-      await DataManager.instance.deleteClass(classId);
+      // ✅ UI는 즉시 반영 (백엔드 작업은 백그라운드에서)
+      DataManager.instance.removeClassOptimistic(classId);
+      if (mounted) {
+        showAppSnackBar(context, '삭제 처리중...', useRoot: true);
+      }
+      unawaited(() async {
+        try {
+          await clearSessionTypeIdForClass(classId);
+          await DataManager.instance.deleteClass(classId);
+          if (mounted) {
+            showAppSnackBar(context, '삭제되었습니다.', useRoot: true);
+          }
+        } catch (e) {
+          // 실패 시 서버/로컬에서 다시 로드해서 상태 복구
+          unawaited(DataManager.instance.loadStudentTimeBlocks());
+          unawaited(DataManager.instance.loadClasses());
+          if (mounted) {
+            showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
+          }
+        }
+      }());
     }
   }
 
@@ -3622,42 +3642,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
   // 수업카드 수정 시 관련 StudentTimeBlock의 session_type_id 일괄 수정
   Future<void> updateSessionTypeIdForClass(
       String oldClassId, String newClassId) async {
-    final blocks = DataManager.instance.studentTimeBlocks
-        .where((b) => b.sessionTypeId == oldClassId)
-        .toList();
-    for (final block in blocks) {
-      final updated = block.copyWith(sessionTypeId: newClassId);
-      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
-    }
+    await DataManager.instance.bulkUpdateStudentTimeBlocksSessionTypeIdForClass(
+      oldClassId,
+      newSessionTypeId: newClassId,
+    );
   }
 
   // 수업카드 삭제 시 관련 StudentTimeBlock의 session_type_id를 null로 초기화
   Future<void> clearSessionTypeIdForClass(String classId) async {
-    final blocks = DataManager.instance.studentTimeBlocks
-        .where((b) => b.sessionTypeId == classId)
-        .toList();
-
-    for (final block in blocks) {
-      // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
-      final updated = StudentTimeBlock(
-        id: block.id,
-        studentId: block.studentId,
-        dayIndex: block.dayIndex,
-        startHour: block.startHour,
-        startMinute: block.startMinute,
-        duration: block.duration,
-        createdAt: block.createdAt,
-        startDate: block.startDate,
-        endDate: block.endDate,
-        setId: block.setId,
-        number: block.number,
-        sessionTypeId: null, // 명시적으로 null 설정
-      );
-      await DataManager.instance.updateStudentTimeBlock(block.id, updated);
-    }
-
-    // 🔄 업데이트 후 데이터 새로고침
-    await DataManager.instance.loadStudentTimeBlocks();
+    await DataManager.instance.bulkUpdateStudentTimeBlocksSessionTypeIdForClass(
+      classId,
+      newSessionTypeId: null,
+    );
   }
 
   // 🔍 고아 sessionTypeId 진단 함수

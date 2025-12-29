@@ -12,6 +12,7 @@ import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
+import 'file_shortcut_tab.dart';
 import '../../models/education_level.dart';
 import '../../models/consult_note.dart';
 import '../../models/memo.dart';
@@ -203,6 +204,12 @@ class _RightSideSheetState extends State<RightSideSheet> {
       for (final pageNum in selected) {
         if (pageNum < 1 || pageNum > src.pages.count) continue;
         final srcPage = src.pages[pageNum - 1];
+        // ✅ 페이지별 실제 크기를 유지 (원본과 동일한 페이지 크기/여백 방지)
+        try {
+          final sz = srcPage.size;
+          dst.pageSettings.size = sz;
+          dst.pageSettings.margins.all = 0;
+        } catch (_) {}
         final tmpl = srcPage.createTemplate();
         final newPage = dst.pages.add();
         try {
@@ -871,7 +878,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
           onCloseSheet: widget.onClose,
         );
       case RightSideSheetMode.fileShortcut:
-        return const SizedBox.expand();
+        return FileShortcutTab(dialogContext: widget.dialogContext);
       case RightSideSheetMode.pdfEdit:
         final inputPath = _pdfEditInputCtrl.text.trim();
         final hasPdf = inputPath.isNotEmpty && inputPath.toLowerCase().endsWith('.pdf');

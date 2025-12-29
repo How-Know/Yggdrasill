@@ -290,24 +290,84 @@ class _PdfEditorDialogState extends State<PdfEditorDialog> with SingleTickerProv
                                           width: 160,
                                           child: ListView.builder(
                                             itemCount: pageCount,
-                                            itemBuilder: (c, i) => InkWell(
-                                              onTap: () => setState(() {
-                                                _currentPreviewPage = i + 1;
-                                              }),
-                                              child: Padding(
+                                            itemBuilder: (c, i) {
+                                              final pageNum = i + 1;
+                                              final isCurrent = pageNum == _currentPreviewPage;
+                                              final isSelected = _selectedPages.contains(pageNum);
+                                              return Padding(
                                                 padding: const EdgeInsets.all(6.0),
-                                                child: AspectRatio(
-                                                  aspectRatio: 1 / 1.4,
-                                                  child: Container(
-                                                    decoration: BoxDecoration(
-                                                      border: Border.all(color: _dlgBorder),
+                                                child: Stack(
+                                                  children: [
+                                                    InkWell(
+                                                      onTap: () => setState(() {
+                                                        _currentPreviewPage = pageNum;
+                                                      }),
                                                       borderRadius: BorderRadius.circular(6),
+                                                      child: AspectRatio(
+                                                        aspectRatio: 1 / 1.4,
+                                                        child: AnimatedContainer(
+                                                          duration: const Duration(milliseconds: 140),
+                                                          decoration: BoxDecoration(
+                                                            color: isCurrent ? _dlgAccent.withOpacity(0.08) : Colors.transparent,
+                                                            border: Border.all(
+                                                              color: isCurrent ? _dlgAccent : _dlgBorder,
+                                                              width: isCurrent ? 2 : 1,
+                                                            ),
+                                                            borderRadius: BorderRadius.circular(6),
+                                                            boxShadow: isCurrent
+                                                                ? [
+                                                                    BoxShadow(
+                                                                      color: _dlgAccent.withOpacity(0.18),
+                                                                      blurRadius: 10,
+                                                                      offset: const Offset(0, 4),
+                                                                    ),
+                                                                  ]
+                                                                : null,
+                                                          ),
+                                                          child: ClipRRect(
+                                                            borderRadius: BorderRadius.circular(5),
+                                                            clipBehavior: Clip.hardEdge,
+                                                            child: PdfPageView(document: doc, pageNumber: pageNum),
+                                                          ),
+                                                        ),
+                                                      ),
                                                     ),
-                                                    child: PdfPageView(document: doc, pageNumber: i + 1),
-                                                  ),
+                                                    Positioned(
+                                                      right: 6,
+                                                      top: 6,
+                                                      child: Tooltip(
+                                                        message: isSelected ? '이미 선택됨' : '페이지 추가',
+                                                        child: InkWell(
+                                                          onTap: isSelected
+                                                              ? null
+                                                              : () {
+                                                                  setState(() {
+                                                                    _currentPreviewPage = pageNum;
+                                                                    _selectedPages.add(pageNum);
+                                                                  });
+                                                                },
+                                                          borderRadius: BorderRadius.circular(999),
+                                                          child: Container(
+                                                            width: 26,
+                                                            height: 26,
+                                                            decoration: BoxDecoration(
+                                                              color: isSelected ? Colors.black54 : _dlgAccent,
+                                                              shape: BoxShape.circle,
+                                                              border: Border.all(color: Colors.white24),
+                                                            ),
+                                                            child: Icon(
+                                                              isSelected ? Icons.check : Icons.add,
+                                                              size: 16,
+                                                              color: Colors.white,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
-                                              ),
-                                            ),
+                                              );
+                                            },
                                           ),
                                         ),
                                         const SizedBox(width: 8),
@@ -452,21 +512,11 @@ class _PdfEditorDialogState extends State<PdfEditorDialog> with SingleTickerProv
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.stretch,
                                             children: [
-                                              SizedBox(
-                                                height: 34,
-                                                child: OutlinedButton.icon(
-                                                  onPressed: () {
-                                                    final p = _currentPreviewPage;
-                                                    setState(() {
-                                                      if (!_selectedPages.contains(p)) _selectedPages.add(p);
-                                                    });
-                                                  },
-                                                  icon: const Icon(Icons.add, size: 16),
-                                                  label: const Text('페이지 추가'),
-                                                  style: outlinedBtnStyle,
-                                                ),
+                                              const Text(
+                                                '선택 페이지',
+                                                style: TextStyle(color: _dlgTextSub, fontWeight: FontWeight.w800),
                                               ),
-                                              const SizedBox(height: 8),
+                                              const SizedBox(height: 10),
                                               Expanded(
                                                 child: ReorderableListView(
                                                   buildDefaultDragHandles: false,
@@ -614,6 +664,12 @@ class _PdfEditorDialogState extends State<PdfEditorDialog> with SingleTickerProv
                     for (final pageNum in selected) {
                       if (pageNum < 1 || pageNum > src.pages.count) continue;
                       final srcPage = src.pages[pageNum - 1];
+                      // ✅ 페이지별 실제 크기를 유지 (원본과 동일한 페이지 크기/여백 방지)
+                      try {
+                        final sz = srcPage.size;
+                        dst.pageSettings.size = sz;
+                        dst.pageSettings.margins.all = 0;
+                      } catch (_) {}
                       final tmpl = srcPage.createTemplate();
                       final newPage = dst.pages.add();
                       // 템플릿을 좌상단(0,0)에 그려 원본 페이지 내용을 복사
@@ -745,24 +801,84 @@ class _PdfPreviewSelectDialogState extends State<PdfPreviewSelectDialog> {
                               width: 160,
                               child: ListView.builder(
                                 itemCount: pageCount,
-                                itemBuilder: (c, i) => InkWell(
-                                  onTap: () => setState(() {
-                                    _currentPreviewPage = i + 1;
-                                  }),
-                                  child: Padding(
+                                itemBuilder: (c, i) {
+                                  final pageNum = i + 1;
+                                  final isCurrent = pageNum == _currentPreviewPage;
+                                  final isSelected = _selectedPages.contains(pageNum);
+                                  return Padding(
                                     padding: const EdgeInsets.all(6.0),
-                                    child: AspectRatio(
-                                      aspectRatio: 1 / 1.4,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          border: Border.all(color: _dlgBorder),
+                                    child: Stack(
+                                      children: [
+                                        InkWell(
+                                          onTap: () => setState(() {
+                                            _currentPreviewPage = pageNum;
+                                          }),
                                           borderRadius: BorderRadius.circular(6),
+                                          child: AspectRatio(
+                                            aspectRatio: 1 / 1.4,
+                                            child: AnimatedContainer(
+                                              duration: const Duration(milliseconds: 140),
+                                              decoration: BoxDecoration(
+                                                color: isCurrent ? _dlgAccent.withOpacity(0.08) : Colors.transparent,
+                                                border: Border.all(
+                                                  color: isCurrent ? _dlgAccent : _dlgBorder,
+                                                  width: isCurrent ? 2 : 1,
+                                                ),
+                                                borderRadius: BorderRadius.circular(6),
+                                                boxShadow: isCurrent
+                                                    ? [
+                                                        BoxShadow(
+                                                          color: _dlgAccent.withOpacity(0.18),
+                                                          blurRadius: 10,
+                                                          offset: const Offset(0, 4),
+                                                        ),
+                                                      ]
+                                                    : null,
+                                              ),
+                                              child: ClipRRect(
+                                                borderRadius: BorderRadius.circular(5),
+                                                clipBehavior: Clip.hardEdge,
+                                                child: PdfPageView(document: doc, pageNumber: pageNum),
+                                              ),
+                                            ),
+                                          ),
                                         ),
-                                        child: PdfPageView(document: doc, pageNumber: i + 1),
-                                      ),
+                                        Positioned(
+                                          right: 6,
+                                          top: 6,
+                                          child: Tooltip(
+                                            message: isSelected ? '이미 선택됨' : '페이지 추가',
+                                            child: InkWell(
+                                              onTap: (_busy || isSelected)
+                                                  ? null
+                                                  : () {
+                                                      setState(() {
+                                                        _currentPreviewPage = pageNum;
+                                                        _selectedPages.add(pageNum);
+                                                      });
+                                                    },
+                                              borderRadius: BorderRadius.circular(999),
+                                              child: Container(
+                                                width: 26,
+                                                height: 26,
+                                                decoration: BoxDecoration(
+                                                  color: isSelected ? Colors.black54 : _dlgAccent,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(color: Colors.white24),
+                                                ),
+                                                child: Icon(
+                                                  isSelected ? Icons.check : Icons.add,
+                                                  size: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -915,23 +1031,11 @@ class _PdfPreviewSelectDialogState extends State<PdfPreviewSelectDialog> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  SizedBox(
-                                    height: 34,
-                                    child: OutlinedButton.icon(
-                                      onPressed: _busy
-                                          ? null
-                                          : () {
-                                              final pnum = _currentPreviewPage;
-                                              setState(() {
-                                                if (!_selectedPages.contains(pnum)) _selectedPages.add(pnum);
-                                              });
-                                            },
-                                      icon: const Icon(Icons.add, size: 16),
-                                      label: const Text('페이지 추가'),
-                                      style: outlinedBtnStyle,
-                                    ),
+                                  const Text(
+                                    '선택 페이지',
+                                    style: TextStyle(color: _dlgTextSub, fontWeight: FontWeight.w800),
                                   ),
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: 10),
                                   Expanded(
                                     child: ReorderableListView(
                                       buildDefaultDragHandles: false,
@@ -1073,6 +1177,12 @@ class _PdfPreviewSelectDialogState extends State<PdfPreviewSelectDialog> {
                     for (final pageNum in _selectedPages) {
                       if (pageNum < 1 || pageNum > src.pages.count) continue;
                       final srcPage = src.pages[pageNum - 1];
+                      // ✅ 페이지별 실제 크기를 유지 (원본과 동일한 페이지 크기/여백 방지)
+                      try {
+                        final sz = srcPage.size;
+                        dst.pageSettings.size = sz;
+                        dst.pageSettings.margins.all = 0;
+                      } catch (_) {}
                       final tmpl = srcPage.createTemplate();
                       final newPage = dst.pages.add();
                       try {

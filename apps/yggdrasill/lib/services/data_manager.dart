@@ -25,6 +25,7 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import '../models/memo.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:postgrest/postgrest.dart' show PostgrestException;
 import 'package:flutter/material.dart';
 import 'tenant_service.dart';
 import 'tag_preset_service.dart';
@@ -128,6 +129,86 @@ class DataManager {
     _studentTimeBlocks = List<StudentTimeBlock>.from(blocks);
     _publishStudentTimeBlocks(refDate: refDate);
     _bumpStudentTimeBlocksRevision();
+  }
+
+  /// 수업카드 변경/삭제 시, 해당 수업을 참조하는 time block들의 session_type_id를 **일괄 변경**한다.
+  ///
+  /// - UI는 먼저 즉시 반영(로컬 메모리 갱신/notify)하고,
+  /// - Supabase/로컬DB 반영은 await 구간에서 수행한다.
+  ///
+  /// ✅ 시간/세트(setId)는 그대로이므로 planned 재생성은 수행하지 않는다.
+  Future<void> bulkUpdateStudentTimeBlocksSessionTypeIdForClass(
+    String oldClassId, {
+    required String? newSessionTypeId,
+    DateTime? refDate,
+    bool publish = true,
+  }) async {
+    final date = refDate ?? _todayDateOnly();
+    bool changed = false;
+    final List<StudentTimeBlock> updated = <StudentTimeBlock>[];
+    final List<StudentTimeBlock> next = <StudentTimeBlock>[];
+    for (final b in _studentTimeBlocks) {
+      if (b.sessionTypeId != oldClassId) {
+        next.add(b);
+        continue;
+      }
+      changed = true;
+      final nb = StudentTimeBlock(
+        id: b.id,
+        studentId: b.studentId,
+        dayIndex: b.dayIndex,
+        startHour: b.startHour,
+        startMinute: b.startMinute,
+        duration: b.duration,
+        createdAt: b.createdAt,
+        startDate: b.startDate,
+        endDate: b.endDate,
+        setId: b.setId,
+        number: b.number,
+        sessionTypeId: newSessionTypeId,
+        weeklyOrder: b.weeklyOrder,
+      );
+      next.add(nb);
+      updated.add(nb);
+    }
+
+    // ✅ UI 즉시 반영
+    if (changed) {
+      _studentTimeBlocks = next;
+      if (publish) {
+        _publishStudentTimeBlocks(refDate: date);
+        _bumpStudentTimeBlocksRevision();
+      }
+    } else {
+      return;
+    }
+
+    // ===== 서버/로컬 반영 (백그라운드 작업) =====
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .update({'session_type_id': newSessionTypeId})
+            .eq('academy_id', academyId)
+            .eq('session_type_id', oldClassId);
+      } catch (e, st) {
+        print('[SUPA][stb bulk session_type_id update] $e\n$st');
+        rethrow;
+      }
+      return;
+    }
+
+    // local DB
+    try {
+      for (final b in updated) {
+        await AcademyDbService.instance.updateStudentTimeBlock(b.id, b);
+      }
+    } catch (e, st) {
+      print('[LOCAL][stb bulk session_type_id update] $e\n$st');
+      rethrow;
+    }
   }
 
   // 디버그: 특정 키(dayIdx,startHour,startMinute,studentId)로 내려온 블록 페이로드 덤프
@@ -1452,12 +1533,196 @@ class DataManager {
   Future<void> deleteStudent(String id) async {
     print('[DEBUG][deleteStudent] 진입: id=$id');
     if (TagPresetService.preferSupabaseRead) {
+      final supa = Supabase.instance.client;
+      final academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+
+      Future<void> timed(String label, Future<void> Function() fn) async {
+        final sw = Stopwatch()..start();
+        print('[DEBUG][deleteStudent][server-only] $label 시작: id=$id, academyId=$academyId');
+        try {
+          await fn();
+          sw.stop();
+          print('[DEBUG][deleteStudent][server-only] $label 완료: elapsedMs=${sw.elapsedMilliseconds}');
+        } catch (e, st) {
+          sw.stop();
+          print('[ERROR][deleteStudent][server-only] $label 실패: elapsedMs=${sw.elapsedMilliseconds} err=$e\n$st');
+          rethrow;
+        }
+      }
+
+      bool isStatementTimeout(dynamic e) {
+        if (e is PostgrestException) return e.code == '57014';
+        final s = e.toString();
+        return s.contains('code: 57014') || (s.contains('57014') && s.toLowerCase().contains('statement timeout'));
+      }
+
+      String inFilterForIds(List<String> ids) {
+        // PostgREST in filter format: ("id1","id2",...)
+        return '(${ids.map((e) => '"$e"').join(',')})';
+      }
+
+      Future<List<String>> fetchIdBatch({
+        required String table,
+        required String studentIdCol,
+        bool hasAcademyId = true,
+        int limit = 100,
+      }) async {
+        var q = supa.from(table).select('id').eq(studentIdCol, id);
+        if (hasAcademyId) q = q.eq('academy_id', academyId);
+        final rows = await q.limit(limit);
+        return (rows as List)
+            .map((m) => (m as Map)['id']?.toString())
+            .whereType<String>()
+            .toList();
+      }
+
+      Future<int> batchDeleteByStudent({
+        required String table,
+        String studentIdCol = 'student_id',
+        bool hasAcademyId = true,
+        int batchSize = 100,
+      }) async {
+        final sw = Stopwatch()..start();
+        int total = 0;
+        int batchNo = 0;
+        while (true) {
+          final ids = await fetchIdBatch(
+            table: table,
+            studentIdCol: studentIdCol,
+            hasAcademyId: hasAcademyId,
+            limit: batchSize,
+          );
+          if (ids.isEmpty) break;
+          batchNo++;
+
+          var dq = supa.from(table).delete().filter('id', 'in', inFilterForIds(ids));
+          if (hasAcademyId) dq = dq.eq('academy_id', academyId);
+          await dq;
+
+          total += ids.length;
+          if (batchNo <= 3 || batchNo % 10 == 0) {
+            print('[DEBUG][deleteStudent][server-only][hard] $table delete batch=$batchNo size=${ids.length} total=$total');
+          }
+        }
+        sw.stop();
+        print('[DEBUG][deleteStudent][server-only][hard] $table delete done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
+        return total;
+      }
+
+      Future<int> batchNullifyByStudent({
+        required String table,
+        String studentIdCol = 'student_id',
+        bool hasAcademyId = true,
+        int batchSize = 100,
+      }) async {
+        final sw = Stopwatch()..start();
+        int total = 0;
+        int batchNo = 0;
+        while (true) {
+          final ids = await fetchIdBatch(
+            table: table,
+            studentIdCol: studentIdCol,
+            hasAcademyId: hasAcademyId,
+            limit: batchSize,
+          );
+          if (ids.isEmpty) break;
+          batchNo++;
+
+          var uq = supa.from(table).update({studentIdCol: null}).filter('id', 'in', inFilterForIds(ids));
+          if (hasAcademyId) uq = uq.eq('academy_id', academyId);
+          await uq;
+
+          total += ids.length;
+          if (batchNo <= 3 || batchNo % 10 == 0) {
+            print('[DEBUG][deleteStudent][server-only][hard] $table nullify batch=$batchNo size=${ids.length} total=$total');
+          }
+        }
+        sw.stop();
+        print('[DEBUG][deleteStudent][server-only][hard] $table nullify done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
+        return total;
+      }
+
+      Future<void> hardDeleteStudentWithLogs() async {
+        print('[WARN][deleteStudent][server-only][hard] 학생 삭제 타임아웃(57014) -> 연관 데이터 배치 삭제로 전환: studentId=$id, academyId=$academyId');
+
+        // 1) FK set-null/연쇄 업데이트 비용을 줄이기 위해 먼저 session_overrides 제거
+        await timed('hard: session_overrides 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'session_overrides', hasAcademyId: true, batchSize: 100);
+        });
+
+        // 2) 출석(가장 큰 테이블일 가능성 높음) 삭제
+        await timed('hard: attendance_records 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'attendance_records', hasAcademyId: true, batchSize: 120);
+        });
+
+        // 3) 결제 레코드 삭제
+        await timed('hard: payment_records 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'payment_records', hasAcademyId: true, batchSize: 200);
+        });
+
+        // 4) 배치/세션 삭제 (academy_id 컬럼 없음)
+        await timed('hard: lesson_batch_sessions 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'lesson_batch_sessions', hasAcademyId: false, batchSize: 200);
+        });
+        await timed('hard: lesson_batch_headers 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'lesson_batch_headers', hasAcademyId: true, batchSize: 200);
+        });
+
+        // 5) 스냅샷 삭제 (attendance_records.snapshot_id FK 때문에 attendance 먼저 삭제)
+        await timed('hard: lesson_snapshot_headers 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'lesson_snapshot_headers', hasAcademyId: true, batchSize: 200);
+        });
+
+        // 6) 시간표 블록 삭제
+        await timed('hard: student_time_blocks 배치 삭제', () async {
+          await batchDeleteByStudent(table: 'student_time_blocks', hasAcademyId: true, batchSize: 200);
+        });
+
+        // 7) on delete set null 대상(규모가 크면 학생 삭제를 느리게 만듦) -> 미리 NULL 처리
+        await timed('hard: homework_items student_id null 처리(배치)', () async {
+          try {
+            await batchNullifyByStudent(table: 'homework_items', hasAcademyId: true, batchSize: 200);
+          } catch (e) {
+            print('[WARN][deleteStudent][server-only][hard] homework_items nullify 실패(무시): $e');
+          }
+        });
+        await timed('hard: tag_events student_id null 처리(배치)', () async {
+          try {
+            await batchNullifyByStudent(table: 'tag_events', studentIdCol: 'student_id', hasAcademyId: true, batchSize: 200);
+          } catch (e) {
+            print('[WARN][deleteStudent][server-only][hard] tag_events nullify 실패(무시): $e');
+          }
+        });
+
+        // 8) 작은 테이블 정리
+        await timed('hard: student_basic_info 삭제', () async {
+          await supa.from('student_basic_info').delete().eq('student_id', id).eq('academy_id', academyId);
+        });
+        await timed('hard: student_payment_info 삭제', () async {
+          await supa.from('student_payment_info').delete().eq('student_id', id).eq('academy_id', academyId);
+        });
+
+        // 9) 마지막으로 students 삭제 (이 시점엔 cascade 작업량이 매우 줄어야 함)
+        await timed('hard: students 최종 삭제', () async {
+          await supa.from('students').delete().eq('id', id).eq('academy_id', academyId);
+        });
+      }
+
+      // 1-shot 삭제 먼저 시도 (빠른 케이스는 여기서 끝)
       try {
-        final supa = Supabase.instance.client;
-        await supa.from('student_basic_info').delete().eq('student_id', id);
-        await supa.from('student_payment_info').delete().eq('student_id', id);
-        await supa.from('students').delete().eq('id', id);
-      } catch (e, st) { print('[SUPA][deleteStudent server-only] $e\n$st'); }
+        await timed('students 삭제(1-shot)', () async {
+          await supa.from('students').delete().eq('id', id).eq('academy_id', academyId);
+        });
+      } catch (e) {
+        if (isStatementTimeout(e)) {
+          await hardDeleteStudentWithLogs();
+        } else {
+          rethrow;
+        }
+      }
+
       await loadStudents();
       await loadStudentTimeBlocks();
       return;
@@ -3027,6 +3292,14 @@ bool _isSavingClassesOrder = false;
 DateTime? _lastClassesOrderSaveEnd;
 DateTime? _lastClassesOrderSaveStart;
 
+  /// UI 즉시 반영용: 수업을 로컬 상태에서 먼저 제거한다(서버 작업은 별도).
+  void removeClassOptimistic(String id) {
+    _classes.removeWhere((c) => c.id == id);
+    classesNotifier.value = List.unmodifiable(_classes);
+    classesRevision.value++;
+    classAssignmentsRevision.value++;
+  }
+
   Future<void> loadClasses() async {
     final now = DateTime.now();
     final loadStartedAt = now;
@@ -3192,22 +3465,22 @@ DateTime? _lastClassesOrderSaveStart;
     classAssignmentsRevision.value++;
   }
   Future<void> deleteClass(String id) async {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        await Supabase.instance.client.from('classes').delete().eq('id', id);
-        _classes.removeWhere((c) => c.id == id);
-        classesNotifier.value = List.unmodifiable(_classes);
-        return;
-      } catch (e, st) {
-        print('[SUPA][classes delete] $e\n$st');
-        return; // server-only: 실패 시 로컬 삭제하지 않음
-      }
-    }
     _classes.removeWhere((c) => c.id == id);
-    await AcademyDbService.instance.deleteClass(id);
     classesNotifier.value = List.unmodifiable(_classes);
     classesRevision.value++;
     classAssignmentsRevision.value++;
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('classes').delete().eq('id', id);
+        return;
+      } catch (e, st) {
+        // UI는 이미 반영(낙관적). 실패 시 다음 로드에서 복구된다.
+        print('[SUPA][classes delete] $e\n$st');
+        return;
+      }
+    }
+    await AcademyDbService.instance.deleteClass(id);
   }
 
   Future<void> saveClassesOrder(List<ClassInfo> newOrder, {bool skipNotifierUpdate = false}) async {

@@ -769,10 +769,15 @@ class StudentScreenState extends State<StudentScreen> {
                 },
                 onDeleteStudent: (studentWithInfo) async {
                   print('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
-                  await DataManager.instance.deleteStudent(studentWithInfo.student.id);
-                  print('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
-                  showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
-                  print('[DEBUG][StudentScreen] 스낵바 호출 완료');
+                  try {
+                    await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                    print('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
+                    showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
+                    print('[DEBUG][StudentScreen] 스낵바 호출 완료');
+                  } catch (e) {
+                    print('[ERROR][StudentScreen] 학생 삭제 실패: $e');
+                    showAppSnackBar(context, '학생 삭제 실패: $e', useRoot: true);
+                  }
                 },
                 onStudentUpdated: (studentWithInfo) async {
                   await showDialog(
@@ -1107,8 +1112,13 @@ class StudentScreenState extends State<StudentScreen> {
                   ),
                 );
                 if (confirmed == true) {
-                  await DataManager.instance.deleteStudent(studentWithInfo.student.id);
-                  showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
+                  try {
+                    await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                    showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
+                  } catch (e) {
+                    print('[ERROR][StudentScreen] 학생 삭제 실패: $e');
+                    showAppSnackBar(context, '학생 삭제 실패: $e', useRoot: true);
+                  }
                 }
               },
               onStudentUpdated: (studentWithInfo) async {

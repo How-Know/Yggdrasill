@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 class TimetableHeader extends StatefulWidget {
   final Function(DateTime) onDateChanged;
@@ -90,12 +91,12 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 width: 48,
                 height: 48,
                 child: IconButton(
-                  tooltip: 'PDF 내보내기(준비중)',
+                  tooltip: '엑셀 내보내기(준비중)',
                   onPressed: () {
-                    // TODO: PDF 내보내기 기능 연결
+                    // TODO: 엑셀 내보내기 기능 연결
                   },
                   // ✅ 20% 확대
-                  icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white70, size: 26),
+                  icon: const Icon(Symbols.output, color: Colors.white70, size: 26),
                   splashRadius: 22,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),

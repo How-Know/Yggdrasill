@@ -414,6 +414,11 @@ class AttendanceService {
     String? snapshotId,
   }) async {
     if (plannedRecords.isEmpty) return {};
+    // ✅ snapshot 기반 planned 재생성에서만 batch tables를 사용한다.
+    // - snapshotId == null 인 전역 planned 생성기는 누락 보강 목적이며,
+    //   여기서 batch headers/sessions를 만들면 (중복/폭증 시) 테이블이 빠르게 커지고 삭제/조회에 장애가 발생한다.
+    // - 현재 중복 폭증의 거의 전부가 snapshotId == null 경로에서 발생한 것이 DB에서 확인됨.
+    if (snapshotId == null) return {};
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
     plannedRecords.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
@@ -705,17 +710,50 @@ class AttendanceService {
     final Map<String, int> counterByStudentCycle = {};
     _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
 
-    // 기존 planned (출석/도착 없는 순수 예정) 중 오늘 이후를 키로 보관하여 중복 생성 방지
+    // 기존 planned 중복 방지 키:
+    // ⚠️ _attendanceRecords는 Supabase(PostgREST) max_rows 설정에 의해 ~1000개로 잘릴 수 있어(실제 로그: recordsLen≈990),
+    //     이 메모리 기반 체크만으로는 중복 생성 방지가 불완전해질 수 있다.
+    // ✅ DB에서 DISTINCT로 키를 가져와 중복 폭증을 방지한다.
     final Set<String> existingPlannedKeys = {};
-    for (final r in _attendanceRecords) {
-      if (!r.isPlanned) continue;
-      if (r.isPresent || r.arrivalTime != null) continue;
-      if (r.setId == null || r.setId!.isEmpty) continue;
-      final dk = _dateKey(r.classDateTime);
-      // anchor(오늘 00:00) 이후만 고려
-      final classDate = DateTime(r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
-      if (classDate.isBefore(anchor)) continue;
-      existingPlannedKeys.add('${r.studentId}|${r.setId}|$dk');
+    try {
+      final fromUtc = anchor.toUtc();
+      final toUtc = anchor.add(Duration(days: days)).toUtc();
+      final data = await supa.rpc('list_planned_attendance_minutes', params: {
+        'p_academy_id': academyId,
+        'p_from': fromUtc.toIso8601String(),
+        'p_to': toUtc.toIso8601String(),
+      });
+      if (data is List) {
+        for (final row in data) {
+          final m = Map<String, dynamic>.from(row as Map);
+          final sid = m['student_id']?.toString();
+          final setId = m['set_id']?.toString();
+          final minuteStr = m['class_minute']?.toString();
+          if (sid == null || sid.isEmpty) continue;
+          if (setId == null || setId.isEmpty) continue;
+          if (minuteStr == null || minuteStr.isEmpty) continue;
+          final dt = DateTime.tryParse(minuteStr);
+          if (dt == null) continue;
+          existingPlannedKeys.add('$sid|$setId|${_dateKey(dt.toLocal())}');
+        }
+      }
+      if (_sideDebug) {
+        print('[PLAN][existing-keys] via rpc keys=${existingPlannedKeys.length} rangeUtc=$fromUtc..$toUtc');
+      }
+    } catch (e) {
+      // fallback: 기존 메모리 기반(정확도 낮을 수 있음)
+      if (_sideDebug) {
+        print('[PLAN][existing-keys][WARN] rpc 실패 -> memory fallback: $e');
+      }
+      for (final r in _attendanceRecords) {
+        if (!r.isPlanned) continue;
+        if (r.isPresent || r.arrivalTime != null) continue;
+        if (r.setId == null || r.setId!.isEmpty) continue;
+        final dk = _dateKey(r.classDateTime);
+        final classDate = DateTime(r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
+        if (classDate.isBefore(anchor)) continue;
+        existingPlannedKeys.add('${r.studentId}|${r.setId}|$dk');
+      }
     }
 
     bool samplePrinted = false;

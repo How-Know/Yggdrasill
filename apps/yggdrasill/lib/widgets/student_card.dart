@@ -4,6 +4,7 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 // removed student_details_dialog
 import 'student_registration_dialog.dart';
+import 'app_snackbar.dart';
 import '../services/data_manager.dart';
 import '../main.dart';
 import '../screens/student/student_profile_page.dart';
@@ -259,7 +260,15 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
     );
 
     if (confirmed == true) {
-      await DataManager.instance.deleteStudent(widget.studentWithInfo.student.id);
+      try {
+        await DataManager.instance.deleteStudent(widget.studentWithInfo.student.id);
+        if (!context.mounted) return;
+        showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
+      } catch (e) {
+        if (!context.mounted) return;
+        print('[ERROR][StudentCard] 학생 삭제 실패: $e');
+        showAppSnackBar(context, '학생 삭제 실패: $e', useRoot: true);
+      }
     }
   }
 
