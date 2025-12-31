@@ -11,7 +11,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 
+import '../../services/academy_db.dart';
 import '../../services/data_manager.dart';
+import '../../services/tag_preset_service.dart';
 
 // NOTE: RightSideSheet의 private 색상 상수(_rsBg 등)에는 접근할 수 없어서,
 // 동일 톤의 색상을 여기에서 다시 정의합니다. (디자인을 유지하기 위한 중복)
@@ -72,8 +74,18 @@ class FileShortcutTab extends StatefulWidget {
 class _FileShortcutTabState extends State<FileShortcutTab> {
   static const String _kCategoryKey = 'file_shortcut';
 
+  // ✅ 탭 재진입(위젯 재생성) 시 "범주 표시가 잠깐 비어있음/불러오는중..." 플리커를 줄이기 위해
+  // 마지막으로 렌더링한 상태를 메모리에 보관한다. (앱 실행 중에만 유지)
+  static List<_FsCategory>? _memCategories;
+  static String? _memSelectedCategoryId;
+  static String? _memSelectedFolderId;
+  static _FsTarget? _memTarget;
+  static Set<String>? _memKnownFileIds;
+
   final ScrollController _scrollCtrl = ScrollController();
   bool _loading = false;
+  bool _booting = true;
+  int _mutationRev = 0;
 
   List<_FsCategory> _categories = <_FsCategory>[];
   String? _selectedCategoryId;
@@ -83,14 +95,68 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   // 삭제 동기화를 위해 현재(서버/로컬)에 존재하는 파일 id 집합을 추적
   Set<String> _knownFileIds = <String>{};
 
+  static _FsFile _cloneFile(_FsFile x) => _FsFile(
+        id: x.id,
+        name: x.name,
+        path: x.path,
+        kind: x.kind,
+        order: x.order,
+      );
+
+  static _FsFolder _cloneFolder(_FsFolder f) => _FsFolder(
+        id: f.id,
+        name: f.name,
+        expanded: f.expanded,
+        order: f.order,
+        files: <_FsFile>[for (final x in f.files) _cloneFile(x)],
+      );
+
+  static _FsCategory _cloneCategory(_FsCategory c) => _FsCategory(
+        id: c.id,
+        name: c.name,
+        order: c.order,
+        folders: <_FsFolder>[for (final f in c.folders) _cloneFolder(f)],
+      );
+
+  void _saveMemCache() {
+    _memCategories = <_FsCategory>[for (final c in _categories) _cloneCategory(c)];
+    _memSelectedCategoryId = _selectedCategoryId;
+    _memSelectedFolderId = _selectedFolderId;
+    _memTarget = _target;
+    _memKnownFileIds = <String>{..._knownFileIds};
+  }
+
+  void _restoreMemCache() {
+    final cached = _memCategories;
+    if (cached == null || cached.isEmpty) return;
+    _categories = <_FsCategory>[for (final c in cached) _cloneCategory(c)];
+    _selectedCategoryId = _memSelectedCategoryId;
+    _selectedFolderId = _memSelectedFolderId;
+    _target = _memTarget ?? _FsTarget.category;
+    _knownFileIds = _memKnownFileIds != null
+        ? <String>{..._memKnownFileIds!}
+        : <String>{
+            for (final c in _categories)
+              for (final f in c.folders)
+                for (final x in f.files) x.id,
+          };
+    // 캐시가 있으면 일단 즉시 표시하고, 최신화는 백그라운드로 진행
+    _booting = false;
+  }
+
   @override
   void initState() {
     super.initState();
-    unawaited(_reload());
+    _restoreMemCache();
+    // ✅ 파일 바로가기 탭은 서버 읽기(preferSupabaseRead)가 켜져 있으면
+    // 진입 시 네트워크 대기 때문에 로딩이 길어질 수 있다.
+    // -> 로컬(SQLite) 캐시를 먼저 빠르게 표시하고, 서버 동기화는 백그라운드로 수행한다.
+    unawaited(_bootstrapReload());
   }
 
   @override
   void dispose() {
+    _saveMemCache();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -232,55 +298,127 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     return cat.folders.firstWhere((f) => f.id == folderId, orElse: () => const _FsFolder.none());
   }
 
-  Future<void> _reload() async {
-    if (_loading) return;
-    setState(() => _loading = true);
+  Future<void> _bootstrapReload() async {
+    final hasLocal = await _reloadFromLocal();
+    if (!mounted) return;
+    // 서버 우선 모드가 아니면 여기서 종료(로컬이 authoritative)
+    // (비어있더라도) "불러오는 중..." 상태는 종료하여 빈 상태 안내를 노출한다.
+    if (!TagPresetService.preferSupabaseRead) {
+      setState(() => _booting = false);
+      return;
+    }
+
+    // 로컬 캐시가 비어 있으면: 한 번만 "블로킹 로드"(빈 화면 방지)
+    if (!hasLocal) {
+      await _reloadFromServer(blocking: true);
+      if (mounted) setState(() => _booting = false);
+      return;
+    }
+    // 로컬이 있으면: UI는 즉시 보여주고 서버 동기화는 백그라운드
+    setState(() => _booting = false);
+    unawaited(_reloadFromServer(blocking: false));
+  }
+
+  Future<bool> _reloadFromLocal() async {
     try {
-      final folderRows = await DataManager.instance.loadResourceFoldersForCategory(_kCategoryKey);
-      final fileRows = await DataManager.instance.loadResourceFilesForCategory(_kCategoryKey);
+      final res = await Future.wait([
+        AcademyDbService.instance.loadResourceFoldersForCategory(_kCategoryKey),
+        AcademyDbService.instance.loadResourceFilesForCategory(_kCategoryKey),
+      ]);
+      if (!mounted) return false;
+      final folderRows = (res[0] as List).cast<Map<String, dynamic>>();
+      final fileRows = (res[1] as List).cast<Map<String, dynamic>>();
+      _applyLoadedRows(folderRows: folderRows, fileRows: fileRows);
+      return folderRows.isNotEmpty || fileRows.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
 
-      final categories = _parseFolders(folderRows);
-      final filesByFolder = _parseFilesByFolder(fileRows);
+  Future<void> _reloadFromServer({required bool blocking}) async {
+    if (_loading) return;
+    final startRev = _mutationRev;
+    if (blocking) {
+      if (mounted) setState(() => _loading = true);
+    }
+    try {
+      final res = await Future.wait([
+        DataManager.instance.loadResourceFoldersForCategory(_kCategoryKey),
+        DataManager.instance.loadResourceFilesForCategory(_kCategoryKey),
+      ]);
+      if (!mounted) return;
+      // 로딩 중 사용자가 수정/정렬/삭제 등을 수행했으면 서버 결과로 덮어쓰지 않는다.
+      if (startRev != _mutationRev) return;
 
-      // attach files
-      final nextCats = categories.map((c) {
-        final nextFolders = c.folders.map((f) {
-          final files = filesByFolder[f.id] ?? const <_FsFile>[];
-          return f.copyWith(files: files);
-        }).toList();
-        return c.copyWith(folders: nextFolders);
+      final folderRows = (res[0] as List).cast<Map<String, dynamic>>();
+      final fileRows = (res[1] as List).cast<Map<String, dynamic>>();
+
+      // 다음 진입 속도를 위해 로컬 캐시도 갱신(서버 write 없이 local-only)
+      unawaited(AcademyDbService.instance.saveResourceFoldersForCategory(_kCategoryKey, folderRows));
+      unawaited(AcademyDbService.instance.saveResourceFilesForCategory(_kCategoryKey, fileRows));
+
+      _applyLoadedRows(folderRows: folderRows, fileRows: fileRows);
+      if (mounted) setState(() => _booting = false);
+    } catch (_) {
+      // 서버 로드 실패 시에도 booting을 끝내서 "범주 없음" 안내를 표시할 수 있게 한다.
+      if (mounted) setState(() => _booting = false);
+    } finally {
+      if (blocking && mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _applyLoadedRows({
+    required List<Map<String, dynamic>> folderRows,
+    required List<Map<String, dynamic>> fileRows,
+  }) {
+    // 확장 상태 유지(2단계 로드/백그라운드 동기화에서 UI가 접히지 않게)
+    final expandedByFolderId = <String, bool>{};
+    for (final c in _categories) {
+      for (final f in c.folders) {
+        expandedByFolderId[f.id] = f.expanded;
+      }
+    }
+
+    final categories = _parseFolders(folderRows);
+    final filesByFolder = _parseFilesByFolder(fileRows);
+
+    // attach files + keep expanded
+    final nextCats = categories.map((c) {
+      final nextFolders = c.folders.map((f) {
+        final files = filesByFolder[f.id] ?? const <_FsFile>[];
+        final expanded = expandedByFolderId[f.id] ?? f.expanded;
+        return f.copyWith(files: files, expanded: expanded);
       }).toList();
+      return c.copyWith(folders: nextFolders);
+    }).toList();
 
-      final known = <String>{};
-      for (final c in nextCats) {
-        for (final f in c.folders) {
-          for (final x in f.files) {
-            known.add(x.id);
-          }
+    final known = <String>{};
+    for (final c in nextCats) {
+      for (final f in c.folders) {
+        for (final x in f.files) {
+          known.add(x.id);
         }
       }
-
-      setState(() {
-        _categories = nextCats;
-        _knownFileIds = known;
-        // 선택 정리
-        final eff = _effectiveCategoryId;
-        if (eff == null) {
-          _selectedCategoryId = null;
-          _selectedFolderId = null;
-          _target = _FsTarget.category;
-        } else {
-          _selectedCategoryId = eff;
-          if (_selectedFolderId != null) {
-            final cat = _categories.firstWhere((c) => c.id == eff);
-            final ok = cat.folders.any((f) => f.id == _selectedFolderId);
-            if (!ok) _selectedFolderId = null;
-          }
-        }
-      });
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
+
+    setState(() {
+      _categories = nextCats;
+      _knownFileIds = known;
+      // 선택 정리
+      final eff = _effectiveCategoryId;
+      if (eff == null) {
+        _selectedCategoryId = null;
+        _selectedFolderId = null;
+        _target = _FsTarget.category;
+      } else {
+        _selectedCategoryId = eff;
+        if (_selectedFolderId != null) {
+          final cat = _categories.firstWhere((c) => c.id == eff);
+          final ok = cat.folders.any((f) => f.id == _selectedFolderId);
+          if (!ok) _selectedFolderId = null;
+        }
+      }
+    });
   }
 
   List<_FsCategory> _parseFolders(List<Map<String, dynamic>> rows) {
@@ -290,7 +428,10 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     for (final r in rows) {
       final id = (r['id'] as String?) ?? '';
       if (id.isEmpty) continue;
-      final name = (r['name'] as String?) ?? '';
+      // 일부 구버전/데이터에서 name이 비어있는 케이스가 있어 description을 fallback으로 사용
+      final rawName = (r['name'] as String?) ?? '';
+      final rawDesc = (r['description'] as String?) ?? '';
+      final name = rawName.trim().isNotEmpty ? rawName : rawDesc;
       final parent = (r['parent_id'] as String?)?.trim();
       final ord = (r['order_index'] as int?) ?? 0;
       if (parent == null || parent.isEmpty) {
@@ -400,6 +541,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     await Future.wait(futures);
 
     _knownFileIds = newIds;
+    _mutationRev++;
   }
 
   void _selectCategory(String categoryId) {
@@ -757,6 +899,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
 
     final hasCategory = cat != null;
     final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
+    final bootEmpty = _booting && _categories.isEmpty;
 
     final canEdit = (_target == _FsTarget.category && hasCategory) || (_target == _FsTarget.folder && hasFolder);
     final canDelete = canEdit;
@@ -814,9 +957,13 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
           const SizedBox(height: 12),
           _CategoryPickerRow(
             label: '범주',
-            valueText: hasCategory ? cat!.name : '범주 없음 (추가 버튼으로 생성)',
+            valueText: bootEmpty
+                ? '불러오는 중...'
+                : (hasCategory
+                    ? (cat!.name.trim().isNotEmpty ? cat!.name : '불러오는 중...')
+                    : '범주 없음 (추가 버튼으로 생성)'),
             selected: _target == _FsTarget.category,
-            onTap: _loading ? null : () => unawaited(_openCategoryPicker()),
+            onTap: (_loading || bootEmpty) ? null : () => unawaited(_openCategoryPicker()),
           ),
           const SizedBox(height: 12),
           InkWell(
@@ -860,7 +1007,13 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: (!hasCategory)
+            child: bootEmpty
+                ? const _EmptyState(
+                    icon: Icons.hourglass_top_rounded,
+                    title: '불러오는 중...',
+                    subtitle: '저장된 파일 바로가기를 불러오고 있어요.',
+                  )
+                : (!hasCategory)
                 ? const _EmptyState(
                     icon: Icons.folder_special_outlined,
                     title: '등록된 범주가 없습니다.',
@@ -1347,7 +1500,8 @@ class _FileCard extends StatefulWidget {
 }
 
 class _FileCardState extends State<_FileCard> {
-  static const double _actionWidth = 112; // 56 * 2
+  // 셀 선택 학생리스트 액션(수정/삭제)과 동일한 폭/패딩을 사용
+  static const double _actionWidth = 140;
   double _dx = 0.0; // negative = reveal actions
   bool _dragging = false;
   bool _printing = false;
@@ -1764,49 +1918,55 @@ class _FileCardState extends State<_FileCard> {
               children: [
                 SizedBox(
                   width: _actionWidth,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Tooltip(
-                          message: '수정',
-                          waitDuration: const Duration(milliseconds: 450),
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Row(
+                      children: [
+                        Expanded(
                           child: Material(
-                            color: _rsPanelBg,
+                            color: const Color(0xFF223131),
+                            borderRadius: BorderRadius.circular(10),
                             child: InkWell(
                               onTap: () {
                                 _close();
                                 widget.onRename();
                               },
+                              borderRadius: BorderRadius.circular(10),
+                              splashFactory: NoSplash.splashFactory,
+                              highlightColor: Colors.white.withOpacity(0.06),
+                              hoverColor: Colors.white.withOpacity(0.03),
                               child: const SizedBox.expand(
                                 child: Center(
-                                  child: Icon(Icons.edit_outlined, color: Colors.white70, size: 22),
+                                  child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Expanded(
-                        child: Tooltip(
-                          message: '삭제',
-                          waitDuration: const Duration(milliseconds: 450),
+                        const SizedBox(width: 6),
+                        Expanded(
                           child: Material(
-                            color: const Color(0x662A0E0E),
+                            color: const Color(0xFFB74C4C),
+                            borderRadius: BorderRadius.circular(10),
                             child: InkWell(
                               onTap: () {
                                 _close();
                                 widget.onDelete();
                               },
+                              borderRadius: BorderRadius.circular(10),
+                              splashFactory: NoSplash.splashFactory,
+                              highlightColor: Colors.white.withOpacity(0.08),
+                              hoverColor: Colors.white.withOpacity(0.04),
                               child: const SizedBox.expand(
                                 child: Center(
-                                  child: Icon(Icons.delete_outline, color: Color(0xFFFFB4B4), size: 22),
+                                  child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],

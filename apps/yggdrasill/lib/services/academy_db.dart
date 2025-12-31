@@ -1769,6 +1769,47 @@ class AcademyDbService {
     await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// category 범위의 resource_files를 "서버 스냅샷"으로 동기화한다.
+  ///
+  /// - 해당 category에 존재하지만 rows에는 없는 파일은 로컬에서 제거한다.
+  /// - rows에 있는 파일은 upsert(기존 레코드와 병합)한다.
+  /// - **서버 write는 하지 않는 local-only 동작**이다.
+  Future<void> saveResourceFilesForCategory(String category, List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.transaction((txn) async {
+      final newIds = <String>{};
+      for (final r in rows) {
+        final id = (r['id'] as String?) ?? '';
+        if (id.isNotEmpty) newIds.add(id);
+      }
+
+      final existing = (category == 'textbook')
+          ? await txn.query('resource_files', columns: ['id'], where: 'category = ? OR category IS NULL', whereArgs: [category])
+          : await txn.query('resource_files', columns: ['id'], where: 'category = ?', whereArgs: [category]);
+      final existingIds = existing.map((r) => (r['id'] as String?) ?? '').where((id) => id.isNotEmpty).toSet();
+
+      final removed = existingIds.difference(newIds);
+      for (final id in removed) {
+        await txn.delete('resource_file_links', where: 'file_id = ?', whereArgs: [id]);
+        await txn.delete('resource_files', where: 'id = ?', whereArgs: [id]);
+      }
+
+      for (final raw in rows) {
+        final id = (raw['id'] as String?) ?? '';
+        if (id.isEmpty) continue;
+        final existingList = await txn.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+        Map<String, dynamic> merged = {};
+        if (existingList.isNotEmpty) {
+          merged = Map<String, dynamic>.from(existingList.first);
+        }
+        merged.addAll(Map<String, dynamic>.from(raw));
+        merged['category'] = category;
+        await txn.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {
     final dbClient = await db;
     await ensureResourceTables();

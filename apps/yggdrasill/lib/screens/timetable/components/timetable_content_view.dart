@@ -2644,38 +2644,124 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required DateTime refDate,
   }) async {
     final date = _dateOnly(refDate);
-    final closeDate = date.subtract(const Duration(days: 1));
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0B1112),
-        title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
-        content: Text(
-          '선택한 날짜(${date.month}/${date.day})부터 해당 수업시간을 삭제할까요?\n'
-          '(과거 수업기록/출석기록은 삭제하지 않고, 기간만 종료 처리됩니다)',
-          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+    final today = _dateOnly(DateTime.now());
+    final bool isToday = date.year == today.year && date.month == today.month && date.day == today.day;
+    final String dateLabel = '${date.month}/${date.day}';
+    final String deleteStartLabel = isToday ? '내일부터' : '선택한 날짜($dateLabel)부터';
+    final setId = (block.setId ?? '').trim();
+    bool deleteFutureSegments = false;
+
+    // 같은 setId의 "미래 세그먼트"가 있으면 사용자에게 범위를 확인
+    if (setId.isNotEmpty) {
+      final hasFuture = DataManager.instance.studentTimeBlocks.any((b) {
+        if (b.studentId != block.studentId) return false;
+        if ((b.setId ?? '').trim() != setId) return false;
+        final sd = _dateOnly(b.startDate);
+        return sd.isAfter(date);
+      });
+      if (hasFuture) {
+        final choice = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0B1112),
+            title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+            content: Text(
+              '$deleteStartLabel 수업시간을 삭제할까요?\n'
+              '또한, 같은 수업(set_id)에 미래 시작 일정이 있습니다.\n\n'
+              '- 이번 일정만: 선택 날짜까지 유지 후 종료(미래 일정 유지)\n'
+              '- 미래도 삭제: 선택 날짜까지 유지 후 종료 + 미래 일정 삭제',
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('이번 일정만', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('미래도 삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+              ),
+            ],
+          ),
+        );
+        if (choice == null) return;
+        deleteFutureSegments = choice;
+      } else {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0B1112),
+            title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+            content: Text(
+              '$deleteStartLabel 해당 수업시간을 삭제할까요?\n'
+              '(과거 수업기록/출석기록은 삭제하지 않고, 기간만 종료 처리됩니다)',
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+      }
+    } else {
+      // setId가 없는 블록은 단일 종료로 처리
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF0B1112),
+          title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+          content: Text(
+            '$deleteStartLabel 해당 수업시간을 삭제할까요?\n'
+            '(과거 수업기록/출석기록은 삭제하지 않고, 기간만 종료 처리됩니다)',
+            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    try {
-      await DataManager.instance.bulkDeleteStudentTimeBlocks(
-        [block.id],
-        immediate: true,
-        endDateOverride: closeDate,
       );
+      if (ok != true) return;
+    }
+    try {
+      if (setId.isNotEmpty) {
+        await DataManager.instance.closeStudentTimeBlockSetAtDate(
+          studentId: block.studentId,
+          setId: setId,
+          refDate: date,
+          deleteFutureSegments: deleteFutureSegments,
+        );
+      } else {
+        await DataManager.instance.bulkDeleteStudentTimeBlocks(
+          [block.id],
+          immediate: true,
+          endDateOverride: isToday ? date : date.subtract(const Duration(days: 1)),
+        );
+      }
       if (mounted) {
-        showAppSnackBar(context, '삭제되었습니다.', useRoot: true);
+        showAppSnackBar(
+          context,
+          deleteFutureSegments ? '삭제되었습니다. (미래 일정도 삭제됨)' : '삭제되었습니다.',
+          useRoot: true,
+        );
       }
     } catch (e) {
       if (mounted) {

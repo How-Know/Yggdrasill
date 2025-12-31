@@ -10,7 +10,8 @@ class AnswerKeyService {
   AnswerKeyService._internal();
   static final AnswerKeyService instance = AnswerKeyService._internal();
 
-  bool get _writeServer => TagPresetService.preferSupabaseRead || TagPresetService.dualWrite;
+  bool get _writeServer =>
+      RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead || TagPresetService.dualWrite;
   bool get _writeLocal =>
       !RuntimeFlags.serverOnly && (!TagPresetService.preferSupabaseRead || TagPresetService.dualWrite);
   bool get _strictServer => RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead;
@@ -130,7 +131,9 @@ class AnswerKeyService {
 
   // ======== BOOKS ========
   Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() async {
-    if (TagPresetService.preferSupabaseRead) {
+    // NOTE: 답지(책/과정/PDF 링크)는 여러 PC에서 동일하게 보여야 하므로
+    // dualWrite 모드에서도 서버를 우선 조회한다. (서버 실패 시 로컬 폴백)
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -138,11 +141,48 @@ class AnswerKeyService {
         final supa = Supabase.instance.client;
         final data = await supa
             .from('answer_key_books')
-            .select('id,name,description,grade_key,order_index')
+            .select('id,name,description,grade_key,order_index,updated_at')
             .eq('academy_id', academyId)
-            .order('order_index');
-        final list = (data as List).cast<Map<String, dynamic>>();
-        if (list.isNotEmpty) return list;
+            .order('order_index')
+            .order('id');
+        final raw = (data as List).cast<Map<String, dynamic>>();
+        if (raw.isNotEmpty) {
+          // 서버/클라이언트 환경 차이(Null/중복 order_index)로 인해 정렬이 흔들릴 수 있어,
+          // 클라이언트에서 한 번 더 안정 정렬한다.
+          final list = raw.map((m) => Map<String, dynamic>.from(m)).toList();
+          list.sort((a, b) {
+            final int ai = (a['order_index'] as int?) ?? 1 << 30; // nulls last
+            final int bi = (b['order_index'] as int?) ?? 1 << 30;
+            final t = ai.compareTo(bi);
+            if (t != 0) return t;
+            final String aid = (a['id'] as String?) ?? '';
+            final String bid = (b['id'] as String?) ?? '';
+            return aid.compareTo(bid);
+          });
+          // PC별로 순서가 달라 보이는 케이스(예: order_index null/중복/깨짐)를 방지하기 위해,
+          // 필요할 때만 order_index를 0..n-1로 정규화해 서버/로컬에 재저장한다.
+          bool needsNormalize = false;
+          final seen = <int>{};
+          for (int i = 0; i < list.length; i++) {
+            final oi = (list[i]['order_index'] as int?) ?? -1;
+            if (oi != i || seen.contains(oi)) {
+              needsNormalize = true;
+              break;
+            }
+            seen.add(oi);
+          }
+          if (needsNormalize) {
+            for (int i = 0; i < list.length; i++) {
+              list[i]['order_index'] = i;
+            }
+            try {
+              await saveAnswerKeyBooks(list);
+            } catch (_) {
+              // ignore
+            }
+          }
+          return list;
+        }
       } catch (e, st) {
         // ignore: avoid_print
         print('[AnswerKey][books] server load failed: $e\n$st');

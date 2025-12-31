@@ -1741,20 +1741,22 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           }
                           // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
                           final allBlocks = DataManager.instance.studentTimeBlocks;
-                  bool hasConflict = false;
-                  for (final startTime in actualStartTimes) {
-                    final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
-                    final conflictBlock = allBlocks.firstWhereOrNull((b) =>
-                      b.studentId == student.id &&
-                      b.dayIndex == dayIdx &&
-                      b.startHour == startTime.hour &&
-                      b.startMinute == startTime.minute &&
-                      _isBlockActiveOnDate(b, dateOnly));
-                    if (conflictBlock != null) {
-                      hasConflict = true;
-                      break;
-                    }
-                  }
+                          // ⚠️ startTimes는 "시간표 그리드"에서 생성된 DateTime(오늘 날짜 기반)일 수 있어,
+                          // 중복 체크는 반드시 "등록 효력 시작일(range.start)" 기준으로 수행해야 한다.
+                          final effectiveDate = DateTime(range.start.year, range.start.month, range.start.day);
+                          bool hasConflict = false;
+                          for (final startTime in actualStartTimes) {
+                            final conflictBlock = allBlocks.firstWhereOrNull((b) =>
+                              b.studentId == student.id &&
+                              b.dayIndex == dayIdx &&
+                              b.startHour == startTime.hour &&
+                              b.startMinute == startTime.minute &&
+                              _isBlockActiveOnDate(b, effectiveDate));
+                            if (conflictBlock != null) {
+                              hasConflict = true;
+                              break;
+                            }
+                          }
                           print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
                           if (hasConflict) {
                             showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
@@ -2004,7 +2006,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   final allBlocks = DataManager.instance.studentTimeBlocks;
                   bool hasConflict = false;
                   for (final startTime in actualStartTimes) {
-                    final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
+                    // startTimes는 내부 그리드(DateTime.now 기반)라 날짜가 의미 없을 수 있어,
+                    // 현재 화면의 선택 날짜(_selectedDate) 기준으로만 활성 중복을 판단한다.
+                    final dateOnly = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
                     final conflictBlock = allBlocks.firstWhereOrNull((b) =>
                       b.studentId == student.id &&
                       b.dayIndex == dayIdx &&

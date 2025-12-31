@@ -2523,6 +2523,151 @@ class DataManager {
     }
   }
 
+  /// student_time_blocks 행을 **하드 삭제**한다. (end_date 종료가 아니라 DB row 삭제)
+  ///
+  /// - 주로 "미래 세그먼트(start_date가 더 미래)"를 완전히 제거할 때 사용한다.
+  /// - `publish=false`로 묶어 여러 작업 후 한 번에 UI를 갱신할 수 있다.
+  Future<void> hardDeleteStudentTimeBlocks(
+    List<String> blockIds, {
+    bool publish = true,
+    DateTime? refDate,
+  }) async {
+    if (blockIds.isEmpty) return;
+    final ids = blockIds.where((e) => e.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return;
+
+    final before = List<StudentTimeBlock>.from(_studentTimeBlocks);
+    final beforePending = List<StudentTimeBlock>.from(_pendingTimeBlocks);
+
+    // ✅ 낙관적 반영(기존 bulkDelete와 동일한 패턴)
+    _pendingTimeBlocks.removeWhere((b) => ids.contains(b.id));
+    _studentTimeBlocks.removeWhere((b) => ids.contains(b.id));
+    if (publish) {
+      _publishStudentTimeBlocks(refDate: refDate);
+      _bumpStudentTimeBlocksRevision();
+    }
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .delete()
+            .filter('id', 'in', '(${ids.map((e) => '"$e"').join(',')})');
+        return;
+      } catch (e, st) {
+        // rollback
+        _studentTimeBlocks = before;
+        _pendingTimeBlocks
+          ..clear()
+          ..addAll(beforePending);
+        if (publish) {
+          _publishStudentTimeBlocks(refDate: refDate);
+          _bumpStudentTimeBlocksRevision();
+        }
+        print('[SUPA][stb hard delete] $e\n$st');
+        rethrow;
+      }
+    }
+
+    // local DB
+    try {
+      await AcademyDbService.instance.bulkDeleteStudentTimeBlocks(ids);
+    } catch (e, st) {
+      // rollback
+      _studentTimeBlocks = before;
+      _pendingTimeBlocks
+        ..clear()
+        ..addAll(beforePending);
+      if (publish) {
+        _publishStudentTimeBlocks(refDate: refDate);
+        _bumpStudentTimeBlocksRevision();
+      }
+      print('[LOCAL][stb hard delete] $e\n$st');
+      rethrow;
+    }
+  }
+
+  /// 같은 setId로 묶인 수업 블록을 "refDate에 활성인 구간" 기준으로 종료(end_date=refDate)한다.
+  ///
+  /// - `deleteFutureSegments=true`면 refDate 이후에 시작하는 동일 setId 블록(미래 세그먼트)은 하드 삭제한다.
+  /// - planned attendance는 refDate 기준으로 재계산되도록 트리거한다(비동기).
+  Future<void> closeStudentTimeBlockSetAtDate({
+    required String studentId,
+    required String setId,
+    required DateTime refDate,
+    bool deleteFutureSegments = false,
+  }) async {
+    final sid = studentId.trim();
+    final sset = setId.trim();
+    if (sid.isEmpty || sset.isEmpty) return;
+    final date = DateTime(refDate.year, refDate.month, refDate.day);
+    final today = _todayDateOnly();
+    // ✅ 기본: refDate부터 삭제(= end_date는 refDate-1)
+    // ✅ 단, refDate가 "오늘"이면 오늘까지 유지하고 내일부터 삭제(= end_date=today)
+    final bool isToday = date.year == today.year && date.month == today.month && date.day == today.day;
+    final DateTime endDateToSet = isToday ? today : date.subtract(const Duration(days: 1));
+
+    final all = _studentTimeBlocks.where((b) => b.studentId == sid && b.setId == sset).toList();
+    if (all.isEmpty) return;
+
+    bool isActiveOnRef(StudentTimeBlock b) => _isBlockActiveOn(b, date);
+    bool isFutureSegment(StudentTimeBlock b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      return sd.isAfter(date);
+    }
+
+    // refDate에 활성인 블록 중에서도,
+    // endDateToSet(refDate-1)가 start_date보다 빠른 경우는 "종료" 대신 하드 삭제가 더 안전하다.
+    final active = all.where(isActiveOnRef).toList();
+    final closableActiveIds = active.where((b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      return !sd.isAfter(endDateToSet);
+    }).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
+    final hardDeleteActiveIds = active.where((b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      return sd.isAfter(endDateToSet);
+    }).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
+    final futureIds = all.where(isFutureSegment).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
+
+    // 1) refDate에 활성인 블록들만 종료(end_date=refDate)
+    if (closableActiveIds.isNotEmpty) {
+      await bulkDeleteStudentTimeBlocks(
+        closableActiveIds,
+        immediate: true,
+        publish: false,
+        skipPlannedRegen: true,
+        endDateOverride: endDateToSet,
+      );
+    }
+    // (보강) refDate 삭제인데 endDateToSet < startDate인 경우: 유효기간을 꼬이게 만들지 않도록 하드 삭제 처리
+    if (hardDeleteActiveIds.isNotEmpty) {
+      await hardDeleteStudentTimeBlocks(
+        hardDeleteActiveIds,
+        publish: false,
+      );
+    }
+
+    // 2) (옵션) 미래 세그먼트 하드 삭제
+    if (deleteFutureSegments && futureIds.isNotEmpty) {
+      await hardDeleteStudentTimeBlocks(
+        futureIds,
+        publish: false,
+      );
+    }
+
+    // 3) UI 갱신은 한 번만
+    _publishStudentTimeBlocks(refDate: date);
+    _bumpStudentTimeBlocksRevision();
+
+    // 4) planned 재생성: refDate부터 반영되도록(미래면 anchor가 refDate가 됨)
+    _schedulePlannedRegen(
+      sid,
+      sset,
+      effectiveStart: date,
+      immediate: false,
+    );
+  }
+
   /// 특정 time block의 유효기간(start_date/end_date)을 직접 수정한다.
   ///
   /// - `startDate`/`endDate`는 date-only로 정규화된다.

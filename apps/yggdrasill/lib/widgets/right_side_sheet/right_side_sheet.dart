@@ -475,58 +475,90 @@ class _RightSideSheetState extends State<RightSideSheet> {
       return;
     }
 
-    final typeGroup = XTypeGroup(label: 'PDF', extensions: const ['pdf']);
-    final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
-    if (file == null) return;
-
     final dlgCtx = widget.dialogContext ?? context;
-    final _BookPickResult? pick = await _selectBookIndexForAttach(dlgCtx);
-    if (pick == null) return;
+    await showDialog<void>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (_) => _PdfAttachWizardDialog(
+        books: _books,
+        grades: _grades,
+        pdfPathByBookAndGrade: _pdfPathByBookAndGrade,
+        basenameOf: _basename,
+        onAttach: ({
+          required int bookIndex,
+          required int gradeIndex,
+          required XFile file,
+        }) =>
+            _attachPdfToBookAndGrade(
+          bookIndex: bookIndex,
+          gradeIndex: gradeIndex,
+          file: file,
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _attachPdfToBookAndGrade({
+    required int bookIndex,
+    required int gradeIndex,
+    required XFile file,
+  }) async {
+    final path = file.path.trim();
+    if (path.isEmpty || !path.toLowerCase().endsWith('.pdf')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+      }
+      return false;
+    }
+    if (_books.isEmpty || _grades.isEmpty) return false;
+    if (bookIndex < 0 || bookIndex >= _books.length) return false;
+    if (gradeIndex < 0 || gradeIndex >= _grades.length) return false;
 
     // 선택 결과 반영(학년 포함) + uuid 정규화/서버 반영
-    if (!mounted) return;
-    final idx = pick.bookIndex.clamp(0, _books.length - 1);
-    final gradeIdx = _grades.isEmpty ? 0 : pick.gradeIndex.clamp(0, _grades.length - 1);
-    setState(() {
-      _books[idx] = _books[idx].copyWith(gradeIndex: gradeIdx);
-      _defaultGradeIndex = gradeIdx;
-    });
-    try { await _saveAllBooks(); } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _books[bookIndex] = _books[bookIndex].copyWith(gradeIndex: gradeIndex);
+        _defaultGradeIndex = gradeIndex;
+        _selectedBookId = _books[bookIndex].id;
+      });
+    }
+    try {
+      await _saveAllBooks();
+    } catch (_) {}
+    if (!mounted) return false;
 
-    if (!mounted) return;
-    final book = _books[idx];
-    setState(() => _selectedBookId = book.id);
-    if (_grades.isEmpty) return;
-    final grade = _grades[gradeIdx];
-
+    final book = _books[bookIndex];
+    final grade = _grades[gradeIndex];
     final existing = _pdfPathByBookAndGrade[book.id]?[grade.key];
-    if (existing != null && existing.isNotEmpty && existing != file.path) {
-      final ok = await _confirmReplacePdf(dlgCtx);
-      if (!ok) return;
+    if (existing != null && existing.isNotEmpty && existing != path) {
+      final ok = await _confirmReplacePdf(widget.dialogContext ?? context);
+      if (!ok) return false;
     }
 
     final row = <String, dynamic>{
       'book_id': book.id,
       'grade_key': grade.key,
-      'path': file.path,
+      'path': path,
       'name': file.name,
     };
-
     try {
       await DataManager.instance.saveAnswerKeyBookPdf(row);
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         final m = _pdfPathByBookAndGrade.putIfAbsent(book.id, () => <String, String>{});
-        m[grade.key] = file.path;
+        m[grade.key] = path;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('연결됨: ${book.name} · ${grade.label}')),
       );
+      return true;
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('PDF 연결 저장에 실패했습니다.')),
       );
+      return false;
     }
   }
 
@@ -730,6 +762,37 @@ class _RightSideSheetState extends State<RightSideSheet> {
         onDetach: (grade) => _deletePdfLinkForBook(book: book, grade: grade),
       ),
     );
+  }
+
+  Future<void> _onEditBookPressed() async {
+    if (_books.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정할 책이 없습니다.')));
+      return;
+    }
+    final dlgCtx = widget.dialogContext ?? context;
+    final result = await showDialog<List<_BookItem>>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (_) => _BookBulkEditDialog(initial: _books),
+    );
+    if (result == null) return;
+
+    if (!mounted) return;
+    setState(() {
+      _books
+        ..clear()
+        ..addAll(result);
+    });
+
+    try {
+      // order_index 포함 전체 저장으로 일괄 반영
+      await _saveAllBooks();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('책 정보 저장에 실패했습니다.')));
+    }
   }
 
   Future<void> _onDeleteBookPressed() async {
@@ -978,6 +1041,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
           grades: _grades,
           pdfPathByBookAndGrade: _pdfPathByBookAndGrade,
           onAddBook: _openAddBookDialog,
+          onEditBook: () => unawaited(_onEditBookPressed()),
           onBookGradeDelta: ({required String bookId, required int delta}) =>
               _changeBookGradeByDelta(bookId: bookId, delta: delta),
           onOpenBook: (book) => unawaited(_openPdfForBook(book)),
@@ -1702,7 +1766,8 @@ class _InquiryNoteCard extends StatefulWidget {
 
 class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerProviderStateMixin {
   // 메모 카드와 동일한 슬라이드 삭제 UX
-  static const double _actionPaneWidth = 108 * 0.7;
+  // 단일 삭제 액션은 2버튼(140) 기준 "1버튼 분량"만 차지하도록 축소
+  static const double _actionPaneWidth = 74;
   static const double _minCardHeight = 84;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
@@ -1864,26 +1929,19 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
                   bottom: 0,
                   width: _actionPaneWidth,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                    padding: const EdgeInsets.all(6),
                     child: Material(
                       color: const Color(0xFFB74C4C),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(10),
                       child: InkWell(
                         onTap: _handleDelete,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(10),
                         splashFactory: NoSplash.splashFactory,
                         highlightColor: Colors.white.withOpacity(0.08),
                         hoverColor: Colors.white.withOpacity(0.04),
                         child: const SizedBox.expand(
                           child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
-                                SizedBox(height: 6),
-                                Text('삭제', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-                              ],
-                            ),
+                            child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
                           ),
                         ),
                       ),
@@ -1909,7 +1967,8 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
 
 class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixin {
   // 삭제 액션 패널 너비를 30% 축소 (108 -> 75.6)
-  static const double _actionPaneWidth = 108 * 0.7;
+  // 단일 삭제 액션은 2버튼(140) 기준 "1버튼 분량"만 차지하도록 축소
+  static const double _actionPaneWidth = 74;
   static const double _minCardHeight = 96;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
@@ -2062,26 +2121,19 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                   bottom: 0,
                   width: _actionPaneWidth,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                    padding: const EdgeInsets.all(6),
                     child: Material(
                       color: const Color(0xFFB74C4C),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(10),
                       child: InkWell(
                         onTap: _handleDelete,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(10),
                         splashFactory: NoSplash.splashFactory,
                         highlightColor: Colors.white.withOpacity(0.08),
                         hoverColor: Colors.white.withOpacity(0.04),
-                        child: SizedBox.expand(
+                        child: const SizedBox.expand(
                           child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
-                                SizedBox(height: 6),
-                                Text('삭제', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-                              ],
-                            ),
+                            child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
                           ),
                         ),
                       ),
@@ -2148,6 +2200,7 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   final List<_GradeOption> grades;
   final Map<String, Map<String, String>> pdfPathByBookAndGrade;
   final VoidCallback onAddBook;
+  final VoidCallback onEditBook;
   final VoidCallback onEditPdfs;
   final VoidCallback onEditGrades;
   final VoidCallback onDeleteBook;
@@ -2161,6 +2214,7 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
     required this.grades,
     required this.pdfPathByBookAndGrade,
     required this.onAddBook,
+    required this.onEditBook,
     required this.onEditPdfs,
     required this.onEditGrades,
     required this.onDeleteBook,
@@ -2210,9 +2264,9 @@ class _AnswerKeyPdfShortcutExplorerState extends State<_AnswerKeyPdfShortcutExpl
                 ),
                 Expanded(
                   child: _ToolbarSegmentButton(
-                    tooltip: 'PDF 수정',
+                    tooltip: '책 수정',
                     icon: Icons.edit_outlined,
-                    onPressed: widget.onEditPdfs,
+                    onPressed: widget.onEditBook,
                     showRightDivider: true,
                   ),
                 ),
@@ -2482,8 +2536,8 @@ class _BookCard extends StatefulWidget {
 }
 
 class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixin {
-  // 수정/삭제 2개 액션(삭제 카드와 동일한 버튼 폭 기준)
-  static const double _actionPaneWidth = 108 * 0.7 * 2;
+  // 셀 선택 학생리스트 액션(수정/삭제)과 동일한 폭/패딩을 사용
+  static const double _actionPaneWidth = 140;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
   late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
@@ -2561,7 +2615,6 @@ class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixi
       final bg = widget.linked ? _rsPanelBg : _rsPanelBg.withOpacity(0.35);
       final fg = widget.linked ? _rsTextSub : Colors.white24;
       return SizedBox(
-        width: 96,
         height: 30,
         // NOTE: ReorderableListView 내부에서 Tooltip(OverlayPortal)이 레이아웃 중 attach되며
         // "A _RenderLayoutBuilder was mutated" 에러가 발생하는 케이스가 있어,
@@ -2617,11 +2670,14 @@ class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixi
                       child: Text(
                         widget.item.name,
                         style: const TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+                        maxLines: 1,
+                        softWrap: false,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    buildGradeBadge(),
+                    const SizedBox(width: 10),
+                    // 요구사항: 이름:과정라벨 = 1:1
+                    Expanded(child: buildGradeBadge()),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -2632,37 +2688,6 @@ class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixi
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget actionButton({
-      required Color color,
-      required IconData icon,
-      required String label,
-      required VoidCallback onTap,
-    }) {
-      return Material(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          splashFactory: NoSplash.splashFactory,
-          highlightColor: Colors.white.withOpacity(0.08),
-          hoverColor: Colors.white.withOpacity(0.04),
-          child: SizedBox.expand(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 18, color: Colors.white),
-                  const SizedBox(height: 6),
-                  Text(label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-                ],
-              ),
             ),
           ),
         ),
@@ -2704,28 +2729,49 @@ class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixi
                     bottom: 0,
                     width: _actionPaneWidth,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: actionButton(
-                              color: _rsAccent,
-                              icon: Icons.edit_outlined,
-                              label: '수정',
+                    // ✅ 셀 선택 학생리스트의 스와이프 액션 버튼 모양과 통일
+                    padding: const EdgeInsets.all(6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Material(
+                            color: const Color(0xFF223131),
+                            borderRadius: BorderRadius.circular(10),
+                            child: InkWell(
                               onTap: _handleEdit,
+                              borderRadius: BorderRadius.circular(10),
+                              splashFactory: NoSplash.splashFactory,
+                              highlightColor: Colors.white.withOpacity(0.06),
+                              hoverColor: Colors.white.withOpacity(0.03),
+                              child: const SizedBox.expand(
+                                child: Center(
+                                  child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                                ),
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: actionButton(
-                              color: const Color(0xFFB74C4C),
-                              icon: Icons.delete_outline_rounded,
-                              label: '삭제',
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Material(
+                            color: const Color(0xFFB74C4C),
+                            borderRadius: BorderRadius.circular(10),
+                            child: InkWell(
                               onTap: _handleDelete,
+                              borderRadius: BorderRadius.circular(10),
+                              splashFactory: NoSplash.splashFactory,
+                              highlightColor: Colors.white.withOpacity(0.08),
+                              hoverColor: Colors.white.withOpacity(0.04),
+                              child: const SizedBox.expand(
+                                child: Center(
+                                  child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                                ),
+                              ),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
+                    ),
                     ),
                   ),
                   AnimatedBuilder(
@@ -3297,6 +3343,7 @@ class _BookPdfEditDialog extends StatefulWidget {
 class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
   late Map<String, String> _paths = Map<String, String>.from(widget.initialPaths);
   bool _busy = false;
+  final ScrollController _scrollCtrl = ScrollController();
 
   Future<void> _open(String path) async {
     final p = path.trim();
@@ -3339,7 +3386,30 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
   }
 
   @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    Widget statusPill({required bool linked}) {
+      final Color color = linked ? _rsAccent : _rsTextSub;
+      final String label = linked ? '연결됨' : '미연결';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withOpacity(0.28)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900, height: 1.0),
+        ),
+      );
+    }
+
     return AlertDialog(
       backgroundColor: _rsBg,
       shape: RoundedRectangleBorder(
@@ -3349,10 +3419,18 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
       titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
       contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      title: Text(
-        'PDF 수정 · ${widget.book.name}',
-        style: const TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
-        overflow: TextOverflow.ellipsis,
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('PDF 수정', style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 6),
+          Text(
+            widget.book.name,
+            style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
       content: SizedBox(
         width: 620,
@@ -3363,87 +3441,124 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
             const Divider(height: 1, color: Color(0x22FFFFFF)),
             const SizedBox(height: 12),
             Expanded(
-              child: ListView.separated(
-                itemCount: widget.grades.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, i) {
-                  final g = widget.grades[i];
-                  final path = _paths[g.key];
-                  final linked = path != null && path.trim().isNotEmpty;
-                  final badgeBg = linked ? _rsPanelBg : _rsPanelBg.withOpacity(0.35);
-                  final badgeFg = linked ? _rsTextSub : Colors.white24;
-                  final fileLabel = linked ? widget.basenameOf(path) : '미연결';
+              child: Scrollbar(
+                controller: _scrollCtrl,
+                thumbVisibility: true,
+                child: ListView.separated(
+                  controller: _scrollCtrl,
+                  itemCount: widget.grades.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, i) {
+                    final g = widget.grades[i];
+                    final path = _paths[g.key];
+                    final linked = path != null && path.trim().isNotEmpty;
+                    final fileLabel = linked ? widget.basenameOf(path) : '미연결';
 
-                  return Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: _rsFieldBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _rsBorder.withOpacity(0.9)),
-                    ),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 56,
-                          height: 30,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: badgeBg,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.transparent),
-                            ),
-                            child: Center(
-                              child: Text(
-                                g.label,
-                                style: TextStyle(color: badgeFg, fontSize: 13, fontWeight: FontWeight.w900),
+                    final outlinedStyle = OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: BorderSide(color: _rsBorder.withOpacity(0.9)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      minimumSize: const Size(0, 36),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    );
+
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _rsFieldBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                // ✅ 과정명은 잘리지 않게: 전체 폭을 쓰고 자연스럽게 줄바꿈
+                                child: Text(
+                                  g.label,
+                                  style: TextStyle(
+                                    color: linked ? _rsText : _rsTextSub,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                    height: 1.15,
+                                  ),
+                                  softWrap: true,
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 10),
+                              statusPill(linked: linked),
+                            ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            fileLabel,
-                            style: TextStyle(
-                              color: linked ? _rsText : _rsTextSub,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.picture_as_pdf_outlined,
+                                size: 16,
+                                color: linked ? _rsTextSub : Colors.white24,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Tooltip(
+                                  message: linked ? path! : '미연결',
+                                  waitDuration: const Duration(milliseconds: 450),
+                                  child: Text(
+                                    fileLabel,
+                                    style: TextStyle(
+                                      color: linked ? _rsText : _rsTextSub,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        if (linked) ...[
-                          OutlinedButton(
-                            onPressed: _busy ? null : () => _open(path!),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.white70,
-                              side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            child: const Text('열기'),
+                          const SizedBox(height: 10),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              if (linked) ...[
+                                OutlinedButton.icon(
+                                  onPressed: _busy ? null : () => _open(path!),
+                                  style: outlinedStyle,
+                                  icon: const Icon(Icons.open_in_new, size: 16),
+                                  label: const Text('열기'),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              OutlinedButton.icon(
+                                onPressed: _busy ? null : () => _pickAndSet(g),
+                                style: outlinedStyle,
+                                icon: const Icon(Icons.folder_open, size: 16),
+                                label: Text(linked ? '변경' : '연결'),
+                              ),
+                              if (linked) ...[
+                                const SizedBox(width: 8),
+                                TextButton.icon(
+                                  onPressed: (!_busy && linked) ? () => _detach(g) : null,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: const Color(0xFFFFB4B4),
+                                    minimumSize: const Size(0, 36),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  ),
+                                  icon: const Icon(Icons.link_off, size: 16),
+                                  label: const Text('해제'),
+                                ),
+                              ],
+                            ],
                           ),
-                          const SizedBox(width: 8),
                         ],
-                        OutlinedButton(
-                          onPressed: _busy ? null : () => _pickAndSet(g),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white70,
-                            side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          child: Text(linked ? '변경' : '연결'),
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: (!_busy && linked) ? () => _detach(g) : null,
-                          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
-                          child: const Text('해제'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
           ],
@@ -3555,6 +3670,603 @@ class _BookAddDialogState extends State<_BookAddDialog> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
           child: const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookBulkEditDialog extends StatefulWidget {
+  final List<_BookItem> initial;
+  const _BookBulkEditDialog({required this.initial});
+
+  @override
+  State<_BookBulkEditDialog> createState() => _BookBulkEditDialogState();
+}
+
+class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
+  late final List<TextEditingController> _nameCtrls = <TextEditingController>[
+    for (final b in widget.initial) ImeAwareTextEditingController(text: b.name),
+  ];
+  late final List<TextEditingController> _descCtrls = <TextEditingController>[
+    for (final b in widget.initial) ImeAwareTextEditingController(text: b.description),
+  ];
+  final ScrollController _scrollCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    for (final c in _nameCtrls) {
+      c.dispose();
+    }
+    for (final c in _descCtrls) {
+      c.dispose();
+    }
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final updated = <_BookItem>[];
+    for (int i = 0; i < widget.initial.length; i++) {
+      final name = _nameCtrls[i].text.trim();
+      final desc = _descCtrls[i].text.trim();
+      if (name.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('책 이름은 비워둘 수 없습니다.')));
+        return;
+      }
+      updated.add(widget.initial[i].copyWith(name: name, description: desc));
+    }
+    Navigator.of(context).pop<List<_BookItem>>(updated);
+  }
+
+  InputDecoration _fieldDeco(String label) => InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+        filled: true,
+        fillColor: _rsFieldBg,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: _rsBorder.withOpacity(0.9)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: _rsAccent, width: 2),
+        ),
+      );
+
+  Widget _indexPill(int index) {
+    return SizedBox(
+      height: 28,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _rsBorder.withOpacity(0.9)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Center(
+            child: Text(
+              '${index + 1}',
+              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _rsBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: const Text(
+        '책 수정',
+        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+      ),
+      content: SizedBox(
+        width: 620,
+        height: 520,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Divider(height: 1, color: Color(0x22FFFFFF)),
+            const SizedBox(height: 12),
+            Expanded(
+              child: Scrollbar(
+                controller: _scrollCtrl,
+                thumbVisibility: true,
+                child: ListView.separated(
+                  controller: _scrollCtrl,
+                  itemCount: widget.initial.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _rsFieldBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              _indexPill(index),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Text(
+                                  '이름 / 설명',
+                                  style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _nameCtrls[index],
+                            style: const TextStyle(color: _rsText, fontWeight: FontWeight.w800),
+                            decoration: _fieldDeco('책 이름'),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: _descCtrls[index],
+                            minLines: 2,
+                            maxLines: 3,
+                            style: const TextStyle(color: _rsText),
+                            decoration: _fieldDeco('설명'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop<List<_BookItem>?>(null),
+          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          style: FilledButton.styleFrom(
+            backgroundColor: _rsAccent,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+        ),
+      ],
+    );
+  }
+}
+
+class _PdfAttachWizardDialog extends StatefulWidget {
+  final List<_BookItem> books;
+  final List<_GradeOption> grades;
+  final Map<String, Map<String, String>> pdfPathByBookAndGrade;
+  final String Function(String path) basenameOf;
+  final Future<bool> Function({
+    required int bookIndex,
+    required int gradeIndex,
+    required XFile file,
+  }) onAttach;
+
+  const _PdfAttachWizardDialog({
+    required this.books,
+    required this.grades,
+    required this.pdfPathByBookAndGrade,
+    required this.basenameOf,
+    required this.onAttach,
+  });
+
+  @override
+  State<_PdfAttachWizardDialog> createState() => _PdfAttachWizardDialogState();
+}
+
+class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
+  final ScrollController _scrollCtrl = ScrollController();
+  int _step = 0; // 0=책 선택, 1=과정 선택
+  int? _bookIndex;
+  bool _busy = false;
+  final Map<int, XFile> _pendingByGradeIndex = <int, XFile>{}; // key=gradeIndex
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<XFile?> _pickPdf() async {
+    final typeGroup = XTypeGroup(label: 'PDF', extensions: const ['pdf']);
+    return await openFile(acceptedTypeGroups: [typeGroup]);
+  }
+
+  bool _isPdf(XFile f) => f.path.trim().toLowerCase().endsWith('.pdf');
+
+  Widget _outlinedAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white70,
+        side: BorderSide(color: _rsBorder.withOpacity(0.9)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        minimumSize: const Size(0, 36),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+      ),
+    );
+  }
+
+  Widget _dropButton({
+    required Future<void> Function(XFile f) onDropped,
+  }) {
+    return DropTarget(
+      onDragDone: (detail) async {
+        if (_busy) return;
+        if (detail.files.isEmpty) return;
+        final xf = detail.files.first;
+        if (!_isPdf(xf)) return;
+        await onDropped(xf);
+      },
+      child: _outlinedAction(
+        icon: Icons.download_rounded,
+        label: '드롭',
+        // 버튼 클릭 자체는 "드롭 안내"용(아무 동작 없음)
+        onPressed: _busy ? null : () {},
+      ),
+    );
+  }
+
+  Widget _header(String title, String subtitle) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 6),
+        Text(subtitle, style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800)),
+      ],
+    );
+  }
+
+  Future<void> _savePending() async {
+    if (_busy) return;
+    final bi = _bookIndex;
+    if (bi == null) return;
+    if (_pendingByGradeIndex.isEmpty) return;
+    if (_step != 1) return;
+
+    final entries = _pendingByGradeIndex.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    setState(() => _busy = true);
+    try {
+      for (final e in entries) {
+        final ok = await widget.onAttach(bookIndex: bi, gradeIndex: e.key, file: e.value);
+        if (!ok) return; // 사용자가 교체를 취소한 경우 등: 다이얼로그 유지
+      }
+      if (mounted) Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final books = widget.books;
+    final grades = widget.grades;
+
+    final int? selectedBookIndex = _bookIndex;
+    final _BookItem? selectedBook =
+        (selectedBookIndex != null && selectedBookIndex >= 0 && selectedBookIndex < books.length)
+            ? books[selectedBookIndex]
+            : null;
+
+    Widget bodyBookList() {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Scrollbar(
+              controller: _scrollCtrl,
+              thumbVisibility: true,
+              child: ListView.separated(
+                controller: _scrollCtrl,
+                itemCount: books.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final b = books[index];
+                  return InkWell(
+                    onTap: _busy
+                        ? null
+                        : () {
+                            setState(() {
+                              _bookIndex = index;
+                              _step = 1;
+                              _pendingByGradeIndex.clear();
+                            });
+                          },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _rsFieldBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  b.name,
+                                  style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  b.description,
+                                  style: const TextStyle(
+                                    color: _rsTextSub,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.25,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          const Icon(Icons.chevron_right, color: Colors.white24, size: 22),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget bodyGradeList() {
+      final b = selectedBook;
+      if (b == null) {
+        return const SizedBox.shrink();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _rsPanelBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _rsBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(b.name, style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 6),
+                Text(
+                  '변경 예정: ${_pendingByGradeIndex.length}개',
+                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '각 과정 행의 “드롭/찾기”로 PDF를 지정한 뒤, 우측 아래 “저장”으로 한 번에 반영하세요.',
+                  style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w700, height: 1.25),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Scrollbar(
+              controller: _scrollCtrl,
+              thumbVisibility: true,
+              child: ListView.separated(
+                controller: _scrollCtrl,
+                itemCount: grades.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final g = grades[index];
+                  final existing = widget.pdfPathByBookAndGrade[b.id]?[g.key];
+                  final linked = existing != null && existing.trim().isNotEmpty;
+                  final fileLabel = linked ? widget.basenameOf(existing!) : '미연결';
+                  final pending = _pendingByGradeIndex[index];
+                  final hasPending = pending != null && pending.path.trim().isNotEmpty;
+
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _rsFieldBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                g.label,
+                                style: TextStyle(
+                                  color: linked ? _rsText : _rsTextSub,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.15,
+                                ),
+                                softWrap: true,
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                    size: 16,
+                                    color: (linked || hasPending) ? _rsTextSub : Colors.white24,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      fileLabel,
+                                      style: TextStyle(
+                                        color: linked ? _rsText : _rsTextSub,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (hasPending) ...[
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.arrow_right_alt, size: 16, color: _rsAccent),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        pending!.name,
+                                        style: const TextStyle(
+                                          color: _rsAccent,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 92,
+                              child: _dropButton(
+                                onDropped: (xf) async {
+                                  if (_busy) return;
+                                  setState(() => _pendingByGradeIndex[index] = xf);
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 92,
+                              child: _outlinedAction(
+                                icon: Icons.folder_open,
+                                label: '찾기',
+                                onPressed: _busy
+                                    ? null
+                                    : () async {
+                                        final xf = await _pickPdf();
+                                        if (xf == null) return;
+                                        if (!_isPdf(xf)) return;
+                                        setState(() => _pendingByGradeIndex[index] = xf);
+                                      },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final title = (_step == 0) ? 'PDF 연결' : 'PDF 연결';
+    final subtitle = (_step == 0) ? '1/2 · 책을 선택하세요' : '2/2 · 과정별 PDF를 지정하고 저장하세요';
+
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _rsBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: _header(title, subtitle),
+      content: SizedBox(
+        width: 640,
+        height: 540,
+        child: (_step == 0) ? bodyBookList() : bodyGradeList(),
+      ),
+      actions: [
+        if (_step == 1)
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () {
+                    setState(() {
+                      _step = 0;
+                      _pendingByGradeIndex.clear();
+                    });
+                  },
+            style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+            child: const Text('뒤로'),
+          ),
+        if (_step == 1) ...[
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: (_busy || _pendingByGradeIndex.isEmpty) ? null : _savePending,
+            style: FilledButton.styleFrom(
+              backgroundColor: _rsAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text(
+              _pendingByGradeIndex.isEmpty ? '저장' : '저장 (${_pendingByGradeIndex.length})',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+          child: const Text('닫기'),
         ),
       ],
     );
