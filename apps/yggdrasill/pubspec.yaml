@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.5+11
+version: 1.0.5+12
 
 environment:
   sdk: '>=3.2.6 <4.0.0'
@@ -155,11 +155,12 @@ msix_config:
   publisher_display_name: How-Know
   identity_name: com.yggdrasill.mneme
   publisher: CN=How-Know
-  msix_version: 1.0.5.11
+  msix_version: 1.0.5.12
   logo_path: windows/runner/resources/app_icon.ico
   certificate_subject: CN=How-Know
   certificate_path: C:\\Users\\harry\\Yggdrasill\\apps\\yggdrasill\\dist\\howknow_codesign_new.pfx
   certificate_password: "HowKnow2025!"
+
 
 
 
