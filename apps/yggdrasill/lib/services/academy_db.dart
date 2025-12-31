@@ -1604,6 +1604,30 @@ class AcademyDbService {
         PRIMARY KEY (book_id, grade_key)
       )
     ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS answer_key_grades (
+        grade_key TEXT PRIMARY KEY,
+        label TEXT,
+        order_index INTEGER
+      )
+    ''');
+  }
+
+  Future<List<Map<String, dynamic>>> loadAnswerKeyGrades() async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    return await dbClient.query('answer_key_grades', orderBy: 'order_index ASC');
+  }
+
+  Future<void> saveAnswerKeyGrades(List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureAnswerKeyTables();
+    await dbClient.transaction((txn) async {
+      await txn.delete('answer_key_grades');
+      for (final row in rows) {
+        await txn.insert('answer_key_grades', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
   }
 
   Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() async {

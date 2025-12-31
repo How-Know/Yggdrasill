@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 import 'academy_db.dart';
 import 'runtime_flags.dart';
@@ -8,6 +9,124 @@ import 'tenant_service.dart';
 class AnswerKeyService {
   AnswerKeyService._internal();
   static final AnswerKeyService instance = AnswerKeyService._internal();
+
+  bool get _writeServer => TagPresetService.preferSupabaseRead || TagPresetService.dualWrite;
+  bool get _writeLocal =>
+      !RuntimeFlags.serverOnly && (!TagPresetService.preferSupabaseRead || TagPresetService.dualWrite);
+  bool get _strictServer => RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead;
+
+  // ======== GRADES (custom course names) ========
+  Future<List<Map<String, dynamic>>> loadAnswerKeyGrades() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa
+            .from('answer_key_grades')
+            .select('grade_key,label,order_index')
+            .eq('academy_id', academyId)
+            .order('order_index');
+        final list = (data as List).cast<Map<String, dynamic>>();
+        if (list.isNotEmpty) return list;
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[AnswerKey][grades] server load failed: $e\n$st');
+        if (RuntimeFlags.serverOnly) {
+          return <Map<String, dynamic>>[];
+        }
+      }
+    }
+
+    if (RuntimeFlags.serverOnly) {
+      return <Map<String, dynamic>>[];
+    }
+    final local = await AcademyDbService.instance.loadAnswerKeyGrades();
+
+    // 서버 백필(초기 1회): 서버 우선 모드에서 서버가 비어있고 로컬에 데이터가 있으면 업로드
+    if (!RuntimeFlags.serverOnly && TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final exists = await supa
+            .from('answer_key_grades')
+            .select('grade_key')
+            .eq('academy_id', academyId)
+            .limit(1);
+        if ((exists as List).isEmpty && local.isNotEmpty) {
+          // ignore: avoid_print
+          print('[AnswerKey][grades] backfill local->supabase count=' +
+              local.length.toString());
+          await saveAnswerKeyGrades(local);
+        }
+      } catch (_) {}
+    }
+
+    return local;
+  }
+
+  Future<void> saveAnswerKeyGrades(List<Map<String, dynamic>> rows) async {
+    if (_writeLocal) {
+      await AcademyDbService.instance.saveAnswerKeyGrades(rows);
+    }
+    if (_writeServer) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        // 전체 삭제 후 현재 상태를 그대로 저장(삭제 반영)
+        await supa.from('answer_key_grades').delete().eq('academy_id', academyId);
+        if (rows.isNotEmpty) {
+          final up = rows.map((r) {
+            return {
+              'academy_id': academyId,
+              'grade_key': r['grade_key'],
+              'label': r['label'],
+              'order_index': r['order_index'],
+            };
+          }).toList();
+          await supa.from('answer_key_grades').insert(up);
+        }
+        // ✅ 진단/검증: 저장 직후 서버에 실제 반영됐는지 확인(과정 편집은 빈번하지 않아서 부담이 작음)
+        try {
+          final data = await supa
+              .from('answer_key_grades')
+              .select('grade_key')
+              .eq('academy_id', academyId);
+          final serverCount = (data as List).length;
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print('[AnswerKey][grades save][verify] academy=$academyId serverCount=$serverCount expected=${rows.length}'
+                ' flags(preferSupabaseRead=' +
+                TagPresetService.preferSupabaseRead.toString() +
+                ', dualWrite=' +
+                TagPresetService.dualWrite.toString() +
+                ', serverOnly=' +
+                RuntimeFlags.serverOnly.toString() +
+                ')');
+          }
+          // 서버 우선/서버 전용 모드에서는 반드시 서버 반영을 보장(미반영이면 실패로 처리)
+          if (_strictServer && serverCount != rows.length) {
+            throw StateError('answer_key_grades verify failed: serverCount=$serverCount expected=${rows.length}');
+          }
+        } catch (e, st) {
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print('[AnswerKey][grades save][verify] failed: $e\n$st');
+          }
+          if (_strictServer) rethrow;
+        }
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[AnswerKey][grades save] supabase write failed: $e\n$st');
+        if (_strictServer) rethrow;
+      }
+    }
+  }
 
   // ======== BOOKS ========
   Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() async {
@@ -39,8 +158,8 @@ class AnswerKeyService {
     }
     final local = await AcademyDbService.instance.loadAnswerKeyBooks();
 
-    // 서버 백필(초기 1회): 서버가 비어있고 로컬에 데이터가 있으면 업로드
-    if (TagPresetService.dualWrite && TagPresetService.preferSupabaseRead) {
+    // 서버 백필(초기 1회): 서버 우선 모드에서 서버가 비어있고 로컬에 데이터가 있으면 업로드
+    if (!RuntimeFlags.serverOnly && TagPresetService.preferSupabaseRead) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -64,8 +183,10 @@ class AnswerKeyService {
   }
 
   Future<void> saveAnswerKeyBook(Map<String, dynamic> row) async {
-    await AcademyDbService.instance.saveAnswerKeyBook(row);
-    if (TagPresetService.dualWrite) {
+    if (_writeLocal) {
+      await AcademyDbService.instance.saveAnswerKeyBook(row);
+    }
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -83,13 +204,16 @@ class AnswerKeyService {
       } catch (e, st) {
         // ignore: avoid_print
         print('[AnswerKey][books save] supabase upsert failed: $e\n$st');
+        if (_strictServer) rethrow;
       }
     }
   }
 
   Future<void> saveAnswerKeyBooks(List<Map<String, dynamic>> rows) async {
-    await AcademyDbService.instance.saveAnswerKeyBooks(rows);
-    if (TagPresetService.dualWrite) {
+    if (_writeLocal) {
+      await AcademyDbService.instance.saveAnswerKeyBooks(rows);
+    }
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -110,16 +234,56 @@ class AnswerKeyService {
               .toList();
           await supa.from('answer_key_books').upsert(up, onConflict: 'id');
         }
+        // ✅ 진단/검증(디버그): 저장 직후 서버 order_index가 기대값대로 반영됐는지 확인
+        if (kDebugMode && rows.isNotEmpty) {
+          try {
+            final expected = <String, int>{
+              for (final r in rows)
+                if ((r['id'] as String?) != null)
+                  (r['id'] as String): (r['order_index'] as int?) ?? 0,
+            };
+            final ids = expected.keys.toList();
+            final data = await supa
+                .from('answer_key_books')
+                .select('id,order_index')
+                .eq('academy_id', academyId)
+                .inFilter('id', ids);
+            final list = (data as List).cast<Map<String, dynamic>>();
+            int mismatch = 0;
+            for (final r in list) {
+              final id = (r['id'] as String?) ?? '';
+              final oi = (r['order_index'] as int?) ?? 0;
+              final exp = expected[id];
+              if (exp == null) continue;
+              if (oi != exp) mismatch++;
+            }
+            // ignore: avoid_print
+            print('[AnswerKey][books saveAll][verify] academy=$academyId mismatch=$mismatch count=${rows.length}'
+                ' flags(preferSupabaseRead=' +
+                TagPresetService.preferSupabaseRead.toString() +
+                ', dualWrite=' +
+                TagPresetService.dualWrite.toString() +
+                ', serverOnly=' +
+                RuntimeFlags.serverOnly.toString() +
+                ')');
+          } catch (e, st) {
+            // ignore: avoid_print
+            print('[AnswerKey][books saveAll][verify] failed: $e\n$st');
+          }
+        }
       } catch (e, st) {
         // ignore: avoid_print
         print('[AnswerKey][books saveAll] supabase write failed: $e\n$st');
+        if (_strictServer) rethrow;
       }
     }
   }
 
   Future<void> deleteAnswerKeyBook(String id) async {
-    await AcademyDbService.instance.deleteAnswerKeyBook(id);
-    if (TagPresetService.dualWrite) {
+    if (_writeLocal) {
+      await AcademyDbService.instance.deleteAnswerKeyBook(id);
+    }
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -161,8 +325,8 @@ class AnswerKeyService {
     }
     final local = await AcademyDbService.instance.loadAnswerKeyBookPdfs();
 
-    // 서버 백필(초기 1회)
-    if (TagPresetService.dualWrite && TagPresetService.preferSupabaseRead) {
+    // 서버 백필(초기 1회): 서버 우선 모드에서 서버가 비어있고 로컬에 데이터가 있으면 업로드
+    if (!RuntimeFlags.serverOnly && TagPresetService.preferSupabaseRead) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -188,8 +352,10 @@ class AnswerKeyService {
   }
 
   Future<void> saveAnswerKeyBookPdf(Map<String, dynamic> row) async {
-    await AcademyDbService.instance.saveAnswerKeyBookPdf(row);
-    if (TagPresetService.dualWrite) {
+    if (_writeLocal) {
+      await AcademyDbService.instance.saveAnswerKeyBookPdf(row);
+    }
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??
@@ -208,6 +374,7 @@ class AnswerKeyService {
       } catch (e, st) {
         // ignore: avoid_print
         print('[AnswerKey][pdf save] supabase upsert failed: $e\n$st');
+        if (_strictServer) rethrow;
       }
     }
   }
@@ -216,8 +383,10 @@ class AnswerKeyService {
     required String bookId,
     required String gradeKey,
   }) async {
-    await AcademyDbService.instance.deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
-    if (TagPresetService.dualWrite) {
+    if (_writeLocal) {
+      await AcademyDbService.instance.deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
+    }
+    if (_writeServer) {
       try {
         final academyId =
             await TenantService.instance.getActiveAcademyId() ??

@@ -1,9 +1,14 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 
 import '../../services/data_manager.dart';
@@ -17,6 +22,39 @@ const Color _rsBorder = Color(0xFF223131);
 const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
+const Color _rsHancomBlue = Color(0xFF2A63FF); // 한글(Hancom) 로고 톤(스크린샷 기준으로 근사)
+
+Widget _rsReorderProxyDecorator(Widget child, int index, Animation<double> animation) {
+  // 기본 drag proxy는 Material 배경/여백 때문에 다크 UI에서 "흰 테두리/여백"처럼 보일 수 있다.
+  // 또한 아이템 사이 간격(Padding)이 proxy에도 포함되면 피드백 위젯이 불필요하게 커 보인다.
+  // -> proxy에서는 padding/drag-listener wrapper를 한 겹 벗기고, 투명 Material로만 감싼다.
+  Widget inner = child;
+  if (inner is ReorderableDragStartListener) {
+    inner = inner.child;
+  }
+  if (inner is Padding) {
+    inner = inner.child ?? const SizedBox.shrink();
+  }
+
+  return AnimatedBuilder(
+    animation: animation,
+    builder: (context, _) {
+      final t = Curves.easeOutCubic.transform(animation.value);
+      final elevation = 8.0 * t;
+      final scale = 1.0 + (0.02 * t);
+      return Transform.scale(
+        scale: scale,
+        child: Material(
+          color: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          shadowColor: const Color(0x88000000),
+          elevation: elevation,
+          child: inner,
+        ),
+      );
+    },
+  );
+}
 
 /// 파일 바로가기 탭(범주 -> 폴더(1-depth) -> 파일(HWP/PDF) 바로가기)
 ///
@@ -58,6 +96,116 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   }
 
   BuildContext get _dlgCtx => widget.dialogContext ?? context;
+
+  String _psSingleQuoted(String s) => "'${s.replaceAll("'", "''")}'";
+
+  Future<void> _openPrintDialogForPath(String path) async {
+    final p = path.trim();
+    if (p.isEmpty) return;
+    try {
+      if (Platform.isWindows) {
+        final q = _psSingleQuoted(p);
+        // NOTE: Windows Shell Verb "Print" 동작은 연결된 기본 프로그램에 위임된다.
+        // 일부 앱은 인쇄 다이얼로그를 띄우고, 일부는 바로 출력할 수 있다.
+        await Process.start(
+          'powershell',
+          ['-NoProfile', '-Command', 'Start-Process -FilePath $q -Verb Print'],
+          runInShell: true,
+        );
+        return;
+      }
+    } catch (_) {
+      // fallthrough
+    }
+    // Fallback: 파일을 열어 사용자가 앱에서 인쇄할 수 있게 한다.
+    await OpenFilex.open(p);
+  }
+
+  Future<void> _renameFile({
+    required String folderId,
+    required String fileId,
+  }) async {
+    final catId = _effectiveCategoryId;
+    if (catId == null) return;
+    final ci = _categories.indexWhere((c) => c.id == catId);
+    if (ci == -1) return;
+    final cat = _categories[ci];
+    final fi = cat.folders.indexWhere((f) => f.id == folderId);
+    if (fi == -1) return;
+    final folder = cat.folders[fi];
+    final xi = folder.files.indexWhere((x) => x.id == fileId);
+    if (xi == -1) return;
+    final cur = folder.files[xi];
+
+    final name = await _promptText(
+      title: '파일 수정',
+      hintText: '파일 이름',
+      okText: '저장',
+      initialText: cur.name,
+    );
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == cur.name) return;
+
+    final nextFiles = [...folder.files];
+    nextFiles[xi] = _FsFile(
+      id: cur.id,
+      name: trimmed,
+      path: cur.path,
+      kind: cur.kind,
+      order: cur.order,
+    );
+
+    final nextFolders = [...cat.folders];
+    nextFolders[fi] = folder.copyWith(files: nextFiles);
+    setState(() {
+      _categories[ci] = cat.copyWith(folders: nextFolders);
+      _target = _FsTarget.folder;
+    });
+    await _persistAll();
+  }
+
+  Future<void> _deleteFile({
+    required String folderId,
+    required String fileId,
+  }) async {
+    final catId = _effectiveCategoryId;
+    if (catId == null) return;
+    final ci = _categories.indexWhere((c) => c.id == catId);
+    if (ci == -1) return;
+    final cat = _categories[ci];
+    final fi = cat.folders.indexWhere((f) => f.id == folderId);
+    if (fi == -1) return;
+    final folder = cat.folders[fi];
+    final xi = folder.files.indexWhere((x) => x.id == fileId);
+    if (xi == -1) return;
+    final cur = folder.files[xi];
+
+    final ok = await _confirmDelete(
+      title: '파일 삭제',
+      message: '“${cur.name}”을(를) 삭제할까요?',
+    );
+    if (!ok) return;
+
+    final kept = [...folder.files]..removeAt(xi);
+    final normalized = <_FsFile>[
+      for (int i = 0; i < kept.length; i++)
+        _FsFile(
+          id: kept[i].id,
+          name: kept[i].name,
+          path: kept[i].path,
+          kind: kept[i].kind,
+          order: i,
+        ),
+    ];
+
+    final nextFolders = [...cat.folders];
+    nextFolders[fi] = folder.copyWith(files: normalized);
+    setState(() {
+      _categories[ci] = cat.copyWith(folders: nextFolders);
+      _target = _FsTarget.folder;
+    });
+    await _persistAll();
+  }
 
   String? get _effectiveCategoryId {
     if (_categories.isEmpty) return null;
@@ -286,6 +434,76 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     });
   }
 
+  Future<void> _onReorderFolders(int oldIndex, int newIndex) async {
+    if (_loading) return;
+    final catId = _effectiveCategoryId;
+    if (catId == null) return;
+    final ci = _categories.indexWhere((c) => c.id == catId);
+    if (ci == -1) return;
+    final cat = _categories[ci];
+    final list = [...cat.folders];
+    if (list.length < 2) return;
+
+    final oi = oldIndex.clamp(0, list.length - 1);
+    final ni = (newIndex > oldIndex) ? (newIndex - 1) : newIndex;
+    final safeNi = ni.clamp(0, list.length - 1);
+    final moved = list.removeAt(oi);
+    list.insert(safeNi, moved);
+
+    final normalized = <_FsFolder>[
+      for (int i = 0; i < list.length; i++) list[i].copyWith(order: i),
+    ];
+
+    setState(() {
+      _categories[ci] = cat.copyWith(folders: normalized);
+      _target = _FsTarget.folder;
+    });
+    await _persistAll();
+  }
+
+  Future<void> _onReorderFiles({
+    required String folderId,
+    required int oldIndex,
+    required int newIndex,
+  }) async {
+    if (_loading) return;
+    final catId = _effectiveCategoryId;
+    if (catId == null) return;
+    final ci = _categories.indexWhere((c) => c.id == catId);
+    if (ci == -1) return;
+    final cat = _categories[ci];
+    final fi = cat.folders.indexWhere((f) => f.id == folderId);
+    if (fi == -1) return;
+    final folder = cat.folders[fi];
+    final list = [...folder.files];
+    if (list.length < 2) return;
+
+    final oi = oldIndex.clamp(0, list.length - 1);
+    final ni = (newIndex > oldIndex) ? (newIndex - 1) : newIndex;
+    final safeNi = ni.clamp(0, list.length - 1);
+    final moved = list.removeAt(oi);
+    list.insert(safeNi, moved);
+
+    final normalized = <_FsFile>[
+      for (int i = 0; i < list.length; i++)
+        _FsFile(
+          id: list[i].id,
+          name: list[i].name,
+          path: list[i].path,
+          kind: list[i].kind,
+          order: i,
+        ),
+    ];
+
+    final nextFolders = [...cat.folders];
+    nextFolders[fi] = folder.copyWith(files: normalized);
+    setState(() {
+      _categories[ci] = cat.copyWith(folders: nextFolders);
+      _target = _FsTarget.folder;
+    });
+    await _persistAll();
+  }
+
   Future<String?> _promptText({
     required String title,
     required String hintText,
@@ -335,10 +553,26 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   }
 
   Future<void> _onCreatePressed() async {
-    if (_target == _FsTarget.category || _effectiveCategoryId == null) {
-      final name = await _promptText(title: '범주 생성', hintText: '범주 이름', okText: '생성');
-      final trimmed = name?.trim() ?? '';
-      if (trimmed.isEmpty) return;
+    // UX: "추가"는 항상 다이얼로그를 띄워 범주/폴더 중 선택 가능
+    final catId = _effectiveCategoryId;
+    final canCreateFolder = catId != null;
+    final initialKind = canCreateFolder ? _FsCreateKind.folder : _FsCreateKind.category;
+
+    final result = await showDialog<_FsCreateDialogResult>(
+      context: _dlgCtx,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (_) => _FsCreateDialog(
+        canCreateFolder: canCreateFolder,
+        categoryName: _effectiveCategory?.name,
+        initialKind: initialKind,
+      ),
+    );
+    if (result == null) return;
+    final trimmed = result.name.trim();
+    if (trimmed.isEmpty) return;
+
+    if (result.kind == _FsCreateKind.category) {
       final id = const Uuid().v4();
       setState(() {
         _categories = [
@@ -353,13 +587,10 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       return;
     }
 
-    final catId = _effectiveCategoryId;
+    // folder
     if (catId == null) return;
     final ci = _categories.indexWhere((c) => c.id == catId);
     if (ci == -1) return;
-    final name = await _promptText(title: '폴더 생성', hintText: '폴더 이름', okText: '생성');
-    final trimmed = name?.trim() ?? '';
-    if (trimmed.isEmpty) return;
     final folderId = const Uuid().v4();
     final cat = _categories[ci];
     final nextFolders = [
@@ -471,7 +702,15 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     if (xf == null) return;
 
     final path = xf.path;
-    final name = (xf.name.isNotEmpty) ? xf.name : path.split(RegExp(r'[\\/]')).last;
+    final defaultName = (xf.name.isNotEmpty) ? xf.name : path.split(RegExp(r'[\\/]')).last;
+    final inputName = await _promptText(
+      title: '파일 추가',
+      hintText: '표시 이름',
+      okText: '추가',
+      initialText: defaultName,
+    );
+    final name = inputName?.trim() ?? '';
+    if (name.isEmpty) return;
     final kind = _FsFileKind.fromPath(path);
 
     final fileId = const Uuid().v4();
@@ -535,38 +774,39 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
           const SizedBox(height: 12),
           _ExplorerHeader(
             leading: Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
               children: [
-                IconButton(
-                  tooltip: '추가(범주/폴더)',
-                  onPressed: _loading ? null : () => unawaited(_onCreatePressed()),
-                  icon: const Icon(Icons.create_new_folder_outlined, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '추가(범주/폴더)',
+                    icon: Icons.create_new_folder_outlined,
+                    onPressed: _loading ? null : () => unawaited(_onCreatePressed()),
+                    showRightDivider: true,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '수정(범주/폴더)',
-                  onPressed: (!_loading && canEdit) ? () => unawaited(_onEditPressed()) : null,
-                  icon: const Icon(Icons.drive_file_rename_outline, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '수정(범주/폴더)',
+                    icon: Icons.drive_file_rename_outline,
+                    onPressed: (!_loading && canEdit) ? () => unawaited(_onEditPressed()) : null,
+                    showRightDivider: true,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '삭제(범주/폴더)',
-                  onPressed: (!_loading && canDelete) ? () => unawaited(_onDeletePressed()) : null,
-                  icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '삭제(범주/폴더)',
+                    icon: Icons.delete_outline,
+                    onPressed: (!_loading && canDelete) ? () => unawaited(_onDeletePressed()) : null,
+                    showRightDivider: true,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '파일 추가',
-                  onPressed: (!_loading && canAddFile) ? () => unawaited(_onAddFilePressed()) : null,
-                  icon: const Icon(Icons.note_add_outlined, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '파일 추가',
+                    icon: Icons.note_add_outlined,
+                    onPressed: (!_loading && canAddFile) ? () => unawaited(_onAddFilePressed()) : null,
+                    showRightDivider: false,
+                  ),
                 ),
               ],
             ),
@@ -635,18 +875,32 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
                     : Scrollbar(
                         controller: _scrollCtrl,
                         thumbVisibility: true,
-                        child: ListView.separated(
-                          controller: _scrollCtrl,
+                        child: ReorderableListView.builder(
+                          scrollController: _scrollCtrl,
+                          buildDefaultDragHandles: false,
+                          proxyDecorator: _rsReorderProxyDecorator,
                           itemCount: folders.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          onReorder: (oldIndex, newIndex) => unawaited(_onReorderFolders(oldIndex, newIndex)),
                           itemBuilder: (context, index) {
                             final folder = folders[index];
                             final selected = (_selectedFolderId == folder.id) && (_target == _FsTarget.folder);
-                            return _FolderNode(
-                              folder: folder,
-                              selected: selected,
-                              onSelect: () => _selectFolder(folder.id),
-                              onToggleExpanded: () => _toggleFolderExpanded(folder.id),
+                            return Padding(
+                              key: ValueKey(folder.id),
+                              padding: EdgeInsets.only(bottom: (index == folders.length - 1) ? 0 : 8),
+                              child: _FolderNode(
+                                folder: folder,
+                                reorderIndex: index,
+                                dialogContext: _dlgCtx,
+                                selected: selected,
+                                onSelect: () => _selectFolder(folder.id),
+                                onToggleExpanded: () => _toggleFolderExpanded(folder.id),
+                                onPrint: _openPrintDialogForPath,
+                                onRenameFile: (fileId) => unawaited(_renameFile(folderId: folder.id, fileId: fileId)),
+                                onDeleteFile: (fileId) => unawaited(_deleteFile(folderId: folder.id, fileId: fileId)),
+                                onReorderFiles: (oldIndex, newIndex) => unawaited(
+                                  _onReorderFiles(folderId: folder.id, oldIndex: oldIndex, newIndex: newIndex),
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -660,6 +914,52 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
 
 enum _FsTarget { category, folder }
 
+enum _FsPaperSize {
+  followFile, // 기본(파일 설정)
+  a4,
+  b4,
+  k8,
+}
+
+extension _FsPaperSizeX on _FsPaperSize {
+  String label() {
+    switch (this) {
+      case _FsPaperSize.followFile:
+        return '기본';
+      case _FsPaperSize.a4:
+        return 'A4';
+      case _FsPaperSize.b4:
+        return 'B4';
+      case _FsPaperSize.k8:
+        return '8K';
+    }
+  }
+
+  // 포인트(1/72 inch) 기준. (A4는 프로젝트 내 다른 코드에서도 595x842 사용)
+  Size portraitSizePt() {
+    switch (this) {
+      case _FsPaperSize.followFile:
+        return const Size(0, 0);
+      case _FsPaperSize.a4:
+        return const Size(595, 842);
+      case _FsPaperSize.b4:
+        // 한국/일본에서 통용되는 B4(257x364mm)에 가까운 값(포인트)
+        return const Size(729, 1032);
+      case _FsPaperSize.k8:
+        // 8절(8K) 용지에 가까운 값(273x394mm 근사, 포인트)
+        return const Size(774, 1118);
+    }
+  }
+
+  Size orientedFor(Size srcPageSize) {
+    if (this == _FsPaperSize.followFile) return srcPageSize;
+    final base = portraitSizePt();
+    if (base.width <= 0 || base.height <= 0) return srcPageSize;
+    final landscape = srcPageSize.width > srcPageSize.height;
+    return landscape ? Size(base.height, base.width) : base;
+  }
+}
+
 enum _FsFileKind {
   pdf,
   hwp,
@@ -668,7 +968,7 @@ enum _FsFileKind {
   static _FsFileKind fromPath(String path) {
     final p = path.trim().toLowerCase();
     if (p.endsWith('.pdf')) return _FsFileKind.pdf;
-    if (p.endsWith('.hwp')) return _FsFileKind.hwp;
+    if (p.endsWith('.hwp') || p.endsWith('.hwpx')) return _FsFileKind.hwp;
     return _FsFileKind.other;
   }
 
@@ -785,6 +1085,8 @@ class _ExplorerHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasLeading = leading != null;
+    final hasTrailing = trailing != null;
     return Container(
       decoration: BoxDecoration(
         color: _rsPanelBg,
@@ -794,13 +1096,51 @@ class _ExplorerHeader extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       child: Row(
         children: [
-          if (leading != null) ...[
-            leading!,
-            const SizedBox(width: 6),
+          if (hasLeading) Expanded(child: leading!) else const Spacer(),
+          if (hasTrailing) ...[
+            if (hasLeading) const SizedBox(width: 6),
+            trailing!,
           ],
-          const Spacer(),
-          if (trailing != null) trailing!,
         ],
+      ),
+    );
+  }
+}
+
+class _ToolbarSegmentButton extends StatelessWidget {
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool showRightDivider;
+
+  const _ToolbarSegmentButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    required this.showRightDivider,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final iconColor = enabled ? Colors.white70 : Colors.white24;
+    final border = showRightDivider ? Border(right: BorderSide(color: _rsBorder.withOpacity(0.9))) : null;
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 450),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          child: Container(
+            height: 44,
+            decoration: BoxDecoration(border: border),
+            child: Center(
+              child: Icon(icon, size: 20, color: iconColor),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -862,65 +1202,82 @@ class _CategoryPickerRow extends StatelessWidget {
 
 class _FolderNode extends StatelessWidget {
   final _FsFolder folder;
+  final int reorderIndex;
+  final BuildContext dialogContext;
   final bool selected;
   final VoidCallback onSelect;
   final VoidCallback onToggleExpanded;
+  final Future<void> Function(String path) onPrint;
+  final void Function(String fileId) onRenameFile;
+  final void Function(String fileId) onDeleteFile;
+  final void Function(int oldIndex, int newIndex) onReorderFiles;
 
   const _FolderNode({
     required this.folder,
+    required this.reorderIndex,
+    required this.dialogContext,
     required this.selected,
     required this.onSelect,
     required this.onToggleExpanded,
+    required this.onPrint,
+    required this.onRenameFile,
+    required this.onDeleteFile,
+    required this.onReorderFiles,
   });
 
   @override
   Widget build(BuildContext context) {
-    final border = selected ? _rsAccent : _rsBorder.withOpacity(0.9);
     return Container(
       decoration: BoxDecoration(
         color: _rsPanelBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border),
+        border: Border.all(color: _rsBorder.withOpacity(0.9)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Material(
             color: Colors.transparent,
-            child: InkWell(
-              onTap: onSelect,
-              borderRadius: BorderRadius.circular(14),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-                child: Row(
-                  children: [
-                    IconButton(
-                      tooltip: folder.expanded ? '접기' : '펼치기',
-                      onPressed: onToggleExpanded,
-                      icon: Icon(
+            child: ReorderableDelayedDragStartListener(
+              index: reorderIndex,
+              child: InkWell(
+                onTap: () {
+                  // 요청: 폴더 카드를 클릭하면 선택 + 펼치기/접기까지
+                  onSelect();
+                  onToggleExpanded();
+                },
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  decoration: BoxDecoration(
+                    // 선택 하이라이트는 "폴더 전체"가 아니라 헤더 영역에만 아주 약하게 적용
+                    color: selected ? _rsAccent.withOpacity(0.08) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                  child: Row(
+                    children: [
+                      Icon(
                         folder.expanded ? Icons.expand_more : Icons.chevron_right,
                         color: _rsTextSub,
-                        size: 20,
+                        size: 18,
                       ),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    ),
-                    const SizedBox(width: 2),
-                    const Icon(Icons.folder_outlined, color: Colors.white70, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        folder.name,
-                        style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
-                        overflow: TextOverflow.ellipsis,
+                      const SizedBox(width: 8),
+                      const Icon(Icons.folder_outlined, color: Colors.white70, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          folder.name,
+                          style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${folder.files.length}',
-                      style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Text(
+                        '${folder.files.length}',
+                        style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -928,19 +1285,40 @@ class _FolderNode extends StatelessWidget {
           if (folder.expanded) ...[
             const Divider(height: 1, color: Color(0x22FFFFFF)),
             Padding(
-              padding: const EdgeInsets.fromLTRB(34, 10, 10, 10),
+              // 트리 들여쓰기 과도함을 줄여 카드 폭을 더 채우도록 조정
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
               child: folder.files.isEmpty
                   ? const Text(
                       '파일 없음 (상단 “파일 추가”로 HWP/PDF 바로가기를 추가할 수 있어요)',
                       style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700, height: 1.25),
                     )
-                  : Column(
-                      children: [
-                        for (int i = 0; i < folder.files.length; i++) ...[
-                          _FileCard(file: folder.files[i]),
-                          if (i != folder.files.length - 1) const SizedBox(height: 8),
-                        ],
-                      ],
+                  : ReorderableListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      proxyDecorator: _rsReorderProxyDecorator,
+                      itemCount: folder.files.length,
+                      onReorder: onReorderFiles,
+                      itemBuilder: (context, index) {
+                        final f = folder.files[index];
+                        return ReorderableDelayedDragStartListener(
+                          key: ValueKey(f.id),
+                          index: index,
+                          child: Padding(
+                            padding: EdgeInsets.only(bottom: (index == folder.files.length - 1) ? 0 : 8),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: _FileCard(
+                                file: f,
+                                dialogContext: dialogContext,
+                                onPrint: onPrint,
+                                onRename: () => onRenameFile(f.id),
+                                onDelete: () => onDeleteFile(f.id),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
             ),
           ],
@@ -950,48 +1328,345 @@ class _FolderNode extends StatelessWidget {
   }
 }
 
-class _FileCard extends StatelessWidget {
+class _FileCard extends StatefulWidget {
   final _FsFile file;
-  const _FileCard({required this.file});
+  final BuildContext dialogContext;
+  final Future<void> Function(String path) onPrint;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+  const _FileCard({
+    required this.file,
+    required this.dialogContext,
+    required this.onPrint,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  @override
+  State<_FileCard> createState() => _FileCardState();
+}
+
+class _FileCardState extends State<_FileCard> {
+  static const double _actionWidth = 112; // 56 * 2
+  double _dx = 0.0; // negative = reveal actions
+  bool _dragging = false;
+  bool _printing = false;
+  _FsPaperSize _paperSize = _FsPaperSize.followFile;
+  final GlobalKey _paperAnchorKey = GlobalKey();
+  OverlayEntry? _paperMenuEntry;
+  Completer<_FsPaperSize?>? _paperMenuCompleter;
+
+  void _dismissPaperMenu([_FsPaperSize? picked]) {
+    final entry = _paperMenuEntry;
+    final c = _paperMenuCompleter;
+    _paperMenuEntry = null;
+    _paperMenuCompleter = null;
+    try {
+      entry?.remove();
+    } catch (_) {}
+    if (c != null && !c.isCompleted) {
+      c.complete(picked);
+    }
+  }
+
+  @override
+  void dispose() {
+    _dismissPaperMenu();
+    super.dispose();
+  }
+
+  String _psSingleQuoted(String s) => "'${s.replaceAll("'", "''")}'";
+
+  String _paperToPsName(_FsPaperSize p) {
+    switch (p) {
+      case _FsPaperSize.followFile:
+        return '';
+      case _FsPaperSize.a4:
+        return 'A4';
+      case _FsPaperSize.b4:
+        return 'B4';
+      case _FsPaperSize.k8:
+        return '8K';
+    }
+  }
+
+  Future<void> _printHwpShellVerbBestEffort({
+    required String path,
+    required _FsPaperSize paper,
+  }) async {
+    final p = path.trim();
+    if (p.isEmpty) return;
+    if (!Platform.isWindows) {
+      await widget.onPrint(p);
+      return;
+    }
+
+    // NOTE:
+    // - HWP는 가장 안정적으로 동작하던 방식(Windows Shell Verb "Print")만 사용한다.
+    // - 창 숨김/용지 자동 적용은 환경에 따라 인쇄가 깨지는 케이스가 있어, 기본 경로에서는 수행하지 않는다.
+    //   (필요 시 별도 옵션/토글로 "실험적" 기능으로 분리하는 것을 권장)
+    await widget.onPrint(p);
+  }
+
+  Future<void> _pickPaperSizeFrom(BuildContext anchorCtx) async {
+    if (_printing) return;
+    // RightSideSheet는 Overlay 안에 있어 Navigator overlay(루트)에 붙이면 시트 "밑"으로 깔릴 수 있음.
+    // 따라서 동일 Overlay에 OverlayEntry로 직접 띄운다.
+    if (_paperMenuEntry != null) {
+      _dismissPaperMenu();
+      return;
+    }
+
+    final overlayState = Overlay.of(context);
+    if (overlayState == null) return;
+
+    final overlayObj = overlayState.context.findRenderObject();
+    if (overlayObj is! RenderBox) return;
+    final overlayBox = overlayObj;
+
+    final anchorObj = anchorCtx.findRenderObject();
+    if (anchorObj is! RenderBox) return;
+    final anchorBox = anchorObj;
+
+    final globalTopLeft = anchorBox.localToGlobal(Offset.zero);
+    final topLeft = overlayBox.globalToLocal(globalTopLeft);
+    final anchorRect = topLeft & anchorBox.size;
+
+    final completer = Completer<_FsPaperSize?>();
+    _paperMenuCompleter = completer;
+
+    const gap = 8.0;
+    const itemHeight = 40.0;
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) {
+        final overlaySize = overlayBox.size;
+        final menuWidth = math.max(anchorRect.width, 140.0);
+        final menuHeight = itemHeight * _FsPaperSize.values.length;
+
+        double x = anchorRect.left;
+        x = x.clamp(gap, overlaySize.width - gap - menuWidth).toDouble();
+
+        double y = anchorRect.bottom + gap;
+        if (y + menuHeight > overlaySize.height - gap) {
+          y = anchorRect.top - gap - menuHeight;
+        }
+        y = y.clamp(gap, overlaySize.height - gap - menuHeight).toDouble();
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _dismissPaperMenu,
+              ),
+            ),
+            Positioned(
+              left: x,
+              top: y,
+              width: menuWidth,
+              child: Material(
+                color: _rsPanelBg,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: _rsBorder),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final v in _FsPaperSize.values)
+                      InkWell(
+                        onTap: () => _dismissPaperMenu(v),
+                        child: SizedBox(
+                          height: itemHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    v.label(),
+                                    style: TextStyle(
+                                      color: v == _paperSize ? _rsText : _rsTextSub,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                if (v == _paperSize)
+                                  const Icon(Icons.check, size: 18, color: _rsAccent),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    _paperMenuEntry = entry;
+    overlayState.insert(entry);
+
+    final picked = await completer.future;
+    if (picked == null) return;
+    if (!mounted) return;
+    setState(() => _paperSize = picked);
+  }
+
+  void _close() {
+    if (_dx == 0) return;
+    setState(() {
+      _dx = 0.0;
+      _dragging = false;
+    });
+  }
+
+  void _open() {
+    setState(() {
+      _dx = -_actionWidth;
+      _dragging = false;
+    });
+  }
+
+  Future<String?> _buildPdfForPrint({
+    required String inputPath,
+    required _FsPaperSize paper,
+  }) async {
+    final inPath = inputPath.trim();
+    if (inPath.isEmpty) return null;
+    if (!inPath.toLowerCase().endsWith('.pdf')) return null;
+    final srcBytes = await File(inPath).readAsBytes();
+    final src = sf.PdfDocument(inputBytes: srcBytes);
+    final dst = sf.PdfDocument();
+    try {
+      dst.pageSettings.margins.all = 0;
+    } catch (_) {}
+
+    try {
+      for (int i = 0; i < src.pages.count; i++) {
+        final srcPage = src.pages[i];
+        final srcSize = srcPage.size;
+        final target = paper.orientedFor(srcSize);
+        try {
+          dst.pageSettings.size = target;
+          dst.pageSettings.margins.all = 0;
+        } catch (_) {}
+
+        final tmpl = srcPage.createTemplate();
+        final newPage = dst.pages.add();
+
+        final tw = target.width;
+        final th = target.height;
+        final sw = srcSize.width;
+        final sh = srcSize.height;
+        if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+          continue;
+        }
+
+        final scale = math.min(tw / sw, th / sh);
+        final w = sw * scale;
+        final h = sh * scale;
+        final dx = (tw - w) / 2.0;
+        final dy = (th - h) / 2.0;
+
+        try {
+          newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
+        } catch (_) {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+        }
+      }
+
+      final outBytes = await dst.save();
+      final dir = await getTemporaryDirectory();
+      final outPath = p.join(
+        dir.path,
+        'fs_print_${DateTime.now().millisecondsSinceEpoch}_${paper.label()}.pdf',
+      );
+      await File(outPath).writeAsBytes(outBytes, flush: true);
+      return outPath;
+    } finally {
+      src.dispose();
+      dst.dispose();
+    }
+  }
+
+  Future<void> _printNow() async {
+    if (_printing) return;
+    final file = widget.file;
+    final srcPath = file.path.trim();
+    if (srcPath.isEmpty) return;
+    setState(() => _printing = true);
+    try {
+      // HWP는 환경별로 자동화(숨김/키보드) 방식이 쉽게 깨질 수 있어,
+      // 가장 안정적인 방식(Windows Shell Verb "Print")으로 위임한다.
+      // -> "파일은 안 열리고, 인쇄 진행/대화창만 뜬 뒤 자동 인쇄"가 이 경로에서 동작하는 경우가 많다.
+      if (file.kind == _FsFileKind.hwp) {
+        await _printHwpShellVerbBestEffort(path: srcPath, paper: _paperSize);
+        return;
+      }
+      String pathToPrint = srcPath;
+      // 용지 크기 지정은 PDF에서만 적용(새 PDF 생성)
+      if (_paperSize != _FsPaperSize.followFile && file.kind == _FsFileKind.pdf) {
+        final out = await _buildPdfForPrint(inputPath: srcPath, paper: _paperSize);
+        if (out != null && out.trim().isNotEmpty) {
+          pathToPrint = out.trim();
+        }
+      }
+      await widget.onPrint(pathToPrint);
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  Future<void> _pickPaperSize() async {
+    if (_printing) return;
+    final anchorCtx = _paperAnchorKey.currentContext;
+    if (anchorCtx == null) return;
+    await _pickPaperSizeFrom(anchorCtx);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final label = file.kind.badgeLabel();
-    final icon = file.kind.icon();
+    final file = widget.file;
 
-    Widget buildBadge() {
-      return SizedBox(
-        width: 54,
-        height: 30,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: _rsPanelBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.transparent),
-          ),
-          child: Center(
-            child: Text(
-              label,
-              style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              softWrap: false,
-            ),
-          ),
+    Widget buildKindBadge() {
+      String? letter;
+      Color? color;
+      switch (file.kind) {
+        case _FsFileKind.hwp:
+          letter = 'H';
+          color = _rsHancomBlue; // 한글(Hancom)
+          break;
+        case _FsFileKind.pdf:
+          letter = 'P';
+          color = const Color(0xFFED1C24); // Adobe 레드 톤
+          break;
+        case _FsFileKind.other:
+          return const SizedBox.shrink();
+      }
+
+      return Tooltip(
+        message: (file.kind == _FsFileKind.pdf) ? 'PDF' : 'HWP',
+        waitDuration: const Duration(milliseconds: 450),
+        child: Text(
+          letter,
+          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900),
         ),
       );
     }
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        final p = file.path.trim();
-        if (p.isEmpty) return;
-        unawaited(OpenFilex.open(p));
-      },
+    final content = Material(
+      color: Colors.transparent,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: _rsFieldBg,
           borderRadius: BorderRadius.circular(14),
@@ -1000,30 +1675,168 @@ class _FileCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            InkWell(
+              onTap: () {
+                if (_dx != 0) {
+                  _close();
+                  return;
+                }
+                final p = file.path.trim();
+                if (p.isEmpty) return;
+                unawaited(OpenFilex.open(p));
+              },
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      file.name,
+                      style: const TextStyle(color: _rsText, fontSize: 15, fontWeight: FontWeight.w900),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
             Row(
               children: [
-                Icon(icon, color: Colors.white54, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    file.name,
-                    style: const TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                IconButton(
+                  tooltip: (file.kind == _FsFileKind.hwp) ? '바로 인쇄' : '인쇄',
+                  onPressed: _printing ? null : () => unawaited(_printNow()),
+                  icon: const Icon(Icons.print_outlined, color: Colors.white70, size: 18),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 ),
-                const SizedBox(width: 12),
-                buildBadge(),
+                const SizedBox(width: 6),
+                if (file.kind == _FsFileKind.pdf)
+                  InkWell(
+                    key: _paperAnchorKey,
+                    onTap: (!_printing) ? () => unawaited(_pickPaperSize()) : null,
+                    borderRadius: BorderRadius.circular(10),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: _rsPanelBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.transparent),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _paperSize.label(),
+                              style: const TextStyle(
+                                color: _rsTextSub,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            const Icon(
+                              Icons.expand_more,
+                              size: 16,
+                              color: _rsTextSub,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox.shrink(),
+                const Spacer(),
+                buildKindBadge(),
               ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              file.path,
-              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w600, height: 1.25),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
+      ),
+    );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                SizedBox(
+                  width: _actionWidth,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Tooltip(
+                          message: '수정',
+                          waitDuration: const Duration(milliseconds: 450),
+                          child: Material(
+                            color: _rsPanelBg,
+                            child: InkWell(
+                              onTap: () {
+                                _close();
+                                widget.onRename();
+                              },
+                              child: const SizedBox.expand(
+                                child: Center(
+                                  child: Icon(Icons.edit_outlined, color: Colors.white70, size: 22),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Tooltip(
+                          message: '삭제',
+                          waitDuration: const Duration(milliseconds: 450),
+                          child: Material(
+                            color: const Color(0x662A0E0E),
+                            child: InkWell(
+                              onTap: () {
+                                _close();
+                                widget.onDelete();
+                              },
+                              child: const SizedBox.expand(
+                                child: Center(
+                                  child: Icon(Icons.delete_outline, color: Color(0xFFFFB4B4), size: 22),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragStart: (_) => setState(() => _dragging = true),
+            onHorizontalDragUpdate: (d) {
+              setState(() {
+                _dx = (_dx + d.delta.dx).clamp(-_actionWidth, 0.0);
+              });
+            },
+            onHorizontalDragEnd: (_) {
+              final open = _dx <= -(_actionWidth * 0.55);
+              if (open) {
+                _open();
+              } else {
+                _close();
+              }
+            },
+            onHorizontalDragCancel: _close,
+            child: AnimatedContainer(
+              duration: _dragging ? Duration.zero : const Duration(milliseconds: 160),
+              curve: Curves.easeOutCubic,
+              transform: Matrix4.translationValues(_dx, 0, 0),
+              child: content,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1119,6 +1932,230 @@ class _CategoryPickDialog extends StatelessWidget {
                         ),
                       ),
                       if (selected) const Icon(Icons.check, color: _rsAccent, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+        ),
+      ],
+    );
+  }
+}
+
+enum _FsCreateKind { category, folder }
+
+class _FsCreateDialogResult {
+  final _FsCreateKind kind;
+  final String name;
+  const _FsCreateDialogResult({required this.kind, required this.name});
+}
+
+class _FsCreateDialog extends StatefulWidget {
+  final bool canCreateFolder;
+  final String? categoryName;
+  final _FsCreateKind initialKind;
+
+  const _FsCreateDialog({
+    required this.canCreateFolder,
+    required this.categoryName,
+    required this.initialKind,
+  });
+
+  @override
+  State<_FsCreateDialog> createState() => _FsCreateDialogState();
+}
+
+class _FsCreateDialogState extends State<_FsCreateDialog> {
+  late _FsCreateKind _kind = widget.initialKind;
+  late final TextEditingController _ctrl = ImeAwareTextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool get _canOk {
+    if (_ctrl.text.trim().isEmpty) return false;
+    if (_kind == _FsCreateKind.folder && !widget.canCreateFolder) return false;
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final folderEnabled = widget.canCreateFolder;
+    final folderHint = folderEnabled ? '폴더 이름' : '폴더를 추가하려면 먼저 범주를 선택/생성하세요';
+    final hint = (_kind == _FsCreateKind.category) ? '범주 이름' : folderHint;
+
+    Widget kindButton({
+      required String label,
+      required _FsCreateKind kind,
+      required bool enabled,
+    }) {
+      final selected = (_kind == kind);
+      final borderColor = !enabled
+          ? _rsBorder.withOpacity(0.35)
+          : (selected ? _rsAccent : _rsBorder);
+      final bg = selected ? _rsAccent.withOpacity(0.12) : _rsPanelBg;
+      final fg = !enabled
+          ? Colors.white24
+          : (selected ? _rsText : _rsTextSub);
+
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: enabled ? () => setState(() => _kind = kind) : null,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            height: 38,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: borderColor),
+            ),
+            child: Center(
+              child: Text(
+                label,
+                style: TextStyle(color: fg, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: const Text('추가', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: kindButton(
+                    label: '범주',
+                    kind: _FsCreateKind.category,
+                    enabled: true,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: kindButton(
+                    label: '폴더',
+                    kind: _FsCreateKind.folder,
+                    enabled: folderEnabled,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (_kind == _FsCreateKind.folder && widget.categoryName != null) ...[
+              Text(
+                '현재 범주: ${widget.categoryName}',
+                style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _ctrl,
+              autofocus: true,
+              enabled: !(_kind == _FsCreateKind.folder && !folderEnabled),
+              style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: const TextStyle(color: _rsTextSub),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: _rsBorder),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                ),
+                filled: true,
+                fillColor: _rsFieldBg,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+        ),
+        FilledButton(
+          onPressed: _canOk
+              ? () => Navigator.of(context).pop(
+                    _FsCreateDialogResult(kind: _kind, name: _ctrl.text.trim()),
+                  )
+              : null,
+          style: FilledButton.styleFrom(backgroundColor: _rsAccent),
+          child: const Text('생성'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PaperSizePickDialog extends StatelessWidget {
+  final _FsPaperSize selected;
+  const _PaperSizePickDialog({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: const Text('용지 크기', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
+      content: SizedBox(
+        width: 320,
+        child: ListView.separated(
+          shrinkWrap: true,
+          itemCount: _FsPaperSize.values.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final v = _FsPaperSize.values[index];
+            final isSel = v == selected;
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => Navigator.of(context).pop<_FsPaperSize>(v),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _rsPanelBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: isSel ? _rsAccent : _rsBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          v.label(),
+                          style: TextStyle(
+                            color: isSel ? _rsText : _rsTextSub,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      if (isSel) const Icon(Icons.check, color: _rsAccent, size: 18),
                     ],
                   ),
                 ),

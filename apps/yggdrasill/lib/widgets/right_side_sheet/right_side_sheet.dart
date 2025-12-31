@@ -13,7 +13,6 @@ import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
-import '../../models/education_level.dart';
 import '../../models/consult_note.dart';
 import '../../models/memo.dart';
 import '../../screens/consult/consult_notes_screen.dart';
@@ -23,6 +22,8 @@ import '../../services/consult_inquiry_demand_service.dart';
 import '../../services/consult_trial_lesson_service.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
+import '../../services/runtime_flags.dart';
+import '../../services/tag_preset_service.dart';
 import '../memo_dialogs.dart';
 
 const Color _rsBg = Color(0xFF0B1112);
@@ -50,15 +51,21 @@ class RightSideSheet extends StatefulWidget {
 }
 
 class _RightSideSheetState extends State<RightSideSheet> {
-  RightSideSheetMode _mode = RightSideSheetMode.none;
+  // 기본 탭: 이전 상태가 없다면 항상 "PDF 바로가기"부터 시작
+  RightSideSheetMode _mode = RightSideSheetMode.answerKey;
   final List<_BookItem> _books = <_BookItem>[];
   Map<String, Map<String, String>> _pdfPathByBookAndGrade = <String, Map<String, String>>{};
   int _bookSeq = 0;
   String? _selectedBookId;
 
-  late final List<_GradeOption> _grades = _buildAllGradeOptions();
+  List<_GradeOption> _grades = <_GradeOption>[];
   int _defaultGradeIndex = 0;
   int _lastGradeScrollMs = 0;
+  // 책 카드에서 과정 변경(휠/드래그)이 연속으로 발생하면 서버 저장이 레이스로 꼬일 수 있어,
+  // 마지막 값만 저장되도록 디바운스한다.
+  final Map<String, Timer> _bookGradeSaveTimers = <String, Timer>{};
+  bool _gradesLoaded = false;
+  bool _gradesLoading = false;
   bool _booksLoaded = false;
   bool _booksLoading = false;
   bool _pdfsLoaded = false;
@@ -84,12 +91,47 @@ class _RightSideSheetState extends State<RightSideSheet> {
   @override
   void initState() {
     super.initState();
+    unawaited(_ensureGradesThenLoadAnswerKeyData());
+  }
+
+  Future<void> _ensureGradesThenLoadAnswerKeyData() async {
+    try {
+      await _loadGrades();
+    } catch (_) {}
     unawaited(_loadBooks());
     unawaited(_loadPdfs());
   }
 
+  Future<void> _loadGrades() async {
+    if (_gradesLoaded || _gradesLoading) return;
+    _gradesLoading = true;
+    try {
+      final rows = await DataManager.instance.loadAnswerKeyGrades();
+      final next = <_GradeOption>[];
+      for (final r in rows) {
+        final key = (r['grade_key'] as String?)?.trim() ?? '';
+        final label = (r['label'] as String?)?.trim() ?? '';
+        if (key.isEmpty || label.isEmpty) continue;
+        next.add(_GradeOption(key: key, label: label));
+      }
+      if (!mounted) return;
+      setState(() {
+        _grades = next;
+      });
+      _gradesLoaded = true;
+    } catch (_) {
+      _gradesLoaded = false;
+    } finally {
+      _gradesLoading = false;
+    }
+  }
+
   @override
   void dispose() {
+    for (final t in _bookGradeSaveTimers.values) {
+      t.cancel();
+    }
+    _bookGradeSaveTimers.clear();
     _pdfEditInputCtrl.dispose();
     _pdfEditRangesCtrl.dispose();
     _pdfEditFileNameCtrl.dispose();
@@ -425,6 +467,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
       );
       return;
     }
+    if (_grades.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과정이 없습니다. “과정 편집”에서 먼저 과정을 추가해주세요.')),
+      );
+      return;
+    }
 
     final typeGroup = XTypeGroup(label: 'PDF', extensions: const ['pdf']);
     final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
@@ -534,6 +583,62 @@ class _RightSideSheetState extends State<RightSideSheet> {
       }
     }
     await OpenFilex.open(path);
+  }
+
+  Future<void> _onEditGradesPressed() async {
+    final dlgCtx = widget.dialogContext ?? context;
+    final result = await showDialog<List<_GradeOption>>(
+      context: dlgCtx,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (_) => _AnswerKeyGradesEditDialog(initial: _grades),
+    );
+    if (result == null) return;
+    if (!mounted) return;
+    setState(() {
+      _grades = result;
+      // 기본 인덱스는 범위 내로 보정
+      if (_grades.isEmpty) {
+        _defaultGradeIndex = 0;
+      } else {
+        _defaultGradeIndex = _defaultGradeIndex.clamp(0, _grades.length - 1);
+      }
+    });
+
+    // 저장(서버/로컬)
+    try {
+      final rows = <Map<String, dynamic>>[
+        for (int i = 0; i < _grades.length; i++)
+          {
+            'grade_key': _grades[i].key,
+            'label': _grades[i].label,
+            'order_index': i,
+          }
+      ];
+      await DataManager.instance.saveAnswerKeyGrades(rows);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과정 목록이 저장되었습니다.')));
+    } catch (e) {
+      if (!mounted) return;
+      final s = e.toString();
+      final missingTable = s.contains('answer_key_grades') &&
+          (s.contains('PGRST205') || s.toLowerCase().contains('schema cache'));
+      if (missingTable) {
+        final localLikelySaved = !RuntimeFlags.serverOnly &&
+            (!TagPresetService.preferSupabaseRead || TagPresetService.dualWrite);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              localLikelySaved
+                  ? '서버 DB에 answer_key_grades 테이블이 없어 서버 저장은 실패했지만, 로컬에는 저장됐습니다. (Supabase 마이그레이션 필요)'
+                  : '서버 DB에 answer_key_grades 테이블이 없어 저장할 수 없습니다. (Supabase 마이그레이션 필요)',
+            ),
+          ),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과정 목록 저장에 실패했습니다.')));
+    }
   }
 
   _BookItem? _findBookById(String? id) {
@@ -707,28 +812,26 @@ class _RightSideSheetState extends State<RightSideSheet> {
     unawaited(() async {
       try {
         await _saveAllBooks();
-      } catch (_) {}
+      } catch (e) {
+        if (!mounted) return;
+        final s = e.toString();
+        final missingTable = s.contains('answer_key_books') &&
+            (s.contains('PGRST205') || s.toLowerCase().contains('schema cache'));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              missingTable
+                  ? '서버 DB에 answer_key_books 테이블이 없어 책 순서를 저장할 수 없습니다. (Supabase 마이그레이션 필요)'
+                  : '책 순서 저장에 실패했습니다.',
+            ),
+          ),
+        );
+      }
     }());
   }
 
-  List<_GradeOption> _buildAllGradeOptions() {
-    final List<_GradeOption> out = <_GradeOption>[];
-    final levels = <EducationLevel>[
-      EducationLevel.elementary,
-      EducationLevel.middle,
-      EducationLevel.high,
-    ];
-
-    for (final level in levels) {
-      final list = gradesByLevel[level] ?? const <Grade>[];
-      for (final g in list) {
-        // 'N수' 같은 특수 학년은 숫자 라벨 대신 이름을 사용
-        final custom = g.isRepeater ? g.name : null;
-        out.add(_GradeOption(level: g.level, grade: g.value, customLabel: custom));
-      }
-    }
-    return out;
-  }
+  // NOTE: 기존(초/중/고 고정 학년 목록)은 사용하지 않음.
+  // 과정(=학년/레벨) 목록은 `answer_key_grades` 테이블에서 로드/편집한다.
 
   Future<void> _openAddBookDialog() async {
     final dlgCtx = widget.dialogContext ?? context;
@@ -758,6 +861,30 @@ class _RightSideSheetState extends State<RightSideSheet> {
     try {
       await _saveAllBooks();
     } catch (_) {}
+  }
+
+  void _schedulePersistBookGrade(String bookId) {
+    _bookGradeSaveTimers[bookId]?.cancel();
+    _bookGradeSaveTimers[bookId] = Timer(const Duration(milliseconds: 320), () {
+      _bookGradeSaveTimers.remove(bookId);
+      final idx = _books.indexWhere((b) => b.id == bookId);
+      if (idx == -1) return;
+      unawaited(() async {
+        try {
+          final b0 = _books[idx];
+          var b = b0;
+          if (b.id.isEmpty || !_looksLikeUuid(b.id)) {
+            final newId = const Uuid().v4();
+            if (!mounted) return;
+            setState(() {
+              _books[idx] = _books[idx].copyWith(id: newId);
+            });
+            b = _books[idx];
+          }
+          await DataManager.instance.saveAnswerKeyBook(_toBookRow(b, idx));
+        } catch (_) {}
+      }());
+    });
   }
 
   void _changeBookGradeByDelta({required String bookId, required int delta}) {
@@ -792,21 +919,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       _defaultGradeIndex = next;
     });
 
-    // 해당 책만 서버/로컬 업서트 (order_index 유지)
-    unawaited(() async {
-      try {
-        var b = _books[idx];
-        if (b.id.isEmpty || !_looksLikeUuid(b.id)) {
-          final newId = const Uuid().v4();
-          if (!mounted) return;
-          setState(() {
-            _books[idx] = _books[idx].copyWith(id: newId);
-          });
-          b = _books[idx];
-        }
-        await DataManager.instance.saveAnswerKeyBook(_toBookRow(b, idx));
-      } catch (_) {}
-    }());
+    // ✅ 마지막 선택만 저장되도록 디바운스
+    _schedulePersistBookGrade(bookId);
   }
 
   @override
@@ -855,6 +969,10 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Widget _buildBody() {
     switch (_mode) {
       case RightSideSheetMode.answerKey:
+        // grades는 답지 기능의 핵심 의존성이라, 최초 진입 시 지연 로드 보장
+        if (!_gradesLoaded && !_gradesLoading) {
+          unawaited(_loadGrades());
+        }
         return _AnswerKeyPdfShortcutExplorer(
           books: _books,
           grades: _grades,
@@ -865,7 +983,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
           onOpenBook: (book) => unawaited(_openPdfForBook(book)),
           onReorderBooks: _onReorderBooks,
           onEditPdfs: () => unawaited(_onEditPdfsPressed()),
+          onEditGrades: () => unawaited(_onEditGradesPressed()),
           onDeleteBook: () => unawaited(_onDeleteBookPressed()),
+          onSelectBook: (id) => setState(() => _selectedBookId = id),
         );
       case RightSideSheetMode.memo:
         return _MemoExplorer(
@@ -1103,18 +1223,30 @@ class _RightSideSheetState extends State<RightSideSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              SizedBox(
-                height: 48,
-                child: OutlinedButton.icon(
-                  onPressed: (!_pdfEditBusy && hasPdf) ? _openPdfPreviewSelectDialogFromSheet : null,
-                  icon: const Icon(Icons.preview_outlined, size: 16),
-                  label: const Text('미리보기로 편집'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _rsTextSub,
-                    side: const BorderSide(color: _rsBorder),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 140),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeOutCubic,
+                transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
+                child: hasPdf
+                    ? SizedBox(
+                        key: const ValueKey('pdf_edit_preview_btn'),
+                        height: 48,
+                        child: OutlinedButton.icon(
+                          onPressed: _pdfEditBusy ? null : _openPdfPreviewSelectDialogFromSheet,
+                          icon: const Icon(Icons.preview_outlined, size: 16),
+                          label: const Text('미리보기로 편집'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _rsTextSub,
+                            side: const BorderSide(color: _rsBorder),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      )
+                    : const SizedBox(
+                        key: ValueKey('pdf_edit_preview_btn_empty'),
+                        height: 48,
+                      ),
               ),
             ],
           ),
@@ -2017,7 +2149,9 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   final Map<String, Map<String, String>> pdfPathByBookAndGrade;
   final VoidCallback onAddBook;
   final VoidCallback onEditPdfs;
+  final VoidCallback onEditGrades;
   final VoidCallback onDeleteBook;
+  final void Function(String bookId) onSelectBook;
   final void Function({required String bookId, required int delta}) onBookGradeDelta;
   final void Function(_BookItem book) onOpenBook;
   final void Function(int oldIndex, int newIndex) onReorderBooks;
@@ -2028,7 +2162,9 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
     required this.pdfPathByBookAndGrade,
     required this.onAddBook,
     required this.onEditPdfs,
+    required this.onEditGrades,
     required this.onDeleteBook,
+    required this.onSelectBook,
     required this.onBookGradeDelta,
     required this.onOpenBook,
     required this.onReorderBooks,
@@ -2062,30 +2198,39 @@ class _AnswerKeyPdfShortcutExplorerState extends State<_AnswerKeyPdfShortcutExpl
           _ExplorerHeader(
             // Windows 탐색기 느낌: 툴바/주소줄을 단순화
             leading: Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
               children: [
-                IconButton(
-                  tooltip: '책 추가',
-                  onPressed: widget.onAddBook,
-                  icon: const Icon(Icons.library_add_outlined, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '책 추가',
+                    icon: Icons.library_add_outlined,
+                    onPressed: widget.onAddBook,
+                    showRightDivider: true,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: 'PDF 수정',
-                  onPressed: widget.onEditPdfs,
-                  icon: const Icon(Icons.edit_outlined, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: 'PDF 수정',
+                    icon: Icons.edit_outlined,
+                    onPressed: widget.onEditPdfs,
+                    showRightDivider: true,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '삭제',
-                  onPressed: widget.onDeleteBook,
-                  icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '과정 편집',
+                    icon: Icons.tune_rounded,
+                    onPressed: widget.onEditGrades,
+                    showRightDivider: true,
+                  ),
+                ),
+                Expanded(
+                  child: _ToolbarSegmentButton(
+                    tooltip: '삭제',
+                    icon: Icons.delete_outline,
+                    onPressed: widget.onDeleteBook,
+                    showRightDivider: false,
+                  ),
                 ),
               ],
             ),
@@ -2099,6 +2244,9 @@ class _AnswerKeyPdfShortcutExplorerState extends State<_AnswerKeyPdfShortcutExpl
               onBookGradeDelta: widget.onBookGradeDelta,
               onOpenBook: widget.onOpenBook,
               onReorderBooks: widget.onReorderBooks,
+              onEditPdfs: widget.onEditPdfs,
+              onDeleteBook: widget.onDeleteBook,
+              onSelectBook: widget.onSelectBook,
               scrollController: _scrollCtrl,
             ),
           ),
@@ -2115,6 +2263,8 @@ class _ExplorerHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasLeading = leading != null;
+    final hasTrailing = trailing != null;
     return Container(
       decoration: BoxDecoration(
         color: _rsPanelBg,
@@ -2124,13 +2274,51 @@ class _ExplorerHeader extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       child: Row(
         children: [
-          if (leading != null) ...[
-            leading!,
-            const SizedBox(width: 6),
+          if (hasLeading) Expanded(child: leading!) else const Spacer(),
+          if (hasTrailing) ...[
+            if (hasLeading) const SizedBox(width: 6),
+            trailing!,
           ],
-          const Spacer(),
-          if (trailing != null) trailing!,
         ],
+      ),
+    );
+  }
+}
+
+class _ToolbarSegmentButton extends StatelessWidget {
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool showRightDivider;
+
+  const _ToolbarSegmentButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    required this.showRightDivider,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final iconColor = enabled ? Colors.white70 : Colors.white24;
+    final border = showRightDivider ? Border(right: BorderSide(color: _rsBorder.withOpacity(0.9))) : null;
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 450),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          child: Container(
+            height: 44,
+            decoration: BoxDecoration(border: border),
+            child: Center(
+              child: Icon(icon, size: 20, color: iconColor),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2143,6 +2331,9 @@ class _BooksSection extends StatelessWidget {
   final void Function({required String bookId, required int delta}) onBookGradeDelta;
   final void Function(_BookItem book) onOpenBook;
   final void Function(int oldIndex, int newIndex) onReorderBooks;
+  final VoidCallback onEditPdfs;
+  final VoidCallback onDeleteBook;
+  final void Function(String bookId) onSelectBook;
   final ScrollController scrollController;
   const _BooksSection({
     required this.books,
@@ -2151,6 +2342,9 @@ class _BooksSection extends StatelessWidget {
     required this.onBookGradeDelta,
     required this.onOpenBook,
     required this.onReorderBooks,
+    required this.onEditPdfs,
+    required this.onDeleteBook,
+    required this.onSelectBook,
     required this.scrollController,
   });
 
@@ -2244,6 +2438,14 @@ class _BooksSection extends StatelessWidget {
                         onGradeDelta: (delta) => onBookGradeDelta(bookId: b.id, delta: delta),
                         linked: linked,
                         onOpen: () => onOpenBook(b),
+                        onEdit: () {
+                          onSelectBook(b.id);
+                          onEditPdfs();
+                        },
+                        onDelete: () {
+                          onSelectBook(b.id);
+                          onDeleteBook();
+                        },
                       ),
                     ),
                   );
@@ -2256,115 +2458,289 @@ class _BooksSection extends StatelessWidget {
   }
 }
 
-class _BookCard extends StatelessWidget {
+class _BookCard extends StatefulWidget {
   final _BookItem item;
   final String gradeLabel;
   final void Function(int delta) onGradeDelta;
   final bool linked;
   final VoidCallback onOpen;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
   const _BookCard({
     required this.item,
     required this.gradeLabel,
     required this.onGradeDelta,
     required this.linked,
     required this.onOpen,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   @override
+  State<_BookCard> createState() => _BookCardState();
+}
+
+class _BookCardState extends State<_BookCard> with SingleTickerProviderStateMixin {
+  // 수정/삭제 2개 액션(삭제 카드와 동일한 버튼 폭 기준)
+  static const double _actionPaneWidth = 108 * 0.7 * 2;
+  static const Duration _snapDuration = Duration(milliseconds: 160);
+
+  late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
+  bool get _isOpen => _ctrl.value > 0.01;
+
+  double _gradeDragDx = 0.0;
+
+  void _open() => _ctrl.animateTo(1, curve: Curves.easeOutCubic);
+  void _close() => _ctrl.animateTo(0, curve: Curves.easeOutCubic);
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails d) {
+    // 왼쪽으로 드래그(delta.dx < 0)하면 열림 진행도(value)가 증가한다.
+    final next = _ctrl.value + (-d.delta.dx / _actionPaneWidth);
+    _ctrl.value = next.clamp(0.0, 1.0);
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0.0; // +: 오른쪽, -: 왼쪽
+    if (v < -250) {
+      _open();
+      return;
+    }
+    if (v > 250) {
+      _close();
+      return;
+    }
+    if (_ctrl.value >= 0.5) {
+      _open();
+    } else {
+      _close();
+    }
+  }
+
+  void _handleTapFront() {
+    // 액션 패널이 열려 있으면 탭은 닫기 동작으로 처리한다.
+    if (_isOpen) {
+      _close();
+      return;
+    }
+    widget.onOpen();
+  }
+
+  void _handleEdit() {
+    _ctrl.value = 0;
+    widget.onEdit();
+  }
+
+  void _handleDelete() {
+    _ctrl.value = 0;
+    widget.onDelete();
+  }
+
+  void _handleGradeDragUpdate(DragUpdateDetails d) {
+    _gradeDragDx += d.delta.dx;
+    if (_gradeDragDx <= -48) {
+      _gradeDragDx = 0.0;
+      widget.onGradeDelta(-1);
+    } else if (_gradeDragDx >= 48) {
+      _gradeDragDx = 0.0;
+      widget.onGradeDelta(1);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    double gradeDragDx = 0.0;
+    final radius = BorderRadius.circular(14);
 
     Widget buildGradeBadge() {
-      final bg = linked ? _rsPanelBg : _rsPanelBg.withOpacity(0.35);
-      final fg = linked ? _rsTextSub : Colors.white24;
+      final bg = widget.linked ? _rsPanelBg : _rsPanelBg.withOpacity(0.35);
+      final fg = widget.linked ? _rsTextSub : Colors.white24;
       return SizedBox(
-        width: 54, // 약 +20%
-        height: 30, // 약 +20%
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.transparent), // 요청: 테두리 색상 투명
-          ),
-          child: Center(
-            child: Text(
-              gradeLabel,
-              style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w900),
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              softWrap: false,
+        width: 96,
+        height: 30,
+        // NOTE: ReorderableListView 내부에서 Tooltip(OverlayPortal)이 레이아웃 중 attach되며
+        // "A _RenderLayoutBuilder was mutated" 에러가 발생하는 케이스가 있어,
+        // 여기서는 Tooltip을 사용하지 않는다. (긴 과정명은 ellipsis로 처리)
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragStart: (_) => _gradeDragDx = 0.0,
+          onHorizontalDragUpdate: _handleGradeDragUpdate,
+          onHorizontalDragEnd: (_) => _gradeDragDx = 0.0,
+          onHorizontalDragCancel: () => _gradeDragDx = 0.0,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.transparent),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  widget.gradeLabel,
+                  style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w900),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  textAlign: TextAlign.right,
+                ),
+              ),
             ),
           ),
         ),
       );
     }
 
-    final content = Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12), // 약 +20%
-      decoration: BoxDecoration(
+    Widget frontCard() {
+      return Material(
         color: _rsFieldBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _rsBorder.withOpacity(0.9)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  item.name,
-                  style: const TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+        child: InkWell(
+          onTap: _handleTapFront,
+          borderRadius: radius,
+          splashFactory: NoSplash.splashFactory,
+          highlightColor: Colors.white.withOpacity(0.05),
+          hoverColor: Colors.white.withOpacity(0.03),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.item.name,
+                        style: const TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    buildGradeBadge(),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  widget.item.description,
+                  style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w600, height: 1.25),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              const SizedBox(width: 12),
-              buildGradeBadge(),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            item.description,
-            style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w600, height: 1.25),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
 
-    // 카드 전체 영역(패딩/빈공간 포함)에서 좌우 스크롤/드래그가 먹히도록 카드 "바깥"으로 리스너/제스처를 올림
-    return Listener(
-      behavior: HitTestBehavior.opaque,
-      onPointerSignal: (signal) {
-        if (signal is PointerScrollEvent) {
-          final dx = signal.scrollDelta.dx;
-          final dy = signal.scrollDelta.dy;
-          // 수직 스크롤은 리스트 스크롤에 맡기고, 가로 입력만 과정 변경으로 사용
-          if (dx != 0 && dx.abs() >= dy.abs()) {
-            // 요청: 왼쪽(음수)=내려감(-1), 오른쪽(양수)=올라감(+1)
-            onGradeDelta(dx < 0 ? -1 : 1);
-          }
-        }
-      },
-      child: GestureDetector(
+    Widget actionButton({
+      required Color color,
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          splashFactory: NoSplash.splashFactory,
+          highlightColor: Colors.white.withOpacity(0.08),
+          hoverColor: Colors.white.withOpacity(0.04),
+          child: SizedBox.expand(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 18, color: Colors.white),
+                  const SizedBox(height: 6),
+                  Text(label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Listener(
         behavior: HitTestBehavior.opaque,
-        onTap: onOpen,
-        onHorizontalDragStart: (_) => gradeDragDx = 0.0,
-        onHorizontalDragUpdate: (d) {
-          gradeDragDx += d.delta.dx;
-          if (gradeDragDx <= -48) {
-            gradeDragDx = 0.0;
-            onGradeDelta(-1);
-          } else if (gradeDragDx >= 48) {
-            gradeDragDx = 0.0;
-            onGradeDelta(1);
+        onPointerSignal: (signal) {
+          if (signal is PointerScrollEvent) {
+            final dx = signal.scrollDelta.dx;
+            final dy = signal.scrollDelta.dy;
+            // 수직 스크롤은 리스트 스크롤에 맡기고, 가로 입력만 과정 변경으로 사용
+            if (dx != 0 && dx.abs() >= dy.abs()) {
+              // 요청: 왼쪽(음수)=내려감(-1), 오른쪽(양수)=올라감(+1)
+              widget.onGradeDelta(dx < 0 ? -1 : 1);
+            }
           }
         },
-        onHorizontalDragEnd: (_) => gradeDragDx = 0.0,
-        onHorizontalDragCancel: () => gradeDragDx = 0.0,
-        child: content,
+        child: GestureDetector(
+          onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+          onHorizontalDragEnd: _handleHorizontalDragEnd,
+          onHorizontalDragCancel: _close,
+          child: Container(
+            decoration: BoxDecoration(
+              color: _rsFieldBg,
+              borderRadius: radius,
+              border: Border.all(color: _rsBorder.withOpacity(0.9)),
+            ),
+            child: ClipRRect(
+              borderRadius: radius,
+              child: Stack(
+                children: [
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: _actionPaneWidth,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: actionButton(
+                              color: _rsAccent,
+                              icon: Icons.edit_outlined,
+                              label: '수정',
+                              onTap: _handleEdit,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: actionButton(
+                              color: const Color(0xFFB74C4C),
+                              icon: Icons.delete_outline_rounded,
+                              label: '삭제',
+                              onTap: _handleDelete,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  AnimatedBuilder(
+                    animation: _ctrl,
+                    builder: (context, child) {
+                      final dx = -_actionPaneWidth * _ctrl.value;
+                      return Transform.translate(offset: Offset(dx, 0), child: child);
+                    },
+                    child: frontCard(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2499,31 +2875,9 @@ class _BookItem {
 }
 
 class _GradeOption {
-  final EducationLevel level;
-  final int grade;
-  final String? customLabel;
-  const _GradeOption({required this.level, required this.grade, this.customLabel});
-
-  String get key => '${level.index}-$grade';
-
-  String get label {
-    if (customLabel != null && customLabel!.isNotEmpty) {
-      return customLabel!;
-    }
-    String p;
-    switch (level) {
-      case EducationLevel.elementary:
-        p = '초';
-        break;
-      case EducationLevel.middle:
-        p = '중';
-        break;
-      case EducationLevel.high:
-        p = '고';
-        break;
-    }
-    return '$p$grade';
-  }
+  final String key;
+  final String label;
+  const _GradeOption({required this.key, required this.label});
 }
 
 class _BookAddDialog extends StatefulWidget {
@@ -2667,10 +3021,10 @@ class _GradePickBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 66,
+      width: 96,
       height: 30,
       child: PopupMenuButton<int>(
-        tooltip: '학년 선택',
+        tooltip: '과정 선택',
         onSelected: onSelected,
         color: _rsPanelBg,
         elevation: 0,
@@ -2688,23 +3042,32 @@ class _GradePickBadge extends StatelessWidget {
               ),
             ),
         ],
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: _rsPanelBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.transparent),
-          ),
-          child: Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(width: 2),
-                const Icon(Icons.keyboard_arrow_down, size: 16, color: _rsTextSub),
-              ],
+        child: Tooltip(
+          message: label,
+          waitDuration: const Duration(milliseconds: 450),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: _rsPanelBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.transparent),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: false,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Icon(Icons.keyboard_arrow_down, size: 16, color: _rsTextSub),
+                ],
+              ),
             ),
           ),
         ),
@@ -2717,6 +3080,197 @@ class _BookPickResult {
   final int bookIndex;
   final int gradeIndex;
   const _BookPickResult({required this.bookIndex, required this.gradeIndex});
+}
+
+class _AnswerKeyGradesEditDialog extends StatefulWidget {
+  final List<_GradeOption> initial;
+  const _AnswerKeyGradesEditDialog({required this.initial});
+
+  @override
+  State<_AnswerKeyGradesEditDialog> createState() => _AnswerKeyGradesEditDialogState();
+}
+
+class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> {
+  final List<TextEditingController> _ctrls = <TextEditingController>[];
+  final List<String> _keys = <String>[];
+  final ScrollController _scrollCtrl = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    for (final g in widget.initial) {
+      _keys.add(g.key);
+      _ctrls.add(ImeAwareTextEditingController(text: g.label));
+    }
+    if (_keys.isEmpty) {
+      // 초기 항목이 없으면 1개를 기본으로 제공
+      _keys.add(const Uuid().v4());
+      _ctrls.add(ImeAwareTextEditingController(text: ''));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrls) {
+      c.dispose();
+    }
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _addRow() {
+    setState(() {
+      _keys.add(const Uuid().v4());
+      _ctrls.add(ImeAwareTextEditingController(text: ''));
+    });
+  }
+
+  void _removeRow(int index) {
+    if (index < 0 || index >= _keys.length) return;
+    setState(() {
+      _ctrls[index].dispose();
+      _ctrls.removeAt(index);
+      _keys.removeAt(index);
+      if (_keys.isEmpty) {
+        _keys.add(const Uuid().v4());
+        _ctrls.add(ImeAwareTextEditingController(text: ''));
+      }
+    });
+  }
+
+  void _save() {
+    final out = <_GradeOption>[];
+    final seen = <String>{};
+    for (int i = 0; i < _keys.length; i++) {
+      final label = _ctrls[i].text.trim();
+      if (label.isEmpty) continue;
+      if (seen.contains(label)) continue;
+      seen.add(label);
+      out.add(_GradeOption(key: _keys[i], label: label));
+    }
+    Navigator.of(context).pop<List<_GradeOption>>(out);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _rsBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: const Text(
+        '과정 편집',
+        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+      ),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '여기에 과정명을 입력하세요. (예: 기본, 심화, 내신, 수능)\n빈 항목은 저장 시 제외됩니다.',
+              style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: Scrollbar(
+                controller: _scrollCtrl,
+                thumbVisibility: true,
+                child: ReorderableListView.builder(
+                  scrollController: _scrollCtrl,
+                  shrinkWrap: true,
+                  itemCount: _keys.length,
+                  buildDefaultDragHandles: false,
+                  onReorder: (oldIndex, newIndex) {
+                    setState(() {
+                      final oi = oldIndex;
+                      final ni = newIndex > oldIndex ? newIndex - 1 : newIndex;
+                      final k = _keys.removeAt(oi);
+                      final c = _ctrls.removeAt(oi);
+                      _keys.insert(ni, k);
+                      _ctrls.insert(ni, c);
+                    });
+                  },
+                  itemBuilder: (context, index) {
+                    return Container(
+                      key: ValueKey(_keys[index]),
+                      margin: EdgeInsets.only(bottom: index == _keys.length - 1 ? 0 : 8),
+                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                      decoration: BoxDecoration(
+                        color: _rsFieldBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                      ),
+                      child: Row(
+                        children: [
+                          ReorderableDragStartListener(
+                            index: index,
+                            child: const Icon(Icons.drag_indicator, color: Colors.white24, size: 18),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: _ctrls[index],
+                              style: const TextStyle(color: _rsText, fontWeight: FontWeight.w800),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                hintText: '과정명',
+                                hintStyle: TextStyle(color: Colors.white24),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '삭제',
+                            onPressed: () => _removeRow(index),
+                            icon: const Icon(Icons.close, color: Colors.white38, size: 18),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _addRow,
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('추가'),
+                style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop<List<_GradeOption>?>(null),
+          style: TextButton.styleFrom(foregroundColor: _rsTextSub),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          style: FilledButton.styleFrom(
+            backgroundColor: _rsAccent,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+        ),
+      ],
+    );
+  }
 }
 
 class _BookPdfEditDialog extends StatefulWidget {

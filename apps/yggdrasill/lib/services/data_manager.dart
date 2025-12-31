@@ -4131,6 +4131,11 @@ DateTime? _lastClassesOrderSaveStart;
       ResourceService.instance.deleteResourceGradeIcon(name);
 
   // ======== ANSWER KEY (우측 사이드시트: 책 리스트) ========
+  Future<List<Map<String, dynamic>>> loadAnswerKeyGrades() =>
+      AnswerKeyService.instance.loadAnswerKeyGrades();
+  Future<void> saveAnswerKeyGrades(List<Map<String, dynamic>> rows) =>
+      AnswerKeyService.instance.saveAnswerKeyGrades(rows);
+
   Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() =>
       AnswerKeyService.instance.loadAnswerKeyBooks();
   Future<void> saveAnswerKeyBook(Map<String, dynamic> row) =>
