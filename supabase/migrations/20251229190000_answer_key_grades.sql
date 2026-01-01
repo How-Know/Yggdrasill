@@ -61,3 +61,4 @@ using (exists (select 1 from public.memberships s where s.academy_id = answer_ke
 
 
 
+

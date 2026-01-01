@@ -638,6 +638,97 @@ class AttendanceService {
     );
   }
 
+  /// "순수 planned" 출석 레코드(=예정 수업)만 일괄 삭제한다.
+  ///
+  /// ✅ 안전장치:
+  /// - `is_planned=true`
+  /// - `is_present=false`
+  /// - `arrival_time IS NULL`
+  ///
+  /// 즉, 실제 출석/등원 기록이 들어간 행은 삭제하지 않는다.
+  Future<void> purgePurePlannedAttendance({
+    String? studentId,
+    Set<String>? setIds,
+  }) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    final sid = studentId?.trim();
+    final sets = setIds?.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet();
+
+    bool match(AttendanceRecord r) {
+      if (!r.isPlanned) return false;
+      if (r.isPresent) return false;
+      if (r.arrivalTime != null) return false;
+      if (sid != null && sid.isNotEmpty && r.studentId != sid) return false;
+      if (sets != null && sets.isNotEmpty) {
+        final s = r.setId;
+        if (s == null || s.isEmpty) return false;
+        if (!sets.contains(s)) return false;
+      }
+      return true;
+    }
+
+    final beforeLocal = _attendanceRecords.length;
+    final willRemove = _attendanceRecords.where(match).length;
+    print('[PLAN][purge] start academy=$academyId student=${sid ?? "ALL"} sets=${sets?.length ?? 0} localWillRemove=$willRemove localBefore=$beforeLocal');
+
+    try {
+      var q = supa
+          .from('attendance_records')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('is_planned', true)
+          .eq('is_present', false)
+          .isFilter('arrival_time', null);
+      if (sid != null && sid.isNotEmpty) {
+        q = q.eq('student_id', sid);
+      }
+      if (sets != null && sets.isNotEmpty) {
+        q = q.inFilter('set_id', sets.toList());
+      }
+      await q;
+    } catch (e, st) {
+      print('[PLAN][purge][ERROR] attendance_records delete failed: $e\n$st');
+      rethrow;
+    }
+
+    _attendanceRecords.removeWhere(match);
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    final afterLocal = _attendanceRecords.length;
+    print('[PLAN][purge] done removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+  }
+
+  /// snapshot 기반 planned가 생성한 batch 세션 중 "planned 상태"만 일괄 삭제한다.
+  ///
+  /// - snapshotId == null 경로(전역 planned 보강)는 원래 batch를 만들지 않기 때문에,
+  ///   이 함수는 주로 "재생성/초기화" 시 정리 용도로 사용한다.
+  Future<void> purgePlannedBatchSessions({
+    String? studentId,
+    Set<String>? setIds,
+  }) async {
+    final supa = Supabase.instance.client;
+    final sid = studentId?.trim();
+    final sets = setIds?.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet();
+
+    try {
+      var q = supa
+          .from('lesson_batch_sessions')
+          .delete()
+          .eq('state', 'planned');
+      if (sid != null && sid.isNotEmpty) {
+        q = q.eq('student_id', sid);
+      }
+      if (sets != null && sets.isNotEmpty) {
+        q = q.inFilter('set_id', sets.toList());
+      }
+      await q;
+      print('[BATCH][purge] planned sessions deleted student=${sid ?? "ALL"} sets=${sets?.length ?? 0}');
+    } catch (e, st) {
+      print('[BATCH][purge][WARN] planned sessions delete failed student=${sid ?? "ALL"}: $e\n$st');
+    }
+  }
+
   String _resolveClassName(String? sessionTypeId) {
     final classes = _d.getClasses();
     if (sessionTypeId == null) return '수업';
@@ -2048,6 +2139,18 @@ class AttendanceService {
     // 3) 추가(add) 또는 replace의 replacement 생성
     if (replacement == null) return;
     if (canceled) {
+      await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: replacement);
+      return;
+    }
+
+    // ✅ completed(이미 처리된 보강/추가) 또는 과거 replacement는 planned를 새로 만들지 않는다.
+    // - 실제 출석/등원 기록이 이미 존재할 가능성이 높고,
+    // - 과거 planned 생성은 중복/혼선을 유발한다.
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final repDay = DateTime(replacement.year, replacement.month, replacement.day);
+    if (ov.status == OverrideStatus.completed || repDay.isBefore(today)) {
+      // 혹시 남아있을 수 있는 "순수 planned"만 정리
       await removePlannedAttendanceForDate(studentId: ov.studentId, classDateTime: replacement);
       return;
     }

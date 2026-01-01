@@ -138,6 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ThemeMode _selectedThemeMode = ThemeMode.dark; // [추가] 테마 선택 상태
   bool _isOwner = false; // 원장 여부 캐시
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
+  bool _resettingPlannedAll = false; // [추가] 예정 수업 전체 재생성 진행 상태
 
   @override
   void initState() {
@@ -905,6 +906,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     if (value) await prefs.setBool('fullscreen_enabled', false);
                   },
                   activeColor: const Color(0xFF1976D2),
+                ),
+                const SizedBox(height: 40),
+                const Text(
+                  '데이터',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1F1F1F),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '모든 학생의 "순수 예정 수업"(is_planned=true, 출석/등원 기록 없는 것)만 전부 삭제한 뒤,\n'
+                          '현재 시간표(student_time_blocks)를 기준으로 예정 수업을 다시 생성합니다.\n'
+                          '※ 시간이 오래 걸릴 수 있습니다.',
+                          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: _resettingPlannedAll
+                            ? null
+                            : () async {
+                                if (!(_isOwner || _isSuperAdmin)) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('원장/관리자만 실행할 수 있습니다.')),
+                                  );
+                                  return;
+                                }
+                                final ok = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    backgroundColor: const Color(0xFF0B1112),
+                                    title: const Text('예정 수업 전체 재생성', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+                                    content: const Text(
+                                      '모든 학생의 순수 예정 수업을 삭제하고 다시 생성합니다.\n'
+                                      '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.\n\n'
+                                      '진행할까요?',
+                                      style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.of(ctx).pop(false),
+                                        child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.of(ctx).pop(true),
+                                        child: const Text('재생성', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (ok != true) return;
+                                setState(() => _resettingPlannedAll = true);
+                                try {
+                                  await DataManager.instance.resetPlannedAttendanceForAllStudents(days: 60);
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('예정 수업이 재생성되었습니다.')),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('재생성 실패: $e')),
+                                    );
+                                  }
+                                } finally {
+                                  if (mounted) setState(() => _resettingPlannedAll = false);
+                                }
+                              },
+                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB74C4C)),
+                        icon: _resettingPlannedAll
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.refresh, size: 18),
+                        label: const Text('예정 전체 재생성'),
+                      ),
+                    ],
+                  ),
                 ),
                 const Padding(padding: EdgeInsets.only(bottom: 24)),
               ],

@@ -3882,6 +3882,190 @@ DateTime? _lastClassesOrderSaveStart;
       AttendanceService.instance.getAttendanceRecord(studentId, classDateTime);
   Future<void> ensurePlannedAttendanceForNextDays({int days = 14}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
+
+  /// (디버그/정리용) 특정 학생의 "순수 planned(예정수업)"를 전부 삭제한 뒤,
+  /// 현재 시간표(student_time_blocks)를 기준으로 planned를 다시 생성한다.
+  ///
+  /// - 출석/등원 기록이 있는 행은 삭제하지 않는다(AttendanceService 기준).
+  /// - 재생성은 snapshot 기반(regeneratePlannedWithSnapshot)으로 수행하여 snapshot_id/batch_session_id가 채워지도록 한다.
+  Future<void> resetPlannedAttendanceForStudent(
+    String studentId, {
+    int days = 60,
+  }) async {
+    final sid = studentId.trim();
+    if (sid.isEmpty) return;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // 예정 재생성 대상 setIds: 오늘 기준 "활성/미래" 세트만 포함
+    final activeOrFutureSetIds = _studentTimeBlocks
+        .where((b) {
+          if (b.studentId != sid) return false;
+          final setId = (b.setId ?? '').trim();
+          if (setId.isEmpty) return false;
+          final end = b.endDate != null
+              ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+              : null;
+          if (end != null && end.isBefore(today)) return false;
+          return true;
+        })
+        .map((b) => (b.setId ?? '').trim())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    // purge(순수 planned만)
+    await AttendanceService.instance.purgePurePlannedAttendance(studentId: sid);
+    await AttendanceService.instance.purgePlannedBatchSessions(studentId: sid);
+
+    if (activeOrFutureSetIds.isEmpty) {
+      print('[PLAN][resetStudent] skip regen: no active/future setIds student=$sid');
+      return;
+    }
+
+    // snapshot 기반 재생성
+    await regeneratePlannedWithSnapshot(
+      studentId: sid,
+      setIds: activeOrFutureSetIds,
+      effectiveStart: today,
+      days: days,
+      note: 'manual reset planned',
+    );
+  }
+
+  /// (디버그/정리용) 모든 학생의 "순수 planned(예정수업)"를 전부 삭제한 뒤,
+  /// 현재 시간표(student_time_blocks)를 기준으로 planned를 다시 생성한다.
+  ///
+  /// - 출석/등원 기록이 있는 행은 삭제하지 않는다(AttendanceService 기준).
+  /// - 재생성은 학생별 snapshot 기반(regeneratePlannedWithSnapshot)으로 수행한다.
+  Future<void> resetPlannedAttendanceForAllStudents({int days = 60}) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // 학생별 예정 재생성 대상 setIds: 오늘 기준 "활성/미래" 세트만 포함
+    final Map<String, Set<String>> setIdsByStudent = {};
+    for (final b in _studentTimeBlocks) {
+      final sid = (b.studentId).trim();
+      if (sid.isEmpty) continue;
+      final setId = (b.setId ?? '').trim();
+      if (setId.isEmpty) continue;
+      final end = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
+      if (end != null && end.isBefore(today)) continue;
+      setIdsByStudent.putIfAbsent(sid, () => <String>{}).add(setId);
+    }
+
+    // purge(순수 planned만) - 전체
+    await AttendanceService.instance.purgePurePlannedAttendance();
+    await AttendanceService.instance.purgePlannedBatchSessions();
+
+    if (setIdsByStudent.isEmpty) {
+      print('[PLAN][resetAll] skip regen: no active/future setIds in student_time_blocks');
+      return;
+    }
+
+    // 표시 순서: 이름 기준(없으면 id)
+    final nameById = <String, String>{
+      for (final s in _studentsWithInfo) s.student.id: s.student.name,
+    };
+    final entries = setIdsByStudent.entries.toList()
+      ..sort((a, b) {
+        final an = (nameById[a.key] ?? a.key).trim();
+        final bn = (nameById[b.key] ?? b.key).trim();
+        return an.compareTo(bn);
+      });
+
+    print('[PLAN][resetAll] regen start students=${entries.length} days=$days');
+    int done = 0;
+    int failed = 0;
+    for (final e in entries) {
+      done++;
+      final sid = e.key;
+      final setIds = e.value;
+      final label = (nameById[sid] ?? sid).trim();
+      try {
+        print('[PLAN][resetAll] ($done/${entries.length}) student=$label setIds=${setIds.length}');
+        await regeneratePlannedWithSnapshot(
+          studentId: sid,
+          setIds: setIds,
+          effectiveStart: today,
+          days: days,
+          note: 'manual reset planned (all)',
+        );
+      } catch (err, st) {
+        failed++;
+        print('[PLAN][resetAll][ERROR] student=$label err=$err\n$st');
+      }
+    }
+    print('[PLAN][resetAll] regen done students=${entries.length} failed=$failed');
+  }
+
+  /// 출석 기록(is_planned=false 등)으로 들어온 "추가수업"을
+  /// 미처리 예정 수업(순수 planned) 1건과 연결하여 "보강(replace)"으로 처리한다.
+  ///
+  /// - 연결 대상 planned는 안전하게 제거(순수 planned만)하고,
+  /// - 추가수업 레코드에는 planned의 set/cycle/order/snapshot/batch 정보를 이식한다.
+  /// - 이후 session_override(replace, makeup, completed)를 생성하여 보강으로 기록한다.
+  Future<void> connectWalkInToPlannedAsMakeup({
+    required AttendanceRecord walkIn,
+    required AttendanceRecord planned,
+  }) async {
+    if (walkIn.studentId != planned.studentId) {
+      throw Exception('학생이 다릅니다.');
+    }
+    if (!(planned.isPlanned && !planned.isPresent && planned.arrivalTime == null)) {
+      throw Exception('연결 대상이 순수 예정 수업이 아닙니다.');
+    }
+
+    final int durMin = () {
+      final d = walkIn.classEndTime.difference(walkIn.classDateTime).inMinutes;
+      if (d > 0) return d;
+      final pd = planned.classEndTime.difference(planned.classDateTime).inMinutes;
+      if (pd > 0) return pd;
+      return _academySettings.lessonDuration;
+    }();
+
+    // 1) walk-in 레코드에 planned 메타를 이식(배치/스냅샷 포함)
+    await saveOrUpdateAttendance(
+      studentId: walkIn.studentId,
+      classDateTime: walkIn.classDateTime,
+      classEndTime: walkIn.classEndTime,
+      className: (planned.className.trim().isNotEmpty ? planned.className : walkIn.className),
+      isPresent: walkIn.isPresent,
+      arrivalTime: walkIn.arrivalTime,
+      departureTime: walkIn.departureTime,
+      notes: walkIn.notes,
+      sessionTypeId: planned.sessionTypeId ?? walkIn.sessionTypeId,
+      setId: planned.setId ?? walkIn.setId,
+      cycle: planned.cycle ?? walkIn.cycle,
+      sessionOrder: planned.sessionOrder ?? walkIn.sessionOrder,
+      isPlanned: walkIn.isPlanned,
+      snapshotId: planned.snapshotId,
+      batchSessionId: planned.batchSessionId,
+    );
+
+    // 2) 원본 planned 제거(순수 planned만)
+    await AttendanceService.instance.removePlannedAttendanceForDate(
+      studentId: planned.studentId,
+      classDateTime: planned.classDateTime,
+    );
+
+    // 3) 보강(replace) 오버라이드 생성(완료)
+    final ov = SessionOverride(
+      studentId: walkIn.studentId,
+      sessionTypeId: planned.sessionTypeId,
+      setId: planned.setId,
+      overrideType: OverrideType.replace,
+      originalClassDateTime: planned.classDateTime,
+      replacementClassDateTime: walkIn.classDateTime,
+      durationMinutes: durMin,
+      reason: OverrideReason.makeup,
+      status: OverrideStatus.completed,
+      originalAttendanceId: planned.id,
+      replacementAttendanceId: walkIn.id,
+    );
+    await addSessionOverride(ov);
+  }
   CycleAttendanceSummary? getCycleAttendanceSummary({
     required String studentId,
     required int cycle,
@@ -3985,6 +4169,8 @@ DateTime? _lastClassesOrderSaveStart;
     int? cycle,
     int? sessionOrder,
     bool isPlanned = false,
+    String? snapshotId,
+    String? batchSessionId,
   }) =>
       AttendanceService.instance.saveOrUpdateAttendance(
         studentId: studentId,
@@ -4000,6 +4186,8 @@ DateTime? _lastClassesOrderSaveStart;
         cycle: cycle,
         sessionOrder: sessionOrder,
         isPlanned: isPlanned,
+        snapshotId: snapshotId,
+        batchSessionId: batchSessionId,
       );
   Future<void> fixMissingDeparturesForYesterdayKst() =>
       AttendanceService.instance.fixMissingDeparturesForYesterdayKst();

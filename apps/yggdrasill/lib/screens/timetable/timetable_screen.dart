@@ -119,6 +119,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 선택 모드 및 선택 학생 상태 추가
   bool _isSelectMode = false;
   Set<String> _selectedStudentIds = {};
+  // ✅ 셀 선택 학생 리스트에서 학생 카드 클릭 시, 해당 학생만 시간표에 표시하는 "주차 필터"
+  String? _weekStudentFilterId;
   // 자습 등록 모드 상태
   bool _isSelfStudyRegistrationMode = false;
   StudentWithInfo? _selectedSelfStudyStudent;
@@ -126,6 +128,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+
+  void _toggleWeekStudentFilter(String studentId) {
+    final id = studentId.trim();
+    if (id.isEmpty) return;
+    setState(() {
+      _weekStudentFilterId = (_weekStudentFilterId == id) ? null : id;
+    });
+  }
 
   Future<void> _openInquiryNote(String noteId) async {
     final id = noteId.trim();
@@ -1496,11 +1506,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final Set<String>? filteredStudentIds = _activeFilter == null
           ? null
           : _filteredStudents.map((s) => s.student.id).toSet();
+        final Set<String>? timetableFilteredStudentIds = _weekStudentFilterId == null
+            ? filteredStudentIds
+            : <String>{_weekStudentFilterId!};
         final Set<String> filteredClassIds = _classIdsFromFilter(_activeFilter);
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
           filteredStudentIds: filteredStudentIds, // 필터링 정보 전달
           filteredClassIds: filteredClassIds,
+          highlightedStudentId: _weekStudentFilterId,
+          onStudentCardTap: _toggleWeekStudentFilter,
           onToggleClassFilter: _toggleClassQuickFilter,
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           viewDate: _selectedDate,
@@ -1812,9 +1827,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     },
                     scrollController: _timetableScrollController,
                     // filteredStudentIds 정의 추가
-                    filteredStudentIds: _activeFilter == null
-                      ? null
-                      : _filteredStudents.map((s) => s.student.id).toSet(),
+                    filteredStudentIds: timetableFilteredStudentIds,
                     selectedStudentWithInfo: _selectedStudentWithInfo,
                     selectedSelfStudyStudent: _selectedSelfStudyStudent,
                     onSelectModeChanged: (selecting) {
@@ -1902,6 +1915,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final Set<String>? filteredStudentIds = _activeFilter == null
         ? null
         : _filteredStudents.map((s) => s.student.id).toSet();
+    final Set<String>? timetableFilteredStudentIds = _weekStudentFilterId == null
+        ? filteredStudentIds
+        : <String>{_weekStudentFilterId!};
     return Column(
       children: [
         // 상단 UI (월정보, 세그먼트, 선택, 필터 버튼 등)
@@ -2063,7 +2079,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 }
               }
             },
-            filteredStudentIds: filteredStudentIds, // 추가: 필터 적용
+            filteredStudentIds: timetableFilteredStudentIds, // 추가: 필터 적용
             selectedStudentWithInfo: _selectedStudentWithInfo, // 추가
             onCellSelfStudyStudentsChanged: (dayIdx, startTime, students) {
               // 자습 블록 수정 로직은 TimetableContentView에서 처리

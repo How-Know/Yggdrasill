@@ -5,6 +5,7 @@ import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/swipe_action_reveal.dart';
+import 'student_time_info_dialog.dart';
 
 class TimetableGroupedStudentPanel extends StatelessWidget {
   final List<StudentWithInfo> students;
@@ -32,6 +33,10 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final VoidCallback? onDragEnd;
   // 셀 선택 시 미리 계산된 블록 정보를 우선 사용하기 위한 override 맵
   final Map<String, StudentTimeBlock>? blockOverrides;
+  /// 우측 학생 리스트에서 "선택(필터)"된 학생 id (카드 테두리 하이라이트 용)
+  final String? highlightedStudentId;
+  /// 우측 학생 카드 탭(토글) 콜백: 탭된 학생 id 전달
+  final ValueChanged<String>? onStudentCardTap;
 
   // 그룹핑 캐시 (학생 ID 목록 기준)
   static final Map<String, _GroupedCache> _groupCache = {};
@@ -58,6 +63,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.onDragStart,
     this.onDragEnd,
     this.blockOverrides,
+    this.highlightedStudentId,
+    this.onStudentCardTap,
   });
 
   String _levelLabel(EducationLevel level) {
@@ -304,6 +311,9 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                           runSpacing: 10,
                           children: gradeStudents.map<Widget>((s) {
                             final isSelected = selectedStudentIds.contains(s.student.id);
+                            final isHighlighted = !isSelectMode &&
+                                (highlightedStudentId ?? '').isNotEmpty &&
+                                highlightedStudentId == s.student.id;
                             Color? indicatorOverride;
                           int? blockNumber;
                             final int? dIdx = dayIndex;
@@ -363,11 +373,15 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               child: _PanelStudentCard(
                                 student: s,
                                 selected: isSelected,
+                                highlighted: isHighlighted,
                                 isSelectMode: isSelectMode,
                                 onToggleSelect: onStudentSelectChanged == null
                                     ? null
                                     : (next) => onStudentSelectChanged!(s.student.id, next),
                                 onOpenStudentPage: onOpenStudentPage,
+                                onTapCard: (!isSelectMode && onStudentCardTap != null)
+                                    ? () => onStudentCardTap!(s.student.id)
+                                    : null,
                                 indicatorColorOverride: indicatorOverride,
                               blockNumber: blockNumber,
                               ),
@@ -415,18 +429,22 @@ class _GroupedCache {
 class _PanelStudentCard extends StatelessWidget {
   final StudentWithInfo student;
   final bool selected;
+  final bool highlighted;
   final bool isSelectMode;
   final void Function(bool next)? onToggleSelect;
   final void Function(StudentWithInfo student)? onOpenStudentPage;
+  final VoidCallback? onTapCard;
   final Color? indicatorColorOverride;
   final int? blockNumber;
 
   const _PanelStudentCard({
     required this.student,
     this.selected = false,
+    this.highlighted = false,
     this.isSelectMode = false,
     this.onToggleSelect,
     this.onOpenStudentPage,
+    this.onTapCard,
     this.indicatorColorOverride,
     this.blockNumber,
   });
@@ -440,6 +458,7 @@ class _PanelStudentCard extends StatelessWidget {
     // override가 없으면 투명 처리하여 다른 set의 색상이 퍼지지 않게 한다.
     final Color? classColor = indicatorColorOverride;
     final Color indicatorColor = classColor ?? Colors.transparent;
+    final bool showBorder = selected || highlighted;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeInOut,
@@ -448,21 +467,22 @@ class _PanelStudentCard extends StatelessWidget {
             ? const Color(0xFF33A373).withOpacity(0.18)
             : const Color(0xFF15171C),
         borderRadius: BorderRadius.circular(12),
-        border: selected
-            ? Border.all(color: const Color(0xFF33A373), width: 1)
-            : Border.all(color: Colors.transparent, width: 1),
+        // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
+        border: Border.all(
+          color: showBorder ? const Color(0xFF33A373) : Colors.transparent,
+          width: 1,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: () {
-            if (isSelectMode && onToggleSelect != null) {
-              onToggleSelect!(!selected);
-            } else if (!isSelectMode && onOpenStudentPage != null) {
-              onOpenStudentPage!(student);
-            }
-          },
+          onTap: isSelectMode && onToggleSelect != null
+              ? () => onToggleSelect!(!selected)
+              : (onTapCard ?? (onOpenStudentPage == null ? null : () => onOpenStudentPage!(student))),
+          onDoubleTap: isSelectMode
+              ? null
+              : () => StudentTimeInfoDialog.show(context, student),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(

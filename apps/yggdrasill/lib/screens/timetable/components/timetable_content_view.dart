@@ -47,6 +47,10 @@ class TimetableContentView extends StatefulWidget {
   final String? placeholderText; // 빈 셀 안내 문구 대체용
   final bool showRegisterControls;
   final Widget? header;
+  /// 우측 학생 리스트에서 "선택(필터)"된 학생 id (카드 테두리 하이라이트 용)
+  final String? highlightedStudentId;
+  /// 우측 학생 카드 탭(토글) 콜백: 탭된 학생 id 전달
+  final ValueChanged<String>? onStudentCardTap;
 
   const TimetableContentView({
     Key? key,
@@ -74,6 +78,8 @@ class TimetableContentView extends StatefulWidget {
     this.placeholderText,
     this.showRegisterControls = true,
     this.header,
+    this.highlightedStudentId,
+    this.onStudentCardTap,
   }) : super(key: key);
 
   @override
@@ -2777,6 +2783,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     DateTime? startTime,
     List<StudentWithInfo>? cellStudents,
     StudentTimeBlock? blockOverride,
+    bool highlightBorder = false,
+    VoidCallback? onTapCard,
   }) {
     // print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, dayIndex=$dayIndex, startTime=$startTime');
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
@@ -2912,6 +2920,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 info,
                 selected: widget.selectedStudentIds.contains(info.student.id),
                 isSelectMode: false,
+                highlighted: highlightBorder,
                 indicatorColorOverride: indicatorOverride,
                 blockNumber: blockNumber,
               ),
@@ -2920,8 +2929,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
               info,
               selected: widget.selectedStudentIds.contains(info.student.id),
               isSelectMode: widget.isSelectMode,
+              highlighted: highlightBorder,
               indicatorColorOverride: indicatorOverride,
               blockNumber: blockNumber,
+              onTap: onTapCard,
               onToggleSelect: (next) {
                 if (widget.onStudentSelectChanged != null) {
                   widget.onStudentSelectChanged!(info.student.id, next);
@@ -3233,10 +3244,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
               spacing: 0,
               runSpacing: 6.4,
               children: noSession
-                  .map((info) => _buildDraggableStudentCard(info,
-                      dayIndex: widget.selectedCellDayIndex,
-                      startTime: widget.selectedCellStartTime,
-                      cellStudents: students))
+                  .map((info) => _buildDraggableStudentCard(
+                        info,
+                        dayIndex: widget.selectedCellDayIndex,
+                        startTime: widget.selectedCellStartTime,
+                        cellStudents: students,
+                        highlightBorder:
+                            (widget.highlightedStudentId ?? '') ==
+                                info.student.id,
+                        onTapCard: widget.onStudentCardTap == null
+                            ? null
+                            : () => widget.onStudentCardTap!(
+                                  info.student.id,
+                                ),
+                      ))
                   .toList(),
             ),
           ),
@@ -3280,10 +3301,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       sessionStudents.sort(
                           (a, b) => a.student.name.compareTo(b.student.name));
                       return sessionStudents
-                          .map((info) => _buildDraggableStudentCard(info,
-                              dayIndex: widget.selectedCellDayIndex,
-                              startTime: widget.selectedCellStartTime,
-                              cellStudents: students))
+                          .map((info) => _buildDraggableStudentCard(
+                                info,
+                                dayIndex: widget.selectedCellDayIndex,
+                                startTime: widget.selectedCellStartTime,
+                                cellStudents: students,
+                                highlightBorder:
+                                    (widget.highlightedStudentId ?? '') ==
+                                        info.student.id,
+                                onTapCard: widget.onStudentCardTap == null
+                                    ? null
+                                    : () => widget.onStudentCardTap!(
+                                          info.student.id,
+                                        ),
+                              ))
                           .toList();
                     })(),
                   ),
@@ -3302,6 +3333,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     ValueChanged<bool>? onToggleSelect,
     Color? indicatorColorOverride,
     int? blockNumber,
+    bool highlighted = false,
+    VoidCallback? onTap,
   }) {
     final nameStyle = const TextStyle(
         color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
@@ -3312,6 +3345,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 주어진 override(요일/시간/SET 기준 색상)만 사용, 없으면 투명 처리해 다른 SET 색상 퍼짐을 방지
     final Color? classColor = indicatorColorOverride;
     final Color indicatorColor = classColor ?? Colors.transparent;
+    final bool showBorder = selected || highlighted;
     return AnimatedContainer(
       key: key,
       duration: const Duration(milliseconds: 140),
@@ -3321,9 +3355,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
             ? const Color(0xFF33A373).withOpacity(0.18)
             : const Color(0xFF15171C),
         borderRadius: BorderRadius.circular(12),
-        border: selected
-            ? Border.all(color: const Color(0xFF33A373), width: 1)
-            : Border.all(color: Colors.transparent, width: 1),
+        // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
+        border: Border.all(
+          color: showBorder ? const Color(0xFF33A373) : Colors.transparent,
+          width: 1,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
@@ -3331,7 +3367,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           borderRadius: BorderRadius.circular(12),
           onTap: isSelectMode && onToggleSelect != null
               ? () => onToggleSelect(!selected)
-              : null,
+              : onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
@@ -3568,8 +3604,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final classRev = DataManager.instance.classesRevision.value;
     final classAssignRev = DataManager.instance.classAssignmentsRevision.value;
     final ids = students.map((s) => s.student.id).toList()..sort();
+    final highlightId = (widget.highlightedStudentId ?? '').trim();
     final key =
-        '$rev|$classRev|$classAssignRev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|${ids.join(",")}|${selectedIds.join(",")}';
+        '$rev|$classRev|$classAssignRev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|highlight=$highlightId|${ids.join(",")}|${selectedIds.join(",")}';
     if (_cachedCellPanelKey == key && _cachedCellPanelWidget != null) {
       return _cachedCellPanelWidget!;
     }
@@ -3586,6 +3623,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       isSelectMode: isSelectMode,
       selectedStudentIds: selectedIds,
       onStudentSelectChanged: onSelectChanged,
+      highlightedStudentId: widget.highlightedStudentId,
+      onStudentCardTap: widget.onStudentCardTap,
       enableDrag: canDrag,
       dayIndex: canDrag ? dayIdx : null,
       startTime: canDrag ? startTime : null,
