@@ -58,6 +58,13 @@ class AttendanceService {
   // 사이드 시트 디버그 플래그와 동일한 목적의 로깅 (planned 생성 검증용)
   static const bool _sideDebug = true;
 
+  // ✅ 서버는 class_date_time을 UTC 분(minute) 단위로 정규화한다.
+  // 클라이언트에서도 동일한 키를 사용해 조회/업데이트가 안정적으로 되도록 맞춘다.
+  static DateTime _utcMinute(DateTime dt) {
+    final u = dt.toUtc();
+    return DateTime.utc(u.year, u.month, u.day, u.hour, u.minute);
+  }
+
   AttendanceDependencies? _deps;
   void configure(AttendanceDependencies deps) {
     _deps = deps;
@@ -96,19 +103,74 @@ class AttendanceService {
     } catch (_) {}
   }
 
-  Future<void> loadAttendanceRecords() async {
+  /// 출석 기록을 서버에서 로드한다.
+  ///
+  /// ⚠️ PostgREST `max_rows`(예: 1000)에 의해 "전체 select"는 잘릴 수 있다.
+  /// 그래서 기본 로딩은 날짜 범위를 제한(rolling window)하고, 그 범위 내에서는 페이지네이션으로 모두 가져온다.
+  ///
+  /// - 기본 범위: 과거 2년 ~ 미래 1년 (학생 수업기록/달력 인디케이터에서 사용하는 date picker 범위와 정합)
+  Future<void> loadAttendanceRecords({
+    DateTime? fromInclusive,
+    DateTime? toExclusive,
+    int pastDays = 365 * 2,
+    int futureDays = 365,
+  }) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final rows = await supa
-          .from('attendance_records')
-          .select(
-              'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version')
-          .eq('academy_id', academyId)
-          .order('class_date_time', ascending: false);
-      final list = rows as List<dynamic>;
-      _attendanceRecords = list.map<AttendanceRecord>((m) {
+
+      final now = DateTime.now();
+      final todayLocal = DateTime(now.year, now.month, now.day);
+
+      // from/to는 "로컬 기준"으로 받고, 서버 필터는 UTC ISO로 변환한다.
+      final DateTime fromLocal = fromInclusive != null
+          ? fromInclusive.toLocal()
+          : todayLocal.subtract(Duration(days: pastDays));
+      final DateTime toLocal = toExclusive != null
+          ? toExclusive.toLocal()
+          : todayLocal.add(Duration(days: futureDays + 1)); // ✅ toExclusive
+
+      final DateTime fromUtc = DateTime(fromLocal.year, fromLocal.month, fromLocal.day).toUtc();
+      final DateTime toUtc = DateTime(toLocal.year, toLocal.month, toLocal.day).toUtc();
+
+      if (!fromUtc.isBefore(toUtc)) {
+        // 잘못된 범위면 안전하게 비움
+        _attendanceRecords = [];
+        attendanceRecordsNotifier.value = const [];
+        return;
+      }
+
+      const selectCols =
+          'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+
+      // ✅ 범위 내 페이지네이션 로드
+      // - Range header로 0..999, 1000..1999 ... 형태로 계속 가져온다.
+      // - 정렬 안정성을 위해 class_date_time + id를 함께 order한다.
+      const int pageSize = 1000;
+      int offset = 0;
+      final List<dynamic> allRows = <dynamic>[];
+      while (true) {
+        final rows = await supa
+            .from('attendance_records')
+            .select(selectCols)
+            .eq('academy_id', academyId)
+            .gte('class_date_time', fromUtc.toIso8601String())
+            .lt('class_date_time', toUtc.toIso8601String())
+            .order('class_date_time', ascending: false)
+            .order('id', ascending: false)
+            .range(offset, offset + pageSize - 1);
+
+        final list = (rows is List) ? rows : <dynamic>[];
+        allRows.addAll(list);
+        if (list.length < pageSize) break;
+        offset += list.length;
+        // 무한 루프 방지(정상 케이스에서는 도달하지 않음)
+        if (offset > 200000) break;
+      }
+
+      _attendanceRecords = allRows.map<AttendanceRecord>((m0) {
+        final m = Map<String, dynamic>.from(m0 as Map);
         DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
         DateTime? parseTsOpt(String k) {
           final v = m[k] as String?;
@@ -141,9 +203,13 @@ class AttendanceService {
           updatedAt: parseTs('updated_at'),
           version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
         );
-      }).toList();
+      }).toList()
+        ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[SUPA] 출석 기록 로드: ${_attendanceRecords.length}개');
+      print(
+        '[SUPA] 출석 기록 로드: ${_attendanceRecords.length}개 (rangeUtc=${fromUtc.toIso8601String()}..${toUtc.toIso8601String()})',
+      );
     } catch (e, st) {
       print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
       _attendanceRecords = [];
@@ -293,11 +359,13 @@ class AttendanceService {
     final String academyId = (await TenantService.instance.getActiveAcademyId()) ??
         await TenantService.instance.ensureActiveAcademy();
     final supa = Supabase.instance.client;
+    final classDtUtc = _utcMinute(record.classDateTime);
     final row = {
       'id': record.id,
       'academy_id': academyId,
       'student_id': record.studentId,
-      'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+      // ✅ 서버는 UTC minute boundary로 정규화하므로, 클라이언트도 분 단위로 정규화해 전송한다.
+      'class_date_time': classDtUtc.toIso8601String(),
       'class_end_time': record.classEndTime.toUtc().toIso8601String(),
       'class_name': record.className,
       'is_present': record.isPresent,
@@ -315,17 +383,130 @@ class AttendanceService {
       'updated_at': record.updatedAt.toUtc().toIso8601String(),
       'version': record.version,
     };
-    final inserted =
-        await supa.from('attendance_records').insert(row).select('id,version').maybeSingle();
-    if (inserted != null) {
-      final withId = record.copyWith(
-          id: (inserted['id'] as String?),
-          version: (inserted['version'] as num?)?.toInt() ?? 1);
-      _attendanceRecords.add(withId);
-    } else {
-      _attendanceRecords.add(record);
+    try {
+      final inserted =
+          await supa.from('attendance_records').insert(row).select('id,version').maybeSingle();
+      if (inserted != null) {
+        final withId = record.copyWith(
+            id: (inserted['id'] as String?),
+            version: (inserted['version'] as num?)?.toInt() ?? 1);
+        _attendanceRecords.add(withId);
+      } else {
+        _attendanceRecords.add(record);
+      }
+      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      return;
+    } on PostgrestException catch (e) {
+      // ✅ 유니크 인덱스(academy_id, student_id, class_date_time) 충돌 시:
+      // 이미 존재하는 레코드를 찾아 "업데이트"로 전환한다.
+      if (e.code != '23505') rethrow;
+
+      const selectCols =
+          'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+      final existing = await supa
+          .from('attendance_records')
+          .select(selectCols)
+          .eq('academy_id', academyId)
+          .eq('student_id', record.studentId)
+          .eq('class_date_time', classDtUtc.toIso8601String())
+          .maybeSingle();
+      if (existing == null) rethrow;
+
+      DateTime parseTs(String k) => DateTime.parse(existing[k] as String).toLocal();
+      DateTime? parseTsOpt(String k) {
+        final v = existing[k] as String?;
+        if (v == null || v.isEmpty) return null;
+        return DateTime.parse(v).toLocal();
+      }
+      final dynamic isPresentDyn = existing['is_present'];
+      final bool existingPresent = (isPresentDyn is bool)
+          ? isPresentDyn
+          : ((isPresentDyn is num) ? isPresentDyn == 1 : false);
+      final bool existingPlanned =
+          existing['is_planned'] == true || existing['is_planned'] == 1;
+      final AttendanceRecord existingRec = AttendanceRecord(
+        id: existing['id'] as String?,
+        studentId: existing['student_id'] as String,
+        classDateTime: parseTs('class_date_time'),
+        classEndTime: parseTs('class_end_time'),
+        className: (existing['class_name'] as String?) ?? '',
+        isPresent: existingPresent,
+        arrivalTime: parseTsOpt('arrival_time'),
+        departureTime: parseTsOpt('departure_time'),
+        notes: existing['notes'] as String?,
+        sessionTypeId: existing['session_type_id'] as String?,
+        setId: existing['set_id'] as String?,
+        snapshotId: existing['snapshot_id'] as String?,
+        batchSessionId: existing['batch_session_id'] as String?,
+        cycle: (existing['cycle'] is num) ? (existing['cycle'] as num).toInt() : null,
+        sessionOrder: (existing['session_order'] is num)
+            ? (existing['session_order'] as num).toInt()
+            : null,
+        isPlanned: existingPlanned,
+        createdAt: parseTs('created_at'),
+        updatedAt: parseTs('updated_at'),
+        version: (existing['version'] is num) ? (existing['version'] as num).toInt() : 1,
+      );
+
+      // ensure in-memory (so updateAttendanceRecord updates notifier immediately)
+      if (existingRec.id != null && !_attendanceRecords.any((r) => r.id == existingRec.id)) {
+        _attendanceRecords.add(existingRec);
+      }
+
+      DateTime? mergedArrival = existingRec.arrivalTime;
+      if (record.arrivalTime != null) {
+        mergedArrival = (mergedArrival == null || record.arrivalTime!.isBefore(mergedArrival))
+            ? record.arrivalTime
+            : mergedArrival;
+      }
+      DateTime? mergedDeparture = existingRec.departureTime;
+      if (record.departureTime != null) {
+        mergedDeparture =
+            (mergedDeparture == null || record.departureTime!.isAfter(mergedDeparture))
+                ? record.departureTime
+                : mergedDeparture;
+      }
+      bool mergedPresent =
+          existingRec.isPresent || record.isPresent || mergedArrival != null || mergedDeparture != null;
+      if (mergedArrival != null) mergedPresent = true;
+      final DateTime mergedEnd =
+          record.classEndTime.isAfter(existingRec.classEndTime) ? record.classEndTime : existingRec.classEndTime;
+      final String mergedClassName =
+          existingRec.className.trim().isEmpty && record.className.trim().isNotEmpty
+              ? record.className
+              : existingRec.className;
+
+      final merged = existingRec.copyWith(
+        classEndTime: mergedEnd,
+        className: mergedClassName,
+        isPresent: mergedPresent,
+        arrivalTime: mergedArrival,
+        departureTime: mergedDeparture,
+        notes: existingRec.notes ?? record.notes,
+        sessionTypeId: existingRec.sessionTypeId ?? record.sessionTypeId,
+        setId: existingRec.setId ?? record.setId,
+        cycle: existingRec.cycle ?? record.cycle,
+        sessionOrder: existingRec.sessionOrder ?? record.sessionOrder,
+        isPlanned: existingRec.isPlanned || record.isPlanned,
+        snapshotId: existingRec.snapshotId ?? record.snapshotId,
+        batchSessionId: existingRec.batchSessionId ?? record.batchSessionId,
+        updatedAt: DateTime.now(),
+      );
+
+      try {
+        await updateAttendanceRecord(merged);
+      } on StateError catch (e2) {
+        if (e2.message != 'CONFLICT_ATTENDANCE_VERSION') rethrow;
+        final cur = await supa
+            .from('attendance_records')
+            .select('version')
+            .eq('id', merged.id!)
+            .limit(1)
+            .maybeSingle();
+        final curVersion = (cur?['version'] as num?)?.toInt() ?? merged.version;
+        await updateAttendanceRecord(merged.copyWith(version: curVersion));
+      }
     }
-    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
   }
 
   Future<void> updateAttendanceRecord(AttendanceRecord record) async {
@@ -333,7 +514,7 @@ class AttendanceService {
     if (record.id != null) {
       final row = {
         'student_id': record.studentId,
-        'class_date_time': record.classDateTime.toUtc().toIso8601String(),
+        'class_date_time': _utcMinute(record.classDateTime).toIso8601String(),
         'class_end_time': record.classEndTime.toUtc().toIso8601String(),
         'class_name': record.className,
         'is_present': record.isPresent,
@@ -376,7 +557,7 @@ class AttendanceService {
         .select('id')
         .eq('academy_id', academyId)
         .eq('student_id', record.studentId)
-        .eq('class_date_time', record.classDateTime.toUtc().toIso8601String())
+        .eq('class_date_time', _utcMinute(record.classDateTime).toIso8601String())
         .limit(1);
     final found = await keyFilter;
     if (found is List && found.isNotEmpty && found.first['id'] is String) {
@@ -1804,7 +1985,70 @@ class AttendanceService {
   }) async {
     final now = DateTime.now();
     final resolvedSetId = setId ?? _resolveSetId(studentId, classDateTime);
-    final existing = getAttendanceRecord(studentId, classDateTime);
+    AttendanceRecord? existing = getAttendanceRecord(studentId, classDateTime);
+    // ✅ 메모리에 없더라도 서버에 "planned(또는 기존)" 행이 있으면 그 행을 먼저 업데이트한다.
+    // (유니크 인덱스 적용 이후에는 insert 시도보다 update가 더 안전/명확)
+    if (existing == null) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        const selectCols =
+            'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+        final classDtUtc = _utcMinute(classDateTime);
+        final row = await Supabase.instance.client
+            .from('attendance_records')
+            .select(selectCols)
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .eq('class_date_time', classDtUtc.toIso8601String())
+            .maybeSingle();
+        if (row != null) {
+          final m = Map<String, dynamic>.from(row as Map);
+          DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+          DateTime? parseTsOpt(String k) {
+            final v = m[k] as String?;
+            if (v == null || v.isEmpty) return null;
+            return DateTime.parse(v).toLocal();
+          }
+          final dynamic isPresentDyn = m['is_present'];
+          final bool isPresent0 = (isPresentDyn is bool)
+              ? isPresentDyn
+              : ((isPresentDyn is num) ? isPresentDyn == 1 : false);
+          final AttendanceRecord fetched = AttendanceRecord(
+            id: m['id'] as String?,
+            studentId: m['student_id'] as String,
+            classDateTime: parseTs('class_date_time'),
+            classEndTime: parseTs('class_end_time'),
+            className: (m['class_name'] as String?) ?? '',
+            isPresent: isPresent0,
+            arrivalTime: parseTsOpt('arrival_time'),
+            departureTime: parseTsOpt('departure_time'),
+            notes: m['notes'] as String?,
+            sessionTypeId: m['session_type_id'] as String?,
+            setId: m['set_id'] as String?,
+            snapshotId: m['snapshot_id'] as String?,
+            batchSessionId: m['batch_session_id'] as String?,
+            cycle: (m['cycle'] is num) ? (m['cycle'] as num).toInt() : null,
+            sessionOrder: (m['session_order'] is num)
+                ? (m['session_order'] as num).toInt()
+                : null,
+            isPlanned: m['is_planned'] == true || m['is_planned'] == 1,
+            createdAt: parseTs('created_at'),
+            updatedAt: parseTs('updated_at'),
+            version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+          );
+          if (fetched.id != null &&
+              !_attendanceRecords.any((r) => r.id == fetched.id)) {
+            _attendanceRecords.add(fetched);
+            attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+          }
+          existing = fetched;
+        }
+      } catch (_) {
+        // 네트워크/권한 문제 등: 기존 로직(INSERT 시도)로 fallback
+      }
+    }
+
     final resolvedSnapshotId = snapshotId ?? existing?.snapshotId;
     final resolvedBatchSessionId = batchSessionId ?? existing?.batchSessionId;
     if (existing != null) {
@@ -1834,16 +2078,6 @@ class AttendanceService {
           rethrow;
         }
       }
-      final idx = _attendanceRecords.indexWhere((r) => r.studentId == studentId &&
-          r.classDateTime.year == classDateTime.year &&
-          r.classDateTime.month == classDateTime.month &&
-          r.classDateTime.day == classDateTime.day &&
-          r.classDateTime.hour == classDateTime.hour &&
-          r.classDateTime.minute == classDateTime.minute);
-      if (idx != -1) {
-        _attendanceRecords[idx] = updated;
-        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      }
       try {
         if (updated.id != null) {
           await _completePlannedOverrideFor(
@@ -1855,28 +2089,16 @@ class AttendanceService {
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(업데이트): $e');
       }
-    } else {
-      // 동일 시각 planned가 있으면 snapshot_id를 이어받는다.
-      final planned = _attendanceRecords.firstWhere(
-        (r) =>
-            r.studentId == studentId &&
-            r.classDateTime.year == classDateTime.year &&
-            r.classDateTime.month == classDateTime.month &&
-            r.classDateTime.day == classDateTime.day &&
-            r.classDateTime.hour == classDateTime.hour &&
-            r.classDateTime.minute == classDateTime.minute &&
-            r.isPlanned,
-        orElse: () => AttendanceRecord.create(
-          studentId: studentId,
-          classDateTime: classDateTime,
-          classEndTime: classEndTime,
-          className: className,
-          isPresent: false,
-        ),
-      );
-      final plannedSnapshotId = planned.snapshotId;
-      final plannedBatchSessionId = planned.batchSessionId;
 
+      // batch_session_id가 있으면 상태 갱신(UPDATE 경로)
+      if (updated.batchSessionId != null) {
+        await _updateBatchSessionState(
+          batchSessionId: updated.batchSessionId!,
+          state: isPresent ? 'completed' : 'planned',
+          attendanceId: updated.id,
+        );
+      }
+    } else {
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
         classDateTime: classDateTime,
@@ -1891,8 +2113,8 @@ class AttendanceService {
         cycle: cycle,
         sessionOrder: sessionOrder,
         isPlanned: isPlanned,
-        snapshotId: resolvedSnapshotId ?? plannedSnapshotId,
-        batchSessionId: resolvedBatchSessionId ?? plannedBatchSessionId,
+        snapshotId: resolvedSnapshotId,
+        batchSessionId: resolvedBatchSessionId,
       );
       await addAttendanceRecord(newRecord);
       try {
@@ -1913,17 +2135,6 @@ class AttendanceService {
       } catch (e) {
         print('[WARN] planned→completed 링크 실패(추가): $e');
       }
-    }
-
-    // 기존 또는 새 레코드에 batch_session_id가 있다면 상태 갱신
-    final targetBatchSessionId =
-        resolvedBatchSessionId ?? existing?.batchSessionId;
-    if (targetBatchSessionId != null) {
-      await _updateBatchSessionState(
-        batchSessionId: targetBatchSessionId,
-        state: isPresent ? 'completed' : 'planned',
-        attendanceId: existing?.id,
-      );
     }
   }
 

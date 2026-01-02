@@ -36,6 +36,36 @@ class StudentTimeInfoDialog extends StatefulWidget {
 class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
   int _tabIndex = 0;
   bool _resettingPlanned = false;
+  late DateTime _queryStart; // date-only
+  late DateTime _queryEnd; // date-only
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  static DateTime _shiftMonthsClamped(DateTime base, int deltaMonths) {
+    int y = base.year;
+    int m = base.month + deltaMonths;
+    while (m <= 0) {
+      m += 12;
+      y -= 1;
+    }
+    while (m > 12) {
+      m -= 12;
+      y += 1;
+    }
+    final int lastDay = DateUtils.getDaysInMonth(y, m);
+    final int d = base.day > lastDay ? lastDay : base.day;
+    return DateTime(y, m, d);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    final today = _dateOnly(now);
+    // ✅ 기본 조회 기간: 지난달(같은 일자) ~ 이번달(오늘)
+    _queryEnd = today;
+    _queryStart = _shiftMonthsClamped(today, -1);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,93 +86,121 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${widget.student.student.name} · 시간 기록',
-                      style: const TextStyle(color: text, fontSize: 18, fontWeight: FontWeight.w900),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              // ✅ 보강관리 다이얼로그처럼: 타이틀 라인에 탭을 함께 배치(폭/높이 축소)
+              SizedBox(
+                height: 48,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${widget.student.student.name} · 시간 기록',
+                        style: const TextStyle(color: text, fontSize: 18, fontWeight: FontWeight.w900),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                  Tooltip(
-                    message: '예정 수업 초기화/재생성',
-                    child: IconButton(
-                      onPressed: _resettingPlanned
-                          ? null
-                          : () async {
-                              final ok = await showDialog<bool>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  backgroundColor: bg,
-                                  title: const Text('예정 수업 재생성', style: TextStyle(color: text, fontWeight: FontWeight.w900)),
-                                  content: const Text(
-                                    '이 학생의 "순수 예정 수업"(is_planned=true, 출석/등원 기록 없는 것)만 전부 삭제한 뒤,\n'
-                                    '현재 시간표(student_time_blocks)를 기준으로 예정 수업을 다시 생성합니다.\n\n'
-                                    '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.',
-                                    style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.of(ctx).pop(false),
-                                      child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.of(ctx).pop(true),
-                                      child: const Text('재생성', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (ok != true) return;
-                              setState(() => _resettingPlanned = true);
-                              try {
-                                await DataManager.instance.resetPlannedAttendanceForStudent(
-                                  widget.student.student.id,
-                                  days: 60,
-                                );
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('예정 수업이 재생성되었습니다.')),
-                                  );
-                                }
-                              } catch (e) {
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('재생성 실패: $e')),
-                                  );
-                                }
-                              } finally {
-                                if (mounted) setState(() => _resettingPlanned = false);
-                              }
-                            },
-                      icon: _resettingPlanned
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh, color: sub, size: 20),
+                    Center(
+                      child: PillTabSelector(
+                        selectedIndex: _tabIndex,
+                        tabs: const ['일정 기록', '출석 기록'],
+                        onTabSelected: (i) => setState(() => _tabIndex = i),
+                        width: 220,
+                        height: 36,
+                        fontSize: 13,
+                        padding: 3,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '닫기',
-                    onPressed: () => Navigator.of(context).maybePop(),
-                    icon: const Icon(Icons.close, color: sub, size: 20),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // ✅ 큰 컨테이너 박스는 제거하고, 탭만 배치한다.
-              Center(
-                child: PillTabSelector(
-                selectedIndex: _tabIndex,
-                tabs: const ['일정 기록', '출석 기록'],
-                onTabSelected: (i) => setState(() => _tabIndex = i),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Tooltip(
+                            message: '예정 수업 초기화/재생성',
+                            child: IconButton(
+                              onPressed: _resettingPlanned
+                                  ? null
+                                  : () async {
+                                      final ok = await showDialog<bool>(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          backgroundColor: bg,
+                                          title: const Text('예정 수업 재생성', style: TextStyle(color: text, fontWeight: FontWeight.w900)),
+                                          content: const Text(
+                                            '이 학생의 "순수 예정 수업"(is_planned=true, 출석/등원 기록 없는 것)만 전부 삭제한 뒤,\n'
+                                            '현재 시간표(student_time_blocks)를 기준으로 예정 수업을 다시 생성합니다.\n\n'
+                                            '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.',
+                                            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.of(ctx).pop(false),
+                                              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => Navigator.of(ctx).pop(true),
+                                              child: const Text('재생성', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (ok != true) return;
+                                      setState(() => _resettingPlanned = true);
+                                      try {
+                                        await DataManager.instance.resetPlannedAttendanceForStudent(
+                                          widget.student.student.id,
+                                          days: 60,
+                                        );
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text('예정 수업이 재생성되었습니다.')),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('재생성 실패: $e')),
+                                          );
+                                        }
+                                      } finally {
+                                        if (mounted) setState(() => _resettingPlanned = false);
+                                      }
+                                    },
+                              icon: _resettingPlanned
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.refresh, color: sub, size: 20),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '닫기',
+                            onPressed: () => Navigator.of(context).maybePop(),
+                            icon: const Icon(Icons.close, color: sub, size: 20),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 10),
+              // ✅ 조회 기간 드롭다운(기본: 지난달~이번달)
+              _QueryRangeDropdown(
+                start: _queryStart,
+                end: _queryEnd,
+                onChanged: (nextStart, nextEnd) {
+                  setState(() {
+                    _queryStart = nextStart;
+                    _queryEnd = nextEnd;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
               Divider(color: border, height: 1),
               const SizedBox(height: 14),
               Expanded(
@@ -154,8 +212,16 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
                   ),
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                   child: _tabIndex == 0
-                      ? _ScheduleHistoryTab(studentId: widget.student.student.id)
-                      : _AttendanceHistoryTab(studentId: widget.student.student.id),
+                      ? _ScheduleHistoryTab(
+                          studentId: widget.student.student.id,
+                          queryStart: _queryStart,
+                          queryEnd: _queryEnd,
+                        )
+                      : _AttendanceHistoryTab(
+                          studentId: widget.student.student.id,
+                          queryStart: _queryStart,
+                          queryEnd: _queryEnd,
+                        ),
                 ),
               ),
             ],
@@ -168,7 +234,13 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
 
 class _ScheduleHistoryTab extends StatelessWidget {
   final String studentId;
-  const _ScheduleHistoryTab({required this.studentId});
+  final DateTime queryStart; // date-only
+  final DateTime queryEnd; // date-only
+  const _ScheduleHistoryTab({
+    required this.studentId,
+    required this.queryStart,
+    required this.queryEnd,
+  });
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   static String _ymd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
@@ -287,7 +359,32 @@ class _ScheduleHistoryTab extends StatelessWidget {
           return 2; // 미래
         }
 
-        entries.sort((a, b) {
+        // ✅ 조회기간 필터는 "과거(닫힘)" 기록에만 적용한다.
+        // - 예정(미래 시작)/현재 활성 블록은 항상 보여야 함.
+        final qs = _dateOnly(queryStart);
+        final qe = _dateOnly(queryEnd);
+        bool intersects(DateTime sd, DateTime ed) {
+          final a = _dateOnly(sd);
+          final b = _dateOnly(ed);
+          return !(b.isBefore(qs) || a.isAfter(qe));
+        }
+        final filtered = <_ScheduleEntry>[];
+        for (final it in entries) {
+          final sd = _dateOnly(it.startDate);
+          final ed = it.endDate == null ? null : _dateOnly(it.endDate!);
+          final bool closed = ed != null && ed.isBefore(today);
+          final bool future = sd.isAfter(today);
+          if (!closed || future) {
+            filtered.add(it); // ✅ 활성/미래는 항상 유지
+            continue;
+          }
+          // closed(과거)만 기간 교집합 체크
+          if (ed != null && intersects(sd, ed)) {
+            filtered.add(it);
+          }
+        }
+
+        filtered.sort((a, b) {
           final sa = statusOrder(a);
           final sb = statusOrder(b);
           if (sa != sb) return sa.compareTo(sb);
@@ -389,10 +486,10 @@ class _ScheduleHistoryTab extends StatelessWidget {
             Expanded(
               child: Scrollbar(
                 child: ListView.separated(
-                  itemCount: entries.length,
+                  itemCount: filtered.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, i) {
-                    final it = entries[i];
+                    final it = filtered[i];
                     final closed = isClosedEntry(it);
                     final start = _ymd(_dateOnly(it.startDate));
                     final end = it.endDate == null ? '현재' : _ymd(_dateOnly(it.endDate!));
@@ -441,7 +538,13 @@ class _ScheduleHistoryTab extends StatelessWidget {
 
 class _AttendanceHistoryTab extends StatefulWidget {
   final String studentId;
-  const _AttendanceHistoryTab({required this.studentId});
+  final DateTime queryStart; // date-only
+  final DateTime queryEnd; // date-only
+  const _AttendanceHistoryTab({
+    required this.studentId,
+    required this.queryStart,
+    required this.queryEnd,
+  });
 
   @override
   State<_AttendanceHistoryTab> createState() => _AttendanceHistoryTabState();
@@ -582,6 +685,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       builder: (context, _) {
         final now = DateTime.now();
         final today = _dateOnly(now);
+        final qs = _dateOnly(widget.queryStart);
+        final qe = _dateOnly(widget.queryEnd);
 
         final classById = <String, ClassInfo>{
           for (final c in DataManager.instance.classes) c.id: c,
@@ -595,7 +700,12 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             .toList();
 
         // 1) 출석 기록(실기록): planned 여부와 무관하게 실제 등원/하원/출석 정보가 있는 항목
-        final attendance = all.where((r) => !_isPurePlanned(r)).toList()
+        // ✅ 조회기간 필터는 "출석 기록"에만 적용 (예정 수업은 필터 영향 X)
+        bool inRange(DateTime dt) {
+          final d = _dateOnly(dt);
+          return !d.isBefore(qs) && !d.isAfter(qe);
+        }
+        final attendance = all.where((r) => !_isPurePlanned(r) && inRange(r.classDateTime)).toList()
           ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
 
         // 2) 예정 수업: 순수 planned만
@@ -751,7 +861,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         }
 
         if (planned.isNotEmpty) {
-          items.add(const Text('예정 수업', style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w900)));
+          items.add(const Text('수업 일정 계획', style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w900)));
           items.add(const SizedBox(height: 8));
           items.add(headerRow());
           items.add(const SizedBox(height: 10));
@@ -770,6 +880,244 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       },
     );
   }
+}
+
+class _QueryRangeDropdown extends StatelessWidget {
+  final DateTime start; // date-only
+  final DateTime end; // date-only
+  final void Function(DateTime nextStart, DateTime nextEnd) onChanged;
+
+  const _QueryRangeDropdown({
+    required this.start,
+    required this.end,
+    required this.onChanged,
+  });
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  static String _pretty(DateTime d) => '${d.year}. ${d.month}. ${d.day}.';
+
+  static DateTime _shiftMonthsClamped(DateTime base, int deltaMonths) {
+    int y = base.year;
+    int m = base.month + deltaMonths;
+    while (m <= 0) {
+      m += 12;
+      y -= 1;
+    }
+    while (m > 12) {
+      m -= 12;
+      y += 1;
+    }
+    final int lastDay = DateUtils.getDaysInMonth(y, m);
+    final int d = base.day > lastDay ? lastDay : base.day;
+    return DateTime(y, m, d);
+  }
+
+  Future<DateTime?> _pick(
+    BuildContext context, {
+    required DateTime initial,
+    required DateTime first,
+    required DateTime last,
+  }) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
+      locale: const Locale('ko', 'KR'),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1B6B63),
+              onPrimary: Colors.white,
+              surface: Color(0xFF0B1112),
+              onSurface: Color(0xFFEAF2F2),
+            ),
+            dialogBackgroundColor: const Color(0xFF0B1112),
+          ),
+          child: child!,
+        );
+      },
+    );
+    return picked == null ? null : _dateOnly(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const border = Color(0xFF223131);
+    const bg = Color(0xFF151C21);
+    const text = Color(0xFFEAF2F2);
+    const sub = Color(0xFF9FB3B3);
+
+    final DateTime s = _dateOnly(start);
+    final DateTime e = _dateOnly(end);
+    final DateTime today = _dateOnly(DateTime.now());
+    final DateTime first = DateTime(today.year - 5, 1, 1);
+    final DateTime last = DateTime(today.year + 5, 12, 31);
+
+    Widget dateCell({
+      required String value,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      value,
+                      style: const TextStyle(color: text, fontSize: 16, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Icon(Icons.calendar_month, color: sub, size: 20),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    PopupMenuItem<_QueryRangePreset> item(_QueryRangePreset preset, String label) {
+      return PopupMenuItem<_QueryRangePreset>(
+        value: preset,
+        child: Text(
+          label,
+          style: const TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border, width: 1),
+      ),
+      child: Row(
+        children: [
+          dateCell(
+            value: _pretty(s),
+            onTap: () async {
+              final picked = await _pick(context, initial: s, first: first, last: last);
+              if (picked == null) return;
+              // start가 end보다 커지면 end를 start로 당겨 일관성 유지
+              final nextStart = picked;
+              final nextEnd = nextStart.isAfter(e) ? nextStart : e;
+              onChanged(nextStart, nextEnd);
+            },
+          ),
+          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10),
+            child: Text('~', style: TextStyle(color: sub, fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
+          dateCell(
+            value: _pretty(e),
+            onTap: () async {
+              final picked = await _pick(context, initial: e, first: first, last: last);
+              if (picked == null) return;
+              // end가 start보다 작아지면 start를 end로 당겨 일관성 유지
+              final nextEnd = picked;
+              final nextStart = nextEnd.isBefore(s) ? nextEnd : s;
+              onChanged(nextStart, nextEnd);
+            },
+          ),
+          Container(width: 1, height: 42, color: border.withOpacity(0.7)),
+          SizedBox(
+            width: 160,
+            child: PopupMenuButton<_QueryRangePreset>(
+              tooltip: '기간 프리셋',
+              color: const Color(0xFF0B1112),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: border.withOpacity(0.9), width: 1),
+              ),
+              itemBuilder: (context) => [
+                item(_QueryRangePreset.last7Days, '최근 7일'),
+                item(_QueryRangePreset.last30Days, '최근 30일'),
+                item(_QueryRangePreset.last3Months, '최근 3개월'),
+                item(_QueryRangePreset.thisYear, '올해'),
+                item(_QueryRangePreset.all, '전체'),
+              ],
+              onSelected: (preset) {
+                DateTime nextStart = s;
+                DateTime nextEnd = e;
+                switch (preset) {
+                  case _QueryRangePreset.last7Days:
+                    nextEnd = today;
+                    nextStart = today.subtract(const Duration(days: 6));
+                    break;
+                  case _QueryRangePreset.last30Days:
+                    nextEnd = today;
+                    nextStart = today.subtract(const Duration(days: 29));
+                    break;
+                  case _QueryRangePreset.last3Months:
+                    nextEnd = today;
+                    nextStart = _shiftMonthsClamped(today, -3);
+                    break;
+                  case _QueryRangePreset.thisYear:
+                    nextEnd = today;
+                    nextStart = DateTime(today.year, 1, 1);
+                    break;
+                  case _QueryRangePreset.all:
+                    nextEnd = today;
+                    // ✅ "전체"는 date picker 기본 범위(최근 5년) 내에서 최대한 넓게
+                    nextStart = DateTime(today.year - 5, today.month, today.day);
+                    break;
+                }
+                // 안전 보정
+                if (nextStart.isAfter(nextEnd)) {
+                  final t = nextStart;
+                  nextStart = nextEnd;
+                  nextEnd = t;
+                }
+                // picker 범위 밖으로 튀어나가는 경우 방지
+                if (nextStart.isBefore(first)) nextStart = first;
+                if (nextEnd.isAfter(last)) nextEnd = last;
+                onChanged(_dateOnly(nextStart), _dateOnly(nextEnd));
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Row(
+                  children: const [
+                    Expanded(
+                      child: Text(
+                        '프리셋',
+                        style: TextStyle(color: text, fontSize: 15, fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Icon(Icons.arrow_drop_down, color: sub, size: 22),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _QueryRangePreset {
+  last7Days,
+  last30Days,
+  last3Months,
+  thisYear,
+  all,
 }
 
 class _ScheduleEntry {

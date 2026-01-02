@@ -192,8 +192,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         setId: entry.key,
         student: studentInfo.student,
         classInfo: classInfo,
-        startHour: dt.hour,
-        startMinute: dt.minute,
+        classDateTime: dt,
         duration: duration,
         overrideType: null,
       ));
@@ -1370,7 +1369,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 _sideSheetDataDirty = true;
               });
               try {
-                final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+                final classDateTime = t.classDateTime;
                 final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
                 final DateTime arrival2 = existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
                 await DataManager.instance.saveOrUpdateAttendance(
@@ -1436,7 +1435,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             }
           });
           try {
-            final classDateTime = DateTime(now.year, now.month, now.day, t.startHour, t.startMinute);
+            final classDateTime = t.classDateTime;
             if (status == 'waiting') {
               await DataManager.instance.saveOrUpdateAttendance(
                 studentId: t.student.id,
@@ -1757,13 +1756,26 @@ class _AttendanceTarget {
   final String setId;
   final Student student;
   final ClassInfo? classInfo;
-  final int startHour;
-  final int startMinute;
+  // ✅ "오늘"을 now로 재구성하지 않고, 실제 attendance_records의 class_date_time(로컬)을 그대로 보존
+  // - 이 값으로 saveOrUpdateAttendance를 호출해야 planned 행을 안정적으로 업데이트한다.
+  // - now.year/month/day로 재구성하면 날짜 경계(자정), 타임존/로컬 변환, 캐시 타이밍에 따라
+  //   planned 행 매칭이 실패하여 동일 시각 중복 INSERT가 발생할 수 있다.
+  final DateTime classDateTime;
   final Duration duration;
   final OverrideType? overrideType; // null이면 일반 수업, replace=보강(파란줄), add=추가수업(초록줄)
-  _AttendanceTarget({required this.setId, required this.student, required this.classInfo, required this.startHour, required this.startMinute, required this.duration, this.overrideType});
 
-  DateTime get startTime => DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, startHour, startMinute);
+  _AttendanceTarget({
+    required this.setId,
+    required this.student,
+    required this.classInfo,
+    required this.classDateTime,
+    required this.duration,
+    this.overrideType,
+  });
+
+  int get startHour => classDateTime.hour;
+  int get startMinute => classDateTime.minute;
+  DateTime get startTime => classDateTime;
 }
 
 class _LeavedDialogEntry {

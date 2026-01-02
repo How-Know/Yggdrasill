@@ -6,6 +6,9 @@ class PillTabSelector extends StatelessWidget {
   final List<String> tabs;
   final ValueChanged<int> onTabSelected;
   final double width;
+  final double height;
+  final double fontSize;
+  final double padding;
 
   const PillTabSelector({
     super.key,
@@ -13,12 +16,15 @@ class PillTabSelector extends StatelessWidget {
     required this.tabs,
     required this.onTabSelected,
     this.width = 288,
+    this.height = 48,
+    this.fontSize = 17,
+    this.padding = 4,
   });
 
   @override
   Widget build(BuildContext context) {
-    // 좌/우 컨트롤(추가/검색/필터) 높이 = 48
-    const double controlHeight = 48;
+    final double controlHeight = height;
+    final double pad = padding;
     return SizedBox(
       width: width,
       child: Container(
@@ -27,10 +33,11 @@ class PillTabSelector extends StatelessWidget {
           color: const Color(0xFF151C21),
           borderRadius: BorderRadius.circular(controlHeight / 2),
         ),
-        padding: const EdgeInsets.all(4),
+        padding: EdgeInsets.all(pad),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final double tabWidth = (constraints.maxWidth - 8) / tabs.length;
+            final double tabWidth = (constraints.maxWidth - (pad * 2)) / tabs.length;
+            final double innerHeight = (controlHeight - (pad * 2)).clamp(0.0, 9999.0);
             return Stack(
               children: [
                 AnimatedPositioned(
@@ -43,7 +50,7 @@ class PillTabSelector extends StatelessWidget {
                   child: Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFF1B6B63),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(innerHeight / 2),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 51),
@@ -70,7 +77,7 @@ class PillTabSelector extends StatelessWidget {
                             style: TextStyle(
                               color: isSelected ? Colors.white : const Color(0xFF7E8A8A),
                               fontWeight: FontWeight.w600,
-                              fontSize: 17,
+                              fontSize: fontSize,
                             ),
                             child: Text(label),
                           ),

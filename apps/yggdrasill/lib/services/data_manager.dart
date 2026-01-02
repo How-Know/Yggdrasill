@@ -3883,6 +3883,7 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> ensurePlannedAttendanceForNextDays({int days = 14}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
 
+
   /// (디버그/정리용) 특정 학생의 "순수 planned(예정수업)"를 전부 삭제한 뒤,
   /// 현재 시간표(student_time_blocks)를 기준으로 planned를 다시 생성한다.
   ///
