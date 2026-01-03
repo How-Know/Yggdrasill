@@ -555,6 +555,32 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   static String _ymd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
   static String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  static String _weekdayShort(DateTime d) {
+    // DateTime.weekday: Mon=1 ... Sun=7
+    switch (d.weekday) {
+      case DateTime.monday:
+        return '월';
+      case DateTime.tuesday:
+        return '화';
+      case DateTime.wednesday:
+        return '수';
+      case DateTime.thursday:
+        return '목';
+      case DateTime.friday:
+        return '금';
+      case DateTime.saturday:
+        return '토';
+      case DateTime.sunday:
+        return '일';
+      default:
+        return '';
+    }
+  }
+
+  static String _ymdWithWeekday(DateTime d) {
+    final dd = _dateOnly(d);
+    return '${_ymd(dd)} (${_weekdayShort(dd)})';
+  }
 
   String? _expandedMakeupKey; // 보강(대조) 카드 펼침 상태
 
@@ -770,13 +796,12 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             child: Row(
               children: [
                 cell('사이클/회차', flex: 10, align: TextAlign.center),
-                cell('날짜', flex: 14),
+                cell('날짜', flex: 18),
                 cell('시간', flex: 16),
                 cell('구분', flex: 10),
                 cell('등원', flex: 10),
                 cell('하원', flex: 10),
-                cell('수업명', flex: 22),
-                const SizedBox(width: 96), // action slot
+                cell('수업명', flex: 28),
               ],
             ),
           );
@@ -799,7 +824,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           required bool isPlannedRow,
         }) {
           final dt = r.classDateTime;
-          final dateStr = _ymd(_dateOnly(dt));
+          final dateStr = _ymdWithWeekday(dt);
           final timeStr = '${_hm(dt)}~${_hm(r.classEndTime)}';
           final cycleStr = cycleOrderLabel(r);
           final cname = _classNameOf(r, classById);
@@ -840,24 +865,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             fontWeight: FontWeight.w700,
           );
 
-          final action = () {
-            if (isPlannedRow) return const SizedBox(width: 96);
-            if (isMakeup) return const SizedBox(width: 96);
-            if (isAddOverride) return const SizedBox(width: 96);
-            if (!isWalkIn) return const SizedBox(width: 96);
-            return SizedBox(
-              width: 96,
-              child: TextButton(
-                onPressed: () async {
-                  final candidates = planned
-                      .where((p) => p.id != r.id)
-                      .toList();
-                  await _connectWalkInToPlanned(walkIn: r, candidates: candidates, classById: classById);
-                },
-                child: const Text('보강 연결', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
-              ),
-            );
-          }();
+          final bool showConnectMakeup = !isPlannedRow && isWalkIn && !isMakeup && !isAddOverride;
 
           DateTime? origStart;
           DateTime? origEnd;
@@ -882,6 +890,51 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                 : origStart!.add(Duration(minutes: durMin <= 0 ? 0 : durMin));
           }
 
+          Widget classCell() {
+            if (!showConnectMakeup) {
+              return Expanded(
+                flex: 28,
+                child: Text(
+                  cname,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: rowStyle,
+                ),
+              );
+            }
+            return Expanded(
+              flex: 28,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      cname,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: rowStyle,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  TextButton(
+                    onPressed: () async {
+                      final candidates = planned.where((p) => p.id != r.id).toList();
+                      await _connectWalkInToPlanned(walkIn: r, candidates: candidates, classById: classById);
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      minimumSize: const Size(0, 34),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      '보강 연결',
+                      style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
           Widget content = Opacity(
             opacity: dimmed ? 0.55 : 1.0,
             child: AnimatedSize(
@@ -901,50 +954,50 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                     Row(
                       children: [
                         cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
-                        cell(dateStr, flex: 14, style: rowStyle),
+                        cell(dateStr, flex: 18, style: rowStyle),
                         cell(timeStr, flex: 16, style: rowStyle),
                         Expanded(flex: 10, child: Align(alignment: Alignment.centerLeft, child: statusWidget)),
                         cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
                         cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
-                        cell(cname, flex: 22, style: rowStyle),
-                        action,
+                        classCell(),
                       ],
                     ),
                     if (expanded) ...[
                       const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF111317),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: border, width: 1),
-                        ),
-                        child: Opacity(
-                          opacity: 0.55,
-                          child: Row(
-                            children: [
-                              cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
-                              cell(origStart == null ? '-' : _ymd(_dateOnly(origStart!)), flex: 14, style: rowStyle),
-                              cell(
-                                (origStart == null || origEnd == null)
-                                    ? '-'
-                                    : '${_hm(origStart!)}~${_hm(origEnd!)}',
-                                flex: 16,
+                      Container(height: 1, color: border.withOpacity(0.55)),
+                      const SizedBox(height: 10),
+                      Opacity(
+                        opacity: 0.45,
+                        child: Row(
+                          children: [
+                            cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
+                            cell(origStart == null ? '-' : _ymdWithWeekday(origStart!), flex: 18, style: rowStyle),
+                            cell(
+                              (origStart == null || origEnd == null)
+                                  ? '-'
+                                  : '${_hm(origStart!)}~${_hm(origEnd!)}',
+                              flex: 16,
+                              style: rowStyle,
+                            ),
+                            Expanded(
+                              flex: 10,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: badge('원본', const Color(0xFF223131)),
+                              ),
+                            ),
+                            cell('-', flex: 10, style: rowStyle),
+                            cell('-', flex: 10, style: rowStyle),
+                            Expanded(
+                              flex: 28,
+                              child: Text(
+                                cname,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: rowStyle,
                               ),
-                              Expanded(
-                                flex: 10,
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: badge('원본', const Color(0xFF223131)),
-                                ),
-                              ),
-                              cell('-', flex: 10, style: rowStyle),
-                              cell('-', flex: 10, style: rowStyle),
-                              cell(cname, flex: 22, style: rowStyle),
-                              const SizedBox(width: 96),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
