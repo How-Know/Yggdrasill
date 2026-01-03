@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 class AttendanceRecord {
   final String? id;
   final String studentId;
+  final String? occurrenceId; // lesson_occurrences FK (원본 회차 고정 참조)
   final DateTime classDateTime; // 실제 수업 시작 시간
   final DateTime classEndTime; // 실제 수업 종료 시간
   final String className;
@@ -24,6 +25,7 @@ class AttendanceRecord {
   AttendanceRecord({
     this.id,
     required this.studentId,
+    this.occurrenceId,
     required this.classDateTime,
     required this.classEndTime,
     required this.className,
@@ -49,6 +51,7 @@ class AttendanceRecord {
     required DateTime classEndTime,
     required String className,
     required bool isPresent,
+    String? occurrenceId,
     DateTime? arrivalTime,
     DateTime? departureTime,
     String? notes,
@@ -64,6 +67,7 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: const Uuid().v4(),
       studentId: studentId,
+      occurrenceId: occurrenceId,
       classDateTime: classDateTime,
       classEndTime: classEndTime,
       className: className,
@@ -95,6 +99,7 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: map['id'] as String?,
       studentId: map['student_id'] as String,
+      occurrenceId: map['occurrence_id']?.toString(),
       classDateTime: DateTime.parse(map['class_date_time'] as String),
       classEndTime: DateTime.parse(map['class_end_time'] as String),
       className: map['class_name'] as String,
@@ -123,6 +128,7 @@ class AttendanceRecord {
     return {
       'id': id,
       'student_id': studentId,
+      'occurrence_id': occurrenceId,
       'class_date_time': classDateTime.toIso8601String(),
       'class_end_time': classEndTime.toIso8601String(),
       'class_name': className,
@@ -146,6 +152,7 @@ class AttendanceRecord {
   AttendanceRecord copyWith({
     String? id,
     String? studentId,
+    String? occurrenceId,
     DateTime? classDateTime,
     DateTime? classEndTime,
     String? className,
@@ -167,6 +174,7 @@ class AttendanceRecord {
     return AttendanceRecord(
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
+      occurrenceId: occurrenceId ?? this.occurrenceId,
       classDateTime: classDateTime ?? this.classDateTime,
       classEndTime: classEndTime ?? this.classEndTime,
       className: className ?? this.className,
@@ -193,6 +201,7 @@ class AttendanceRecord {
     return other is AttendanceRecord &&
         other.id == id &&
         other.studentId == studentId &&
+        other.occurrenceId == occurrenceId &&
         other.classDateTime == classDateTime &&
         other.classEndTime == classEndTime;
   }
@@ -201,6 +210,7 @@ class AttendanceRecord {
   int get hashCode {
     return id.hashCode ^
         studentId.hashCode ^
+        occurrenceId.hashCode ^
         classDateTime.hashCode ^
         classEndTime.hashCode;
   }

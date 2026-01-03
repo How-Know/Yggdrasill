@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/attendance_record.dart';
 import '../models/class_info.dart';
 import '../models/cycle_attendance_summary.dart';
+import '../models/lesson_occurrence.dart';
 import '../models/payment_record.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -83,6 +84,11 @@ class AttendanceService {
   List<AttendanceRecord> _attendanceRecords = [];
   List<AttendanceRecord> get attendanceRecords => List.unmodifiable(_attendanceRecords);
 
+  final ValueNotifier<List<LessonOccurrence>> lessonOccurrencesNotifier =
+      ValueNotifier<List<LessonOccurrence>>([]);
+  List<LessonOccurrence> _lessonOccurrences = [];
+  List<LessonOccurrence> get lessonOccurrences => List.unmodifiable(_lessonOccurrences);
+
   RealtimeChannel? _attendanceRealtimeChannel;
 
   Timer? _plannedRegenTimer;
@@ -94,6 +100,8 @@ class AttendanceService {
       print('[ATT][reset] attendanceRecords cleared');
     }
     attendanceRecordsNotifier.value = [];
+    _lessonOccurrences = [];
+    lessonOccurrencesNotifier.value = [];
   }
 
   Future<void> forceMigration() async {
@@ -142,7 +150,7 @@ class AttendanceService {
       }
 
       const selectCols =
-          'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
 
       // ✅ 범위 내 페이지네이션 로드
       // - Range header로 0..999, 1000..1999 ... 형태로 계속 가져온다.
@@ -184,6 +192,7 @@ class AttendanceService {
         return AttendanceRecord(
           id: m['id'] as String?,
           studentId: m['student_id'] as String,
+          occurrenceId: m['occurrence_id']?.toString(),
           classDateTime: parseTs('class_date_time'),
           classEndTime: parseTs('class_end_time'),
           className: (m['class_name'] as String?) ?? '',
@@ -218,6 +227,682 @@ class AttendanceService {
       }
       attendanceRecordsNotifier.value = [];
     }
+  }
+
+  /// 원본 회차(lesson_occurrences)를 서버에서 로드한다.
+  ///
+  /// - 기본 범위: 과거 ~200일 ~ 미래 ~60일 (cycle/정산 UI에서 주로 사용)
+  Future<void> loadLessonOccurrences({
+    DateTime? fromInclusive,
+    DateTime? toExclusive,
+    int pastDays = 200,
+    int futureDays = 60,
+  }) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+
+      final now = DateTime.now();
+      final todayLocal = DateTime(now.year, now.month, now.day);
+
+      final DateTime fromLocal = fromInclusive != null
+          ? fromInclusive.toLocal()
+          : todayLocal.subtract(Duration(days: pastDays));
+      final DateTime toLocal = toExclusive != null
+          ? toExclusive.toLocal()
+          : todayLocal.add(Duration(days: futureDays + 1));
+
+      final DateTime fromUtc = DateTime(fromLocal.year, fromLocal.month, fromLocal.day).toUtc();
+      final DateTime toUtc = DateTime(toLocal.year, toLocal.month, toLocal.day).toUtc();
+      if (!fromUtc.isBefore(toUtc)) {
+        _lessonOccurrences = [];
+        lessonOccurrencesNotifier.value = const [];
+        return;
+      }
+
+      const selectCols =
+          'id,student_id,kind,cycle,session_order,original_class_datetime,original_class_end_time,duration_minutes,session_type_id,set_id,snapshot_id,created_at,updated_at,version';
+
+      const int pageSize = 1000;
+      int offset = 0;
+      final List<dynamic> allRows = <dynamic>[];
+      while (true) {
+        final rows = await supa
+            .from('lesson_occurrences')
+            .select(selectCols)
+            .eq('academy_id', academyId)
+            .gte('original_class_datetime', fromUtc.toIso8601String())
+            .lt('original_class_datetime', toUtc.toIso8601String())
+            .order('original_class_datetime', ascending: false)
+            .order('id', ascending: false)
+            .range(offset, offset + pageSize - 1);
+
+        final list = (rows is List) ? rows : <dynamic>[];
+        allRows.addAll(list);
+        if (list.length < pageSize) break;
+        offset += list.length;
+        if (offset > 200000) break;
+      }
+
+      _lessonOccurrences = allRows.map<LessonOccurrence>((m0) {
+        final m = Map<String, dynamic>.from(m0 as Map);
+        DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+        DateTime? parseTsOpt(String k) {
+          final v = m[k] as String?;
+          if (v == null || v.isEmpty) return null;
+          return DateTime.parse(v).toLocal();
+        }
+        int? asIntOpt(dynamic v) {
+          if (v == null) return null;
+          if (v is int) return v;
+          if (v is num) return v.toInt();
+          if (v is String) return int.tryParse(v);
+          return null;
+        }
+        return LessonOccurrence(
+          id: m['id']?.toString() ?? '',
+          studentId: m['student_id']?.toString() ?? '',
+          kind: (m['kind']?.toString() ?? 'regular').trim(),
+          cycle: asIntOpt(m['cycle']) ?? 0,
+          sessionOrder: asIntOpt(m['session_order']),
+          originalClassDateTime: parseTs('original_class_datetime'),
+          originalClassEndTime: parseTsOpt('original_class_end_time'),
+          durationMinutes: asIntOpt(m['duration_minutes']),
+          sessionTypeId: m['session_type_id']?.toString(),
+          setId: m['set_id']?.toString(),
+          snapshotId: m['snapshot_id']?.toString(),
+          createdAt: parseTsOpt('created_at'),
+          updatedAt: parseTsOpt('updated_at'),
+          version: asIntOpt(m['version']),
+        );
+      }).toList()
+        ..sort((a, b) => b.originalClassDateTime.compareTo(a.originalClassDateTime));
+
+      lessonOccurrencesNotifier.value = List.unmodifiable(_lessonOccurrences);
+      if (_sideDebug) {
+        print(
+          '[SUPA] lesson_occurrences 로드: ${_lessonOccurrences.length}개 (rangeUtc=${fromUtc.toIso8601String()}..${toUtc.toIso8601String()})',
+        );
+      }
+    } catch (e, st) {
+      // 아직 마이그레이션 전/테이블 미존재 등도 여기로 올 수 있으므로 조용히 fallback
+      if (_sideDebug) {
+        print('[SUPA][WARN] lesson_occurrences 로드 실패(무시): $e\n$st');
+      }
+      _lessonOccurrences = [];
+      lessonOccurrencesNotifier.value = [];
+    }
+  }
+
+  ({DateTime start, DateTime end})? _cycleRangeForStudent({
+    required String studentId,
+    required int cycle,
+  }) {
+    final paymentRecords = _d.getPaymentRecords().where((p) => p.studentId == studentId).toList();
+    PaymentRecord? cur;
+    PaymentRecord? next;
+    for (final p in paymentRecords) {
+      if (p.cycle == cycle) cur = p;
+      if (p.cycle == cycle + 1) next = p;
+    }
+    if (cur == null) return null;
+    final DateTime start = DateTime(cur!.dueDate.year, cur!.dueDate.month, cur!.dueDate.day);
+    final DateTime end = next != null
+        ? DateTime(next!.dueDate.year, next!.dueDate.month, next!.dueDate.day)
+        : start.add(const Duration(days: 31));
+    return (start: start, end: end);
+  }
+
+  Future<List<LessonOccurrence>> _fetchLessonOccurrencesForStudentCycle({
+    required String academyId,
+    required String studentId,
+    required int cycle,
+    required String kind,
+  }) async {
+    final supa = Supabase.instance.client;
+    const selectCols =
+        'id,student_id,kind,cycle,session_order,original_class_datetime,original_class_end_time,duration_minutes,session_type_id,set_id,snapshot_id,created_at,updated_at,version';
+    final rows = await supa
+        .from('lesson_occurrences')
+        .select(selectCols)
+        .eq('academy_id', academyId)
+        .eq('student_id', studentId)
+        .eq('cycle', cycle)
+        .eq('kind', kind)
+        .order('original_class_datetime', ascending: true)
+        .order('id', ascending: true);
+    final list = (rows is List) ? rows : <dynamic>[];
+    DateTime parseTs(Map m, String k) => DateTime.parse(m[k] as String).toLocal();
+    DateTime? parseTsOpt(Map m, String k) {
+      final v = m[k] as String?;
+      if (v == null || v.isEmpty) return null;
+      return DateTime.parse(v).toLocal();
+    }
+    int? asIntOpt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+    return list.map<LessonOccurrence>((m0) {
+      final m = Map<String, dynamic>.from(m0 as Map);
+      return LessonOccurrence(
+        id: m['id']?.toString() ?? '',
+        studentId: m['student_id']?.toString() ?? '',
+        kind: (m['kind']?.toString() ?? kind).trim(),
+        cycle: asIntOpt(m['cycle']) ?? cycle,
+        sessionOrder: asIntOpt(m['session_order']),
+        originalClassDateTime: parseTs(m, 'original_class_datetime'),
+        originalClassEndTime: parseTsOpt(m, 'original_class_end_time'),
+        durationMinutes: asIntOpt(m['duration_minutes']),
+        sessionTypeId: m['session_type_id']?.toString(),
+        setId: m['set_id']?.toString(),
+        snapshotId: m['snapshot_id']?.toString(),
+        createdAt: parseTsOpt(m, 'created_at'),
+        updatedAt: parseTsOpt(m, 'updated_at'),
+        version: asIntOpt(m['version']),
+      );
+    }).toList();
+  }
+
+  Future<List<LessonOccurrence>> _ensureRegularLessonOccurrencesForStudentCycle({
+    required String academyId,
+    required String studentId,
+    required int cycle,
+  }) async {
+    // 1) already exists?
+    try {
+      final existing = await _fetchLessonOccurrencesForStudentCycle(
+        academyId: academyId,
+        studentId: studentId,
+        cycle: cycle,
+        kind: 'regular',
+      );
+      if (existing.isNotEmpty) {
+        _mergeLessonOccurrences(existing);
+        return existing;
+      }
+    } catch (_) {
+      // 테이블 미존재/권한 등: 상위 로직에서 fallback하도록 비움 반환
+      return const <LessonOccurrence>[];
+    }
+
+    final range = _cycleRangeForStudent(studentId: studentId, cycle: cycle);
+    if (range == null) return const <LessonOccurrence>[];
+
+    // ✅ cycle 시작 시점에 "활성"이었던 블록만을 원본 회차 생성의 근거로 사용한다.
+    // (보강/추가수업이 원본 회차를 훼손하지 않도록, 원본은 고정 엔티티로 저장)
+    final DateTime start = range.start;
+    final DateTime end = range.end;
+
+    final blocks = _d.getStudentTimeBlocks().where((b) {
+      if (b.studentId != studentId) return false;
+      final sid = (b.setId ?? '').trim();
+      if (sid.isEmpty) return false;
+      return _isBlockActiveOnDate(b, start);
+    }).toList();
+    if (blocks.isEmpty) return const <LessonOccurrence>[];
+
+    // 날짜별/세트별 집계(하루/세트당 1개 occurrence)
+    final candidates = <_PlannedDailyAgg>[];
+    for (DateTime d = start; d.isBefore(end); d = d.add(const Duration(days: 1))) {
+      final dayIdx = d.weekday - 1;
+      final Map<String, _PlannedDailyAgg> aggBySet = {};
+      for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        final setId = (b.setId ?? '').trim();
+        if (setId.isEmpty) continue;
+        final classStart = DateTime(d.year, d.month, d.day, b.startHour, b.startMinute);
+        final classEnd = classStart.add(b.duration);
+        final agg = aggBySet.putIfAbsent(
+          setId,
+          () => _PlannedDailyAgg(
+            studentId: b.studentId,
+            setId: setId,
+            start: classStart,
+            end: classEnd,
+            sessionTypeId: b.sessionTypeId,
+          ),
+        );
+        if (classStart.isBefore(agg.start)) agg.start = classStart;
+        if (classEnd.isAfter(agg.end)) agg.end = classEnd;
+        if (agg.sessionTypeId == null && b.sessionTypeId != null) {
+          agg.sessionTypeId = b.sessionTypeId;
+        }
+      }
+      candidates.addAll(aggBySet.values);
+    }
+    if (candidates.isEmpty) return const <LessonOccurrence>[];
+
+    candidates.sort((a, b) {
+      final cmpDt = a.start.compareTo(b.start);
+      if (cmpDt != 0) return cmpDt;
+      return a.setId.compareTo(b.setId);
+    });
+
+    final rows = <Map<String, dynamic>>[];
+    for (int i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
+      final int sessionOrder = i + 1;
+      final startUtc = _utcMinute(c.start);
+      final durMin = c.end.difference(c.start).inMinutes;
+      final endUtc = startUtc.add(Duration(minutes: durMin <= 0 ? _d.getAcademySettings().lessonDuration : durMin));
+      rows.add({
+        'academy_id': academyId,
+        'student_id': studentId,
+        'kind': 'regular',
+        'cycle': cycle,
+        'session_order': sessionOrder,
+        'original_class_datetime': startUtc.toIso8601String(),
+        'original_class_end_time': endUtc.toIso8601String(),
+        'duration_minutes': durMin,
+        'session_type_id': c.sessionTypeId,
+        'set_id': c.setId,
+      }..removeWhere((k, v) => v == null));
+    }
+
+    // insert (chunked)
+    final supa = Supabase.instance.client;
+    const int chunk = 500;
+    try {
+      for (int i = 0; i < rows.length; i += chunk) {
+        final part = rows.sublist(i, (i + chunk > rows.length) ? rows.length : i + chunk);
+        await supa.from('lesson_occurrences').insert(part);
+      }
+    } catch (e) {
+      // 다른 클라이언트가 동시에 생성했을 수 있으므로, 실패해도 "재조회"로 마무리한다.
+      if (_sideDebug) {
+        print('[OCC][WARN] regular occurrences insert failed (will refetch): $e');
+      }
+    }
+
+    try {
+      final created = await _fetchLessonOccurrencesForStudentCycle(
+        academyId: academyId,
+        studentId: studentId,
+        cycle: cycle,
+        kind: 'regular',
+      );
+      _mergeLessonOccurrences(created);
+      return created;
+    } catch (_) {
+      return const <LessonOccurrence>[];
+    }
+  }
+
+  void _mergeLessonOccurrences(List<LessonOccurrence> incoming) {
+    if (incoming.isEmpty) return;
+    final byId = <String, LessonOccurrence>{
+      for (final o in _lessonOccurrences) o.id: o,
+    };
+    for (final o in incoming) {
+      if (o.id.isEmpty) continue;
+      byId[o.id] = o;
+    }
+    _lessonOccurrences = byId.values.toList()
+      ..sort((a, b) => b.originalClassDateTime.compareTo(a.originalClassDateTime));
+    lessonOccurrencesNotifier.value = List.unmodifiable(_lessonOccurrences);
+  }
+
+  /// (임시 관리자 도구) lesson_occurrences(원본 회차) 생성 + occurrence_id 백필
+  ///
+  /// 목적:
+  /// - 보강(replace): 원본 cycle/sessionOrder가 훼손되지 않도록, 원본 occurrence에 귀속시키는 링크를 채운다.
+  /// - 추가수업(add): kind='extra' occurrence로 분리 저장하여 사이클 집계에서 제외 가능하게 한다.
+  ///
+  /// 범위:
+  /// - 기본: 과거 2년 ~ 미래 60일 (출석 로드 기본 범위와 유사)
+  ///
+  /// NOTE:
+  /// - Supabase 마이그레이션(lesson_occurrences + occurrence_id 컬럼)이 적용되지 않은 환경에서는
+  ///   조용히 실패할 수 있다(예외는 호출자가 UI에서 처리).
+  Future<({
+    int ensuredCycles,
+    int updatedOverrides,
+    int updatedAttendance,
+    int createdExtraOccurrences,
+  })> runOccurrenceBackfillTool({
+    DateTime? fromInclusive,
+    DateTime? toExclusive,
+    int pastDays = 365 * 2,
+    int futureDays = 60,
+    void Function(String phase, int done, int total)? onProgress,
+  }) async {
+    final String academyId = (await TenantService.instance.getActiveAcademyId()) ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+
+    final now = DateTime.now();
+    final todayLocal = DateTime(now.year, now.month, now.day);
+    final DateTime fromLocal = fromInclusive != null
+        ? fromInclusive.toLocal()
+        : todayLocal.subtract(Duration(days: pastDays));
+    final DateTime toLocal = toExclusive != null
+        ? toExclusive.toLocal()
+        : todayLocal.add(Duration(days: futureDays + 1));
+
+    if (!fromLocal.isBefore(toLocal)) {
+      return (ensuredCycles: 0, updatedOverrides: 0, updatedAttendance: 0, createdExtraOccurrences: 0);
+    }
+
+    try { await _d.loadPaymentRecords(); } catch (_) {}
+
+    // 1) regular occurrence 생성/보장 (cycle 범위에 걸치는 것만)
+    final prs = _d.getPaymentRecords().toList();
+    final Map<String, List<PaymentRecord>> byStudent = {};
+    for (final p in prs) {
+      byStudent.putIfAbsent(p.studentId, () => <PaymentRecord>[]).add(p);
+    }
+
+    bool intersects(DateTime aStart, DateTime aEnd, DateTime bStart, DateTime bEnd) {
+      return aEnd.isAfter(bStart) && aStart.isBefore(bEnd);
+    }
+
+    final cycles = <({String studentId, int cycle})>[];
+    for (final entry in byStudent.entries) {
+      final sid = entry.key;
+      final list = entry.value..sort((a, b) => a.cycle.compareTo(b.cycle));
+      for (int i = 0; i < list.length; i++) {
+        final cur = list[i];
+        final start = DateTime(cur.dueDate.year, cur.dueDate.month, cur.dueDate.day);
+        final end = (i + 1 < list.length)
+            ? DateTime(list[i + 1].dueDate.year, list[i + 1].dueDate.month, list[i + 1].dueDate.day)
+            : start.add(const Duration(days: 31));
+        if (!intersects(start, end, fromLocal, toLocal)) continue;
+        cycles.add((studentId: sid, cycle: cur.cycle));
+      }
+    }
+
+    int ensuredCycles = 0;
+    for (int i = 0; i < cycles.length; i++) {
+      onProgress?.call('원본 회차 생성(regular)', i, cycles.length);
+      final c = cycles[i];
+      try {
+        await _ensureRegularLessonOccurrencesForStudentCycle(
+          academyId: academyId,
+          studentId: c.studentId,
+          cycle: c.cycle,
+        );
+        ensuredCycles += 1;
+      } catch (_) {
+        // ignore per cycle
+      }
+    }
+
+    // 최신 occurrence 로드/정렬(맵 생성용)
+    try {
+      await loadLessonOccurrences(fromInclusive: fromLocal, toExclusive: toLocal);
+    } catch (_) {}
+
+    String minKey(DateTime dt) =>
+        '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+    String occKey(String studentId, String setId, DateTime dt) =>
+        '$studentId|$setId|${minKey(dt)}';
+
+    final Map<String, LessonOccurrence> regularOccByKey = {};
+    final Map<String, LessonOccurrence> regularOccByCycleOrder = {};
+    final Map<String, LessonOccurrence> extraOccByKey = {};
+    for (final o in _lessonOccurrences) {
+      final sid = (o.setId ?? '').trim();
+      if (o.kind == 'regular') {
+        if (sid.isNotEmpty) {
+          regularOccByKey[occKey(o.studentId, sid, o.originalClassDateTime)] = o;
+        }
+        if (o.sessionOrder != null && o.sessionOrder! > 0) {
+          regularOccByCycleOrder['${o.studentId}|${o.cycle}|${o.sessionOrder}'] = o;
+        }
+      } else if (o.kind == 'extra') {
+        if (sid.isNotEmpty) {
+          extraOccByKey[occKey(o.studentId, sid, o.originalClassDateTime)] = o;
+        }
+      }
+    }
+
+    Future<LessonOccurrence?> ensureExtraOcc({
+      required String studentId,
+      required String setId,
+      required DateTime replacementLocal,
+      required int durationMinutes,
+      String? sessionTypeId,
+    }) async {
+      final existing = extraOccByKey[occKey(studentId, setId, replacementLocal)];
+      if (existing != null) return existing;
+      final int cycle = _resolveCycleByDueDate(studentId, replacementLocal) ?? 1;
+      final startUtc = _utcMinute(replacementLocal);
+      final endUtc = startUtc.add(Duration(minutes: durationMinutes));
+      const occSelect =
+          'id,student_id,kind,cycle,session_order,original_class_datetime,original_class_end_time,duration_minutes,session_type_id,set_id,snapshot_id,created_at,updated_at,version';
+      try {
+        final inserted = await supa
+            .from('lesson_occurrences')
+            .insert({
+              'academy_id': academyId,
+              'student_id': studentId,
+              'kind': 'extra',
+              'cycle': cycle,
+              'session_order': null,
+              'original_class_datetime': startUtc.toIso8601String(),
+              'original_class_end_time': endUtc.toIso8601String(),
+              'duration_minutes': durationMinutes,
+              'session_type_id': sessionTypeId,
+              'set_id': setId,
+            }..removeWhere((k, v) => v == null))
+            .select(occSelect)
+            .maybeSingle();
+        if (inserted != null) {
+          final m = Map<String, dynamic>.from(inserted as Map);
+          DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+          DateTime? parseTsOpt(String k) {
+            final v = m[k] as String?;
+            if (v == null || v.isEmpty) return null;
+            return DateTime.parse(v).toLocal();
+          }
+          int? asIntOpt(dynamic v) {
+            if (v == null) return null;
+            if (v is int) return v;
+            if (v is num) return v.toInt();
+            if (v is String) return int.tryParse(v);
+            return null;
+          }
+          final occ = LessonOccurrence(
+            id: m['id']?.toString() ?? '',
+            studentId: m['student_id']?.toString() ?? studentId,
+            kind: (m['kind']?.toString() ?? 'extra').trim(),
+            cycle: asIntOpt(m['cycle']) ?? cycle,
+            sessionOrder: asIntOpt(m['session_order']),
+            originalClassDateTime: parseTs('original_class_datetime'),
+            originalClassEndTime: parseTsOpt('original_class_end_time'),
+            durationMinutes: asIntOpt(m['duration_minutes']) ?? durationMinutes,
+            sessionTypeId: m['session_type_id']?.toString(),
+            setId: m['set_id']?.toString(),
+            snapshotId: m['snapshot_id']?.toString(),
+            createdAt: parseTsOpt('created_at'),
+            updatedAt: parseTsOpt('updated_at'),
+            version: asIntOpt(m['version']),
+          );
+          _mergeLessonOccurrences([occ]);
+          final sid = (occ.setId ?? '').trim();
+          if (sid.isNotEmpty) {
+            extraOccByKey[occKey(occ.studentId, sid, occ.originalClassDateTime)] = occ;
+          }
+          return occ;
+        }
+      } catch (_) {
+        // duplicate or table missing -> try fetch
+        try {
+          final fetched = await supa
+              .from('lesson_occurrences')
+              .select(occSelect)
+              .eq('academy_id', academyId)
+              .eq('student_id', studentId)
+              .eq('kind', 'extra')
+              .eq('set_id', setId)
+              .eq('original_class_datetime', startUtc.toIso8601String())
+              .maybeSingle();
+          if (fetched != null) {
+            final m = Map<String, dynamic>.from(fetched as Map);
+            DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+            DateTime? parseTsOpt(String k) {
+              final v = m[k] as String?;
+              if (v == null || v.isEmpty) return null;
+              return DateTime.parse(v).toLocal();
+            }
+            int? asIntOpt(dynamic v) {
+              if (v == null) return null;
+              if (v is int) return v;
+              if (v is num) return v.toInt();
+              if (v is String) return int.tryParse(v);
+              return null;
+            }
+            final occ = LessonOccurrence(
+              id: m['id']?.toString() ?? '',
+              studentId: m['student_id']?.toString() ?? studentId,
+              kind: (m['kind']?.toString() ?? 'extra').trim(),
+              cycle: asIntOpt(m['cycle']) ?? cycle,
+              sessionOrder: asIntOpt(m['session_order']),
+              originalClassDateTime: parseTs('original_class_datetime'),
+              originalClassEndTime: parseTsOpt('original_class_end_time'),
+              durationMinutes: asIntOpt(m['duration_minutes']) ?? durationMinutes,
+              sessionTypeId: m['session_type_id']?.toString(),
+              setId: m['set_id']?.toString(),
+              snapshotId: m['snapshot_id']?.toString(),
+              createdAt: parseTsOpt('created_at'),
+              updatedAt: parseTsOpt('updated_at'),
+              version: asIntOpt(m['version']),
+            );
+            _mergeLessonOccurrences([occ]);
+            final sid = (occ.setId ?? '').trim();
+            if (sid.isNotEmpty) {
+              extraOccByKey[occKey(occ.studentId, sid, occ.originalClassDateTime)] = occ;
+            }
+            return occ;
+          }
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    // 2) session_overrides occurrence_id 백필
+    int updatedOverrides = 0;
+    int createdExtraOccurrences = 0;
+    final overrides = _d.getSessionOverrides().toList();
+    int ovDone = 0;
+    for (final ov in overrides) {
+      ovDone++;
+      onProgress?.call('보강/추가수업 오버라이드 백필', ovDone, overrides.length);
+      final curOcc = (ov.occurrenceId ?? '').trim();
+      if (curOcc.isNotEmpty) continue;
+
+      String? occId;
+      if (ov.overrideType == OverrideType.replace) {
+        final orig = ov.originalClassDateTime;
+        if (orig != null) {
+          final setId = (ov.setId ?? _resolveSetId(ov.studentId, orig) ?? '').trim();
+          if (setId.isNotEmpty) {
+            occId = regularOccByKey[occKey(ov.studentId, setId, orig)]?.id;
+          }
+        }
+      } else if (ov.overrideType == OverrideType.add) {
+        final rep = ov.replacementClassDateTime;
+        if (rep != null) {
+          final setId = (ov.setId ?? ov.id).trim();
+          if (setId.isNotEmpty) {
+            final dur = ov.durationMinutes ?? _d.getAcademySettings().lessonDuration;
+            final occ = await ensureExtraOcc(
+              studentId: ov.studentId,
+              setId: setId,
+              replacementLocal: rep,
+              durationMinutes: dur,
+              sessionTypeId: ov.sessionTypeId,
+            );
+            if (occ != null) {
+              occId = occ.id;
+              if (extraOccByKey.containsKey(occKey(ov.studentId, setId, rep)) == false) {
+                createdExtraOccurrences += 1;
+              }
+            }
+          }
+        }
+      } else {
+        continue;
+      }
+
+      if (occId == null || occId!.isEmpty) continue;
+      try {
+        await supa.from('session_overrides').update({'occurrence_id': occId}).eq('id', ov.id);
+        // local reflect (no regen)
+        _d.applySessionOverrideLocal(ov.copyWith(occurrenceId: occId, updatedAt: DateTime.now()));
+        updatedOverrides += 1;
+      } catch (_) {}
+    }
+
+    // 3) attendance_records occurrence_id 백필
+    // override replacement 매칭(보강/추가수업 우선)
+    final Map<String, String> replaceOccByReplacement = {};
+    final Map<String, String> addOccByReplacement = {};
+    for (final ov in _d.getSessionOverrides()) {
+      final rep = ov.replacementClassDateTime;
+      final occId = (ov.occurrenceId ?? '').trim();
+      if (rep == null || occId.isEmpty) continue;
+      final k = '${ov.studentId}|${minKey(rep)}';
+      if (ov.overrideType == OverrideType.replace) {
+        replaceOccByReplacement[k] = occId;
+      } else if (ov.overrideType == OverrideType.add) {
+        addOccByReplacement[k] = occId;
+      }
+    }
+
+    final targets = _attendanceRecords.where((r) {
+      final oid = (r.occurrenceId ?? '').trim();
+      if (oid.isNotEmpty) return false;
+      if (r.classDateTime.isBefore(fromLocal) || !r.classDateTime.isBefore(toLocal)) return false;
+      return true;
+    }).toList();
+
+    int updatedAttendance = 0;
+    for (int i = 0; i < targets.length; i++) {
+      onProgress?.call('출석 기록 백필', i, targets.length);
+      final r = targets[i];
+      final rid = (r.id ?? '').trim();
+      if (rid.isEmpty) continue;
+
+      String? occId;
+      final keyByRep = '${r.studentId}|${minKey(r.classDateTime)}';
+      occId = replaceOccByReplacement[keyByRep] ?? addOccByReplacement[keyByRep];
+
+      if (occId == null || occId.isEmpty) {
+        final setId = (r.setId ?? '').trim();
+        if (setId.isNotEmpty) {
+          occId = regularOccByKey[occKey(r.studentId, setId, r.classDateTime)]?.id;
+        }
+      }
+      if ((occId == null || occId.isEmpty) && r.cycle != null && r.sessionOrder != null) {
+        occId = regularOccByCycleOrder['${r.studentId}|${r.cycle}|${r.sessionOrder}']?.id;
+      }
+
+      if (occId == null || occId!.isEmpty) continue;
+      try {
+        await supa.from('attendance_records').update({'occurrence_id': occId}).eq('id', rid);
+        final idx = _attendanceRecords.indexWhere((x) => x.id == rid);
+        if (idx != -1) {
+          _attendanceRecords[idx] = _attendanceRecords[idx].copyWith(
+            occurrenceId: occId,
+            updatedAt: DateTime.now(),
+          );
+        }
+        updatedAttendance += 1;
+      } catch (_) {}
+    }
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+
+    onProgress?.call('완료', 1, 1);
+    return (
+      ensuredCycles: ensuredCycles,
+      updatedOverrides: updatedOverrides,
+      updatedAttendance: updatedAttendance,
+      createdExtraOccurrences: createdExtraOccurrences,
+    );
   }
 
   Future<void> subscribeAttendanceRealtime() async {
@@ -312,6 +997,7 @@ class AttendanceService {
                 sessionTypeId:
                     m['session_type_id'] as String? ?? _attendanceRecords[idx].sessionTypeId,
                 setId: m['set_id'] as String? ?? _attendanceRecords[idx].setId,
+                occurrenceId: m['occurrence_id'] as String? ?? _attendanceRecords[idx].occurrenceId,
                 snapshotId: m['snapshot_id'] as String? ?? _attendanceRecords[idx].snapshotId,
                 batchSessionId:
                     m['batch_session_id'] as String? ?? _attendanceRecords[idx].batchSessionId,
@@ -364,6 +1050,7 @@ class AttendanceService {
       'id': record.id,
       'academy_id': academyId,
       'student_id': record.studentId,
+      'occurrence_id': record.occurrenceId,
       // ✅ 서버는 UTC minute boundary로 정규화하므로, 클라이언트도 분 단위로 정규화해 전송한다.
       'class_date_time': classDtUtc.toIso8601String(),
       'class_end_time': record.classEndTime.toUtc().toIso8601String(),
@@ -402,7 +1089,7 @@ class AttendanceService {
       if (e.code != '23505') rethrow;
 
       const selectCols =
-          'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
       final existing = await supa
           .from('attendance_records')
           .select(selectCols)
@@ -427,6 +1114,7 @@ class AttendanceService {
       final AttendanceRecord existingRec = AttendanceRecord(
         id: existing['id'] as String?,
         studentId: existing['student_id'] as String,
+        occurrenceId: existing['occurrence_id']?.toString(),
         classDateTime: parseTs('class_date_time'),
         classEndTime: parseTs('class_end_time'),
         className: (existing['class_name'] as String?) ?? '',
@@ -485,6 +1173,7 @@ class AttendanceService {
         notes: existingRec.notes ?? record.notes,
         sessionTypeId: existingRec.sessionTypeId ?? record.sessionTypeId,
         setId: existingRec.setId ?? record.setId,
+        occurrenceId: existingRec.occurrenceId ?? record.occurrenceId,
         cycle: existingRec.cycle ?? record.cycle,
         sessionOrder: existingRec.sessionOrder ?? record.sessionOrder,
         isPlanned: existingRec.isPlanned || record.isPlanned,
@@ -514,6 +1203,7 @@ class AttendanceService {
     if (record.id != null) {
       final row = {
         'student_id': record.studentId,
+        'occurrence_id': record.occurrenceId,
         'class_date_time': _utcMinute(record.classDateTime).toIso8601String(),
         'class_end_time': record.classEndTime.toUtc().toIso8601String(),
         'class_name': record.className,
@@ -972,6 +1662,78 @@ class AttendanceService {
       }
     }
 
+    // ===== lesson_occurrences (원본 회차) 보장/맵 =====
+    // - regular occurrence가 있으면 cycle/session_order/원본시간을 고정값으로 사용할 수 있다.
+    // - 없으면(마이그레이션 전 등) 기존 cycle/sessionOrder 계산 로직으로 fallback한다.
+    final DateTime rangeEnd = anchor.add(Duration(days: days));
+    final Set<String> studentIds = <String>{
+      for (final b in blocks) b.studentId,
+    };
+    for (final o in _d.getSessionOverrides()) {
+      if (o.status != OverrideStatus.planned) continue;
+      final rep = o.replacementClassDateTime;
+      if (rep == null) continue;
+      // 이번 planned 생성 범위 내 replacement가 있으면 해당 학생도 포함
+      if (!rep.isBefore(anchor) && rep.isBefore(rangeEnd)) {
+        studentIds.add(o.studentId);
+      }
+    }
+
+    final Map<String, Set<int>> cyclesByStudent = {};
+    for (final sid in studentIds) {
+      final c1 = _resolveCycleByDueDate(sid, anchor);
+      final c2 = _resolveCycleByDueDate(sid, rangeEnd);
+      if (c1 != null) cyclesByStudent.putIfAbsent(sid, () => <int>{}).add(c1);
+      if (c2 != null) cyclesByStudent.putIfAbsent(sid, () => <int>{}).add(c2);
+    }
+    // replace 오버라이드의 원본 cycle도 포함(원본이 과거 cycle일 수 있음)
+    for (final o in _d.getSessionOverrides()) {
+      if (o.status != OverrideStatus.planned) continue;
+      if (o.overrideType != OverrideType.replace) continue;
+      final orig = o.originalClassDateTime;
+      if (orig == null) continue;
+      final c0 = _resolveCycleByDueDate(o.studentId, orig);
+      if (c0 != null) cyclesByStudent.putIfAbsent(o.studentId, () => <int>{}).add(c0);
+    }
+
+    // regular occurrences ensure(없으면 생성)
+    try {
+      for (final e in cyclesByStudent.entries) {
+        final sid = e.key;
+        for (final c in e.value) {
+          final has = _lessonOccurrences.any((o) => o.studentId == sid && o.kind == 'regular' && o.cycle == c);
+          if (has) continue;
+          await _ensureRegularLessonOccurrencesForStudentCycle(
+            academyId: academyId,
+            studentId: sid,
+            cycle: c,
+          );
+        }
+      }
+    } catch (_) {
+      // 테이블 미존재/권한 등: fallback
+    }
+
+    // lookup: student|setId|yyyy-mm-dd-hh-mm (original)
+    String occKey(String studentId, String setId, DateTime originalLocal) =>
+        '$studentId|$setId|${minKey(originalLocal)}';
+    final Map<String, LessonOccurrence> regularOccByKey = {};
+    for (final o in _lessonOccurrences) {
+      if (o.kind != 'regular') continue;
+      if (!studentIds.contains(o.studentId)) continue;
+      final sid = (o.setId ?? '').trim();
+      if (sid.isEmpty) continue;
+      regularOccByKey[occKey(o.studentId, sid, o.originalClassDateTime)] = o;
+    }
+    final Map<String, LessonOccurrence> extraOccByKey = {};
+    for (final o in _lessonOccurrences) {
+      if (o.kind != 'extra') continue;
+      if (!studentIds.contains(o.studentId)) continue;
+      final sid = (o.setId ?? '').trim();
+      if (sid.isEmpty) continue;
+      extraOccByKey[occKey(o.studentId, sid, o.originalClassDateTime)] = o;
+    }
+
     final List<Map<String, dynamic>> rows = [];
     final List<AttendanceRecord> localAdds = [];
 
@@ -1122,6 +1884,18 @@ class AttendanceService {
               '[WARN][PLAN] sessionOrder<=0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime');
           sessionOrder = 1;
         }
+
+        // ✅ occurrence가 있으면 cycle/session_order를 occurrence 기반 고정값으로 덮어쓴다.
+        // (보강/추가수업으로 cycle 회차가 흔들리지 않게 하는 핵심)
+        final occ = regularOccByKey[occKey(agg.studentId, agg.setId, classDateTime)];
+        if (occ != null) {
+          cycle = occ.cycle;
+          final so = occ.sessionOrder;
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
+        }
+
         final plannedKey = '${agg.studentId}|${agg.setId}|${_dateKey(classDateTime)}';
         if (existingPlannedKeys.contains(plannedKey)) {
           if (_sideDebug) {
@@ -1138,6 +1912,7 @@ class AttendanceService {
 
         final record = AttendanceRecord.create(
           studentId: agg.studentId,
+          occurrenceId: occ?.id,
           classDateTime: classDateTime,
           classEndTime: classEndTime,
           className: _resolveClassName(agg.sessionTypeId),
@@ -1150,12 +1925,14 @@ class AttendanceService {
           cycle: cycle,
           sessionOrder: sessionOrder,
           isPlanned: true,
+          snapshotId: occ?.snapshotId,
         );
 
         rows.add({
           'id': record.id,
           'academy_id': academyId,
           'student_id': record.studentId,
+          'occurrence_id': record.occurrenceId,
           'class_date_time': record.classDateTime.toUtc().toIso8601String(),
           'class_end_time': record.classEndTime.toUtc().toIso8601String(),
           'class_name': record.className,
@@ -1168,7 +1945,7 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
-          'snapshot_id': null,
+          'snapshot_id': record.snapshotId,
           'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
@@ -1212,6 +1989,147 @@ class AttendanceService {
         final durMin = o.durationMinutes ?? _d.getAcademySettings().lessonDuration;
         final end = start.add(Duration(minutes: durMin));
 
+        // ✅ occurrence 연결:
+        // - replace: 원본 회차(regular occurrence)로 귀속 (cycle/sessionOrder 고정)
+        // - add: 별도 집계용 extra occurrence 생성/연결
+        LessonOccurrence? occ;
+        final ovOccId = (o.occurrenceId ?? '').trim();
+        if (ovOccId.isNotEmpty) {
+          for (final it in _lessonOccurrences) {
+            if (it.id == ovOccId) {
+              occ = it;
+              break;
+            }
+          }
+        }
+        if (occ == null && o.overrideType == OverrideType.replace) {
+          final orig = o.originalClassDateTime;
+          if (orig != null) {
+            final resolvedSet = (o.setId ?? _resolveSetId(o.studentId, orig) ?? setId).trim();
+            if (resolvedSet.isNotEmpty) {
+              occ = regularOccByKey[occKey(o.studentId, resolvedSet, orig)];
+            }
+          }
+        }
+        if (occ == null && o.overrideType == OverrideType.add) {
+          final extraSetId = (o.setId ?? o.id).trim();
+          if (extraSetId.isNotEmpty) {
+            occ = extraOccByKey[occKey(o.studentId, extraSetId, start)];
+          }
+          if (occ == null && extraSetId.isNotEmpty) {
+            const occSelect =
+                'id,student_id,kind,cycle,session_order,original_class_datetime,original_class_end_time,duration_minutes,session_type_id,set_id,snapshot_id,created_at,updated_at,version';
+            final int extraCycle = _resolveCycleByDueDate(o.studentId, start) ?? 1;
+            final startUtc = _utcMinute(start);
+            final endUtc = startUtc.add(Duration(minutes: durMin));
+            try {
+              final inserted = await supa
+                  .from('lesson_occurrences')
+                  .insert({
+                    'academy_id': academyId,
+                    'student_id': o.studentId,
+                    'kind': 'extra',
+                    'cycle': extraCycle,
+                    'session_order': null,
+                    'original_class_datetime': startUtc.toIso8601String(),
+                    'original_class_end_time': endUtc.toIso8601String(),
+                    'duration_minutes': durMin,
+                    'session_type_id': o.sessionTypeId,
+                    'set_id': extraSetId,
+                  }..removeWhere((k, v) => v == null))
+                  .select(occSelect)
+                  .maybeSingle();
+              if (inserted != null) {
+                final m = Map<String, dynamic>.from(inserted as Map);
+                DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+                DateTime? parseTsOpt(String k) {
+                  final v = m[k] as String?;
+                  if (v == null || v.isEmpty) return null;
+                  return DateTime.parse(v).toLocal();
+                }
+                int? asIntOpt(dynamic v) {
+                  if (v == null) return null;
+                  if (v is int) return v;
+                  if (v is num) return v.toInt();
+                  if (v is String) return int.tryParse(v);
+                  return null;
+                }
+                occ = LessonOccurrence(
+                  id: m['id']?.toString() ?? '',
+                  studentId: m['student_id']?.toString() ?? o.studentId,
+                  kind: (m['kind']?.toString() ?? 'extra').trim(),
+                  cycle: asIntOpt(m['cycle']) ?? extraCycle,
+                  sessionOrder: asIntOpt(m['session_order']),
+                  originalClassDateTime: parseTs('original_class_datetime'),
+                  originalClassEndTime: parseTsOpt('original_class_end_time'),
+                  durationMinutes: asIntOpt(m['duration_minutes']) ?? durMin,
+                  sessionTypeId: m['session_type_id']?.toString(),
+                  setId: m['set_id']?.toString(),
+                  snapshotId: m['snapshot_id']?.toString(),
+                  createdAt: parseTsOpt('created_at'),
+                  updatedAt: parseTsOpt('updated_at'),
+                  version: asIntOpt(m['version']),
+                );
+              }
+            } catch (e) {
+              // unique conflict 등: fetch existing
+              try {
+                final fetched = await supa
+                    .from('lesson_occurrences')
+                    .select(occSelect)
+                    .eq('academy_id', academyId)
+                    .eq('student_id', o.studentId)
+                    .eq('kind', 'extra')
+                    .eq('set_id', extraSetId)
+                    .eq('original_class_datetime', startUtc.toIso8601String())
+                    .maybeSingle();
+                if (fetched != null) {
+                  final m = Map<String, dynamic>.from(fetched as Map);
+                  DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+                  DateTime? parseTsOpt(String k) {
+                    final v = m[k] as String?;
+                    if (v == null || v.isEmpty) return null;
+                    return DateTime.parse(v).toLocal();
+                  }
+                  int? asIntOpt(dynamic v) {
+                    if (v == null) return null;
+                    if (v is int) return v;
+                    if (v is num) return v.toInt();
+                    if (v is String) return int.tryParse(v);
+                    return null;
+                  }
+                  occ = LessonOccurrence(
+                    id: m['id']?.toString() ?? '',
+                    studentId: m['student_id']?.toString() ?? o.studentId,
+                    kind: (m['kind']?.toString() ?? 'extra').trim(),
+                    cycle: asIntOpt(m['cycle']) ?? extraCycle,
+                    sessionOrder: asIntOpt(m['session_order']),
+                    originalClassDateTime: parseTs('original_class_datetime'),
+                    originalClassEndTime: parseTsOpt('original_class_end_time'),
+                    durationMinutes: asIntOpt(m['duration_minutes']) ?? durMin,
+                    sessionTypeId: m['session_type_id']?.toString(),
+                    setId: m['set_id']?.toString(),
+                    snapshotId: m['snapshot_id']?.toString(),
+                    createdAt: parseTsOpt('created_at'),
+                    updatedAt: parseTsOpt('updated_at'),
+                    version: asIntOpt(m['version']),
+                  );
+                }
+              } catch (_) {}
+              if (_sideDebug) {
+                print('[OCC][extra][WARN] ensure failed: $e');
+              }
+            }
+            if (occ != null) {
+              _mergeLessonOccurrences([occ!]);
+              final sid = (occ!.setId ?? '').trim();
+              if (sid.isNotEmpty) {
+                extraOccByKey[occKey(occ!.studentId, sid, occ!.originalClassDateTime)] = occ!;
+              }
+            }
+          }
+        }
+
         int? cycle = _resolveCycleByDueDate(o.studentId, start);
         int sessionOrder;
         if (cycle == null) {
@@ -1233,8 +2151,22 @@ class AttendanceService {
         if (cycle == null || cycle == 0) cycle = 1;
         if (sessionOrder <= 0) sessionOrder = 1;
 
+        // occurrence가 있으면 cycle/session_order를 occurrence 기준으로 고정
+        if (occ != null) {
+          cycle = occ!.cycle;
+          if (o.overrideType == OverrideType.replace) {
+            final so = occ!.sessionOrder;
+            if (so != null && so > 0) {
+              sessionOrder = so;
+            }
+          }
+        }
+
+        final String effectiveSetId = (occ?.setId ?? setId).trim().isNotEmpty ? (occ?.setId ?? setId) : setId;
+
         final record = AttendanceRecord.create(
           studentId: o.studentId,
+          occurrenceId: occ?.id,
           classDateTime: start,
           classEndTime: end,
           className: _resolveClassName(o.sessionTypeId),
@@ -1243,17 +2175,18 @@ class AttendanceService {
           departureTime: null,
           notes: null,
           sessionTypeId: o.sessionTypeId,
-          setId: setId,
+          setId: effectiveSetId,
           cycle: cycle,
-          sessionOrder: sessionOrder,
+          sessionOrder: o.overrideType == OverrideType.add ? null : sessionOrder,
           isPlanned: true,
-          snapshotId: null,
+          snapshotId: occ?.snapshotId,
         );
 
         rows.add({
           'id': record.id,
           'academy_id': academyId,
           'student_id': record.studentId,
+          'occurrence_id': record.occurrenceId,
           'class_date_time': record.classDateTime.toUtc().toIso8601String(),
           'class_end_time': record.classEndTime.toUtc().toIso8601String(),
           'class_name': record.className,
@@ -1266,7 +2199,7 @@ class AttendanceService {
           'cycle': record.cycle,
           'session_order': record.sessionOrder,
           'is_planned': record.isPlanned,
-          'snapshot_id': null,
+          'snapshot_id': record.snapshotId,
           'batch_session_id': record.batchSessionId,
           'created_at': record.createdAt.toUtc().toIso8601String(),
           'updated_at': record.updatedAt.toUtc().toIso8601String(),
@@ -1658,6 +2591,42 @@ class AttendanceService {
       }
     }
 
+    // ===== lesson_occurrences(원본 회차) 보장/맵 (학생 단위 regen) =====
+    final Set<int> cyclesNeeded = <int>{};
+    final c1 = _resolveCycleByDueDate(studentId, anchor);
+    final c2 = _resolveCycleByDueDate(studentId, endDate);
+    if (c1 != null) cyclesNeeded.add(c1);
+    if (c2 != null) cyclesNeeded.add(c2);
+    for (final o in _d.getSessionOverrides()) {
+      if (o.studentId != studentId) continue;
+      if (o.status != OverrideStatus.planned) continue;
+      if (o.overrideType != OverrideType.replace) continue;
+      final orig = o.originalClassDateTime;
+      if (orig == null) continue;
+      final c0 = _resolveCycleByDueDate(studentId, orig);
+      if (c0 != null) cyclesNeeded.add(c0);
+    }
+    try {
+      for (final c in cyclesNeeded) {
+        final has = _lessonOccurrences.any((o) => o.studentId == studentId && o.kind == 'regular' && o.cycle == c);
+        if (has) continue;
+        await _ensureRegularLessonOccurrencesForStudentCycle(
+          academyId: academyId,
+          studentId: studentId,
+          cycle: c,
+        );
+      }
+    } catch (_) {}
+    String occKey(String setId, DateTime originalLocal) => '$studentId|$setId|${minKey(originalLocal)}';
+    final Map<String, LessonOccurrence> regularOccByKey = {};
+    for (final o in _lessonOccurrences) {
+      if (o.studentId != studentId) continue;
+      if (o.kind != 'regular') continue;
+      final sid = (o.setId ?? '').trim();
+      if (sid.isEmpty) continue;
+      regularOccByKey[occKey(sid, o.originalClassDateTime)] = o;
+    }
+
     // 중복 생성 방지: 하루/세트 키 (동일 학생)
     final Set<String> existingPlannedKeys = {};
     for (final r in _attendanceRecords) {
@@ -1756,6 +2725,16 @@ class AttendanceService {
               '[WARN][PLAN-student] sessionOrder<=0 → 1 set=${agg.setId} student=$studentId date=$classDateTime');
           sessionOrder = 1;
         }
+
+        // ✅ occurrence가 있으면 cycle/session_order 고정값으로 덮어쓴다.
+        final occ = regularOccByKey[occKey(agg.setId, classDateTime)];
+        if (occ != null) {
+          cycle = occ.cycle;
+          final so = occ.sessionOrder;
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
+        }
         if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
           _logCycleDecision(
             studentId: studentId,
@@ -1784,6 +2763,7 @@ class AttendanceService {
 
         final record = AttendanceRecord.create(
           studentId: studentId,
+          occurrenceId: occ?.id,
           classDateTime: classDateTime,
           classEndTime: classEndTime,
           className: _resolveClassName(agg.sessionTypeId),
@@ -1803,6 +2783,7 @@ class AttendanceService {
           'id': record.id,
           'academy_id': academyId,
           'student_id': record.studentId,
+          'occurrence_id': record.occurrenceId,
           'class_date_time': record.classDateTime.toUtc().toIso8601String(),
           'class_end_time': record.classEndTime.toUtc().toIso8601String(),
           'class_name': record.className,
@@ -1875,8 +2856,25 @@ class AttendanceService {
         if (cycle == null || cycle == 0) cycle = 1;
         if (sessionOrder <= 0) sessionOrder = 1;
 
+        // ✅ replace 오버라이드는 원본 occurrence로 귀속(cycle/sessionOrder 고정)
+        LessonOccurrence? repOcc;
+        if (o.overrideType == OverrideType.replace) {
+          final orig = o.originalClassDateTime;
+          if (orig != null) {
+            repOcc = regularOccByKey[occKey(setId, orig)];
+            if (repOcc != null) {
+              cycle = repOcc!.cycle;
+              final so = repOcc!.sessionOrder;
+              if (so != null && so > 0) {
+                sessionOrder = so;
+              }
+            }
+          }
+        }
+
         final record = AttendanceRecord.create(
           studentId: studentId,
+          occurrenceId: repOcc?.id,
           classDateTime: start,
           classEndTime: end,
           className: _resolveClassName(o.sessionTypeId),
@@ -1896,6 +2894,7 @@ class AttendanceService {
           'id': record.id,
           'academy_id': academyId,
           'student_id': record.studentId,
+          'occurrence_id': record.occurrenceId,
           'class_date_time': record.classDateTime.toUtc().toIso8601String(),
           'class_end_time': record.classEndTime.toUtc().toIso8601String(),
           'class_name': record.className,
@@ -1993,7 +2992,7 @@ class AttendanceService {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         const selectCols =
-            'id,student_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+            'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
         final classDtUtc = _utcMinute(classDateTime);
         final row = await Supabase.instance.client
             .from('attendance_records')
@@ -2017,6 +3016,7 @@ class AttendanceService {
           final AttendanceRecord fetched = AttendanceRecord(
             id: m['id'] as String?,
             studentId: m['student_id'] as String,
+            occurrenceId: m['occurrence_id']?.toString(),
             classDateTime: parseTs('class_date_time'),
             classEndTime: parseTs('class_end_time'),
             className: (m['class_name'] as String?) ?? '',
@@ -2099,8 +3099,24 @@ class AttendanceService {
         );
       }
     } else {
+      // occurrence_id를 최대한 채워 넣는다(원본 회차/추가수업 역추적)
+      String? inferredOccurrenceId;
+      bool sameMinute(DateTime a, DateTime b) =>
+          a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+      final sid = (resolvedSetId ?? '').trim();
+      if (sid.isNotEmpty) {
+        for (final o in _lessonOccurrences) {
+          if (o.studentId != studentId) continue;
+          if ((o.setId ?? '') != sid) continue;
+          if (sameMinute(o.originalClassDateTime, classDateTime)) {
+            inferredOccurrenceId = o.id;
+            break;
+          }
+        }
+      }
       final newRecord = AttendanceRecord.create(
         studentId: studentId,
+        occurrenceId: inferredOccurrenceId,
         classDateTime: classDateTime,
         classEndTime: classEndTime,
         className: className,
@@ -2245,6 +3261,54 @@ class AttendanceService {
           _dateKey(r.classDateTime) == minStartDateKey);
       if (hasPlannedSameDay) return;
 
+      // ✅ occurrence 매칭(원본 회차 고정)
+      bool sameMinute(DateTime a, DateTime b) =>
+          a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+      LessonOccurrence? occ;
+      final hint = (ov.occurrenceId ?? '').trim();
+      if (hint.isNotEmpty) {
+        for (final it in _lessonOccurrences) {
+          if (it.id == hint) {
+            occ = it;
+            break;
+          }
+        }
+      }
+      if (occ == null) {
+        for (final it in _lessonOccurrences) {
+          if (it.kind != 'regular') continue;
+          if (it.studentId != ov.studentId) continue;
+          if ((it.setId ?? '') != inferredSetId) continue;
+          if (sameMinute(it.originalClassDateTime, minStart)) {
+            occ = it;
+            break;
+          }
+        }
+      }
+      if (occ == null) {
+        final c0 = _resolveCycleByDueDate(ov.studentId, minStart);
+        if (c0 != null) {
+          try {
+            final academyId0 = await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+            await _ensureRegularLessonOccurrencesForStudentCycle(
+              academyId: academyId0,
+              studentId: ov.studentId,
+              cycle: c0,
+            );
+          } catch (_) {}
+          for (final it in _lessonOccurrences) {
+            if (it.kind != 'regular') continue;
+            if (it.studentId != ov.studentId) continue;
+            if ((it.setId ?? '') != inferredSetId) continue;
+            if (sameMinute(it.originalClassDateTime, minStart)) {
+              occ = it;
+              break;
+            }
+          }
+        }
+      }
+
       // session_order 계산: student+cycle 기준
       int? cycle = _resolveCycleByDueDate(ov.studentId, minStart);
       if (cycle == null) {
@@ -2263,10 +3327,17 @@ class AttendanceService {
           ? m[dateKey]!
           : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
 
+      // occurrence가 있으면 cycle/sessionOrder를 occurrence 기준으로 고정
+      final int fixedCycle = occ?.cycle ?? ((cycle == null || cycle == 0) ? 1 : cycle);
+      final int fixedOrder = (occ?.sessionOrder != null && (occ!.sessionOrder ?? 0) > 0)
+          ? occ!.sessionOrder!
+          : (sessionOrder <= 0 ? 1 : sessionOrder);
+
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final record = AttendanceRecord.create(
         studentId: ov.studentId,
+        occurrenceId: occ?.id,
         classDateTime: minStart,
         classEndTime: maxEnd,
         className: _resolveClassName(sessionTypeId),
@@ -2276,8 +3347,8 @@ class AttendanceService {
         notes: null,
         sessionTypeId: sessionTypeId,
         setId: inferredSetId,
-        cycle: (cycle == null || cycle == 0) ? 1 : cycle,
-        sessionOrder: sessionOrder <= 0 ? 1 : sessionOrder,
+        cycle: fixedCycle,
+        sessionOrder: fixedOrder,
         isPlanned: true,
         snapshotId: null,
       );
@@ -2286,6 +3357,7 @@ class AttendanceService {
         'id': record.id,
         'academy_id': academyId,
         'student_id': record.studentId,
+        'occurrence_id': record.occurrenceId,
         'class_date_time': record.classDateTime.toUtc().toIso8601String(),
         'class_end_time': record.classEndTime.toUtc().toIso8601String(),
         'class_name': record.className,
@@ -2376,6 +3448,139 @@ class AttendanceService {
       return ov.setId ?? ov.id;
     }();
 
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+    LessonOccurrence? occ;
+    final hint = (ov.occurrenceId ?? '').trim();
+    if (hint.isNotEmpty) {
+      for (final it in _lessonOccurrences) {
+        if (it.id == hint) {
+          occ = it;
+          break;
+        }
+      }
+    }
+
+    // replace: 원본 occurrence로 귀속
+    if (occ == null && ov.overrideType == OverrideType.replace) {
+      final orig = ov.originalClassDateTime;
+      if (orig != null) {
+        final resolvedSet = (ov.setId ?? _resolveSetId(ov.studentId, orig) ?? setId).trim();
+        for (final it in _lessonOccurrences) {
+          if (it.kind != 'regular') continue;
+          if (it.studentId != ov.studentId) continue;
+          if ((it.setId ?? '') != resolvedSet) continue;
+          if (sameMinute(it.originalClassDateTime, orig)) {
+            occ = it;
+            break;
+          }
+        }
+        if (occ == null) {
+          final c0 = _resolveCycleByDueDate(ov.studentId, orig);
+          if (c0 != null) {
+            try {
+              await _ensureRegularLessonOccurrencesForStudentCycle(
+                academyId: await TenantService.instance.getActiveAcademyId() ??
+                    await TenantService.instance.ensureActiveAcademy(),
+                studentId: ov.studentId,
+                cycle: c0,
+              );
+            } catch (_) {}
+            for (final it in _lessonOccurrences) {
+              if (it.kind != 'regular') continue;
+              if (it.studentId != ov.studentId) continue;
+              if ((it.setId ?? '') != resolvedSet) continue;
+              if (sameMinute(it.originalClassDateTime, orig)) {
+                occ = it;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // add: extra occurrence 생성/연결(별도 집계)
+    if (occ == null && ov.overrideType == OverrideType.add) {
+      final extraSetId = (ov.setId ?? ov.id).trim();
+      if (extraSetId.isNotEmpty) {
+        for (final it in _lessonOccurrences) {
+          if (it.kind != 'extra') continue;
+          if (it.studentId != ov.studentId) continue;
+          if ((it.setId ?? '') != extraSetId) continue;
+          if (sameMinute(it.originalClassDateTime, target)) {
+            occ = it;
+            break;
+          }
+        }
+        if (occ == null) {
+          const occSelect =
+              'id,student_id,kind,cycle,session_order,original_class_datetime,original_class_end_time,duration_minutes,session_type_id,set_id,snapshot_id,created_at,updated_at,version';
+          final int extraCycle = _resolveCycleByDueDate(ov.studentId, target) ?? 1;
+          final startUtc = _utcMinute(target);
+          final int durMin = ov.durationMinutes ?? _d.getAcademySettings().lessonDuration;
+          final endUtc = startUtc.add(Duration(minutes: durMin));
+          try {
+            final inserted = await Supabase.instance.client
+                .from('lesson_occurrences')
+                .insert({
+                  'academy_id': await TenantService.instance.getActiveAcademyId() ??
+                      await TenantService.instance.ensureActiveAcademy(),
+                  'student_id': ov.studentId,
+                  'kind': 'extra',
+                  'cycle': extraCycle,
+                  'session_order': null,
+                  'original_class_datetime': startUtc.toIso8601String(),
+                  'original_class_end_time': endUtc.toIso8601String(),
+                  'duration_minutes': durMin,
+                  'session_type_id': ov.sessionTypeId,
+                  'set_id': extraSetId,
+                }..removeWhere((k, v) => v == null))
+                .select(occSelect)
+                .maybeSingle();
+            if (inserted != null) {
+              final m = Map<String, dynamic>.from(inserted as Map);
+              DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+              DateTime? parseTsOpt(String k) {
+                final v = m[k] as String?;
+                if (v == null || v.isEmpty) return null;
+                return DateTime.parse(v).toLocal();
+              }
+              int? asIntOpt(dynamic v) {
+                if (v == null) return null;
+                if (v is int) return v;
+                if (v is num) return v.toInt();
+                if (v is String) return int.tryParse(v);
+                return null;
+              }
+              occ = LessonOccurrence(
+                id: m['id']?.toString() ?? '',
+                studentId: m['student_id']?.toString() ?? ov.studentId,
+                kind: (m['kind']?.toString() ?? 'extra').trim(),
+                cycle: asIntOpt(m['cycle']) ?? extraCycle,
+                sessionOrder: asIntOpt(m['session_order']),
+                originalClassDateTime: parseTs('original_class_datetime'),
+                originalClassEndTime: parseTsOpt('original_class_end_time'),
+                durationMinutes: asIntOpt(m['duration_minutes']) ?? durMin,
+                sessionTypeId: m['session_type_id']?.toString(),
+                setId: m['set_id']?.toString(),
+                snapshotId: m['snapshot_id']?.toString(),
+                createdAt: parseTsOpt('created_at'),
+                updatedAt: parseTsOpt('updated_at'),
+                version: asIntOpt(m['version']),
+              );
+            }
+          } catch (_) {
+            // ignore (table may not exist yet)
+          }
+          if (occ != null) {
+            _mergeLessonOccurrences([occ!]);
+          }
+        }
+      }
+    }
+
     int? cycle = _resolveCycleByDueDate(ov.studentId, target);
     if (cycle == null) {
       final Map<String, DateTime> earliestMonthByKey = {};
@@ -2393,12 +3598,19 @@ class AttendanceService {
         ? m[dateKey]!
         : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
 
+    // occurrence가 있으면 cycle/session_order를 occurrence 기준으로 고정
+    final int fixedCycle = occ?.cycle ?? ((cycle == null || cycle == 0) ? 1 : cycle);
+    final int? fixedOrder = (ov.overrideType == OverrideType.replace && occ?.sessionOrder != null && (occ!.sessionOrder ?? 0) > 0)
+        ? occ!.sessionOrder
+        : (sessionOrder <= 0 ? 1 : sessionOrder);
+
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
     final classEndTime =
         target.add(Duration(minutes: ov.durationMinutes ?? _d.getAcademySettings().lessonDuration));
     final record = AttendanceRecord.create(
       studentId: ov.studentId,
+      occurrenceId: occ?.id,
       classDateTime: target,
       classEndTime: classEndTime,
       className: _resolveClassName(ov.sessionTypeId),
@@ -2407,9 +3619,9 @@ class AttendanceService {
       departureTime: null,
       notes: null,
       sessionTypeId: ov.sessionTypeId,
-      setId: setId,
-      cycle: (cycle == null || cycle == 0) ? 1 : cycle,
-      sessionOrder: sessionOrder <= 0 ? 1 : sessionOrder,
+      setId: (occ?.setId ?? setId),
+      cycle: fixedCycle,
+      sessionOrder: ov.overrideType == OverrideType.add ? null : fixedOrder,
       isPlanned: true,
       snapshotId: null,
     );
@@ -2418,6 +3630,7 @@ class AttendanceService {
       'id': record.id,
       'academy_id': academyId,
       'student_id': record.studentId,
+      'occurrence_id': record.occurrenceId,
       'class_date_time': record.classDateTime.toUtc().toIso8601String(),
       'class_end_time': record.classEndTime.toUtc().toIso8601String(),
       'class_name': record.className,
@@ -2573,6 +3786,33 @@ class AttendanceService {
     final Map<String, int> counterByStudentCycle = {};
     _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
 
+    // ===== lesson_occurrences(원본 회차) 보장/맵 (세트 단위 regen) =====
+    String minKey(DateTime dt) =>
+        '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+    final Set<int> cyclesNeeded = <int>{};
+    final c1 = _resolveCycleByDueDate(studentId, anchor);
+    final c2 = _resolveCycleByDueDate(studentId, anchor.add(Duration(days: days)));
+    if (c1 != null) cyclesNeeded.add(c1);
+    if (c2 != null) cyclesNeeded.add(c2);
+    try {
+      for (final c in cyclesNeeded) {
+        final has = _lessonOccurrences.any((o) => o.studentId == studentId && o.kind == 'regular' && o.cycle == c);
+        if (has) continue;
+        await _ensureRegularLessonOccurrencesForStudentCycle(
+          academyId: academyId,
+          studentId: studentId,
+          cycle: c,
+        );
+      }
+    } catch (_) {}
+    final Map<String, LessonOccurrence> regularOccByMinute = {};
+    for (final o in _lessonOccurrences) {
+      if (o.kind != 'regular') continue;
+      if (o.studentId != studentId) continue;
+      if ((o.setId ?? '') != setId) continue;
+      regularOccByMinute[minKey(o.originalClassDateTime)] = o;
+    }
+
     // 중복 생성 방지: 하루/세트 키
     final Set<String> existingPlannedKeys = {};
 
@@ -2649,6 +3889,16 @@ class AttendanceService {
               '[WARN][PLAN-set] sessionOrder<=0 → 1 set=$setId student=$studentId date=$classDateTime');
           sessionOrder = 1;
         }
+
+        // ✅ occurrence가 있으면 cycle/session_order 고정값으로 덮어쓴다.
+        final occ = regularOccByMinute[minKey(classDateTime)];
+        if (occ != null) {
+          cycle = occ.cycle;
+          final so = occ.sessionOrder;
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
+        }
         final plannedKey = '$studentId|$setId|${_dateKey(classDateTime)}';
         if (existingPlannedKeys.contains(plannedKey)) {
           if (_sideDebug) {
@@ -2676,6 +3926,7 @@ class AttendanceService {
 
         final record = AttendanceRecord.create(
           studentId: studentId,
+          occurrenceId: occ?.id,
           classDateTime: classDateTime,
           classEndTime: classEndTime,
           className: _resolveClassName(agg.sessionTypeId),
@@ -2695,6 +3946,7 @@ class AttendanceService {
           'id': record.id,
           'academy_id': academyId,
           'student_id': record.studentId,
+          'occurrence_id': record.occurrenceId,
           'class_date_time': record.classDateTime.toUtc().toIso8601String(),
           'class_end_time': record.classEndTime.toUtc().toIso8601String(),
           'class_name': record.className,
@@ -2808,6 +4060,127 @@ class AttendanceService {
         : start.add(const Duration(days: 31));
 
     final DateTime nowRef = now ?? DateTime.now();
+
+    // ✅ occurrence 기반 집계(가능하면 우선 적용)
+    // - kind='regular'만 사이클 집계에 포함(추가수업(kind='extra')는 별도 집계)
+    final regularOccs = _lessonOccurrences
+        .where((o) => o.studentId == studentId && o.kind == 'regular' && o.cycle == cycle)
+        .toList();
+
+    if (regularOccs.isNotEmpty) {
+      // 원본 시간 기준 정렬(표시/안정성)
+      regularOccs.sort((a, b) => a.originalClassDateTime.compareTo(b.originalClassDateTime));
+
+      bool sameMinute(DateTime a, DateTime b) =>
+          a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+
+      int minutesOfOccurrence(LessonOccurrence o) {
+        final dm = o.durationMinutes;
+        if (dm != null && dm > 0) return dm;
+        final end = o.originalClassEndTime;
+        if (end != null) {
+          final d = end.difference(o.originalClassDateTime).inMinutes;
+          if (d > 0) return d;
+        }
+        return _d.getAcademySettings().lessonDuration;
+      }
+
+      DateTime effectiveDateTimeOfOccurrence(LessonOccurrence o) {
+        // replace 오버라이드가 있으면 replacement 시각을 "실제 예정 시각"으로 본다.
+        // (occurrenceId를 채우는 단계로 넘어가면 ov.occurrenceId 우선 매칭으로 강화 가능)
+        for (final ov in _d.getSessionOverrides()) {
+          if (ov.studentId != studentId) continue;
+          if (ov.status == OverrideStatus.canceled) continue;
+          if (ov.overrideType != OverrideType.replace) continue;
+          final orig = ov.originalClassDateTime;
+          final rep = ov.replacementClassDateTime;
+          if (orig == null || rep == null) continue;
+          if (sameMinute(orig, o.originalClassDateTime)) return rep;
+        }
+        return o.originalClassDateTime;
+      }
+
+      int plannedCount = 0;
+      int actualCount = 0;
+      int absentCount = 0;
+      int pendingCount = 0;
+      int plannedMinutes = 0;
+      int actualMinutes = 0;
+      int absentMinutes = 0;
+      int pendingMinutes = 0;
+
+      for (final o in regularOccs) {
+        final minutes = minutesOfOccurrence(o);
+        plannedCount += 1;
+        plannedMinutes += minutes;
+
+        var records = _attendanceRecords
+            .where((r) => r.studentId == studentId && r.occurrenceId == o.id)
+            .toList();
+        // Backward compatible fallback:
+        // occurrence_id가 아직 백필되지 않은 과거 데이터는 "시간/세트"로 매칭하여 집계 정확도를 유지한다.
+        if (records.isEmpty) {
+          final sid = (o.setId ?? '').trim();
+          final eff = effectiveDateTimeOfOccurrence(o);
+          records = _attendanceRecords.where((r) {
+            if (r.studentId != studentId) return false;
+            if (!sameMinute(r.classDateTime, eff)) return false;
+            if (sid.isNotEmpty && (r.setId ?? '') != sid) return false;
+            return true;
+          }).toList();
+        }
+
+        AttendanceRecord? actualRec;
+        AttendanceRecord? absentRec;
+        for (final r in records) {
+          final bool isActual = r.isPresent || r.arrivalTime != null || r.departureTime != null;
+          if (isActual) {
+            actualRec = r;
+            break;
+          }
+          // 명시 결석: isPlanned=false && 미출석
+          if (!r.isPlanned && !r.isPresent && r.arrivalTime == null && r.departureTime == null) {
+            absentRec = r;
+          }
+        }
+
+        if (actualRec != null) {
+          actualCount += 1;
+          final m = actualRec!.classEndTime.difference(actualRec.classDateTime).inMinutes;
+          actualMinutes += (m > 0 ? m : minutes);
+          continue;
+        }
+
+        // 미래 회차는 결석/미기록으로 분류하지 않는다.
+        final effectiveDt = effectiveDateTimeOfOccurrence(o);
+        if (effectiveDt.isAfter(nowRef)) {
+          continue;
+        }
+
+        if (absentRec != null) {
+          absentCount += 1;
+          absentMinutes += minutes;
+        } else {
+          pendingCount += 1;
+          pendingMinutes += minutes;
+        }
+      }
+
+      return CycleAttendanceSummary(
+        studentId: studentId,
+        cycle: cycle,
+        start: start,
+        end: end,
+        plannedCount: plannedCount,
+        actualCount: actualCount,
+        absentCount: absentCount,
+        pendingCount: pendingCount,
+        plannedMinutes: plannedMinutes,
+        actualMinutes: actualMinutes,
+        absentMinutes: absentMinutes,
+        pendingMinutes: pendingMinutes,
+      );
+    }
 
     int plannedCount = 0;
     int actualCount = 0;

@@ -1041,7 +1041,7 @@ class DataManager {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('session_overrides')
-          .select('id,student_id,session_type_id,set_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
+          .select('id,student_id,session_type_id,set_id,occurrence_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       final list = rows as List<dynamic>;
@@ -1056,6 +1056,7 @@ class DataManager {
           studentId: m['student_id'] as String,
           sessionTypeId: m['session_type_id'] as String?,
           setId: m['set_id'] as String?,
+          occurrenceId: m['occurrence_id']?.toString(),
           overrideType: SessionOverride.parseType(m['override_type'] as String),
           originalClassDateTime: parseTsOpt('original_class_datetime'),
           replacementClassDateTime: parseTsOpt('replacement_class_datetime'),
@@ -1090,6 +1091,7 @@ class DataManager {
         'student_id': overrideData.studentId,
         'session_type_id': overrideData.sessionTypeId,
         'set_id': overrideData.setId,
+        'occurrence_id': overrideData.occurrenceId,
         'override_type': SessionOverride.typeToString(overrideData.overrideType),
         'original_class_datetime': overrideData.originalClassDateTime?.toUtc().toIso8601String(),
         'replacement_class_datetime': overrideData.replacementClassDateTime?.toUtc().toIso8601String(),
@@ -1124,6 +1126,7 @@ class DataManager {
         'student_id': newData.studentId,
         'session_type_id': newData.sessionTypeId,
         'set_id': newData.setId,
+        'occurrence_id': newData.occurrenceId,
         'override_type': SessionOverride.typeToString(newData.overrideType),
         'original_class_datetime': newData.originalClassDateTime?.toUtc().toIso8601String(),
         'replacement_class_datetime': newData.replacementClassDateTime?.toUtc().toIso8601String(),
@@ -2261,6 +2264,7 @@ class DataManager {
     try { await loadTeachers(); } catch (_) {}
     try { await loadClasses(); } catch (_) {}
     try { await loadPaymentRecords(); } catch (_) {}
+    try { await AttendanceService.instance.loadLessonOccurrences(); } catch (_) {}
     try { await loadAttendanceRecords(); } catch (_) {}
     try { await loadMemos(); } catch (_) {}
     try { await loadResourceFolders(); } catch (_) {}

@@ -2,6 +2,7 @@
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
+import '../../services/attendance_service.dart';
 import '../../models/payment_type.dart';
 import '../../services/academy_db.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -139,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isOwner = false; // 원장 여부 캐시
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
   bool _resettingPlannedAll = false; // [추가] 예정 수업 전체 재생성 진행 상태
+  bool _occurrenceBackfillRunning = false; // [임시] occurrence 백필 도구 실행 상태
 
   @override
   void initState() {
@@ -176,6 +178,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() { _isSuperAdmin = false; });
+    }
+  }
+
+  Future<void> _runOccurrenceBackfillTool() async {
+    if (!_isOwner && !_isSuperAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('권한이 없습니다. (원장/플랫폼 관리자만 실행 가능)')),
+      );
+      return;
+    }
+    if (_occurrenceBackfillRunning) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0B1112),
+        title: const Text('occurrence 백필(임시 도구)', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        content: const Text(
+          '원본 회차(lesson_occurrences)를 생성/보장하고,\n'
+          'attendance_records / session_overrides의 occurrence_id를 채웁니다.\n\n'
+          '- 보강(replace): 원본 cycle/회차 고정\n'
+          '- 추가수업(add): extra occurrence로 분리(사이클 집계 제외)\n\n'
+          '데이터 양에 따라 시간이 오래 걸릴 수 있습니다.',
+          style: TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('실행', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _occurrenceBackfillRunning = true);
+
+    String phase = '시작 준비 중...';
+    int done = 0;
+    int total = 1;
+    String finalMessage = '';
+    BuildContext? dialogCtx;
+    StateSetter? dialogSetState;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogCtx = ctx;
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) {
+            dialogSetState = setStateDialog;
+            final double? v = (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('백필 진행 중', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(phase, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 14),
+                    LinearProgressIndicator(value: v, minHeight: 6),
+                    const SizedBox(height: 10),
+                    Text('$done / $total', style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                    if (finalMessage.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(finalMessage, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    try {
+      // dialog build가 완료되기 전에 progress callback이 먼저 올 수 있어서 약간 대기
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final res = await AttendanceService.instance.runOccurrenceBackfillTool(
+        onProgress: (p, d, t) {
+          phase = p;
+          done = d;
+          total = t <= 0 ? 1 : t;
+          dialogSetState?.call(() {});
+        },
+      );
+      finalMessage =
+          '완료: regular cycle=${res.ensuredCycles}, overrides=${res.updatedOverrides}, attendance=${res.updatedAttendance}, extra=${res.createdExtraOccurrences}';
+      dialogSetState?.call(() {});
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    } catch (e) {
+      finalMessage = '실패: $e';
+      dialogSetState?.call(() {});
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    } finally {
+      if (mounted) setState(() => _occurrenceBackfillRunning = false);
+      try {
+        if (dialogCtx != null) Navigator.of(dialogCtx!).pop();
+      } catch (_) {}
+      if (mounted && finalMessage.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(finalMessage)));
+      }
     }
   }
 
@@ -307,6 +420,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                // [임시] 관리 도구
+                if (_isOwner || _isSuperAdmin) ...[
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Text(
+                      '관리 도구(임시)',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F1F1F),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '원본 회차(occurrence) 백필',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'lesson_occurrences 생성 + attendance/session_overrides occurrence_id 채움\n'
+                                '(보강은 원본 cycle 귀속, 추가수업은 extra로 분리)',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: _occurrenceBackfillRunning ? null : () async => _runOccurrenceBackfillTool(),
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: _occurrenceBackfillRunning
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Text('실행'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 // AI 기능 토글
                 const Padding(
                   padding: EdgeInsets.only(top: 24),

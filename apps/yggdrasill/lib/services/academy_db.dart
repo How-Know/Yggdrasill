@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 39,
+      version: 40,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -200,6 +200,7 @@ class AcademyDbService {
             arrival_time TEXT,
             departure_time TEXT,
             notes TEXT,
+            occurrence_id TEXT,
             snapshot_id TEXT,
             batch_session_id TEXT,
             created_at TEXT,
@@ -297,6 +298,7 @@ class AcademyDbService {
             student_id TEXT NOT NULL,
             session_type_id TEXT,
             set_id TEXT,
+            occurrence_id TEXT,
             override_type TEXT NOT NULL,
             original_class_datetime TEXT,
             replacement_class_datetime TEXT,
@@ -317,6 +319,38 @@ class AcademyDbService {
         await db.execute('''
           CREATE INDEX idx_session_overrides_lookup
           ON session_overrides(student_id, replacement_class_datetime)
+        ''');
+
+        // v40: lesson_occurrences (원본 회차 고정 테이블)
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS lesson_occurrences (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'regular',
+            cycle INTEGER NOT NULL,
+            session_order INTEGER,
+            original_class_datetime TEXT NOT NULL,
+            original_class_end_time TEXT,
+            duration_minutes INTEGER,
+            session_type_id TEXT,
+            set_id TEXT,
+            snapshot_id TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_lesson_occurrences_student_cycle
+          ON lesson_occurrences(student_id, cycle, session_order)
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_lesson_occurrences_student_dt
+          ON lesson_occurrences(student_id, original_class_datetime)
+        ''');
+        await db.execute('''
+          CREATE UNIQUE INDEX IF NOT EXISTS uidx_lesson_occurrences_student_kind_set_dt
+          ON lesson_occurrences(student_id, kind, set_id, original_class_datetime)
         ''');
         await db.execute('''
           CREATE TABLE memos (
@@ -647,6 +681,54 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v39 lesson batch/batch_session_id 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 40) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS lesson_occurrences (
+                id TEXT PRIMARY KEY,
+                student_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'regular',
+                cycle INTEGER NOT NULL,
+                session_order INTEGER,
+                original_class_datetime TEXT NOT NULL,
+                original_class_end_time TEXT,
+                duration_minutes INTEGER,
+                session_type_id TEXT,
+                set_id TEXT,
+                snapshot_id TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_lesson_occurrences_student_cycle
+              ON lesson_occurrences(student_id, cycle, session_order)
+            ''');
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_lesson_occurrences_student_dt
+              ON lesson_occurrences(student_id, original_class_datetime)
+            ''');
+            await db.execute('''
+              CREATE UNIQUE INDEX IF NOT EXISTS uidx_lesson_occurrences_student_kind_set_dt
+              ON lesson_occurrences(student_id, kind, set_id, original_class_datetime)
+            ''');
+
+            final attCols = await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final hasOccInAttendance = attCols.any((c) => c['name'] == 'occurrence_id');
+            if (!hasOccInAttendance) {
+              await db.execute("ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT");
+            }
+
+            final ovCols = await db.rawQuery("PRAGMA table_info(session_overrides)");
+            final hasOccInOverrides = ovCols.any((c) => c['name'] == 'occurrence_id');
+            if (!hasOccInOverrides) {
+              await db.execute("ALTER TABLE session_overrides ADD COLUMN occurrence_id TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v40 lesson_occurrences/occurrence_id 추가 실패: $e');
           }
         }
         if (oldVersion < 37) {
@@ -2670,6 +2752,7 @@ class AcademyDbService {
             arrival_time TEXT,
             departure_time TEXT,
             notes TEXT,
+            occurrence_id TEXT,
             snapshot_id TEXT,
             created_at TEXT,
             updated_at TEXT,
@@ -2689,6 +2772,11 @@ class AcademyDbService {
         if (!columnNames.contains('class_end_time')) {
           print('[DEBUG] class_end_time 컬럼 추가 중...');
           await dbClient.execute('ALTER TABLE attendance_records ADD COLUMN class_end_time TEXT');
+        }
+
+        if (!columnNames.contains('occurrence_id')) {
+          print('[DEBUG] occurrence_id 컬럼 추가 중...');
+          await dbClient.execute('ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT');
         }
         
         // date 컬럼이 있으면 삭제 (SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재생성)
@@ -2716,6 +2804,7 @@ class AcademyDbService {
               arrival_time TEXT,
               departure_time TEXT,
               notes TEXT,
+              occurrence_id TEXT,
               snapshot_id TEXT,
               created_at TEXT,
               updated_at TEXT,

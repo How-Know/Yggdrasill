@@ -5,6 +5,7 @@ import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
 import '../../../models/attendance_record.dart';
 import '../../../models/session_override.dart';
+import '../../../services/attendance_service.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/pill_tab_selector.dart';
 
@@ -555,6 +556,16 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   static String _ymd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
   static String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
+  String? _expandedMakeupKey; // 보강(대조) 카드 펼침 상태
+
+  static String _rowKey(AttendanceRecord r) {
+    final id = (r.id ?? '').trim();
+    if (id.isNotEmpty) return id;
+    final dt = r.classDateTime;
+    final m = DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute);
+    return '${r.studentId}|${m.toIso8601String()}';
+  }
+
   bool _isPurePlanned(AttendanceRecord r) {
     return r.isPlanned == true && !r.isPresent && r.arrivalTime == null;
   }
@@ -739,6 +750,15 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           );
         }
 
+        String cycleOrderLabel(AttendanceRecord r) {
+          final c = r.cycle;
+          final o = r.sessionOrder;
+          if (c == null && o == null) return '-';
+          if (c == null) return '-/$o';
+          if (o == null) return '$c/-';
+          return '$c/$o';
+        }
+
         Widget headerRow() {
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -749,12 +769,13 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             ),
             child: Row(
               children: [
+                cell('사이클/회차', flex: 10, align: TextAlign.center),
                 cell('날짜', flex: 14),
                 cell('시간', flex: 16),
                 cell('구분', flex: 10),
                 cell('등원', flex: 10),
                 cell('하원', flex: 10),
-                cell('수업명', flex: 26),
+                cell('수업명', flex: 22),
                 const SizedBox(width: 96), // action slot
               ],
             ),
@@ -780,19 +801,34 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final dt = r.classDateTime;
           final dateStr = _ymd(_dateOnly(dt));
           final timeStr = '${_hm(dt)}~${_hm(r.classEndTime)}';
+          final cycleStr = cycleOrderLabel(r);
           final cname = _classNameOf(r, classById);
 
           final ov = _findOverrideForRecord(ovs, r);
           final bool isWalkIn = r.isPlanned == false;
           final bool isMakeup = ov != null && ov.overrideType == OverrideType.replace;
           final bool isAddOverride = ov != null && ov.overrideType == OverrideType.add;
+          final String rowKey = _rowKey(r);
+          final bool expanded = isMakeup && _expandedMakeupKey == rowKey;
 
           final statusWidget = () {
             if (isPlannedRow) {
               final past = _dateOnly(dt).isBefore(today);
               return badge(past ? '미출석' : '예정', past ? const Color(0xFF5B4B2B) : const Color(0xFF223131));
             }
-            if (isMakeup) return badge('보강', const Color(0xFF1976D2));
+            if (isMakeup) {
+              return MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _expandedMakeupKey = expanded ? null : rowKey;
+                    });
+                  },
+                  child: badge('보강', const Color(0xFF1976D2)),
+                ),
+              );
+            }
             if (isAddOverride) return badge('추가', const Color(0xFF4CAF50));
             if (isWalkIn) return badge('추가수업', const Color(0xFF4CAF50));
             return badge('기록', const Color(0xFF223131));
@@ -806,8 +842,9 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
 
           final action = () {
             if (isPlannedRow) return const SizedBox(width: 96);
+            if (isMakeup) return const SizedBox(width: 96);
+            if (isAddOverride) return const SizedBox(width: 96);
             if (!isWalkIn) return const SizedBox(width: 96);
-            if (isMakeup || isAddOverride) return const SizedBox(width: 96);
             return SizedBox(
               width: 96,
               child: TextButton(
@@ -822,28 +859,112 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             );
           }();
 
-          return Opacity(
+          DateTime? origStart;
+          DateTime? origEnd;
+          if (isMakeup) {
+            final oid = (r.occurrenceId ?? '').trim();
+            if (oid.isNotEmpty) {
+              for (final o in AttendanceService.instance.lessonOccurrences) {
+                if (o.id == oid) {
+                  origStart = o.originalClassDateTime;
+                  origEnd = o.originalClassEndTime;
+                  origEnd ??= (origStart == null)
+                      ? null
+                      : origStart!.add(Duration(minutes: (o.durationMinutes ?? 0)));
+                  break;
+                }
+              }
+            }
+            origStart ??= ov?.originalClassDateTime;
+            final durMin = ov?.durationMinutes ?? r.classEndTime.difference(r.classDateTime).inMinutes;
+            origEnd ??= (origStart == null)
+                ? null
+                : origStart!.add(Duration(minutes: durMin <= 0 ? 0 : durMin));
+          }
+
+          Widget content = Opacity(
             opacity: dimmed ? 0.55 : 1.0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF15171C),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: border, width: 1),
-              ),
-              child: Row(
-                children: [
-                  cell(dateStr, flex: 14, style: rowStyle),
-                  cell(timeStr, flex: 16, style: rowStyle),
-                  Expanded(flex: 10, child: Align(alignment: Alignment.centerLeft, child: statusWidget)),
-                  cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
-                  cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
-                  cell(cname, flex: 26, style: rowStyle),
-                  action,
-                ],
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15171C),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: border, width: 1),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
+                        cell(dateStr, flex: 14, style: rowStyle),
+                        cell(timeStr, flex: 16, style: rowStyle),
+                        Expanded(flex: 10, child: Align(alignment: Alignment.centerLeft, child: statusWidget)),
+                        cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
+                        cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
+                        cell(cname, flex: 22, style: rowStyle),
+                        action,
+                      ],
+                    ),
+                    if (expanded) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF111317),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: border, width: 1),
+                        ),
+                        child: Opacity(
+                          opacity: 0.55,
+                          child: Row(
+                            children: [
+                              cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
+                              cell(origStart == null ? '-' : _ymd(_dateOnly(origStart!)), flex: 14, style: rowStyle),
+                              cell(
+                                (origStart == null || origEnd == null)
+                                    ? '-'
+                                    : '${_hm(origStart!)}~${_hm(origEnd!)}',
+                                flex: 16,
+                                style: rowStyle,
+                              ),
+                              Expanded(
+                                flex: 10,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: badge('원본', const Color(0xFF223131)),
+                                ),
+                              ),
+                              cell('-', flex: 10, style: rowStyle),
+                              cell('-', flex: 10, style: rowStyle),
+                              cell(cname, flex: 22, style: rowStyle),
+                              const SizedBox(width: 96),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           );
+
+          if (expanded) {
+            content = TapRegion(
+              onTapOutside: (_) {
+                if (!mounted) return;
+                setState(() => _expandedMakeupKey = null);
+              },
+              child: content,
+            );
+          }
+
+          return content;
         }
 
         final items = <Widget>[];
@@ -853,7 +974,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           items.add(headerRow());
           items.add(const SizedBox(height: 10));
           for (final r in attendance) {
-            final dimmed = _dateOnly(r.classDateTime).isBefore(today);
+            final dimmed = false; // ✅ 출결기록 비활성(흐림) 효과 제거
             items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: false));
             items.add(const SizedBox(height: 8));
           }

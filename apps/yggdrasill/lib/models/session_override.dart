@@ -9,6 +9,7 @@ class SessionOverride {
   final String studentId;
   final String? sessionTypeId; // 수업 종류(이름/ID)
   final String? setId; // 세트 식별자
+  final String? occurrenceId; // lesson_occurrences FK (원본 회차 고정 참조)
   final OverrideType overrideType;
   final DateTime? originalClassDateTime; // skip/replace 대상 회차
   final DateTime? replacementClassDateTime; // replace/add 대체/추가 회차
@@ -26,6 +27,7 @@ class SessionOverride {
     required this.studentId,
     this.sessionTypeId,
     this.setId,
+    this.occurrenceId,
     required this.overrideType,
     this.originalClassDateTime,
     this.replacementClassDateTime,
@@ -46,6 +48,7 @@ class SessionOverride {
     String? studentId,
     String? sessionTypeId,
     String? setId,
+    String? occurrenceId,
     OverrideType? overrideType,
     DateTime? originalClassDateTime,
     DateTime? replacementClassDateTime,
@@ -63,6 +66,7 @@ class SessionOverride {
       studentId: studentId ?? this.studentId,
       sessionTypeId: sessionTypeId ?? this.sessionTypeId,
       setId: setId ?? this.setId,
+      occurrenceId: occurrenceId ?? this.occurrenceId,
       overrideType: overrideType ?? this.overrideType,
       originalClassDateTime: originalClassDateTime ?? this.originalClassDateTime,
       replacementClassDateTime: replacementClassDateTime ?? this.replacementClassDateTime,
@@ -169,6 +173,7 @@ class SessionOverride {
       studentId: map['student_id'] as String,
       sessionTypeId: map['session_type_id'] as String?,
       setId: map['set_id'] as String?,
+      occurrenceId: map['occurrence_id']?.toString(),
       overrideType: _typeFromString(map['override_type'] as String),
       originalClassDateTime: map['original_class_datetime'] != null
           ? DateTime.parse(map['original_class_datetime'] as String)
@@ -193,6 +198,7 @@ class SessionOverride {
       'student_id': studentId,
       'session_type_id': sessionTypeId,
       'set_id': setId,
+      'occurrence_id': occurrenceId,
       'override_type': _typeToString(overrideType),
       'original_class_datetime': originalClassDateTime?.toIso8601String(),
       'replacement_class_datetime': replacementClassDateTime?.toIso8601String(),
