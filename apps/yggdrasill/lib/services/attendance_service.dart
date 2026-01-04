@@ -66,6 +66,85 @@ class AttendanceService {
     return DateTime.utc(u.year, u.month, u.day, u.hour, u.minute);
   }
 
+  // ✅ cycle/session_order 계산용 키(분 단위)
+  // - set_id가 다르면 같은 시각이라도 다른 회차로 취급(요구사항)
+  // - 초/밀리초는 무시하고 분 단위로 고정
+  static String _minuteKey(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    return '$y-$mo-$d-$h-$mi';
+  }
+
+  static String _sessionKeyForOrder({required String setId, required DateTime startLocal}) {
+    final sid = setId.trim();
+    return '$sid|${_minuteKey(startLocal)}';
+  }
+
+  /// 결제 사이클 내 수업을 "시간순(+set_id tie-break)"으로 정렬했을 때의 session_order(1..N) 맵을 만든다.
+  ///
+  /// - 주 목적: student_time_blocks 연속 수정 후 planned 재생성 시 회차가 랜덤으로 섞이는 문제 방지
+  /// - 범위: 해당 cycle 전체(dueDate~다음 dueDate)에서 계산
+  Map<String, int> _buildSessionOrderMapForStudentCycle({
+    required String studentId,
+    required int cycle,
+    List<StudentTimeBlock>? blocksOverride,
+  }) {
+    final range = _cycleRangeForStudent(studentId: studentId, cycle: cycle);
+    if (range == null) return const <String, int>{};
+
+    final blocks = (blocksOverride ?? _d.getStudentTimeBlocks())
+        .where((b) => b.studentId == studentId && (b.setId ?? '').trim().isNotEmpty)
+        .toList();
+    if (blocks.isEmpty) return const <String, int>{};
+
+    final candidates = <_PlannedDailyAgg>[];
+    for (DateTime day = range.start; day.isBefore(range.end); day = day.add(const Duration(days: 1))) {
+      final dayIdx = day.weekday - 1;
+      final Map<String, _PlannedDailyAgg> aggBySet = {};
+      for (final b in blocks.where((b) => b.dayIndex == dayIdx)) {
+        if (!_isBlockActiveOnDate(b, day)) continue;
+        final setId = (b.setId ?? '').trim();
+        if (setId.isEmpty) continue;
+        final classStart = DateTime(day.year, day.month, day.day, b.startHour, b.startMinute);
+        final classEnd = classStart.add(b.duration);
+        final agg = aggBySet.putIfAbsent(
+          setId,
+          () => _PlannedDailyAgg(
+            studentId: studentId,
+            setId: setId,
+            start: classStart,
+            end: classEnd,
+            sessionTypeId: b.sessionTypeId,
+          ),
+        );
+        if (classStart.isBefore(agg.start)) agg.start = classStart;
+        if (classEnd.isAfter(agg.end)) agg.end = classEnd;
+        if (agg.sessionTypeId == null && b.sessionTypeId != null) {
+          agg.sessionTypeId = b.sessionTypeId;
+        }
+      }
+      candidates.addAll(aggBySet.values);
+    }
+
+    if (candidates.isEmpty) return const <String, int>{};
+
+    candidates.sort((a, b) {
+      final cmpDt = a.start.compareTo(b.start);
+      if (cmpDt != 0) return cmpDt;
+      return a.setId.compareTo(b.setId);
+    });
+
+    final map = <String, int>{};
+    for (int i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
+      map[_sessionKeyForOrder(setId: c.setId, startLocal: c.start)] = i + 1;
+    }
+    return map;
+  }
+
   AttendanceDependencies? _deps;
   void configure(AttendanceDependencies deps) {
     _deps = deps;
@@ -903,6 +982,199 @@ class AttendanceService {
       updatedAttendance: updatedAttendance,
       createdExtraOccurrences: createdExtraOccurrences,
     );
+  }
+
+  /// (임시 관리자 도구) attendance_records의 cycle/session_order 백필
+  ///
+  /// 요구사항:
+  /// - 결제 사이클 내 수업을 시간순(+set_id tie-break)으로 나열한 값을 session_order로 사용
+  /// - 등록일자 이전의 기록은 cycle/session_order를 null로 비운다.
+  ///
+  /// 주의:
+  /// - 대량 업데이트로 인해 updated_at/version이 변경되며, 다른 기기/사용자와 동시 편집 시 충돌이 날 수 있다.
+  Future<({
+    int scanned,
+    int updated,
+    int clearedBeforeRegistration,
+  })> runCycleSessionOrderBackfillTool({
+    DateTime? fromInclusive,
+    DateTime? toExclusive,
+    int pastDays = 365 * 2,
+    int futureDays = 365,
+    void Function(String phase, int done, int total)? onProgress,
+  }) async {
+    final String academyId = (await TenantService.instance.getActiveAcademyId()) ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+
+    final now = DateTime.now();
+    final todayLocal = DateTime(now.year, now.month, now.day);
+    final DateTime fromLocal = fromInclusive != null
+        ? fromInclusive.toLocal()
+        : todayLocal.subtract(Duration(days: pastDays));
+    final DateTime toLocal = toExclusive != null
+        ? toExclusive.toLocal()
+        : todayLocal.add(Duration(days: futureDays + 1)); // ✅ toExclusive
+
+    if (!fromLocal.isBefore(toLocal)) {
+      return (scanned: 0, updated: 0, clearedBeforeRegistration: 0);
+    }
+
+    // 0) prereq loads
+    try {
+      await _d.loadPaymentRecords();
+    } catch (_) {}
+
+    // ✅ 이 도구는 현재 메모리에 로드된 출석만 처리하면 누락이 생길 수 있으므로,
+    // 지정 범위를 먼저 서버에서 재로딩하여 "범위 내 전체"를 대상으로 처리한다.
+    onProgress?.call('출석 기록 로드', 0, 1);
+    await loadAttendanceRecords(fromInclusive: fromLocal, toExclusive: toLocal);
+
+    try {
+      await loadLessonOccurrences(fromInclusive: fromLocal, toExclusive: toLocal);
+    } catch (_) {}
+
+    // 1) registration_date map
+    onProgress?.call('학생 등록일 로드', 0, 1);
+    final Map<String, DateTime> registrationDateByStudent = {};
+    try {
+      final rows = await supa
+          .from('student_payment_info')
+          .select('student_id,registration_date')
+          .eq('academy_id', academyId);
+      if (rows is List) {
+        for (final row0 in rows) {
+          final m = Map<String, dynamic>.from(row0 as Map);
+          final sid = (m['student_id'] ?? '').toString().trim();
+          final regStr = m['registration_date']?.toString();
+          if (sid.isEmpty || regStr == null || regStr.isEmpty) continue;
+          final reg = DateTime.tryParse(regStr);
+          if (reg == null) continue;
+          final d = reg.toLocal();
+          registrationDateByStudent[sid] = DateTime(d.year, d.month, d.day);
+        }
+      }
+    } catch (e) {
+      if (_sideDebug) {
+        print('[BACKFILL][cycle/session][WARN] registration_date 로드 실패(무시): $e');
+      }
+    }
+
+    // 2) occurrence map (cycle/session_order 우선)
+    final Map<String, LessonOccurrence> occById = {
+      for (final o in _lessonOccurrences) if (o.id.isNotEmpty) o.id: o,
+    };
+
+    // 3) replace override map (replacement -> original)
+    final Map<String, DateTime> originalByReplacementMinute = {};
+    for (final ov in _d.getSessionOverrides()) {
+      if (ov.overrideType != OverrideType.replace) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final rep = ov.replacementClassDateTime;
+      final orig = ov.originalClassDateTime;
+      if (rep == null || orig == null) continue;
+      originalByReplacementMinute['${ov.studentId}|${_minuteKey(rep.toLocal())}'] = orig.toLocal();
+    }
+
+    DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+    // 4) per-student-cycle order map cache
+    final Map<String, Map<String, int>> orderMapCache = {};
+    Map<String, int> orderMapOf(String studentId, int cycle) {
+      final key = '$studentId|$cycle';
+      return orderMapCache.putIfAbsent(
+        key,
+        () => _buildSessionOrderMapForStudentCycle(
+          studentId: studentId,
+          cycle: cycle,
+          blocksOverride: _d.getStudentTimeBlocks(),
+        ),
+      );
+    }
+
+    // 5) targets within range
+    final targets = _attendanceRecords.where((r) {
+      final dt = r.classDateTime;
+      return !dt.isBefore(fromLocal) && dt.isBefore(toLocal);
+    }).toList();
+
+    int updated = 0;
+    int cleared = 0;
+
+    for (int i = 0; i < targets.length; i++) {
+      onProgress?.call('출석 cycle/회차 백필', i, targets.length);
+      final r = targets[i];
+      final rid = (r.id ?? '').trim();
+      if (rid.isEmpty) continue;
+
+      final reg = registrationDateByStudent[r.studentId];
+
+      // replacement(보강)인 경우: cycle/session_order는 원본 시간 기준으로 계산해야 한다.
+      final repKey = '${r.studentId}|${_minuteKey(r.classDateTime.toLocal())}';
+      final DateTime effectiveLocalForOrder = originalByReplacementMinute[repKey] ?? r.classDateTime.toLocal();
+
+      int? nextCycle;
+      int? nextOrder;
+
+      // 등록일 이전은 null 처리
+      if (reg != null && dateOnly(effectiveLocalForOrder).isBefore(reg)) {
+        nextCycle = null;
+        nextOrder = null;
+        if (r.cycle != null || r.sessionOrder != null) {
+          cleared += 1;
+        }
+      } else {
+        // 1) occurrence가 있으면 그 값을 우선 사용 (가장 안정적)
+        final oid = (r.occurrenceId ?? '').trim();
+        final occ = (oid.isEmpty) ? null : occById[oid];
+        if (occ != null) {
+          nextCycle = occ.cycle;
+          nextOrder = occ.sessionOrder; // extra는 null일 수 있음
+        } else {
+          // 2) cycle은 결제 due_date 기준
+          nextCycle = _resolveCycleByDueDate(r.studentId, effectiveLocalForOrder);
+          // 3) session_order는 (cycle 범위 내 수업을 시간순으로 나열) 맵에서 결정
+          final setId = (r.setId ?? '').trim();
+          if (nextCycle != null && nextCycle! > 0 && setId.isNotEmpty) {
+            final map = orderMapOf(r.studentId, nextCycle!);
+            final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
+            nextOrder = map[k];
+          } else {
+            nextOrder = null;
+          }
+        }
+      }
+
+      // no change -> skip
+      if (r.cycle == nextCycle && r.sessionOrder == nextOrder) {
+        continue;
+      }
+
+      try {
+        await supa.from('attendance_records').update({
+          'cycle': nextCycle,
+          'session_order': nextOrder,
+        }).eq('id', rid);
+
+        final idx = _attendanceRecords.indexWhere((x) => x.id == rid);
+        if (idx != -1) {
+          _attendanceRecords[idx] = _attendanceRecords[idx].copyWith(
+            cycle: nextCycle,
+            sessionOrder: nextOrder,
+            updatedAt: DateTime.now(),
+          );
+        }
+        updated += 1;
+      } catch (e) {
+        if (_sideDebug) {
+          print('[BACKFILL][cycle/session][WARN] update failed id=$rid: $e');
+        }
+      }
+    }
+
+    attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    onProgress?.call('완료', 1, 1);
+    return (scanned: targets.length, updated: updated, clearedBeforeRegistration: cleared);
   }
 
   Future<void> subscribeAttendanceRealtime() async {
@@ -2563,12 +2835,19 @@ class AttendanceService {
     final Map<String, DateTime> earliestMonthByKey = {};
     final Map<String, int> monthCountByKey = {};
     _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    final Map<String, Map<String, int>> dateOrderByKey = {};
-    final Map<String, int> counterByKey = {};
-    _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
+    // ✅ 회차(session_order)는 "결제 사이클 내 수업을 시간순으로 나열"한 순서를 따른다.
+    // - set_id가 다르면 같은 날짜라도 서로 다른 회차
+    // - student_time_blocks 연속 수정 시에도 결정적으로 동일한 결과가 나오도록, cycle 전체 범위를 기반으로 맵을 만든다.
+    final Map<int, Map<String, int>> _orderMapByCycle = {};
+    Map<String, int> _getOrderMap(int cycle) => _orderMapByCycle.putIfAbsent(
+          cycle,
+          () => _buildSessionOrderMapForStudentCycle(
+            studentId: studentId,
+            cycle: cycle,
+            // cycle 전체를 계산할 때는 "전체 블록"이 필요(부분 setIds만 넘기면 글로벌 순서가 깨짐)
+            blocksOverride: _d.getStudentTimeBlocks(),
+          ),
+        );
 
     String minKey(DateTime dt) =>
         '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
@@ -2673,11 +2952,17 @@ class AttendanceService {
         }
       }
 
-      for (final agg in aggBySet.values) {
+      final aggs = aggBySet.values.toList()
+        ..sort((a, b) {
+          final cmpDt = a.start.compareTo(b.start);
+          if (cmpDt != 0) return cmpDt;
+          return a.setId.compareTo(b.setId);
+        });
+
+      for (final agg in aggs) {
         final classDateTime = agg.start;
         final classEndTime = agg.end;
         final keyBase = '$studentId|${agg.setId}';
-        final dateKey = _dateKey(classDateTime);
 
         // ✅ 휴강/대체(원래 회차)면 base planned는 만들지 않는다.
         final ov = overrideByOriginalKey['$studentId|${minKey(classDateTime)}'];
@@ -2699,20 +2984,18 @@ class AttendanceService {
         }
 
         int? cycle = _resolveCycleByDueDate(studentId, classDateTime);
-        int sessionOrder;
+        int sessionOrder = 1;
         if (cycle == null) {
           final monthDate = _monthKey(classDateTime);
           cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
         }
-        final studentCycleKey = '$studentId|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
+        if (cycle != null && cycle > 0) {
+          final orderMap = _getOrderMap(cycle);
+          final key = _sessionKeyForOrder(setId: agg.setId, startLocal: classDateTime);
+          final so = orderMap[key];
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
         }
         if (cycle == null || cycle == 0) {
           print(
@@ -2836,25 +3119,24 @@ class AttendanceService {
         final end = start.add(Duration(minutes: durMin));
 
         int? cycle = _resolveCycleByDueDate(studentId, start);
-        int sessionOrder;
+        int? sessionOrder;
         if (cycle == null) {
           final monthDate = _monthKey(start);
           final keyBase = '$studentId|$setId';
           cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
         }
-        final studentCycleKey = '$studentId|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        final dateKey = _dateKey(start);
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
-        }
         if (cycle == null || cycle == 0) cycle = 1;
-        if (sessionOrder <= 0) sessionOrder = 1;
+
+        // ✅ session_order는 결제 사이클 내 "전체 수업"을 시간순(+set_id tie-break)으로 나열한 값
+        // (set_id가 다르면 다른 회차)
+        if (cycle != null && cycle > 0) {
+          final map = _getOrderMap(cycle);
+          final k = _sessionKeyForOrder(setId: setId, startLocal: start);
+          final so = map[k];
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
+        }
 
         // ✅ replace 오버라이드는 원본 occurrence로 귀속(cycle/sessionOrder 고정)
         LessonOccurrence? repOcc;

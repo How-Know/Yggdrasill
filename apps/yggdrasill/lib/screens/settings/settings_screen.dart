@@ -141,6 +141,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
   bool _resettingPlannedAll = false; // [추가] 예정 수업 전체 재생성 진행 상태
   bool _occurrenceBackfillRunning = false; // [임시] occurrence 백필 도구 실행 상태
+  bool _cycleOrderBackfillRunning = false; // [임시] 출석 cycle/session_order 백필 도구 실행 상태
 
   @override
   void initState() {
@@ -286,6 +287,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
       try {
         if (dialogCtx != null) Navigator.of(dialogCtx!).pop();
       } catch (_) {}
+      if (mounted && finalMessage.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(finalMessage)));
+      }
+    }
+  }
+
+  Future<void> _runCycleOrderBackfillTool() async {
+    if (!_isOwner && !_isSuperAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('권한이 없습니다. (원장/플랫폼 관리자만 실행 가능)')),
+      );
+      return;
+    }
+    if (_cycleOrderBackfillRunning) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0B1112),
+        title: const Text('출석 cycle/회차 백필(임시 도구)', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        content: const Text(
+          '모든 학생의 attendance_records에 대해 cycle/session_order를 재계산합니다.\n\n'
+          '- 등록일자 이전(class_date_time < registration_date) 기록은 cycle/session_order를 null로 비웁니다.\n'
+          '- 결제 사이클 내 수업을 시간순(+set_id tie-break)으로 나열한 값을 회차로 사용합니다.\n'
+          '- 보강(replace)은 원본 시간 기준으로 계산합니다.\n\n'
+          '⚠️ 대량 업데이트로 인해 updated_at/version이 변경됩니다.\n'
+          '실행 중에는 다른 기기에서 출석/시간표 편집을 피해주세요.',
+          style: TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('실행', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _cycleOrderBackfillRunning = true);
+
+    String phase = '시작 준비 중...';
+    int done = 0;
+    int total = 1;
+    String finalMessage = '';
+    BuildContext? dialogCtx;
+    StateSetter? dialogSetState;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogCtx = ctx;
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) {
+            dialogSetState = setStateDialog;
+            final double? v = (total <= 0) ? null : (done / total).clamp(0.0, 1.0);
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('백필 진행 중', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(phase, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 14),
+                    LinearProgressIndicator(value: v, minHeight: 6),
+                    const SizedBox(height: 10),
+                    Text('$done / $total', style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                    if (finalMessage.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(finalMessage, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    try {
+      final res = await AttendanceService.instance.runCycleSessionOrderBackfillTool(
+        pastDays: 365 * 2,
+        futureDays: 365,
+        onProgress: (p, d, t) {
+          phase = p;
+          done = d;
+          total = t;
+          dialogSetState?.call(() {});
+        },
+      );
+      finalMessage =
+          '스캔: ${res.scanned}건\n업데이트: ${res.updated}건\n등록일 이전 null 처리: ${res.clearedBeforeRegistration}건';
+      dialogSetState?.call(() {});
+      await Future.delayed(const Duration(milliseconds: 350));
+    } catch (e) {
+      finalMessage = '실패: $e';
+      dialogSetState?.call(() {});
+    } finally {
+      if (mounted) setState(() => _cycleOrderBackfillRunning = false);
+      if (dialogCtx != null && Navigator.of(dialogCtx!).canPop()) {
+        Navigator.of(dialogCtx!).pop();
+      }
       if (mounted && finalMessage.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(finalMessage)));
       }
@@ -473,6 +585,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onPressed: _occurrenceBackfillRunning ? null : () async => _runOccurrenceBackfillTool(),
                           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
                           child: _occurrenceBackfillRunning
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Text('실행'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F1F1F),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '출석 cycle/회차 백필',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'attendance_records의 cycle/session_order를 재계산\n'
+                                '(등록일 이전은 null, 결제 사이클 내 시간순 정렬 기반)',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(
+                          onPressed: _cycleOrderBackfillRunning ? null : () async => _runCycleOrderBackfillTool(),
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          child: _cycleOrderBackfillRunning
                               ? const SizedBox(
                                   width: 18,
                                   height: 18,

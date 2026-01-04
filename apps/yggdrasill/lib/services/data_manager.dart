@@ -4141,11 +4141,34 @@ DateTime? _lastClassesOrderSaveStart;
     _pendingRegenEffectiveStartByStudent.clear();
     _plannedRegenTimer?.cancel();
     _plannedRegenTimer = null;
+    final today = _todayDateOnly();
     for (final entry in pending.entries) {
+      final studentId = entry.key;
+
+      // ✅ 회차(session_order)는 결제 사이클 내 "전체 수업"을 시간순으로 나열한 값이므로,
+      // set 단위로만 재생성하면(연속 수정 시) 기존 다른 set과의 순서가 섞여 랜덤처럼 보일 수 있다.
+      // → 학생 단위로 "활성/미래" 모든 set_id를 한 번에 재생성하여 순서를 안정화한다.
+      final allSetIds = _studentTimeBlocks
+          .where((b) {
+            if (b.studentId != studentId) return false;
+            final setId = (b.setId ?? '').trim();
+            if (setId.isEmpty) return false;
+            final end = b.endDate != null
+                ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+                : null;
+            if (end != null && end.isBefore(today)) return false;
+            return true;
+          })
+          .map((b) => (b.setId ?? '').trim())
+          .where((s) => s.isNotEmpty)
+          .toSet();
+
+      if (allSetIds.isEmpty) continue;
+
       await regeneratePlannedWithSnapshot(
-        studentId: entry.key,
-        setIds: entry.value,
-        effectiveStart: pendingStart[entry.key],
+        studentId: studentId,
+        setIds: allSetIds,
+        effectiveStart: pendingStart[studentId],
         days: 14,
       );
     }
