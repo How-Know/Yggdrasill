@@ -736,20 +736,40 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             .where((o) => o.studentId == widget.studentId)
             .toList();
 
-        // 1) 출석 기록(실기록): planned 여부와 무관하게 실제 등원/하원/출석 정보가 있는 항목
-        // ✅ 조회기간 필터는 "출석 기록"에만 적용 (예정 수업은 필터 영향 X)
+        // ✅ 조회기간 필터: "출석/과거" 영역에만 적용
+        // - 예정 수업(오늘 포함 미래)은 필터 영향 X (짧은 기간을 선택해도 앞으로의 일정은 항상 보여야 함)
         bool inRange(DateTime dt) {
           final d = _dateOnly(dt);
           return !d.isBefore(qs) && !d.isAfter(qe);
         }
-        final attendance = all.where((r) => !_isPurePlanned(r) && inRange(r.classDateTime)).toList()
-          ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
 
-        // 2) 예정 수업: 순수 planned만
-        final planned = all.where(_isPurePlanned).toList()
+        // 순수 예정(planned) 전체 (보강 연결 후보로도 사용)
+        final purePlanned = all.where(_isPurePlanned).toList()
           ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
 
-        if (attendance.isEmpty && planned.isEmpty) {
+        // 1) 실제 출석 기록(실기록): planned 여부와 무관하게 등/하원/출석 정보가 있는 항목
+        //    - 조회기간 필터 적용
+        final actual = all.where((r) => !_isPurePlanned(r) && inRange(r.classDateTime)).toList();
+
+        // 2) 예정 수업(순수 planned) 중 "오늘 이전"은 출석 리스트(과거 영역)에 포함
+        //    - 조회기간 필터 적용
+        final plannedPast = purePlanned
+            .where((r) => _dateOnly(r.classDateTime).isBefore(today) && inRange(r.classDateTime))
+            .toList();
+
+        // 3) 예정 수업(오늘 포함 미래)은 아래(미래 영역)로 유지
+        //    - 조회기간 필터 미적용
+        final plannedFuture =
+            purePlanned.where((r) => !_dateOnly(r.classDateTime).isBefore(today)).toList()
+              ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+        // 사용자에게는 "하나의 리스트"처럼 보이도록 병합
+        // - 과거 영역: 실제 출석 + 오늘 이전 예정(미출석)
+        // - 미래 영역: 오늘 포함 예정
+        final mergedPast = <AttendanceRecord>[...actual, ...plannedPast]
+          ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+        if (mergedPast.isEmpty && plannedFuture.isEmpty) {
           return const Center(
             child: Text(
               '출석/예정 기록이 없습니다.',
@@ -917,7 +937,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                   const SizedBox(width: 10),
                   TextButton(
                     onPressed: () async {
-                      final candidates = planned.where((p) => p.id != r.id).toList();
+                      final candidates = purePlanned.where((p) => p.id != r.id).toList();
                       await _connectWalkInToPlanned(walkIn: r, candidates: candidates, classById: classById);
                     },
                     style: TextButton.styleFrom(
@@ -1020,30 +1040,47 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           return content;
         }
 
-        final items = <Widget>[];
-        if (attendance.isNotEmpty) {
-          items.add(const Text('출석 기록', style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w900)));
-          items.add(const SizedBox(height: 8));
-          items.add(headerRow());
-          items.add(const SizedBox(height: 10));
-          for (final r in attendance) {
-            final dimmed = false; // ✅ 출결기록 비활성(흐림) 효과 제거
-            items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: false));
-            items.add(const SizedBox(height: 8));
-          }
-          items.add(const SizedBox(height: 12));
+        Widget todayDivider() {
+          final label = _ymdWithWeekday(today);
+          const accent = Color(0xFF33A373);
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              children: [
+                const Expanded(child: SizedBox(height: 1, child: ColoredBox(color: accent))),
+                const SizedBox(width: 12),
+                Text(
+                  '오늘 · $label',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(child: SizedBox(height: 1, child: ColoredBox(color: accent))),
+              ],
+            ),
+          );
         }
 
-        if (planned.isNotEmpty) {
-          items.add(const Text('수업 일정 계획', style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w900)));
+        final items = <Widget>[];
+        items.add(headerRow());
+        items.add(const SizedBox(height: 10));
+
+        // 1) 과거(출석 기록 + 오늘 이전 예정/미출석)
+        for (final r in mergedPast) {
+          final dimmed = false; // ✅ 출결기록 비활성(흐림) 효과 제거
+          items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: _isPurePlanned(r)));
           items.add(const SizedBox(height: 8));
-          items.add(headerRow());
-          items.add(const SizedBox(height: 10));
-          for (final r in planned) {
-            final dimmed = false;
-            items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: true));
-            items.add(const SizedBox(height: 8));
-          }
+        }
+
+        // 2) 오늘 기준 구분선 (과거/미래 모두 있을 때만)
+        if (mergedPast.isNotEmpty && plannedFuture.isNotEmpty) {
+          items.add(todayDivider());
+        }
+
+        // 3) 미래(오늘 포함 예정)
+        for (final r in plannedFuture) {
+          final dimmed = false;
+          items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: true));
+          items.add(const SizedBox(height: 8));
         }
 
         return Scrollbar(
