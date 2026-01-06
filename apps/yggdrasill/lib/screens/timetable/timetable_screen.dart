@@ -453,6 +453,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
     super.initState();
     _loadData();
     _loadOperatingHours();
+    // ✅ 주 이동(과거/미래)에서도 정확히 렌더링되도록, 현재 주의 time blocks를 미리 로드
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
+    });
     // 일정 스토어 초기화
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ScheduleStore.instance.load();
@@ -635,6 +639,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         _selectedDayDate = null;
       }
     });
+    // ✅ 주 이동 시 해당 주 time blocks 프리로드(비동기, 중복 호출은 내부에서 방지)
+    unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(date));
   }
 
   void _handleStudentMenu() {

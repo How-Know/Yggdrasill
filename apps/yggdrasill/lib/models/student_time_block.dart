@@ -13,7 +13,9 @@ class StudentTimeBlock {
   final DateTime? endDate; // 적용 종료일(누적 기록용), null이면 현재 유효
   final String? setId; // 같은 셋에 속한 블록끼리 공유
   final int? number;   // 1, 2, 3... 넘버링
-  final String? sessionTypeId; // 수업카드 드롭시 등록되는 수업명(또는 고유값)
+  // ⚠️ 이름은 sessionTypeId지만, 실제 의미는 "수업카드(classes)의 id"를 참조하는 값이다.
+  // (DB 컬럼명: student_time_blocks.session_type_id → classes.id)
+  final String? sessionTypeId;
   final int? weeklyOrder; // 주간 내 n번째 수업(요일/시간 순 정렬 결과)
 
   StudentTimeBlock({

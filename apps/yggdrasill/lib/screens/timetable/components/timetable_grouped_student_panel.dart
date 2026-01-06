@@ -333,25 +333,34 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                   : Colors.transparent;
                             }
                             if (indicatorOverride == null) {
-                              final block = DataManager.instance.studentTimeBlocks.firstWhere(
-                                (b) =>
-                                    b.studentId == s.student.id &&
-                                    b.dayIndex == dIdx &&
-                                    b.startHour == st.hour &&
-                                    b.startMinute == st.minute,
-                                orElse: () => StudentTimeBlock(
-                                  id: '',
-                                  studentId: '',
-                                  dayIndex: 0,
-                                  startHour: 0,
-                                  startMinute: 0,
-                                  duration: Duration.zero,
-                                  createdAt: DateTime(0),
-                                  startDate: DateTime(0),
-                                  sessionTypeId: null,
-                                  setId: null,
-                                ),
-                              );
+                              final ref = DateTime(st.year, st.month, st.day);
+                              bool isActiveOn(StudentTimeBlock b) {
+                                final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+                                final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+                                return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
+                              }
+                              final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+                              final candidates = weekBlocks.where((b) =>
+                                  b.studentId == s.student.id &&
+                                  b.dayIndex == dIdx &&
+                                  b.startHour == st.hour &&
+                                  b.startMinute == st.minute &&
+                                  isActiveOn(b)
+                              ).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                              final block = candidates.isNotEmpty
+                                  ? candidates.first
+                                  : StudentTimeBlock(
+                                      id: '',
+                                      studentId: '',
+                                      dayIndex: 0,
+                                      startHour: 0,
+                                      startMinute: 0,
+                                      duration: Duration.zero,
+                                      createdAt: DateTime(0),
+                                      startDate: DateTime(0),
+                                      sessionTypeId: null,
+                                      setId: null,
+                                    );
                               blockNumber ??= block.number;
                               final sessionId = block.sessionTypeId;
                               if (sessionId != null && sessionId != '__default_class__') {
@@ -574,11 +583,21 @@ class _DraggablePanelCard extends StatelessWidget {
     if (blockOverride != null && blockOverride!.studentId == s.student.id) {
       return blockOverride!.setId;
     }
-    final block = DataManager.instance.studentTimeBlocks.firstWhere(
-      (b) => b.studentId == s.student.id && b.dayIndex == dayIndex && b.startHour == startTime.hour && b.startMinute == startTime.minute,
-      orElse: () => StudentTimeBlock(id: '', studentId: '', dayIndex: 0, startHour: 0, startMinute: 0, duration: Duration.zero, createdAt: DateTime(0), startDate: DateTime(0)),
-    );
-    return block.id.isEmpty ? null : block.setId;
+    final ref = refDateForActions ?? DateTime(startTime.year, startTime.month, startTime.day);
+    bool isActiveOn(StudentTimeBlock b) {
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
+    }
+    final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+    final candidates = weekBlocks.where((b) =>
+        b.studentId == s.student.id &&
+        b.dayIndex == dayIndex &&
+        b.startHour == startTime.hour &&
+        b.startMinute == startTime.minute &&
+        isActiveOn(b)
+    ).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return candidates.isEmpty ? null : candidates.first.setId;
   }
 
   @override

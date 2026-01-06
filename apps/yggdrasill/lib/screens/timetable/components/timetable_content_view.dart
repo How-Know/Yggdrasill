@@ -207,9 +207,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
     ConsultTrialLessonService.instance.slotsNotifier.addListener(_revListener);
     // 🧹 앱 시작 시 삭제된 수업의 sessionTypeId를 가진 블록들 정리
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _diagnoseOrphanedSessionTypeIds(); // 진단 먼저
+      // ✅ classes 로드가 완료되기 전에 cleanup이 실행되면,
+      // 정상 classId(session_type_id)를 "고아"로 오판해 time block을 닫아버리는(end_date 입력) 문제가 발생할 수 있다.
+      // → 여기서는 classes 로드를 다시 보장하고, classes가 비어있으면 cleanup을 스킵한다(안전 우선).
+      try {
+        await DataManager.instance.loadClasses();
+      } catch (_) {}
+      if (DataManager.instance.classes.isEmpty) {
+        // 네트워크 지연/일시 실패/초기 빈 상태에서의 오판 방지
+        return;
+      }
       await cleanupOrphanedSessionTypeIds();
-      await _diagnoseOrphanedSessionTypeIds(); // 정리 후 다시 확인
     });
     // 임시 진단: 특정 학생 블록 payload 덤프
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -383,7 +391,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       valueListenable: DataManager.instance.studentTimeBlocksRevision,
       builder: (context, _, __) {
         // 해당 요일의 활성 블록 중 number가 없거나 1인 학생만 수집
-        final blocksOfDay = DataManager.instance.studentTimeBlocks.where((b) {
+        final weekStart = _weekMonday(refDate);
+        final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+        final blocksOfDay = weekBlocks.where((b) {
           if (b.dayIndex != dayIdx) return false;
           final start =
               DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
@@ -2501,7 +2511,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
     String? setId,
   }) {
     final ref = _dateOnly(refDate);
-    final candidates = DataManager.instance.studentTimeBlocks.where((b) {
+    final weekStart = _weekMonday(ref);
+    final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+    final candidates = weekBlocks.where((b) {
       if (b.studentId != studentId) return false;
       if (b.dayIndex != dayIdx) return false;
       if (b.startHour != hour) return false;
@@ -3141,17 +3153,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 1. 학생별로 해당 시간에 속한 StudentTimeBlock을 찾아 sessionTypeId로 분류
     // 종료된 블록이 섞여 색상/세션이 비는 문제를 막기 위해
     // 선택한 셀의 날짜(refDate) 기준으로 직접 활성 필터링
-    final allBlocks = DataManager.instance.studentTimeBlocks;
     final selectedDayIdx = widget.selectedCellDayIndex;
     final selectedStartTime = widget.selectedCellStartTime;
-    DateTime _refDate() {
+    final DateTime refDate = (() {
       if (selectedStartTime != null) {
-        return DateTime(selectedStartTime.year, selectedStartTime.month,
-            selectedStartTime.day);
+        return DateTime(
+          selectedStartTime.year,
+          selectedStartTime.month,
+          selectedStartTime.day,
+        );
       }
       final now = DateTime.now();
       return DateTime(now.year, now.month, now.day);
-    }
+    })();
+    final allBlocks = DataManager.instance.getStudentTimeBlocksForWeek(refDate);
 
     bool _isActive(StudentTimeBlock b, DateTime ref) {
       final startDate =
@@ -3164,7 +3179,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
 
     StudentTimeBlock? _pickLatestActiveBlock(String studentId) {
-      final ref = _refDate();
+      final ref = refDate;
       final candidates = allBlocks.where((b) {
         final dayOk =
             selectedDayIdx == null ? true : b.dayIndex == selectedDayIdx;
@@ -3194,7 +3209,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         })()
     };
     // 빌드 로그: 활성 여부/세션 매핑
-    final refForLog = _refDate();
+    final refForLog = refDate;
     final dayLog = selectedDayIdx != null ? selectedDayIdx.toString() : 'any';
     final timeLog = selectedStartTime != null
         ? '${selectedStartTime!.hour}:${selectedStartTime!.minute}'
@@ -3450,9 +3465,19 @@ class TimetableContentViewState extends State<TimetableContentView> {
       List<StudentWithInfo> students,
       {bool showWeekdayInTimeLabel = false}) {
     // 학생이 속한 “활성” 시간블록을 (요일, 시간)별로 그룹핑
-    // 전체 목록(_studentTimeBlocks) 대신 notifier의 활성 리스트를 사용해
-    // end_date로 종료된 블록이 다시 노출되는 문제를 막는다.
-    final blocks = DataManager.instance.studentTimeBlocksNotifier.value;
+    // ✅ 주 이동(과거/미래)에서도 정확히 보이도록 "현재 보고 있는 주" 범위로 겹치는 블록만 사용한다.
+    // - 서버 week-cache + 로컬 변경분 merge 결과를 사용
+    final weekStart = _weekMonday(widget.viewDate);
+    final blocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+
+    bool isActiveOn(DateTime day, StudentTimeBlock b) {
+      final ref = DateTime(day.year, day.month, day.day);
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
+    }
     // Map<(dayIdx, startTime), List<StudentWithInfo>>
     final Map<String, List<StudentWithInfo>> grouped = {};
     for (final student in students) {
@@ -3463,6 +3488,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
               (b.number == null || b.number == 1))
           .toList();
       for (final block in studentBlocks) {
+        final occDate = weekStart.add(Duration(days: block.dayIndex));
+        if (!isActiveOn(occDate, block)) continue;
         final key =
             '${block.dayIndex}-${block.startHour}:${block.startMinute.toString().padLeft(2, '0')}';
         grouped.putIfAbsent(key, () => []);
@@ -3504,35 +3531,30 @@ class TimetableContentViewState extends State<TimetableContentView> {
           String className = '';
           if (!showWeekdayInTimeLabel && students.isNotEmpty) {
             final studentId = students.first.student.id;
-            final block = blocks.firstWhere(
-              (b) =>
-                  b.studentId == studentId &&
-                  b.dayIndex == dayIdx &&
-                  b.startHour == hour &&
-                  b.startMinute == min,
-              orElse: () => StudentTimeBlock(
-                  id: '',
-                  studentId: '',
-                  dayIndex: 0,
-                  startHour: 0,
-                  startMinute: 0,
-                  duration: Duration.zero,
-                  createdAt: DateTime(0),
-                  startDate: DateTime(0)),
-            );
-            if (block.id.isNotEmpty &&
-                block.sessionTypeId != null &&
-                block.sessionTypeId!.isNotEmpty) {
-              final classInfo = DataManager.instance.classes.firstWhere(
-                (c) => c.id == block.sessionTypeId,
-                orElse: () => ClassInfo(
-                    id: '',
-                    name: '',
-                    color: null,
-                    description: '',
-                    capacity: null),
-              );
-              className = classInfo.id.isEmpty ? '' : classInfo.name;
+            final occDate = weekStart.add(Duration(days: dayIdx));
+            final slotCandidates = blocks
+                .where((b) =>
+                    b.studentId == studentId &&
+                    b.dayIndex == dayIdx &&
+                    b.startHour == hour &&
+                    b.startMinute == min &&
+                    isActiveOn(occDate, b))
+                .toList()
+              ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            if (slotCandidates.isNotEmpty) {
+              final picked = slotCandidates.first;
+              if (picked.sessionTypeId != null && picked.sessionTypeId!.isNotEmpty) {
+                final classInfo = DataManager.instance.classes.firstWhere(
+                  (c) => c.id == picked.sessionTypeId,
+                  orElse: () => ClassInfo(
+                      id: '',
+                      name: '',
+                      color: null,
+                      description: '',
+                      capacity: null),
+                );
+                className = classInfo.id.isEmpty ? '' : classInfo.name;
+              }
             }
           }
           return Padding(
@@ -3827,32 +3849,21 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
     if (orphanedBlocks.isNotEmpty) {
       try {
-        // 🔄 삭제 후 재추가 방식으로 안전하게 처리
-        final blockIdsToDelete = orphanedBlocks.map((b) => b.id).toList();
-        final updatedBlocks = orphanedBlocks.map<StudentTimeBlock>((block) {
-          // copyWith(sessionTypeId: null)는 기존 값을 유지하므로, 새 객체 생성
-          return StudentTimeBlock(
-            id: block.id,
-            studentId: block.studentId,
-            dayIndex: block.dayIndex,
-            startHour: block.startHour,
-            startMinute: block.startMinute,
-            duration: block.duration,
-            createdAt: block.createdAt,
-            startDate: block.startDate,
-            endDate: block.endDate,
-            setId: block.setId,
-            number: block.number,
-            sessionTypeId: null, // 명시적으로 null 설정
+        // ✅ HOTFIX:
+        // 기존 방식(삭제→재추가)은 bulkDeleteStudentTimeBlocks가 end_date를 입력하므로,
+        // 간헐적으로 "사용자 조작 없이 블록이 닫히는" 문제를 유발할 수 있다.
+        // → end_date를 건드리지 않고, class 연결(session_type_id)만 null로 정리한다.
+        final orphanedClassIds = orphanedBlocks
+            .map((b) => (b.sessionTypeId ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toSet()
+            .toList();
+        for (final classId in orphanedClassIds) {
+          await DataManager.instance.bulkUpdateStudentTimeBlocksClassIdForClass(
+            classId,
+            newClassId: null,
           );
-        }).toList();
-
-        // 1. 기존 블록들 삭제
-        await DataManager.instance
-            .bulkDeleteStudentTimeBlocks(blockIdsToDelete);
-
-        // 2. sessionTypeId가 null로 설정된 새 블록들 추가
-        await DataManager.instance.bulkAddStudentTimeBlocks(updatedBlocks);
+        }
       } catch (e, stackTrace) {
         print('[ERROR][cleanupOrphanedSessionTypeIds] 정리 중 오류 발생: $e');
         print('[ERROR][cleanupOrphanedSessionTypeIds] 스택트레이스: $stackTrace');

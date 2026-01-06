@@ -131,7 +131,7 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
                                           title: const Text('예정 수업 재생성', style: TextStyle(color: text, fontWeight: FontWeight.w900)),
                                           content: const Text(
                                             '이 학생의 "순수 예정 수업"(is_planned=true, 출석/등원 기록 없는 것)만 전부 삭제한 뒤,\n'
-                                            '현재 시간표(student_time_blocks)를 기준으로 예정 수업을 다시 생성합니다.\n\n'
+                                            '현재 시간표(student_time_blocks)를 기준으로 앞으로 15일치 예정 수업을 다시 생성합니다.\n\n'
                                             '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.',
                                             style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
                                           ),
@@ -152,7 +152,7 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
                                       try {
                                         await DataManager.instance.resetPlannedAttendanceForStudent(
                                           widget.student.student.id,
-                                          days: 60,
+                                          days: 15,
                                         );
                                         if (mounted) {
                                           ScaffoldMessenger.of(context).showSnackBar(

@@ -1292,7 +1292,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     backgroundColor: const Color(0xFF0B1112),
                                     title: const Text('예정 수업 전체 재생성', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
                                     content: const Text(
-                                      '모든 학생의 순수 예정 수업을 삭제하고 다시 생성합니다.\n'
+                                      '모든 학생의 순수 예정 수업을 삭제하고 앞으로 15일치만 다시 생성합니다.\n'
                                       '출석/등원/하원 기록이 있는 행은 삭제하지 않습니다.\n\n'
                                       '진행할까요?',
                                       style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
@@ -1312,7 +1312,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 if (ok != true) return;
                                 setState(() => _resettingPlannedAll = true);
                                 try {
-                                  await DataManager.instance.resetPlannedAttendanceForAllStudents(days: 60);
+                                  await DataManager.instance.resetPlannedAttendanceForAllStudents(days: 15);
                                   if (mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(content: Text('예정 수업이 재생성되었습니다.')),

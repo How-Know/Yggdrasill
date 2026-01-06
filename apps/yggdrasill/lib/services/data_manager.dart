@@ -100,6 +100,175 @@ class DataManager {
   final ValueNotifier<int> studentTimeBlocksRevision = ValueNotifier<int>(0);
   final ValueNotifier<int> classesRevision = ValueNotifier<int>(0);
   final ValueNotifier<int> classAssignmentsRevision = ValueNotifier<int>(0);
+
+  // ===== student_time_blocks: week-range cache (시간표 UI 최적화/주 이동 대응) =====
+  // - 서버/로컬에서 "해당 주에 겹치는 블록만" 가져와 캐시한다.
+  // - 기존 _studentTimeBlocks(전역)는 planned/정산/편집 로직에서 그대로 사용하되,
+  //   UI는 필요 시 week cache를 우선 활용한다.
+  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksByWeek = <String, List<StudentTimeBlock>>{};
+  final Set<String> _studentTimeBlocksWeekLoading = <String>{};
+
+  static String _ymd(DateTime d) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${d.year.toString().padLeft(4, '0')}-${two(d.month)}-${two(d.day)}';
+  }
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  DateTime _weekMonday(DateTime d) {
+    final base = _dateOnly(d);
+    return base.subtract(Duration(days: base.weekday - DateTime.monday));
+  }
+
+  String _weekKey(DateTime weekStart) => _ymd(_dateOnly(weekStart));
+
+  /// 특정 주(weekStart=월요일)의 "겹치는" student_time_blocks를 캐시한다.
+  /// - 겹침 조건: start_date <= weekEnd && (end_date is null || end_date >= weekStart)
+  /// - UI에서는 이 목록을 다시 날짜(refDate)로 한 번 더 필터링해 사용한다.
+  Future<void> ensureStudentTimeBlocksForWeek(
+    DateTime dateInWeek, {
+    bool force = false,
+  }) async {
+    final weekStart = _weekMonday(dateInWeek);
+    final key = _weekKey(weekStart);
+    if (!force && _studentTimeBlocksByWeek.containsKey(key)) return;
+    if (_studentTimeBlocksWeekLoading.contains(key)) return;
+    _studentTimeBlocksWeekLoading.add(key);
+    try {
+      final weekEnd = weekStart.add(const Duration(days: 6));
+      List<StudentTimeBlock> blocks = <StudentTimeBlock>[];
+
+      if (TagPresetService.preferSupabaseRead) {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        blocks = await _fetchStudentTimeBlocksRangeFromSupabase(
+          academyId: academyId,
+          rangeStart: weekStart,
+          rangeEnd: weekEnd,
+        );
+      } else {
+        // 로컬 DB는 일단 전체 로드 후 범위 필터(필요 시 AcademyDbService에 range query 추가 가능)
+        final all = await AcademyDbService.instance.getStudentTimeBlocks();
+        blocks = all.where((b) => _overlapsRange(b, weekStart, weekEnd)).toList();
+      }
+
+      _studentTimeBlocksByWeek[key] = List.unmodifiable(blocks);
+      _bumpStudentTimeBlocksRevision(); // UI 캐시 무효화/리빌드 트리거로 재사용
+    } catch (e, st) {
+      print('[STB][week] load failed week=$key err=$e\n$st');
+    } finally {
+      _studentTimeBlocksWeekLoading.remove(key);
+    }
+  }
+
+  /// 주(weekStart=월요일)에 겹치는 블록 목록을 반환한다.
+  /// - 서버 week-cache + 로컬 메모리(_studentTimeBlocks)의 변경분(optimistic/pending)을 id 기준으로 병합한다.
+  List<StudentTimeBlock> getStudentTimeBlocksForWeek(DateTime weekStart) {
+    final ws = _weekMonday(weekStart);
+    final key = _weekKey(ws);
+    final we = ws.add(const Duration(days: 6));
+    final Map<String, StudentTimeBlock> byId = <String, StudentTimeBlock>{};
+
+    final cached = _studentTimeBlocksByWeek[key];
+    if (cached != null) {
+      for (final b in cached) {
+        if (b.id.isEmpty) continue;
+        byId[b.id] = b;
+      }
+    }
+
+    // 로컬(메모리) 변경분 우선 반영: 캐시보다 최신일 수 있다.
+    for (final b in _studentTimeBlocks) {
+      if (b.id.isEmpty) continue;
+      if (!_overlapsRange(b, ws, we)) continue;
+      byId[b.id] = b;
+    }
+
+    final out = byId.values.toList()
+      ..sort((a, b) {
+        final c1 = a.dayIndex.compareTo(b.dayIndex);
+        if (c1 != 0) return c1;
+        final c2 = a.startHour.compareTo(b.startHour);
+        if (c2 != 0) return c2;
+        final c3 = a.startMinute.compareTo(b.startMinute);
+        if (c3 != 0) return c3;
+        return a.createdAt.compareTo(b.createdAt);
+      });
+    return List.unmodifiable(out);
+  }
+
+  bool _overlapsRange(StudentTimeBlock b, DateTime rangeStart, DateTime rangeEnd) {
+    final rs = _dateOnly(rangeStart);
+    final re = _dateOnly(rangeEnd);
+    final sd = _dateOnly(b.startDate);
+    final ed = b.endDate == null ? null : _dateOnly(b.endDate!);
+    if (sd.isAfter(re)) return false;
+    if (ed != null && ed.isBefore(rs)) return false;
+    return true;
+  }
+
+  StudentTimeBlock _stbFromServerRow(Map<String, dynamic> raw) {
+    final mm = Map<String, dynamic>.from(raw);
+    DateTime parseDateOnlyOr(DateTime fallback, String? v) {
+      if (v == null || v.trim().isEmpty) return fallback;
+      return DateTime.tryParse(v) ?? fallback;
+    }
+
+    final createdAt = DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ?? DateTime.now();
+    final startDate = parseDateOnlyOr(createdAt, (mm['start_date'] as String?)) ;
+    final endDateStr = (mm['end_date'] as String?);
+    final endDate = (endDateStr != null && endDateStr.trim().isNotEmpty) ? DateTime.tryParse(endDateStr) : null;
+    return StudentTimeBlock(
+      id: (mm['id'] as String?) ?? '',
+      studentId: (mm['student_id'] as String?) ?? '',
+      dayIndex: (mm['day_index'] as int?) ?? 0,
+      startHour: (mm['start_hour'] as int?) ?? 0,
+      startMinute: (mm['start_minute'] as int?) ?? 0,
+      duration: Duration(minutes: (mm['duration'] as int?) ?? 0),
+      createdAt: createdAt,
+      startDate: startDate,
+      endDate: endDate,
+      setId: mm['set_id'] as String?,
+      number: mm['number'] as int?,
+      sessionTypeId: mm['session_type_id'] as String?,
+      weeklyOrder: mm['weekly_order'] as int?,
+    );
+  }
+
+  Future<List<StudentTimeBlock>> _fetchStudentTimeBlocksRangeFromSupabase({
+    required String academyId,
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+  }) async {
+    const int pageSize = 1000;
+    final rs = _ymd(_dateOnly(rangeStart));
+    final re = _ymd(_dateOnly(rangeEnd));
+
+    final out = <StudentTimeBlock>[];
+    int from = 0;
+    while (true) {
+      final data = await Supabase.instance.client
+          .from('student_time_blocks')
+          .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
+          .eq('academy_id', academyId)
+          // range overlap
+          .lte('start_date', re)
+          .or('end_date.is.null,end_date.gte.$rs')
+          .order('day_index')
+          .order('start_hour')
+          .order('start_minute')
+          .range(from, from + pageSize - 1);
+
+      final list = (data as List).cast<Map<String, dynamic>>();
+      for (final r in list) {
+        final b = _stbFromServerRow(r);
+        if (b.id.isEmpty || b.studentId.isEmpty) continue;
+        out.add(b);
+      }
+      if (list.length < pageSize) break;
+      from += pageSize;
+    }
+    return out;
+  }
   void _bumpStudentTimeBlocksRevision() {
     studentTimeBlocksRevision.value++;
     classAssignmentsRevision.value++;
@@ -210,6 +379,24 @@ class DataManager {
       rethrow;
     }
   }
+
+  /// (리팩터) `session_type_id`는 실제로 `classes.id`를 참조하므로,
+  /// 코드 레벨에서 의미를 드러내기 위한 wrapper.
+  ///
+  /// - DB 컬럼명은 그대로 유지(마이그레이션 없음)
+  /// - 동작은 `bulkUpdateStudentTimeBlocksSessionTypeIdForClass`와 동일
+  Future<void> bulkUpdateStudentTimeBlocksClassIdForClass(
+    String oldClassId, {
+    required String? newClassId,
+    DateTime? refDate,
+    bool publish = true,
+  }) =>
+      bulkUpdateStudentTimeBlocksSessionTypeIdForClass(
+        oldClassId,
+        newSessionTypeId: newClassId,
+        refDate: refDate,
+        publish: publish,
+      );
 
   // 디버그: 특정 키(dayIdx,startHour,startMinute,studentId)로 내려온 블록 페이로드 덤프
   void debugDumpStudentBlocks({
@@ -329,7 +516,7 @@ class DataManager {
     required String studentId,
     required Set<String> setIds,
     DateTime? effectiveStart,
-    int days = 14,
+    int days = 15,
     double? billedAmount,
     double? unitPrice,
     String? note,
@@ -1938,33 +2125,38 @@ class DataManager {
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final data = await Supabase.instance.client
-            .from('student_time_blocks')
-            .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
-            .eq('academy_id', academyId)
-            .order('day_index')
-            .order('start_hour')
-            .order('start_minute');
-        _studentTimeBlocks = (data as List).map((m) {
-          final Map<String, dynamic> mm = Map<String, dynamic>.from(m);
-          return StudentTimeBlock(
-            id: (mm['id'] as String),
-            studentId: (mm['student_id'] as String),
-            dayIndex: (mm['day_index'] as int?) ?? 0,
-            startHour: (mm['start_hour'] as int?) ?? 0,
-            startMinute: (mm['start_minute'] as int?) ?? 0,
-            duration: Duration(minutes: (mm['duration'] as int?) ?? 0),
-            createdAt: DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ?? DateTime.now(),
-            startDate: DateTime.tryParse((mm['start_date'] as String?) ?? '') ??
-                DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ??
-                _todayDateOnly(),
-            endDate: (mm['end_date'] as String?) != null ? DateTime.tryParse(mm['end_date'] as String) : null,
-            setId: mm['set_id'] as String?,
-            number: mm['number'] as int?,
-            sessionTypeId: mm['session_type_id'] as String?,
-            weeklyOrder: mm['weekly_order'] as int?,
-          );
-        }).toList();
+        // ✅ 서버 응답 max rows(예: 1000) 제한에 걸리면 일부만 로드되어 "기존 블록이 사라져 보이는" 문제가 생길 수 있다.
+        // → (1) 페이지네이션(range) + (2) 아주 오래된 종료 이력은 제외(lookback)로 안정화/최적화.
+        const int pageSize = 1000;
+        const int lookbackDays = 180; // 결제 사이클/회차(session_order) 안정화를 위해 충분히 넉넉하게 유지
+        final today = _todayDateOnly();
+        final minEnd = today.subtract(const Duration(days: lookbackDays));
+        final minEndYmd = _ymd(minEnd);
+
+        final List<StudentTimeBlock> out = <StudentTimeBlock>[];
+        int from = 0;
+        while (true) {
+          final data = await Supabase.instance.client
+              .from('student_time_blocks')
+              .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
+              .eq('academy_id', academyId)
+              // "열려있거나, 최근 lookback 기간 내에 종료된 것"만 유지(아주 오래된 이력은 week-cache로 조회)
+              .or('end_date.is.null,end_date.gte.$minEndYmd')
+              .order('day_index')
+              .order('start_hour')
+              .order('start_minute')
+              .order('id')
+              .range(from, from + pageSize - 1);
+          final list = (data as List).cast<Map<String, dynamic>>();
+          for (final m in list) {
+            final b = _stbFromServerRow(m);
+            if (b.id.isEmpty || b.studentId.isEmpty) continue;
+            out.add(b);
+          }
+          if (list.length < pageSize) break;
+          from += pageSize;
+        }
+        _studentTimeBlocks = out;
         _publishStudentTimeBlocks();
         // debug log trimmed: keep minimal noise
         print('[STB][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
@@ -2105,6 +2297,105 @@ class DataManager {
   final List<StudentTimeBlock> _pendingTimeBlocks = [];
   RealtimeChannel? _rtStudentTimeBlocks;
   StreamSubscription<AuthState>? _authSub;
+
+  void _removeStudentTimeBlockFromWeekCaches(String id) {
+    final bid = id.trim();
+    if (bid.isEmpty) return;
+    if (_studentTimeBlocksByWeek.isEmpty) return;
+    for (final key in _studentTimeBlocksByWeek.keys.toList()) {
+      final current = _studentTimeBlocksByWeek[key];
+      if (current == null || current.isEmpty) continue;
+      final next = current.where((b) => b.id != bid).toList();
+      if (next.length == current.length) continue;
+      _studentTimeBlocksByWeek[key] = List.unmodifiable(next);
+    }
+  }
+
+  void _upsertStudentTimeBlockIntoWeekCaches(StudentTimeBlock b) {
+    if (b.id.isEmpty) return;
+    if (_studentTimeBlocksByWeek.isEmpty) return;
+    for (final key in _studentTimeBlocksByWeek.keys.toList()) {
+      final weekStart = DateTime.tryParse(key);
+      if (weekStart == null) continue;
+      final weekEnd = weekStart.add(const Duration(days: 6));
+      if (!_overlapsRange(b, weekStart, weekEnd)) continue;
+      final current = _studentTimeBlocksByWeek[key] ?? const <StudentTimeBlock>[];
+      final next = current.where((x) => x.id != b.id).toList()
+        ..add(b);
+      next.sort((a, b) {
+        final c1 = a.dayIndex.compareTo(b.dayIndex);
+        if (c1 != 0) return c1;
+        final c2 = a.startHour.compareTo(b.startHour);
+        if (c2 != 0) return c2;
+        final c3 = a.startMinute.compareTo(b.startMinute);
+        if (c3 != 0) return c3;
+        return a.createdAt.compareTo(b.createdAt);
+      });
+      _studentTimeBlocksByWeek[key] = List.unmodifiable(next);
+    }
+  }
+
+  void _applyStudentTimeBlocksRealtimePayload(dynamic payload) {
+    try {
+      final dynamic p = payload;
+      final dynamic newRec = p.newRecord;
+      final dynamic oldRec = p.oldRecord;
+
+      Map<String, dynamic>? newMap;
+      Map<String, dynamic>? oldMap;
+      if (newRec is Map && newRec.isNotEmpty) {
+        newMap = Map<String, dynamic>.from(newRec as Map);
+      }
+      if (oldRec is Map && oldRec.isNotEmpty) {
+        oldMap = Map<String, dynamic>.from(oldRec as Map);
+      }
+
+      // 일부 환경에서는 payload에 레코드가 없을 수 있으므로 안전 폴백
+      if ((newMap == null || newMap.isEmpty) && (oldMap == null || oldMap.isEmpty)) {
+        _bumpStudentTimeBlocksRevision();
+        _debouncedReload(loadStudentTimeBlocks);
+        return;
+      }
+
+      if (newMap != null && newMap.isNotEmpty) {
+        // insert/update: upsert
+        final bNew = _stbFromServerRow(newMap);
+        if (bNew.id.isEmpty) {
+          _bumpStudentTimeBlocksRevision();
+          _debouncedReload(loadStudentTimeBlocks);
+          return;
+        }
+        final idx = _studentTimeBlocks.indexWhere((b) => b.id == bNew.id);
+        if (idx == -1) {
+          _studentTimeBlocks.add(bNew);
+        } else {
+          _studentTimeBlocks[idx] = bNew;
+        }
+        // week-cache도 즉시 반영(기존 id 제거 후, 현재 겹치는 주에만 추가)
+        _removeStudentTimeBlockFromWeekCaches(bNew.id);
+        _upsertStudentTimeBlockIntoWeekCaches(bNew);
+      } else {
+        // delete: remove
+        final id = (oldMap?['id'] as String?)?.trim() ?? '';
+        if (id.isEmpty) {
+          _bumpStudentTimeBlocksRevision();
+          _debouncedReload(loadStudentTimeBlocks);
+          return;
+        }
+        _studentTimeBlocks.removeWhere((b) => b.id == id);
+        _pendingTimeBlocks.removeWhere((b) => b.id == id);
+        _removeStudentTimeBlockFromWeekCaches(id);
+      }
+
+      _publishStudentTimeBlocks();
+      _bumpStudentTimeBlocksRevision();
+    } catch (e, st) {
+      print('[STB][rt] payload apply failed: $e\n$st');
+      _bumpStudentTimeBlocksRevision();
+      _debouncedReload(loadStudentTimeBlocks);
+    }
+  }
+
   Future<void> _subscribeStudentTimeBlocksRealtime() async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
@@ -2114,21 +2405,21 @@ class DataManager {
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
+          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
+          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'student_time_blocks',
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) async { _bumpStudentTimeBlocksRevision(); _debouncedReload(loadStudentTimeBlocks); },
+          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
         )
         ..subscribe();
     } catch (_) {}
@@ -2271,7 +2562,7 @@ class DataManager {
     try { await loadResourceFiles(); } catch (_) {}
     try { await TagPresetService.instance.loadPresets(); } catch (_) {}
     try { await TagStore.instance.loadAllFromDb(); } catch (_) {}
-    try { await _generatePlannedAttendanceForNextDays(days: 14); } catch (_) {}
+    try { await _generatePlannedAttendanceForNextDays(days: 15); } catch (_) {}
   }
   
   Future<void> bulkAddStudentTimeBlocks(
@@ -2451,7 +2742,7 @@ class DataManager {
         await _regeneratePlannedAttendanceForStudentSets(
           studentId: entry.key,
           setIds: entry.value,
-          days: 14,
+          days: 15,
         );
       }
     }
@@ -2520,7 +2811,7 @@ class DataManager {
           await _regeneratePlannedAttendanceForSet(
             studentId: sid,
             setId: setId,
-            days: 14,
+            days: 15,
           );
         }
       }
@@ -2719,7 +3010,7 @@ class DataManager {
         await _regeneratePlannedAttendanceForSet(
           studentId: next.studentId,
           setId: next.setId!,
-          days: 14,
+          days: 15,
         );
       } catch (e, st) {
         // planned regen 실패는 UI 편집 자체를 막지 않음
@@ -2739,7 +3030,7 @@ class DataManager {
       await _regeneratePlannedAttendanceForSet(
         studentId: studentId,
         setId: setId,
-        days: 14,
+        days: 15,
       );
     }
   }
@@ -3369,26 +3660,32 @@ class DataManager {
   /// 특정 요일/시간(+선택적 setId) 블록 기준 학생의 수업 색상 반환 (없으면 null)
   /// refDate를 넘기면 해당 날짜 기준 활성 블록을 판단; 없으면 오늘 날짜 사용
   Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId, DateTime? refDate}) {
+    const bool _colorDebug = false;
     final refDateResolved = refDate ?? _todayDateOnly();
-    // refDate 기준으로 이미 활성 필터를 거친 블록만 대상으로 색상 계산
-    final active = _activeBlocks(refDateResolved);
-    final candidates = active
-        .where((b) =>
-            b.studentId == studentId &&
-            b.dayIndex == dayIdx &&
-            b.startHour == startTime.hour &&
-            b.startMinute == startTime.minute &&
-            (setId == null || b.setId == setId) &&
-            _isBlockActiveOn(b, refDateResolved))
+    // ✅ 주 이동(과거/미래)에서도 정확한 값을 얻기 위해 week-cache(해당 주 겹침) 기반으로 후보를 만든다.
+    final weekStart = _weekMonday(refDateResolved);
+    final weekBlocks = getStudentTimeBlocksForWeek(weekStart);
+    final candidates = weekBlocks
+        .where((b) {
+          if (b.studentId != studentId) return false;
+          if (b.dayIndex != dayIdx) return false;
+          if (b.startHour != startTime.hour) return false;
+          if (b.startMinute != startTime.minute) return false;
+          if (setId != null && setId.isNotEmpty && b.setId != setId) return false;
+          return _isBlockActiveOn(b, refDateResolved);
+        })
         .toList();
-    // 디버그: refDate와 후보 블록 상태 확인
-    if (candidates.isNotEmpty) {
-      print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=${candidates.map((b) => '${b.id}|sess=${b.sessionTypeId}|set=${b.setId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}').join(',')}');
-    } else {
-      print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=0');
+    if (_colorDebug) {
+      if (candidates.isNotEmpty) {
+        print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=${candidates.map((b) => '${b.id}|sess=${b.sessionTypeId}|set=${b.setId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}').join(',')}');
+      } else {
+        print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=0');
+      }
     }
     if (candidates.isEmpty) {
-      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved no-active-candidates');
+      if (_colorDebug) {
+        print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved no-active-candidates');
+      }
       return null;
     }
 
@@ -3401,9 +3698,11 @@ class DataManager {
         orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
       );
       final color = cls.id.isEmpty ? null : cls.color;
-      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
-      if (color == null) {
-        print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
+      if (_colorDebug) {
+        print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
+        if (color == null) {
+          print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
+        }
       }
       return color;
     }
@@ -3415,9 +3714,11 @@ class DataManager {
       orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
     );
     final color = cls.id.isEmpty ? null : cls.color;
-    print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
-    if (color == null) {
-      print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
+    if (_colorDebug) {
+      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
+      if (color == null) {
+        print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
+      }
     }
     return color;
   }
@@ -3884,7 +4185,7 @@ DateTime? _lastClassesOrderSaveStart;
       AttendanceService.instance.getAttendanceRecordsForStudent(studentId);
   AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) =>
       AttendanceService.instance.getAttendanceRecord(studentId, classDateTime);
-  Future<void> ensurePlannedAttendanceForNextDays({int days = 14}) =>
+  Future<void> ensurePlannedAttendanceForNextDays({int days = 15}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
 
 
@@ -3895,7 +4196,7 @@ DateTime? _lastClassesOrderSaveStart;
   /// - 재생성은 snapshot 기반(regeneratePlannedWithSnapshot)으로 수행하여 snapshot_id/batch_session_id가 채워지도록 한다.
   Future<void> resetPlannedAttendanceForStudent(
     String studentId, {
-    int days = 60,
+    int days = 15,
   }) async {
     final sid = studentId.trim();
     if (sid.isEmpty) return;
@@ -3942,7 +4243,7 @@ DateTime? _lastClassesOrderSaveStart;
   ///
   /// - 출석/등원 기록이 있는 행은 삭제하지 않는다(AttendanceService 기준).
   /// - 재생성은 학생별 snapshot 기반(regeneratePlannedWithSnapshot)으로 수행한다.
-  Future<void> resetPlannedAttendanceForAllStudents({int days = 60}) async {
+  Future<void> resetPlannedAttendanceForAllStudents({int days = 15}) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
@@ -4079,12 +4380,12 @@ DateTime? _lastClassesOrderSaveStart;
         studentId: studentId,
         cycle: cycle,
       );
-  Future<void> _generatePlannedAttendanceForNextDays({int days = 14}) =>
+  Future<void> _generatePlannedAttendanceForNextDays({int days = 15}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
   Future<void> _regeneratePlannedAttendanceForSet({
     required String studentId,
     required String setId,
-    int days = 14,
+    int days = 15,
   }) async {
     await regeneratePlannedWithSnapshot(
       studentId: studentId,
@@ -4095,7 +4396,7 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> _regeneratePlannedAttendanceForStudentSets({
     required String studentId,
     required Set<String> setIds,
-    int days = 14,
+    int days = 15,
   }) async {
     await regeneratePlannedWithSnapshot(
       studentId: studentId,
@@ -4105,7 +4406,7 @@ DateTime? _lastClassesOrderSaveStart;
   }
   Future<void> _regeneratePlannedAttendanceForStudent({
     required String studentId,
-    int days = 14,
+    int days = 15,
   }) =>
       AttendanceService.instance.regeneratePlannedAttendanceForStudent(
         studentId: studentId,
@@ -4169,7 +4470,7 @@ DateTime? _lastClassesOrderSaveStart;
         studentId: studentId,
         setIds: allSetIds,
         effectiveStart: pendingStart[studentId],
-        days: 14,
+        days: 15,
       );
     }
   }

@@ -1765,7 +1765,7 @@ class AttendanceService {
   Future<void> replanRemainingForStudentSets({
     required String studentId,
     required Set<String> setIds,
-    int days = 60,
+    int days = 15,
     DateTime? anchor,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
@@ -1891,7 +1891,7 @@ class AttendanceService {
     return !start.isAfter(target) && (end == null || !end.isBefore(target));
   }
 
-  Future<void> generatePlannedAttendanceForNextDays({int days = 14}) async {
+  Future<void> generatePlannedAttendanceForNextDays({int days = 15}) async {
     final blocks = _d
         .getStudentTimeBlocks()
         .where((b) => b.setId != null && b.setId!.isNotEmpty)
@@ -2657,7 +2657,7 @@ class AttendanceService {
       await _regeneratePlannedAttendanceForStudentSets(
         studentId: entry.key,
         setIds: entry.value,
-        days: 14,
+        days: 15,
         snapshotId: null,
         blocksOverride: null,
       );
@@ -2671,7 +2671,7 @@ class AttendanceService {
   Future<void> regeneratePlannedAttendanceForStudentSets({
     required String studentId,
     required Set<String> setIds,
-    int days = 14,
+    int days = 15,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
   }) =>
@@ -2685,7 +2685,7 @@ class AttendanceService {
 
   Future<void> regeneratePlannedAttendanceForStudent({
     required String studentId,
-    int days = 14,
+    int days = 15,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
   }) async {
@@ -2716,7 +2716,7 @@ class AttendanceService {
     );
   }
 
-  Future<void> deletePlannedAttendanceForStudent(String studentId, {int days = 14}) async {
+  Future<void> deletePlannedAttendanceForStudent(String studentId, {int days = 15}) async {
     final today = DateTime.now();
     final anchor = DateTime(today.year, today.month, today.day);
     final end = anchor.add(Duration(days: days));
@@ -2776,7 +2776,7 @@ class AttendanceService {
   Future<void> _regeneratePlannedAttendanceForStudentSets({
     required String studentId,
     required Set<String> setIds,
-    int days = 14,
+    int days = 15,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
   }) async {
@@ -3495,10 +3495,10 @@ class AttendanceService {
 
       final now = DateTime.now();
       final anchor = DateTime(now.year, now.month, now.day);
-      final end = anchor.add(const Duration(days: 14));
+      final end = anchor.add(const Duration(days: 15));
       final dateOnly = DateTime(original.year, original.month, original.day);
       if (dateOnly.isBefore(anchor) || dateOnly.isAfter(end)) {
-        // planned 유지 범위(다음 14일) 밖은 글로벌 생성기에 맡김
+        // planned 유지 범위(다음 15일) 밖은 글로벌 생성기에 맡김
         return;
       }
 
@@ -4004,7 +4004,7 @@ class AttendanceService {
   Future<void> regeneratePlannedAttendanceForSet({
     required String studentId,
     required String setId,
-    int days = 14,
+    int days = 15,
     String? snapshotId,
     List<StudentTimeBlock>? blocksOverride,
   }) async {
