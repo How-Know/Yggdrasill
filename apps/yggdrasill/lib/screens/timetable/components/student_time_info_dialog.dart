@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../models/class_info.dart';
 import '../../../models/student.dart';
@@ -287,6 +288,9 @@ class _ScheduleHistoryTab extends StatelessWidget {
         final today = _dateOnly(DateTime.now());
 
         final raw = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+        final rawById = <String, StudentTimeBlock>{
+          for (final b in raw) if (b.id.isNotEmpty) b.id: b,
+        };
 
         final classById = <String, ClassInfo>{
           for (final c in DataManager.instance.classes) c.id: c,
@@ -320,6 +324,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           final blocks = e.value;
           final any = blocks.first;
           final setId = (any.setId ?? '').trim();
+          final blockIds = blocks.map((b) => b.id).where((id) => id.trim().isNotEmpty).map((id) => id.trim()).toSet().toList();
           final sd = blocks.map((b) => _dateOnly(b.startDate)).reduce((a, b) => a.isBefore(b) ? a : b);
           DateTime? ed;
           for (final b in blocks) {
@@ -340,6 +345,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           return _ScheduleEntry(
             key: e.key,
             setId: setId.isEmpty ? null : setId,
+            blockIds: blockIds,
             startDate: sd,
             endDate: ed,
             dayIndex: dayIdx,
@@ -442,22 +448,623 @@ class _ScheduleHistoryTab extends StatelessWidget {
 
         String timeRangeOfEntry(_ScheduleEntry it) => '${_hmFromMinutes(it.startMinute)}~${_hmFromMinutes(it.endMinute)}';
 
-        Widget cell(String v, {required int flex, TextAlign align = TextAlign.left, TextStyle? style}) {
+        Widget cell(
+          String v, {
+          required int flex,
+          TextAlign align = TextAlign.left,
+          TextStyle? style,
+          VoidCallback? onTap,
+          String? tooltip,
+        }) {
+          final String? tip = (tooltip == null || tooltip.trim().isEmpty) ? null : tooltip.trim();
           return Expanded(
             flex: flex,
-            child: Text(
-              v,
-              textAlign: align,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style ??
-                  const TextStyle(
-                    color: text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
+            child: MouseRegion(
+              cursor: onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                    child: tip == null
+                        ? Text(
+                            v,
+                            textAlign: align,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: style ??
+                                const TextStyle(
+                                  color: text,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          )
+                        : Tooltip(
+                            message: tip,
+                            waitDuration: const Duration(milliseconds: 600),
+                            child: Text(
+                              v,
+                              textAlign: align,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: style ??
+                                  const TextStyle(
+                                    color: text,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ),
                   ),
+                ),
+              ),
             ),
           );
+        }
+
+        List<StudentTimeBlock> resolveBlocks(_ScheduleEntry it) {
+          final out = <StudentTimeBlock>[];
+          for (final id in it.blockIds) {
+            final b = rawById[id];
+            if (b != null) out.add(b);
+          }
+          out.sort((a, b) {
+            final na = a.number ?? 999999;
+            final nb = b.number ?? 999999;
+            final cN = na.compareTo(nb);
+            if (cN != 0) return cN;
+            final c1 = a.startHour.compareTo(b.startHour);
+            if (c1 != 0) return c1;
+            final c2 = a.startMinute.compareTo(b.startMinute);
+            if (c2 != 0) return c2;
+            return a.createdAt.compareTo(b.createdAt);
+          });
+          return out;
+        }
+
+        Future<DateTime?> pickDate(DateTime initial) async {
+          final picked = await showDatePicker(
+            context: context,
+            initialDate: initial,
+            firstDate: DateTime(2020, 1, 1),
+            lastDate: DateTime(DateTime.now().year + 5, 12, 31),
+            locale: const Locale('ko', 'KR'),
+            builder: (context, child) {
+              return Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF1B6B63),
+                    onPrimary: Colors.white,
+                    surface: Color(0xFF0B1112),
+                    onSurface: Color(0xFFEAF2F2),
+                  ),
+                  dialogBackgroundColor: const Color(0xFF0B1112),
+                ),
+                child: child!,
+              );
+            },
+          );
+          return picked == null ? null : _dateOnly(picked);
+        }
+
+        Future<TimeOfDay?> pickTime(TimeOfDay initial) async {
+          final picked = await showTimePicker(
+            context: context,
+            initialTime: initial,
+            builder: (context, child) {
+              return Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF1B6B63),
+                    onPrimary: Colors.white,
+                    surface: Color(0xFF0B1112),
+                    onSurface: Color(0xFFEAF2F2),
+                  ),
+                  dialogBackgroundColor: const Color(0xFF0B1112),
+                ),
+                child: child!,
+              );
+            },
+          );
+          return picked;
+        }
+
+        int toMin(TimeOfDay t) => t.hour * 60 + t.minute;
+        TimeOfDay fromMin(int m) => TimeOfDay(hour: (m ~/ 60) % 24, minute: m % 60);
+
+        Future<void> hardDeleteEntry(_ScheduleEntry it) async {
+          final blocks = resolveBlocks(it);
+          if (blocks.isEmpty) return;
+          final start = _ymd(_dateOnly(it.startDate));
+          final end = it.endDate == null ? '현재' : _ymd(_dateOnly(it.endDate!));
+          final weekday = _weekday(it.dayIndex);
+          final time = timeRangeOfEntry(it);
+          final cname = classNameOfEntry(it);
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('일정 하드삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: Text(
+                '이 일정(수업 블록)을 서버에서 완전히 삭제합니다.\n\n'
+                '- 기간: $start ~ $end\n'
+                '- 요일/시간: $weekday  $time\n'
+                '- 수업명: $cname\n'
+                '- 삭제 블록 수: ${it.blockIds.length}\n\n'
+                '정말 삭제할까요? (복구 불가)',
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          );
+          if (ok != true) return;
+
+          try {
+            // 1) 블록 하드삭제
+            await DataManager.instance.hardDeleteStudentTimeBlocks(
+              it.blockIds,
+              refDate: _dateOnly(DateTime.now()),
+            );
+            // 2) (set_id 기반) planned 정리/재생성: 우선 해당 set의 순수 planned를 제거하고,
+            //    이후 학생 전체 planned를 스케줄 방식으로 재생성하여 session_order를 안정화한다.
+            final setId = (it.setId ?? '').trim();
+            if (setId.isNotEmpty) {
+              await AttendanceService.instance.purgePurePlannedAttendance(
+                studentId: studentId,
+                setIds: {setId},
+              );
+              await AttendanceService.instance.purgePlannedBatchSessions(
+                studentId: studentId,
+                setIds: {setId},
+              );
+              DataManager.instance.schedulePlannedRegenForStudentSet(
+                studentId: studentId,
+                setId: setId,
+                effectiveStart: it.startDate,
+                immediate: false,
+              );
+            }
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('일정이 삭제되었습니다.')));
+            }
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+            }
+          }
+        }
+
+        Future<void> editStartDate(_ScheduleEntry it) async {
+          final picked = await pickDate(_dateOnly(it.startDate));
+          if (picked == null) return;
+          final ed = it.endDate == null ? null : _dateOnly(it.endDate!);
+          if (ed != null && ed.isBefore(picked)) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('종료일은 시작일보다 빠를 수 없습니다.')));
+            return;
+          }
+          try {
+            await DataManager.instance.updateStudentTimeBlocksDateRangeBulk(
+              it.blockIds,
+              startDate: picked,
+              endDate: ed,
+              refDate: picked,
+            );
+            final setId = (it.setId ?? '').trim();
+            if (setId.isNotEmpty) {
+              DataManager.instance.schedulePlannedRegenForStudentSet(
+                studentId: studentId,
+                setId: setId,
+                effectiveStart: picked,
+              );
+            }
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          }
+        }
+
+        Future<void> editEndDate(_ScheduleEntry it) async {
+          final current = it.endDate == null ? null : _dateOnly(it.endDate!);
+          DateTime? next = current;
+          final action = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('종료일 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: Text(
+                '현재 종료일: ${current == null ? "현재(무기한)" : _ymd(current)}\n\n'
+                '어떻게 변경할까요?',
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('cancel'),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('clear'),
+                  child: const Text('무기한(현재)', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('pick'),
+                  child: const Text('날짜 선택', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          );
+          if (action == null || action == 'cancel') return;
+          if (action == 'clear') {
+            next = null;
+          } else if (action == 'pick') {
+            final picked = await pickDate(current ?? _dateOnly(DateTime.now()));
+            if (picked == null) return;
+            next = picked;
+          }
+          final sd = _dateOnly(it.startDate);
+          if (next != null && next!.isBefore(sd)) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('종료일은 시작일보다 빠를 수 없습니다.')));
+            return;
+          }
+          try {
+            await DataManager.instance.updateStudentTimeBlocksDateRangeBulk(
+              it.blockIds,
+              startDate: sd,
+              endDate: next,
+              refDate: sd,
+            );
+            final setId = (it.setId ?? '').trim();
+            if (setId.isNotEmpty) {
+              DataManager.instance.schedulePlannedRegenForStudentSet(
+                studentId: studentId,
+                setId: setId,
+                effectiveStart: sd,
+              );
+            }
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          }
+        }
+
+        Future<void> editClassName(_ScheduleEntry it) async {
+          final classes = DataManager.instance.classes.where((c) => c.id.trim().isNotEmpty).toList();
+          final selected = await showDialog<String?>(
+            context: context,
+            builder: (ctx) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF0B1112),
+                title: const Text('수업명 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+                content: SizedBox(
+                  width: 520,
+                  height: 520,
+                  child: ListView.separated(
+                    itemCount: classes.length + 1,
+                    separatorBuilder: (_, __) => const Divider(color: Color(0xFF223131), height: 1),
+                    itemBuilder: (context, i) {
+                      if (i == 0) {
+                        return ListTile(
+                          title: const Text('기본 수업', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+                          subtitle: const Text('session_type_id = null', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                          onTap: () => Navigator.of(ctx).pop(''),
+                        );
+                      }
+                      final c = classes[i - 1];
+                      return ListTile(
+                        title: Text(c.name, style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+                        subtitle: Text(c.id, style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                        onTap: () => Navigator.of(ctx).pop(c.id),
+                      );
+                    },
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(null),
+                    child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              );
+            },
+          );
+          if (selected == null) return;
+          final nextSid = selected.trim().isEmpty ? null : selected.trim();
+          try {
+            await DataManager.instance.updateStudentTimeBlocksSessionTypeIdBulk(
+              it.blockIds,
+              sessionTypeId: nextSid,
+              refDate: _dateOnly(DateTime.now()),
+            );
+            final setId = (it.setId ?? '').trim();
+            if (setId.isNotEmpty) {
+              DataManager.instance.schedulePlannedRegenForStudentSet(
+                studentId: studentId,
+                setId: setId,
+                effectiveStart: it.startDate,
+              );
+            }
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          }
+        }
+
+        Future<void> editTimeRange(_ScheduleEntry it) async {
+          final blocks = resolveBlocks(it);
+          if (blocks.isEmpty) return;
+
+          final int curStart = it.startMinute;
+          final int curEnd = it.endMinute;
+
+          TimeOfDay startT = fromMin(curStart);
+          TimeOfDay endT = fromMin(curEnd);
+          final picked = await showDialog<bool>(
+            context: context,
+            builder: (ctx) {
+              return StatefulBuilder(builder: (ctx, setState) {
+                String fmt(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+                return AlertDialog(
+                  backgroundColor: const Color(0xFF0B1112),
+                  title: const Text('시간 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+                  content: SizedBox(
+                    width: 420,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('시간 범위를 선택하세요.', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  final p = await pickTime(startT);
+                                  if (p == null) return;
+                                  setState(() => startT = p);
+                                },
+                                child: Text('시작: ${fmt(startT)}'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  final p = await pickTime(endT);
+                                  if (p == null) return;
+                                  setState(() => endT = p);
+                                },
+                                child: Text('끝: ${fmt(endT)}'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '현재 row는 30분 블록 묶음(set_id) 기준입니다.\n'
+                          '필요 시 블록 개수를 자동으로 늘리거나 줄입니다.',
+                          style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600, height: 1.35),
+                        ),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('수정', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                    ),
+                  ],
+                );
+              });
+            },
+          );
+          if (picked != true) return;
+
+          final int newStartMin = toMin(startT);
+          final int newEndMin = toMin(endT);
+          if (newEndMin <= newStartMin) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('끝 시간은 시작 시간보다 늦어야 합니다.')));
+            return;
+          }
+
+          // 단일(legacy) 블록이면 duration만 조정해서 처리
+          final setId = (it.setId ?? '').trim();
+          if (setId.isEmpty) {
+            final b = blocks.first;
+            try {
+              await DataManager.instance.updateStudentTimeBlockSchedule(
+                b.id,
+                dayIndex: b.dayIndex,
+                startHour: newStartMin ~/ 60,
+                startMinute: newStartMin % 60,
+                durationMinutes: (newEndMin - newStartMin),
+                number: b.number,
+                refDate: _dateOnly(DateTime.now()),
+              );
+            } catch (e) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            }
+            return;
+          }
+
+          // set_id(30분 블록 묶음): (1) 필요한 블록 수 계산 → (2) 기존 블록 update → (3) 초과분 하드삭제 or 부족분 추가
+          const int blockMinutes = 30;
+          final total = newEndMin - newStartMin;
+          final full = total ~/ blockMinutes;
+          final rem = total % blockMinutes;
+          final durations = <int>[
+            for (int i = 0; i < full; i++) blockMinutes,
+            if (rem > 0) rem,
+          ];
+          if (durations.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('유효하지 않은 시간 범위입니다.')));
+            return;
+          }
+
+          // 충돌 체크(간단): 같은 학생/요일에서 기간이 겹치는 다른 블록과 시간 겹침이 있으면 막는다.
+          final sd = _dateOnly(it.startDate);
+          final ed = it.endDate == null ? null : _dateOnly(it.endDate!);
+          bool rangesOverlap(DateTime a1, DateTime? a2, DateTime b1, DateTime? b2) {
+            final aEnd = a2 ?? DateTime(9999, 12, 31);
+            final bEnd = b2 ?? DateTime(9999, 12, 31);
+            return !(aEnd.isBefore(b1) || bEnd.isBefore(a1));
+          }
+          final otherBlocks = raw.where((b) => !it.blockIds.contains(b.id) && b.dayIndex == it.dayIndex).toList();
+          for (final ob in otherBlocks) {
+            final osd = _dateOnly(ob.startDate);
+            final oed = ob.endDate == null ? null : _dateOnly(ob.endDate!);
+            if (!rangesOverlap(sd, ed, osd, oed)) continue;
+            final oStart = ob.startHour * 60 + ob.startMinute;
+            final oEnd = oStart + ob.duration.inMinutes;
+            final overlap = newStartMin < oEnd && oStart < newEndMin;
+            if (overlap) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('다른 일정과 시간이 겹칩니다.')));
+              return;
+            }
+          }
+
+          final old = List<StudentTimeBlock>.from(blocks);
+          old.sort((a, b) {
+            final na = a.number ?? 999999;
+            final nb = b.number ?? 999999;
+            final cN = na.compareTo(nb);
+            if (cN != 0) return cN;
+            final aMin = a.startHour * 60 + a.startMinute;
+            final bMin = b.startHour * 60 + b.startMinute;
+            return aMin.compareTo(bMin);
+          });
+
+          final int keepN = (old.length < durations.length) ? old.length : durations.length;
+          final toDelete = old.length > durations.length ? old.sublist(durations.length) : const <StudentTimeBlock>[];
+          final toAddCount = durations.length > old.length ? durations.length - old.length : 0;
+
+          // 롤백용(서버/로컬) 원본/추가된 id 추적
+          final originalById = <String, StudentTimeBlock>{};
+          final addedIds = <String>[];
+
+          try {
+            int cur = newStartMin;
+
+            // 1) 기존 블록 update (publish 지연)
+            for (int i = 0; i < keepN; i++) {
+              final b = old[i];
+              originalById[b.id] = b;
+              final dur = durations[i];
+              await DataManager.instance.updateStudentTimeBlockSchedule(
+                b.id,
+                dayIndex: b.dayIndex,
+                startHour: cur ~/ 60,
+                startMinute: cur % 60,
+                durationMinutes: dur,
+                number: i + 1,
+                publish: false,
+                refDate: sd,
+              );
+              cur += dur;
+            }
+
+            // 2) 부족분 추가 (기존 블록과 일시적으로 겹칠 수 있으므로 overlap check는 skip)
+            if (toAddCount > 0) {
+              final base = old.isNotEmpty ? old.first : blocks.first;
+              final addBlocks = <StudentTimeBlock>[];
+              for (int i = keepN; i < durations.length; i++) {
+                final dur = durations[i];
+                final id = const Uuid().v4();
+                addedIds.add(id);
+                addBlocks.add(
+                  StudentTimeBlock(
+                    id: id,
+                    studentId: base.studentId,
+                    dayIndex: base.dayIndex,
+                    startHour: cur ~/ 60,
+                    startMinute: cur % 60,
+                    duration: Duration(minutes: dur),
+                    createdAt: DateTime.now(),
+                    startDate: sd,
+                    endDate: ed,
+                    setId: setId,
+                    number: i + 1,
+                    sessionTypeId: base.sessionTypeId,
+                    weeklyOrder: base.weeklyOrder,
+                  ),
+                );
+                cur += dur;
+              }
+              await DataManager.instance.bulkAddStudentTimeBlocks(
+                addBlocks,
+                immediate: true,
+                injectLocal: true,
+                skipOverlapCheck: true,
+              );
+            }
+
+            // 3) 초과분 하드삭제(마지막에 수행: 실패 시 데이터 손실 최소화)
+            if (toDelete.isNotEmpty) {
+              await DataManager.instance.hardDeleteStudentTimeBlocks(
+                toDelete.map((b) => b.id).toList(),
+                publish: false,
+                refDate: sd,
+              );
+            }
+
+            // 4) publish(한 번)
+            DataManager.instance.applyStudentTimeBlocksOptimistic(
+              List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks),
+              refDate: sd,
+            );
+
+            // 5) planned 재생성 스케줄
+            DataManager.instance.schedulePlannedRegenForStudentSet(
+              studentId: studentId,
+              setId: setId,
+              effectiveStart: sd,
+              immediate: false,
+            );
+          } catch (e) {
+            // best-effort rollback: (1) 추가된 블록 삭제 (2) 수정된 기존 블록 원복
+            try {
+              if (addedIds.isNotEmpty) {
+                await DataManager.instance.hardDeleteStudentTimeBlocks(
+                  addedIds,
+                  publish: false,
+                  refDate: sd,
+                );
+              }
+            } catch (_) {}
+            try {
+              for (final b in originalById.values) {
+                await DataManager.instance.updateStudentTimeBlockSchedule(
+                  b.id,
+                  dayIndex: b.dayIndex,
+                  startHour: b.startHour,
+                  startMinute: b.startMinute,
+                  durationMinutes: b.duration.inMinutes,
+                  number: b.number,
+                  publish: false,
+                  refDate: sd,
+                  touchModifiedAt: false,
+                );
+              }
+            } catch (_) {}
+            try {
+              DataManager.instance.applyStudentTimeBlocksOptimistic(
+                List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks),
+                refDate: sd,
+              );
+            } catch (_) {}
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          }
         }
 
         final header = Container(
@@ -474,7 +1081,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
               cell('요일', flex: 6),
               cell('시간', flex: 14),
               cell('수업명', flex: 22),
-              cell('마지막 수정', flex: 18),
+              cell('마지막 수정', flex: 18, align: TextAlign.left),
             ],
           ),
         );
@@ -516,12 +1123,61 @@ class _ScheduleHistoryTab extends StatelessWidget {
                         ),
                         child: Row(
                           children: [
-                            cell(start, flex: 14, style: rowStyle),
-                            cell(end, flex: 14, style: rowStyle),
+                            cell(
+                              start,
+                              flex: 14,
+                              style: rowStyle,
+                              onTap: () => editStartDate(it),
+                              tooltip: '클릭하여 시작일 수정',
+                            ),
+                            cell(
+                              end,
+                              flex: 14,
+                              style: rowStyle,
+                              onTap: () => editEndDate(it),
+                              tooltip: '클릭하여 종료일 수정',
+                            ),
                             cell(weekday, flex: 6, style: rowStyle),
-                            cell(time, flex: 14, style: rowStyle),
-                            cell(cname, flex: 22, style: rowStyle),
-                            cell(modified, flex: 18, style: rowStyle),
+                            cell(
+                              time,
+                              flex: 14,
+                              style: rowStyle,
+                              onTap: () => editTimeRange(it),
+                              tooltip: '클릭하여 시간 수정',
+                            ),
+                            cell(
+                              cname,
+                              flex: 22,
+                              style: rowStyle,
+                              onTap: () => editClassName(it),
+                              tooltip: '클릭하여 수업명(연결) 수정',
+                            ),
+                            Expanded(
+                              flex: 18,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      modified,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: rowStyle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Tooltip(
+                                    message: '하드삭제(서버 삭제)',
+                                    child: IconButton(
+                                      onPressed: () => hardDeleteEntry(it),
+                                      icon: const Icon(Icons.delete_forever, color: Color(0xFFB74C4C), size: 18),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      splashRadius: 18,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -1334,6 +1990,7 @@ enum _QueryRangePreset {
 class _ScheduleEntry {
   final String key;
   final String? setId;
+  final List<String> blockIds; // 이 row가 대표하는 실제 student_time_blocks id 목록(하드삭제/수정 대상)
   final DateTime startDate;
   final DateTime? endDate;
   final int dayIndex;
@@ -1345,6 +2002,7 @@ class _ScheduleEntry {
   const _ScheduleEntry({
     required this.key,
     required this.setId,
+    required this.blockIds,
     required this.startDate,
     required this.endDate,
     required this.dayIndex,

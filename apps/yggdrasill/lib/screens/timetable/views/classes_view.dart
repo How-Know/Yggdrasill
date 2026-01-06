@@ -20,6 +20,10 @@ import '../../../services/consult_trial_lesson_service.dart';
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
 
+// registrationMode 드래그는 PointerMove/Update가 매우 자주 호출된다.
+// 과도한 print는 UI 스레드에서 콘솔 I/O로 직결되어 렉을 유발하므로 기본 OFF.
+const bool _kRegistrationPerfDebug = false;
+
 class _BlockRange {
   final DateTime start;
   final DateTime? end;
@@ -406,33 +410,51 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   void _onCellPanStart(int dayIdx, int blockIdx) {
     final timeBlocks = _generateTimeBlocks();
     final blockTime = timeBlocks[blockIdx].startTime;
-    print('[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
+    }
     setState(() {
       dragStartIdx = blockIdx;
       dragEndIdx = blockIdx;
       dragDayIdx = dayIdx;
       isDragging = true;
     });
-    print('[DEBUG][_onCellPanStart] dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx, dragDayIdx=$dragDayIdx, isDragging=$isDragging');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanStart] dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx, dragDayIdx=$dragDayIdx, isDragging=$isDragging');
+    }
   }
 
   void _onCellPanUpdate(int dayIdx, int blockIdx) {
     final timeBlocks = _generateTimeBlocks();
     final blockTime = timeBlocks[blockIdx].startTime;
-    print('[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
+    }
     if (!isDragging || dragDayIdx != dayIdx) return;
     if (dragEndIdx != blockIdx) {
       setState(() {
         dragEndIdx = blockIdx;
       });
-      print('[DEBUG][_onCellPanUpdate] dragEndIdx updated: $dragEndIdx');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanUpdate] dragEndIdx updated: $dragEndIdx');
+      }
     }
   }
 
   void _onCellPanEnd(int dayIdx) async {
-    print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+    }
     if (!isDragging || dragDayIdx != dayIdx || dragStartIdx == null || dragEndIdx == null) {
-      print('[DEBUG][_onCellPanEnd] 드래그 종료 조건 미달, 드래그 상태 해제');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanEnd] 드래그 종료 조건 미달, 드래그 상태 해제');
+      }
       setState(() { isDragging = false; });
       return;
     }
@@ -442,7 +464,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final selectedIdxs = start <= end
         ? [for (int i = start; i <= end; i++) i]
         : [for (int i = end; i <= start; i++) i];
-    print('[DEBUG][_onCellPanEnd] selectedIdxs=$selectedIdxs');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] selectedIdxs=$selectedIdxs');
+    }
     setState(() {
       isDragging = false;
       dragStartIdx = null;
@@ -452,9 +477,14 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final mode = widget.registrationModeType;
     final timeBlocks = _generateTimeBlocks();
     List<DateTime> startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
-    print('[DEBUG][_onCellPanEnd] startTimes=$startTimes');
-    print('[DEBUG][_onCellPanEnd] mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, startTimes.length=${startTimes.length}');
-    print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] startTimes=$startTimes');
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, startTimes.length=${startTimes.length}');
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
+    }
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       // 단일 슬롯은 "기준 수업시간(lessonDuration)"만큼 블록을 생성하는 클릭 로직과 동일해야 하므로
       // 상위 콜백으로 위임한다(등록모드에서는 콜백 쪽에서 pending 누적).
@@ -474,7 +504,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         return;
       }
       final studentId = widget.selectedStudentWithInfo!.student.id;
-      print('[DEBUG][_onCellPanEnd] 드래그 등록 분기 진입');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanEnd] 드래그 등록 분기 진입');
+      }
       final blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
         studentIds: [studentId],
         dayIndex: dayIdx,
@@ -483,7 +516,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         startDate: range.start,
         endDate: range.end,
       );
-      print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
+      }
       // 등록모드: 저장은 ESC/우클릭 종료 시 한 번에 upsert
       await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
       if (widget.onCellStudentsSelected != null) {
@@ -491,19 +527,29 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       }
       return;
     }
-    print('[DEBUG][_onCellPanEnd] 방어로직 진입');
-    print('[DEBUG][_onCellPanEnd] 중복 체크 진입');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] 방어로직 진입');
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] 중복 체크 진입');
+    }
     bool hasConflict = false;
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       final studentId = widget.selectedStudentWithInfo!.student.id;
       final refDate = range?.start;
       if (refDate == null) {
-        print('[DEBUG][_onCellPanEnd] 중복 체크: refDate null -> return');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd] 중복 체크: refDate null -> return');
+        }
         return;
       }
       for (final startTime in startTimes) {
         if (_isStudentTimeOverlap(studentId, dayIdx, startTime, 30, refDate: refDate)) {
-          print('[DEBUG][_onCellPanEnd] 중복 체크: 이미 등록된 시간 startTime=$startTime');
+          if (_kRegistrationPerfDebug) {
+            // ignore: avoid_print
+            print('[DEBUG][_onCellPanEnd] 중복 체크: 이미 등록된 시간 startTime=$startTime');
+          }
           hasConflict = true;
           break;
         }
@@ -511,13 +557,19 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
     if (hasConflict) {
       if (mounted) {
-        print('[DEBUG][_onCellPanEnd] 중복 체크: 스낵바 호출');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd] 중복 체크: 스낵바 호출');
+        }
         showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
         if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
       }
       return;
     }
-    print('[DEBUG][_onCellPanEnd] 기타 등록 분기 진입');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd] 기타 등록 분기 진입');
+    }
     // [수정] 30분짜리 블록만 생성
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       final studentId = widget.selectedStudentWithInfo!.student.id;
@@ -531,31 +583,55 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       );
       // 등록모드: 저장은 ESC/우클릭 종료 시 한 번에 upsert
       await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] bulkAddStudentTimeBlocks 완료');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] bulkAddStudentTimeBlocks 완료');
+      }
       setState(() {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
+        }
       });
     }
-    print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] onCellStudentsSelected 콜백 호출');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] onCellStudentsSelected 콜백 호출');
+    }
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       if (widget.onCellStudentsSelected != null) {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출');
+        }
         widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
       } else {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출');
+        }
         final refDate = range?.start;
         await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!], refDate: refDate);
       }
     } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null) {
       if (widget.onCellStudentsSelected != null) {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출(자습)');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출(자습)');
+        }
         widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
       } else {
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출(자습)');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출(자습)');
+        }
         await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
       }
     } else {
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
+      }
     }
   }
 
@@ -684,7 +760,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                       dragEndIdx = blockIdx;
                       dragDayIdx = dayIdx;
                     });
-                    print('[DEBUG][onPointerMove] 드래그 시작: dayIdx=$dayIdx, blockIdx=$blockIdx');
+                    if (_kRegistrationPerfDebug) {
+                      // ignore: avoid_print
+                      print('[DEBUG][onPointerMove] 드래그 시작: dayIdx=$dayIdx, blockIdx=$blockIdx');
+                    }
                   } else if (isDragging) {
                     final box = context.findRenderObject() as RenderBox;
                     final local = box.globalToLocal(event.position);
@@ -694,11 +773,17 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   }
                 },
                 onPointerUp: (event) {
-                  print('[DEBUG][onPointerUp] isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+                  if (_kRegistrationPerfDebug) {
+                    // ignore: avoid_print
+                    print('[DEBUG][onPointerUp] isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+                  }
                   if (!widget.isRegistrationMode) return;
                   // 드래그 시작 후라면 무조건 _onCellPanEnd 호출
                   if (isDragging && dragStartIdx != null && dragEndIdx != null) {
-                    print('[DEBUG][onPointerUp] _onCellPanEnd 호출');
+                    if (_kRegistrationPerfDebug) {
+                      // ignore: avoid_print
+                      print('[DEBUG][onPointerUp] _onCellPanEnd 호출');
+                    }
                     _onCellPanEnd(dragDayIdx ?? 0); // dragDayIdx가 null이어도 0으로 호출
                   }
                   setState(() {
@@ -1011,7 +1096,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                 countColor = const Color(0xFF223131);
                               }
                               if (isDragHighlight) {
-                                print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
+                                if (_kRegistrationPerfDebug) {
+                                  // ignore: avoid_print
+                                  print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
+                                }
                               }
                               return Expanded(
                                 child: MouseRegion(
@@ -1019,7 +1107,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                     if (widget.isRegistrationMode) {
                                       setState(() {
                                         _hoveredCellKey = cellKey;
-                                        print('[DEBUG][MouseRegion] onEnter: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                        if (_kRegistrationPerfDebug) {
+                                          // ignore: avoid_print
+                                          print('[DEBUG][MouseRegion] onEnter: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                        }
                                       });
                                     }
                                   },
@@ -1027,7 +1118,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                     if (widget.isRegistrationMode) {
                                       setState(() {
                                         if (_hoveredCellKey == cellKey) _hoveredCellKey = null;
-                                        print('[DEBUG][MouseRegion] onExit: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                        if (_kRegistrationPerfDebug) {
+                                          // ignore: avoid_print
+                                          print('[DEBUG][MouseRegion] onExit: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
+                                        }
                                       });
                                     }
                                   },
@@ -1040,25 +1134,37 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                                       final selectedStudentWithInfo = widget.selectedStudentWithInfo;
                                       final studentId = selectedStudentWithInfo?.student.id;
-                                      print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
+                                      if (_kRegistrationPerfDebug) {
+                                        // ignore: avoid_print
+                                        print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
+                                      }
                                       // 클릭한 셀의 시작 시간
                                       final startTime = timeBlocks[blockIdx].startTime;
                                       // lessonDuration만큼 생성될 모든 블록의 startTime 리스트 생성
                                       final blockCount = (lessonDuration / 30).ceil();
                                       final allStartTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: 30 * i)));
                                       if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
-                                        print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');
+                                        if (_kRegistrationPerfDebug) {
+                                          // ignore: avoid_print
+                                          print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');
+                                        }
                                         Future.microtask(() {
                                           try {
                                             showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
                                           } catch (e, st) {
-                                            print('[DEBUG][showAppSnackBar 예외] $e\n$st');
+                                            if (_kRegistrationPerfDebug) {
+                                              // ignore: avoid_print
+                                              print('[DEBUG][showAppSnackBar 예외] $e\n$st');
+                                            }
                                           }
                                         });
                                         return;
                                       }
                                       if (widget.isRegistrationMode && widget.onCellStudentsSelected != null && selectedStudentWithInfo != null) {
-                                        print('[DEBUG][등록시도] studentId=${selectedStudentWithInfo.student.id}, dayIdx=$dayIdx, startTime=${timeBlocks[blockIdx].startTime}');
+                                        if (_kRegistrationPerfDebug) {
+                                          // ignore: avoid_print
+                                          print('[DEBUG][등록시도] studentId=${selectedStudentWithInfo.student.id}, dayIdx=$dayIdx, startTime=${timeBlocks[blockIdx].startTime}');
+                                        }
                                         widget.onCellStudentsSelected!(
                                           dayIdx,
                                           [timeBlocks[blockIdx].startTime],
@@ -1222,7 +1328,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         '${b.id}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}|day=${b.dayIndex}|t=${b.startHour}:${b.startMinute}';
     String _fmtSelfStudyBlock(SelfStudyTimeBlock b) =>
         '${b.id}|created=${b.createdAt.toIso8601String().split("T").first}|day=${b.dayIndex}|t=${b.startHour}:${b.startMinute}';
-    print('[DEBUG][_isStudentTimeOverlap] refDate=$dateOnly studentBlocks=${studentBlocks.map(_fmtStudentBlock).toList()} selfStudyBlocks=${selfStudyBlocks.map(_fmtSelfStudyBlock).toList()}');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_isStudentTimeOverlap] refDate=$dateOnly studentBlocks=${studentBlocks.map(_fmtStudentBlock).toList()} selfStudyBlocks=${selfStudyBlocks.map(_fmtSelfStudyBlock).toList()}');
+    }
     
     final newStart = startTime.hour * 60 + startTime.minute;
     final newEnd = newStart + lessonDurationMinutes;
@@ -1232,7 +1341,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
-        print('[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
+        }
         return true;
       }
     }
@@ -1242,12 +1354,18 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
       if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
-        print('[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block= [33m${block.toJson()} [0m');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
+        }
         return true;
       }
     }
     
-    print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, refDate=$dateOnly');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, refDate=$dateOnly');
+    }
     return false;
   }
 
@@ -1380,15 +1498,22 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                           final allBlocks = DataManager.instance.studentTimeBlocks;
                           // 같은 학생 id와 set_id를 모두 만족하는 블록만 삭제
                           final toDelete = allBlocks.where((b) => b.setId == block.setId && b.studentId == block.studentId).toList();
-                          print('[삭제드롭존][진단] 전체 블록 setId 목록: ' + allBlocks.map((b) => b.setId).toList().toString());
-                          print('[삭제드롭존][진단] 전체 블록 studentId 목록: ' + allBlocks.map((b) => b.studentId).toList().toString());
-                          print('[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
+                          }
                           for (final b in toDelete) {
-                            print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startHour=${b.startHour}, block.startMinute=${b.startMinute}');
+                            if (_kRegistrationPerfDebug) {
+                              // ignore: avoid_print
+                              print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startHour=${b.startHour}, block.startMinute=${b.startMinute}');
+                            }
                             await DataManager.instance.removeStudentTimeBlock(b.id);
                           }
                         } else {
-                          print('[삭제드롭존] setId=null, 단일 삭제: block.id=${block.id}');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[삭제드롭존] setId=null, 단일 삭제: block.id=${block.id}');
+                          }
                           await DataManager.instance.removeStudentTimeBlock(block.id);
                         }
                       } catch (_) {}

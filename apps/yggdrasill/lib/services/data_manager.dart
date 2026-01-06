@@ -2673,8 +2673,13 @@ class DataManager {
       return b.copyWith(startDate: sd, endDate: ed);
     }).toList();
 
+    // ✅ 성능: 같은 start_date에 대해 _activeBlocks(date)를 반복 계산하지 않도록 캐시한다.
+    final Map<String, List<StudentTimeBlock>> activeByDate = <String, List<StudentTimeBlock>>{};
     for (final newBlock in normalizedBlocks) {
-      final overlap = _activeBlocks(newBlock.startDate).any((b) =>
+      final d = DateTime(newBlock.startDate.year, newBlock.startDate.month, newBlock.startDate.day);
+      final key = _ymd(d);
+      final active = activeByDate.putIfAbsent(key, () => _activeBlocks(d));
+      final overlap = active.any((b) =>
         b.studentId == newBlock.studentId &&
         b.dayIndex == newBlock.dayIndex &&
         (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
@@ -2837,6 +2842,10 @@ class DataManager {
     // ✅ 낙관적 반영(기존 bulkDelete와 동일한 패턴)
     _pendingTimeBlocks.removeWhere((b) => ids.contains(b.id));
     _studentTimeBlocks.removeWhere((b) => ids.contains(b.id));
+    // ✅ week-cache에도 남아있으면(merge 로직상) 삭제된 블록이 다시 보일 수 있으므로 즉시 제거
+    for (final id in ids) {
+      _removeStudentTimeBlockFromWeekCaches(id);
+    }
     if (publish) {
       _publishStudentTimeBlocks(refDate: refDate);
       _bumpStudentTimeBlocksRevision();
@@ -2987,21 +2996,27 @@ class DataManager {
     final prev = _studentTimeBlocks[prevIndex];
     final next = prev.copyWith(startDate: sd, endDate: ed);
 
+    final now = DateTime.now();
     if (TagPresetService.preferSupabaseRead) {
       try {
         await Supabase.instance.client.from('student_time_blocks').update({
           'start_date': sd.toIso8601String().split('T').first,
           'end_date': ed?.toIso8601String().split('T').first,
+          'block_created_at': now.toIso8601String(),
         }).eq('id', blockId);
       } catch (e, st) {
         print('[SUPA][stb update range] $e\n$st');
         rethrow;
       }
     } else {
-      await AcademyDbService.instance.updateStudentTimeBlock(blockId, next);
+      await AcademyDbService.instance.updateStudentTimeBlock(blockId, next.copyWith(createdAt: now));
     }
 
-    _studentTimeBlocks[prevIndex] = next;
+    final applied = next.copyWith(createdAt: now);
+    _studentTimeBlocks[prevIndex] = applied;
+    // 캐시 정합(기간 변경으로 주차 overlap이 달라질 수 있음)
+    _removeStudentTimeBlockFromWeekCaches(blockId);
+    _upsertStudentTimeBlockIntoWeekCaches(applied);
     _publishStudentTimeBlocks(); // 오늘 기준 active notifier 갱신(검색/리스트 등에 사용)
     _bumpStudentTimeBlocksRevision();
 
@@ -3017,6 +3032,214 @@ class DataManager {
         print('[WARN][stb update range planned regen] $e\n$st');
       }
     }
+  }
+
+  /// 여러 student_time_blocks의 기간(start_date/end_date)을 한 번에 수정한다.
+  ///
+  /// - `endDate == null`이면 무기한(열림)으로 설정된다.
+  /// - 내부 week-cache 정합을 위해 id를 캐시에서 제거 후(필요 시) 다시 upsert 한다.
+  Future<void> updateStudentTimeBlocksDateRangeBulk(
+    List<String> blockIds, {
+    required DateTime startDate,
+    DateTime? endDate,
+    bool publish = true,
+    DateTime? refDate,
+    bool touchModifiedAt = true,
+  }) async {
+    final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
+    if (ids.isEmpty) return;
+
+    final sd = DateTime(startDate.year, startDate.month, startDate.day);
+    final ed = endDate == null ? null : DateTime(endDate.year, endDate.month, endDate.day);
+    if (ed != null && ed.isBefore(sd)) {
+      throw Exception('종료일은 시작일보다 빠를 수 없습니다.');
+    }
+
+    final now = DateTime.now();
+    final patch = <String, dynamic>{
+      'start_date': sd.toIso8601String().split('T').first,
+      'end_date': ed?.toIso8601String().split('T').first,
+    };
+    if (touchModifiedAt) {
+      patch['block_created_at'] = now.toIso8601String();
+    }
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .update(patch)
+            .filter('id', 'in', '(${ids.map((e) => '"$e"').join(',')})');
+      } catch (e, st) {
+        print('[SUPA][stb bulk update range] $e\n$st');
+        rethrow;
+      }
+    } else {
+      // 로컬DB: 개별 update
+      for (final id in ids) {
+        final idx = _studentTimeBlocks.indexWhere((b) => b.id == id);
+        if (idx == -1) continue;
+        final prev = _studentTimeBlocks[idx];
+        final next = prev.copyWith(
+          startDate: sd,
+          endDate: ed,
+          createdAt: touchModifiedAt ? now : prev.createdAt,
+        );
+        await AcademyDbService.instance.updateStudentTimeBlock(id, next);
+      }
+    }
+
+    // 메모리 반영 + week-cache 정합
+    for (int i = 0; i < _studentTimeBlocks.length; i++) {
+      final b = _studentTimeBlocks[i];
+      if (!ids.contains(b.id)) continue;
+      final next = b.copyWith(
+        startDate: sd,
+        endDate: ed,
+        createdAt: touchModifiedAt ? now : b.createdAt,
+      );
+      _studentTimeBlocks[i] = next;
+      _removeStudentTimeBlockFromWeekCaches(next.id);
+      _upsertStudentTimeBlockIntoWeekCaches(next);
+    }
+
+    if (publish) {
+      _publishStudentTimeBlocks(refDate: refDate);
+      _bumpStudentTimeBlocksRevision();
+    }
+  }
+
+  /// 여러 student_time_blocks의 session_type_id를 한 번에 수정한다. (null 포함)
+  Future<void> updateStudentTimeBlocksSessionTypeIdBulk(
+    List<String> blockIds, {
+    required String? sessionTypeId,
+    bool publish = true,
+    DateTime? refDate,
+    bool touchModifiedAt = true,
+  }) async {
+    final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
+    if (ids.isEmpty) return;
+
+    final now = DateTime.now();
+    final patch = <String, dynamic>{
+      'session_type_id': (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+    };
+    if (touchModifiedAt) {
+      patch['block_created_at'] = now.toIso8601String();
+    }
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .update(patch)
+            .filter('id', 'in', '(${ids.map((e) => '"$e"').join(',')})');
+      } catch (e, st) {
+        print('[SUPA][stb bulk update session_type_id] $e\n$st');
+        rethrow;
+      }
+    } else {
+      for (final id in ids) {
+        final idx = _studentTimeBlocks.indexWhere((b) => b.id == id);
+        if (idx == -1) continue;
+        final prev = _studentTimeBlocks[idx];
+        final next = prev.copyWith(
+          sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+          createdAt: touchModifiedAt ? now : prev.createdAt,
+        );
+        await AcademyDbService.instance.updateStudentTimeBlock(id, next);
+      }
+    }
+
+    for (int i = 0; i < _studentTimeBlocks.length; i++) {
+      final b = _studentTimeBlocks[i];
+      if (!ids.contains(b.id)) continue;
+      final next = b.copyWith(
+        sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+        createdAt: touchModifiedAt ? now : b.createdAt,
+      );
+      _studentTimeBlocks[i] = next;
+      // overlap는 변하지 않지만, 캐시 일관성을 위해 upsert
+      _upsertStudentTimeBlockIntoWeekCaches(next);
+    }
+
+    if (publish) {
+      _publishStudentTimeBlocks(refDate: refDate);
+      _bumpStudentTimeBlocksRevision();
+    }
+  }
+
+  /// 단일 student_time_block의 "시간/요일/길이/번호"를 직접 수정한다. (히스토리 row 인플레이스 편집용)
+  Future<void> updateStudentTimeBlockSchedule(
+    String blockId, {
+    required int dayIndex,
+    required int startHour,
+    required int startMinute,
+    required int durationMinutes,
+    int? number,
+    bool publish = true,
+    DateTime? refDate,
+    bool touchModifiedAt = true,
+  }) async {
+    final id = blockId.trim();
+    if (id.isEmpty) return;
+    final idx = _studentTimeBlocks.indexWhere((b) => b.id == id);
+    if (idx == -1) {
+      throw Exception('수업블록을 찾지 못했습니다. (id=$id)');
+    }
+    final prev = _studentTimeBlocks[idx];
+    final now = DateTime.now();
+    final next = prev.copyWith(
+      dayIndex: dayIndex,
+      startHour: startHour,
+      startMinute: startMinute,
+      duration: Duration(minutes: durationMinutes),
+      number: number ?? prev.number,
+      createdAt: touchModifiedAt ? now : prev.createdAt,
+    );
+
+    final patch = <String, dynamic>{
+      'day_index': dayIndex,
+      'start_hour': startHour,
+      'start_minute': startMinute,
+      'duration': durationMinutes,
+      'number': number ?? prev.number,
+    };
+    if (touchModifiedAt) {
+      patch['block_created_at'] = now.toIso8601String();
+    }
+
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        await Supabase.instance.client.from('student_time_blocks').update(patch).eq('id', id);
+      } catch (e, st) {
+        print('[SUPA][stb update schedule] $e\n$st');
+        rethrow;
+      }
+    } else {
+      await AcademyDbService.instance.updateStudentTimeBlock(id, next);
+    }
+
+    _studentTimeBlocks[idx] = next;
+    _upsertStudentTimeBlockIntoWeekCaches(next);
+    if (publish) {
+      _publishStudentTimeBlocks(refDate: refDate);
+      _bumpStudentTimeBlocksRevision();
+    }
+  }
+
+  /// (공개) 일정 변경 후 예정(planned) 재생성을 학생+set 단위로 스케줄한다.
+  /// 내부적으로는 학생의 활성/미래 모든 set_id를 한 번에 재생성하여 session_order를 안정화한다.
+  void schedulePlannedRegenForStudentSet({
+    required String studentId,
+    required String setId,
+    DateTime? effectiveStart,
+    bool immediate = false,
+  }) {
+    final sid = studentId.trim();
+    final sset = setId.trim();
+    if (sid.isEmpty || sset.isEmpty) return;
+    _schedulePlannedRegen(sid, sset, effectiveStart: effectiveStart, immediate: immediate);
   }
 
   // 특정 학생의 set_id 목록에 해당하는 모든 수업 블록 삭제

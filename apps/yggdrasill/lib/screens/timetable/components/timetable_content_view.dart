@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
@@ -51,6 +53,11 @@ class TimetableContentView extends StatefulWidget {
   final String? highlightedStudentId;
   /// 우측 학생 카드 탭(토글) 콜백: 탭된 학생 id 전달
   final ValueChanged<String>? onStudentCardTap;
+  // PERF: 셀 클릭 → 우측 리스트 첫 프레임까지 측정용 (기본 비활성)
+  final bool enableCellRenderPerfTrace;
+  final int cellRenderPerfToken;
+  final int cellRenderPerfStartUs;
+  final void Function(int token, int endUs)? onCellRenderPerfFrame;
 
   const TimetableContentView({
     Key? key,
@@ -80,6 +87,10 @@ class TimetableContentView extends StatefulWidget {
     this.header,
     this.highlightedStudentId,
     this.onStudentCardTap,
+    this.enableCellRenderPerfTrace = false,
+    this.cellRenderPerfToken = 0,
+    this.cellRenderPerfStartUs = 0,
+    this.onCellRenderPerfFrame,
   }) : super(key: key);
 
   @override
@@ -137,6 +148,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
   Widget? _cachedSearchGroupedWidget;
   String? _cachedCellPanelKey;
   Widget? _cachedCellPanelWidget;
+  // 보강(Replace) 원본 블라인드 키 캐시: studentId -> keys
+  // (셀 클릭 시 블록마다 반복 계산되는 것을 방지)
+  final Map<String, Set<String>> _makeupOriginalBlindKeysCache = {};
+  int _lastPerfReportedToken = 0;
   bool isClassRegisterMode = false;
   // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
   late final VoidCallback _revListener;
@@ -196,6 +211,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
         _cachedSearchGroupedWidget = null;
         _cachedCellPanelKey = null;
         _cachedCellPanelWidget = null;
+        _makeupOriginalBlindKeysCache.clear();
       });
     };
     DataManager.instance.studentTimeBlocksRevision.addListener(_revListener);
@@ -219,15 +235,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
       }
       await cleanupOrphanedSessionTypeIds();
     });
-    // 임시 진단: 특정 학생 블록 payload 덤프
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      DataManager.instance.debugDumpStudentBlocks(
-        dayIdx: 5,
-        startHour: 16,
-        startMinute: 0,
-        studentId: 'fce51628-cc03-416f-9ee4-02d68cc3a10c',
-      );
-    });
+    // 임시 진단: 특정 학생 블록 payload 덤프 (기본 비활성)
+    const bool _kTimetableDebugDump = false;
+    if (_kTimetableDebugDump) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        DataManager.instance.debugDumpStudentBlocks(
+          dayIdx: 5,
+          startHour: 16,
+          startMinute: 0,
+          studentId: 'fce51628-cc03-416f-9ee4-02d68cc3a10c',
+        );
+      });
+    }
   }
 
   @override
@@ -1582,8 +1601,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                   cellYmd.year,
                                                   cellYmd.month,
                                                   cellYmd.day);
+                                              // ✅ 셀 클릭 시에는 "현재 보고 있는 주"에 겹치는 블록만 사용(week-cache)
+                                              // 전체 히스토리(비활성 포함)를 매번 스캔하면 클릭마다 1s+ 지연이 생길 수 있다.
                                               final allBlocks = DataManager
-                                                  .instance.studentTimeBlocks;
+                                                  .instance
+                                                  .getStudentTimeBlocksForWeek(
+                                                      refDate);
                                               final blocks = allBlocks
                                                   .where((b) =>
                                                       b.dayIndex == selDayIdx &&
@@ -1613,6 +1636,19 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                               final activeBlocks = blocks
                                                   .where(_isActive)
                                                   .toList();
+                                              // 학생별(선택 dayIdx) 블록 인덱스: sessionOverride의 setId 추정용
+                                              final Map<String,
+                                                      List<StudentTimeBlock>>
+                                                  blocksByStudentOnDay = {};
+                                              for (final b in allBlocks) {
+                                                if (b.dayIndex != selDayIdx)
+                                                  continue;
+                                                blocksByStudentOnDay
+                                                    .putIfAbsent(
+                                                        b.studentId,
+                                                        () => <StudentTimeBlock>[])
+                                                    .add(b);
+                                              }
                                               // 보강 원본 블라인드(set_id 우선): 같은 날짜(YMD)의 replace 원본이 있으면 해당 (studentId,setId) 전체를 제외
                                               final DateTime cellDate =
                                                   DateTime(
@@ -1652,13 +1688,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                 if (setId == null ||
                                                     setId.isEmpty) {
                                                   // 학생의 같은 요일 블록에서 원본 시간과 가장 가까운 블록의 setId 추정
-                                                  final blocksByStudent = allBlocks
-                                                      .where((b) =>
-                                                          b.studentId ==
-                                                              ov.studentId &&
-                                                          b.dayIndex ==
-                                                              selDayIdx)
-                                                      .toList();
+                                                  final blocksByStudent =
+                                                      blocksByStudentOnDay[
+                                                              ov.studentId] ??
+                                                          const <StudentTimeBlock>[];
                                                   if (blocksByStudent
                                                       .isNotEmpty) {
                                                     int origMin =
@@ -1695,6 +1728,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                                   s.student.id)
                                                               .toList())
                                                       .toSet();
+                                              final Map<String, DateTime?>
+                                                  registrationDateByStudentId = {
+                                                for (final s in DataManager
+                                                    .instance.students)
+                                                  s.student.id: s.basicInfo
+                                                      .registrationDate,
+                                              };
                                               List<StudentTimeBlock>
                                                   filteredBlocks = [];
                                               for (final b in activeBlocks) {
@@ -1709,18 +1749,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                   continue; // set_id 블라인드 적용
                                                 }
                                                 // 주차 계산 (등록일 기반)
-                                                DateTime? reg;
-                                                try {
-                                                  reg = DataManager
-                                                      .instance.students
-                                                      .firstWhere((s) =>
-                                                          s.student.id ==
-                                                          b.studentId)
-                                                      .basicInfo
-                                                      .registrationDate;
-                                                } catch (_) {
-                                                  reg = null;
-                                                }
+                                                final reg =
+                                                    registrationDateByStudentId[
+                                                        b.studentId];
                                                 if (reg == null) {
                                                   filteredBlocks.add(b);
                                                   continue;
@@ -1774,36 +1805,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                           .contains(
                                                               s.student.id))
                                                       .toList();
+                                              final Map<String,
+                                                      StudentWithInfo>
+                                                  studentById = {
+                                                for (final s in students)
+                                                  s.student.id: s,
+                                              };
                                               final cellStudents = blocksToUse
                                                   .map((b) =>
-                                                      students.firstWhere(
-                                                        (s) =>
-                                                            s.student.id ==
-                                                            b.studentId,
-                                                        orElse: () =>
-                                                            StudentWithInfo(
-                                                          student: Student(
-                                                              id: '',
-                                                              name: '',
-                                                              school: '',
-                                                              grade: 0,
-                                                              educationLevel:
-                                                                  EducationLevel
-                                                                      .elementary),
-                                                          basicInfo:
-                                                              StudentBasicInfo(
-                                                                  studentId:
-                                                                      ''),
-                                                        ),
-                                                      ))
-                                                  .where((s) =>
-                                                      s.student.id.isNotEmpty)
-                                                  .toList(); // 빈 학생 제거
-                                              // DIAG: 셀 리스트 구성 로그
-                                              // 블록 기준(refDate=선택 셀 날짜)으로 sessionTypeId/set/number/기간을 덤프
-                                              final blockLog = blocksToUse
-                                                  .map((b) =>
-                                                      '${b.studentId}|sess=${b.sessionTypeId}|set=${b.setId}|num=${b.number}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}')
+                                                      studentById[b.studentId])
+                                                  .whereType<StudentWithInfo>()
                                                   .toList();
                                               // 학생별 최신 블록(생성시각 기준) 매핑: 번호/SET/색상 계산 시 재탐색 없이 사용
                                               final Map<String,
@@ -1819,9 +1830,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                       b;
                                                 }
                                               }
-                                              // 선택 셀 날짜/시간 + 리스트 디테일 로그 (리비전 포함)
-                                              print(
-                                                  '[TT][cellList] rev=${DataManager.instance.studentTimeBlocksRevision.value} cellDate=${cellDate.toIso8601String()} day=${widget.selectedCellDayIndex} time=${widget.selectedCellStartTime} blocks=${blocksToUse.length} students=${cellStudents.length} detail=$blockLog');
 
                                               return LayoutBuilder(
                                                 builder:
@@ -3208,21 +3216,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
           return block?.sessionTypeId;
         })()
     };
-    // 빌드 로그: 활성 여부/세션 매핑
-    final refForLog = refDate;
-    final dayLog = selectedDayIdx != null ? selectedDayIdx.toString() : 'any';
-    final timeLog = selectedStartTime != null
-        ? '${selectedStartTime!.hour}:${selectedStartTime!.minute}'
-        : 'any';
-    final logLines = deduped.map((s) {
-      final block = _pickLatestActiveBlock(s.student.id);
-      final status = block == null
-          ? 'none'
-          : 'block=${block.id}|sess=${block.sessionTypeId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}|set=${block.setId}';
-      return '${s.student.name}(${s.student.id}): $status';
-    }).toList();
-    print(
-        '[TT][studentCardList] ref=$refForLog day=$dayLog time=$timeLog students=${deduped.length} detail=$logLines');
     final noSession = <StudentWithInfo>[];
     final sessionMap = <String, List<StudentWithInfo>>{};
     for (final s in deduped) {
@@ -3784,6 +3777,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
         (widget.selectedCellStartTime != oldWidget.selectedCellStartTime)) {
       clearSearch();
     }
+
+    // PERF: 셀 클릭 → 우측 리스트 첫 프레임까지 측정(기본 OFF, 기능 영향 0)
+    if (widget.enableCellRenderPerfTrace &&
+        widget.onCellRenderPerfFrame != null &&
+        widget.cellRenderPerfToken != oldWidget.cellRenderPerfToken &&
+        widget.cellRenderPerfStartUs > 0) {
+      final token = widget.cellRenderPerfToken;
+      dev.Timeline.instantSync('TT cell selection updated', arguments: <String, Object?>{
+        'token': token,
+        'dayIdx': widget.selectedCellDayIndex ?? -1,
+        'hour': widget.selectedCellStartTime?.hour ?? -1,
+        'minute': widget.selectedCellStartTime?.minute ?? -1,
+      });
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!widget.enableCellRenderPerfTrace) return;
+        if (_lastPerfReportedToken == token) return;
+        _lastPerfReportedToken = token;
+        widget.onCellRenderPerfFrame!(token, DateTime.now().microsecondsSinceEpoch);
+      });
+    }
   }
 
   // 수업카드 수정 시 관련 StudentTimeBlock의 session_type_id 일괄 수정
@@ -3979,7 +3993,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       required String? sessionTypeId,
       required int dayIdx,
       required int startMin}) {
-    final keys = _makeupOriginalBlindKeysFor(studentId);
+    // ✅ 학생별 key 셋은 캐시한다(셀 클릭 시 블록마다 재계산 방지)
+    final keys = _makeupOriginalBlindKeysCache.putIfAbsent(
+        studentId, () => _makeupOriginalBlindKeysFor(studentId));
     final rounded = (startMin / 5).round() * 5;
     final key =
         '$weekNumber|${weeklyOrder ?? -1}|${sessionTypeId ?? 'null'}|$dayIdx|$rounded';
@@ -4557,29 +4573,6 @@ class _ClassCardState extends State<_ClassCard> {
     final int studentCount = widget.studentCountOverride ??
         DataManager.instance.getStudentCountForClass(widget.classInfo.id, refDate: widget.refDate);
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
-    // 선택(필터)된 수업카드는 "수업단위 이동(class-move)" 드래그를 제공한다.
-    // - 비선택 상태: ReorderableDelayedDragStartListener가 오래누름 드래그를 소비(순서이동)
-    // - 선택 상태: 이 카드 자체가 오래누름 드래그로 class-move 페이로드를 제공
-    final classBlocks = isDefaultClass
-        ? const <StudentTimeBlock>[]
-        : DataManager.instance.studentTimeBlocks.where((b) => b.sessionTypeId == c.id).toList();
-    final dataPayload = {
-      'type': 'class-move',
-      'classId': c.id,
-      'blocks': classBlocks
-          .map((b) => {
-                'id': b.id,
-                'studentId': b.studentId,
-                'dayIndex': b.dayIndex,
-                'startHour': b.startHour,
-                'startMinute': b.startMinute,
-                'duration': b.duration.inMinutes,
-                'setId': b.setId,
-                'number': b.number,
-                'sessionTypeId': b.sessionTypeId,
-              })
-          .toList(),
-    };
 
     Widget buildCardBody() {
       return DragTarget<Map<String, dynamic>>(
@@ -4858,7 +4851,31 @@ class _ClassCardState extends State<_ClassCard> {
     final card = buildCardBody();
 
     // class-move: 선택된 수업만 활성화 (스와이프 액션과의 충돌 방지를 위해 LongPress로 시작)
-    if (widget.isFiltered && classBlocks.isNotEmpty) {
+    if (widget.isFiltered && !isDefaultClass) {
+      // ✅ 성능 최적화:
+      // class-move payload(블록 목록)은 "선택된 수업"에서만 필요하다.
+      // 기존처럼 모든 수업카드 빌드마다 전체 블록을 map/toList로 변환하면 셀 클릭마다 1s+ 지연이 생길 수 있다.
+      final classBlocks = DataManager.instance.studentTimeBlocks
+          .where((b) => b.sessionTypeId == c.id)
+          .toList();
+      if (classBlocks.isEmpty) return card;
+      final dataPayload = {
+        'type': 'class-move',
+        'classId': c.id,
+        'blocks': classBlocks
+            .map((b) => {
+                  'id': b.id,
+                  'studentId': b.studentId,
+                  'dayIndex': b.dayIndex,
+                  'startHour': b.startHour,
+                  'startMinute': b.startMinute,
+                  'duration': b.duration.inMinutes,
+                  'setId': b.setId,
+                  'number': b.number,
+                  'sessionTypeId': b.sessionTypeId,
+                })
+            .toList(),
+      };
       final Color indicatorColor = c.color ?? const Color(0xFF223131);
       final feedback = Material(
         color: Colors.transparent,

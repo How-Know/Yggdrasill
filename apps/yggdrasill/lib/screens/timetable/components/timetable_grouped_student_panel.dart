@@ -314,23 +314,32 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                             final isHighlighted = !isSelectMode &&
                                 (highlightedStudentId ?? '').isNotEmpty &&
                                 highlightedStudentId == s.student.id;
+                            // ✅ 성능 최적화:
+                            // 셀 선택 리스트에서는 `blockOverrides`(해당 셀의 최신 블록)가 이미 계산되어 넘어온다.
+                            // 기존처럼 학생마다 getStudentClassColorAt() → getStudentTimeBlocksForWeek() (merge+sort)
+                            // 를 반복 호출하면(학생 수만큼) UI 스레드가 1~2초 멈출 수 있어,
+                            // 여기서는 "블록의 sessionTypeId → classes.color"만 빠르게 매핑해 사용한다.
+                            final classColorById = <String, Color?>{
+                              for (final c in DataManager.instance.classes) c.id: c.color,
+                            };
+
                             Color? indicatorOverride;
-                          int? blockNumber;
+                            int? blockNumber;
                             final int? dIdx = dayIndex;
                             final DateTime? st = startTime;
                           final StudentTimeBlock? overrideBlock = blockOverrides?[s.student.id];
                           if (dIdx != null && st != null) {
                             if (overrideBlock != null) {
                               blockNumber = overrideBlock.number;
-                              indicatorOverride = (overrideBlock.sessionTypeId != null && overrideBlock.sessionTypeId!.isNotEmpty)
-                                  ? DataManager.instance.getStudentClassColorAt(
-                                      s.student.id,
-                                      dIdx,
-                                      DateTime(0, 1, 1, st.hour, st.minute),
-                                      setId: overrideBlock.setId,
-                                      refDate: DateTime(st.year, st.month, st.day),
-                                    )
-                                  : Colors.transparent;
+                              final sessionId = overrideBlock.sessionTypeId;
+                              if (sessionId != null &&
+                                  sessionId.isNotEmpty &&
+                                  sessionId != '__default_class__') {
+                                indicatorOverride =
+                                    classColorById[sessionId] ?? Colors.transparent;
+                              } else {
+                                indicatorOverride = Colors.transparent;
+                              }
                             }
                             if (indicatorOverride == null) {
                               final ref = DateTime(st.year, st.month, st.day);
@@ -364,13 +373,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               blockNumber ??= block.number;
                               final sessionId = block.sessionTypeId;
                               if (sessionId != null && sessionId != '__default_class__') {
-                                indicatorOverride = DataManager.instance.getStudentClassColorAt(
-                                  s.student.id,
-                                  dIdx,
-                                  DateTime(0, 1, 1, st.hour, st.minute),
-                                  setId: block.setId,
-                                  refDate: DateTime(st.year, st.month, st.day),
-                                );
+                                indicatorOverride =
+                                    classColorById[sessionId] ?? Colors.transparent;
                               } else {
                                 // sessionTypeId 없거나 기본수업이면 색상 표시하지 않음 (fallback 방지)
                                 indicatorOverride = Colors.transparent;

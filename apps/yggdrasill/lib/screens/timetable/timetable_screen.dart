@@ -35,7 +35,16 @@ import 'components/timetable_search_field.dart';
 import '../consult/consult_notes_screen.dart';
 import '../../services/consult_note_controller.dart';
 import '../../widgets/dark_panel_route.dart';
+import 'dart:developer' as dev;
 
+// 등록모드/드래그 선택은 이벤트가 매우 자주 발생한다.
+// DEBUG 로그(특히 큰 리스트 toJson 출력)는 UI 스레드를 심하게 막아 렉/입력지연의 주 원인이 되므로 기본 OFF.
+const bool _kRegistrationPerfDebug = false;
+// PERF: 셀 클릭 → 우측 리스트 첫 프레임까지 측정(DevTools Timeline에서 확인)
+// - 기본 OFF (기능 영향 0)
+// - 켜려면: flutter run ... --dart-define=TT_CELL_PERF=true
+const bool _kCellRenderPerfTrace =
+    bool.fromEnvironment('TT_CELL_PERF', defaultValue: false);
 
 enum TimetableViewType {
   classes,    // 수업
@@ -105,6 +114,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 셀 선택 시 학생 리스트 상태 추가
   // 학생 리스트는 timetable_content_view.dart에서 계산
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
+  // PERF: 셀 선택 → 우측 패널 렌더까지 측정용 토큰/타임스탬프
+  int _cellRenderPerfToken = 0;
+  int _cellRenderPerfStartUs = 0;
+  final Map<int, dev.TimelineTask> _cellRenderPerfTasks = <int, dev.TimelineTask>{};
+  final Map<int, int> _cellRenderPerfStartByToken = <int, int>{};
   final FocusNode _focusNode = FocusNode();
   // 필터 chips 상태
   Set<String> _selectedEducationLevels = {};
@@ -128,6 +142,41 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
   final TextEditingController _headerSearchController = TextEditingController();
+
+  void _beginCellRenderPerfTrace({
+    required int dayIdx,
+    required DateTime startTime,
+  }) {
+    if (!_kCellRenderPerfTrace) return;
+    final token = _cellRenderPerfToken + 1;
+    final startUs = DateTime.now().microsecondsSinceEpoch;
+    _cellRenderPerfToken = token;
+    _cellRenderPerfStartUs = startUs;
+
+    final task = dev.TimelineTask(filterKey: 'timetable');
+    task.start('TT cell→list first frame', arguments: <String, Object?>{
+      'token': token,
+      'dayIdx': dayIdx,
+      'hour': startTime.hour,
+      'minute': startTime.minute,
+      'selectedDate': _selectedDate.toIso8601String(),
+      'viewType': _viewType.name,
+    });
+    _cellRenderPerfTasks[token] = task;
+    _cellRenderPerfStartByToken[token] = startUs;
+  }
+
+  void _finishCellRenderPerfTrace(int token, int endUs) {
+    if (!_kCellRenderPerfTrace) return;
+    final task = _cellRenderPerfTasks.remove(token);
+    final startUs = _cellRenderPerfStartByToken.remove(token);
+    if (task == null) return;
+    final durMs = (startUs == null) ? null : (endUs - startUs) / 1000.0;
+    task.finish(arguments: <String, Object?>{
+      'token': token,
+      if (durMs != null) 'dur_ms': durMs,
+    });
+  }
 
   void _toggleWeekStudentFilter(String studentId) {
     final id = studentId.trim();
@@ -436,11 +485,17 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   List<StudentTimeBlock> _applySelectedClassId(List<StudentTimeBlock> blocks) {
     if (_selectedClassId == null || _selectedClassId!.isEmpty) {
-      print('[DEBUG][_applySelectedClassId] skip (selectedClassId is null/empty), blocks=${blocks.length}');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][_applySelectedClassId] skip (selectedClassId is null/empty), blocks=${blocks.length}');
+      }
       return blocks;
     }
     final mapped = blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
-    print('[DEBUG][_applySelectedClassId] selectedClassId=$_selectedClassId, before=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}, after=${mapped.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][_applySelectedClassId] selectedClassId=$_selectedClassId, before=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}, after=${mapped.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+    }
     return mapped;
   }
 
@@ -506,7 +561,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
       }
     }
     final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
-    print('[DEBUG][Timetable] scrollToCurrentTime: blocks=${timeBlocks.length}, currentIdx=$currentIdx, targetOffset=$targetOffset');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG][Timetable] scrollToCurrentTime: blocks=${timeBlocks.length}, currentIdx=$currentIdx, targetOffset=$targetOffset');
+    }
     if (_timetableScrollController.hasClients) {
       final maxOffset = _timetableScrollController.position.maxScrollExtent;
       final minOffset = _timetableScrollController.position.minScrollExtent;
@@ -518,7 +576,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
         curve: Curves.easeInOut,
       );
     } else {
-      print('[DEBUG][Timetable] scroll controller has no clients yet');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG][Timetable] scroll controller has no clients yet');
+      }
     }
   }
 
@@ -593,7 +654,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final start = DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
         final end = DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
         final within = now.isAfter(start) && now.isBefore(end);
-        print('[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
+        }
         if (within) {
           // 1) 해당 날짜의 타임블록 생성
           final blocks = _generateTimeBlocks();
@@ -621,7 +685,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _selectedStartTimeHour = chosen.hour;
               _selectedStartTimeMinute = chosen.minute;
             });
-            print('[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
+            if (_kRegistrationPerfDebug) {
+              // ignore: avoid_print
+              print('[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
+            }
           }
         }
       }
@@ -650,7 +717,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void _handleRegistrationButton() async {
-    print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+    if (_kRegistrationPerfDebug) {
+      // ignore: avoid_print
+      print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+    }
     // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
     // ✅ 상단 '+ 추가' 버튼은 "학생 수업시간 등록"만 지원한다. (드롭다운 제거)
     // 다이얼로그 표시가 느려지는 원인: 여기서 동기화(loadStudents/loadStudentTimeBlocks)를 await 하면
@@ -662,7 +732,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
       builder: (context) => StudentSearchDialog(isSelfStudyMode: false),
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(DataManager.instance.loadStudentTimeBlocks());
+      // ✅ 전체 student_time_blocks reload는 비용이 크고(700~1000+ row 파싱/리빌드),
+      // 등록 중 사용자 입력(클릭/ESC)이 "먹히지 않는" 체감 렉의 주요 원인이 될 수 있다.
+      // - 비어있을 때만 전체 로드
+      // - 그 외에는 현재 주만 프리로드(경량)로 충분
+      if (DataManager.instance.studentTimeBlocks.isEmpty) {
+        unawaited(DataManager.instance.loadStudentTimeBlocks());
+      } else {
+        unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
+      }
       unawaited(DataManager.instance.loadStudents());
     });
     final selectedStudent = await dialogFuture;
@@ -699,22 +777,37 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
         if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
           _selectedClassId = preselectedClassId;
-          print('[DEBUG][학생선택] preselectedClassId 적용: $_selectedClassId');
+          if (_kRegistrationPerfDebug) {
+            // ignore: avoid_print
+            print('[DEBUG][학생선택] preselectedClassId 적용: $_selectedClassId');
+          }
         }
-        print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
+        }
       });
       // ESC 등 키 입력 포커스를 다시 메인 타임테이블로 돌려 등록 취소/종료가 동작하도록 한다.
       _focusNode.requestFocus();
-      print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      }
     } else {
       setState(() {
         _isStudentRegistrationMode = false;
         _isClassRegistrationMode = false;
         _selectedStudentWithInfo = null;
         
-        print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+        if (_kRegistrationPerfDebug) {
+          // ignore: avoid_print
+          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+        }
       });
-      print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      if (_kRegistrationPerfDebug) {
+        // ignore: avoid_print
+        print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      }
     }
   }
 
@@ -1315,7 +1408,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
           if (_isSelectMode) {
             setState(() {
               _isSelectMode = false;
-              print('[DEBUG][TimetableScreen] 선택모드 해제(셀 클릭): _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+              if (_kRegistrationPerfDebug) {
+                // ignore: avoid_print
+                print('[DEBUG][TimetableScreen] 선택모드 해제(셀 클릭): _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+              }
             });
           }
         },
@@ -1525,6 +1621,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onToggleClassFilter: _toggleClassQuickFilter,
           selectedDayDate: _selectedDayDate, // 요일 클릭 시 선택 날짜 전달
           viewDate: _selectedDate,
+          // PERF: 셀 클릭→우측 리스트 첫 프레임까지 측정(기본 OFF)
+          enableCellRenderPerfTrace: _kCellRenderPerfTrace,
+          cellRenderPerfToken: _cellRenderPerfToken,
+          cellRenderPerfStartUs: _cellRenderPerfStartUs,
+          onCellRenderPerfFrame: _finishCellRenderPerfTrace,
           header: Padding(
             padding: const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
             child: Row(
@@ -1660,6 +1761,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     filteredClassIds: filteredClassIds.isEmpty ? null : filteredClassIds,
                     onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
                     onTimeSelected: (dayIdx, startTime) {
+                      _beginCellRenderPerfTrace(dayIdx: dayIdx, startTime: startTime);
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedStartTimeHour = startTime.hour;
@@ -1667,9 +1769,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       });
                     },
                     onCellStudentsSelected: (dayIdx, startTimes, students) async {
-                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+                      if (_kRegistrationPerfDebug) {
+                        // ignore: avoid_print
+                        print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+                      }
                       // 셀 클릭 시 검색 리셋
                       _resetSearch();
+                      if (startTimes.isNotEmpty) {
+                        _beginCellRenderPerfTrace(
+                          dayIdx: dayIdx,
+                          startTime: startTimes.first,
+                        );
+                      }
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
                         _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
@@ -1677,7 +1788,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       });
                       // 자습 등록 모드 처리
                       if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
-                        print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
+                        if (_kRegistrationPerfDebug) {
+                          // ignore: avoid_print
+                          print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
+                        }
                         final studentId = _selectedSelfStudyStudent!.student.id;
                         final blockMinutes = 30; // 자습 블록 길이(분)
                         List<DateTime> actualStartTimes = startTimes;
@@ -1711,17 +1825,25 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           return;
                         }
                         
-                        print('[DEBUG][onCellStudentsSelected] 생성할 자습 블록 actualStartTimes: $actualStartTimes');
+                        if (_kRegistrationPerfDebug) {
+                          // ignore: avoid_print
+                          print('[DEBUG][onCellStudentsSelected] 생성할 자습 블록 actualStartTimes: $actualStartTimes');
+                        }
                         final blocks = SelfStudyTimeBlockFactory.createBlocksWithSetIdAndNumber(
                           studentId: studentId,
                           dayIndex: dayIdx,
                           startTimes: actualStartTimes,
                           duration: Duration(minutes: blockMinutes),
                         );
-                        print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
+                        if (_kRegistrationPerfDebug) {
+                          // ignore: avoid_print
+                          print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: count=${blocks.length}');
+                        }
                         for (final block in blocks) {
-                          print('[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: ${block.toJson()}');
-                          print('[DEBUG][onCellStudentsSelected] block.setId=${block.setId}, block.number=${block.number}');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: setId=${block.setId} number=${block.number} day=${block.dayIndex} start=${block.startHour}:${block.startMinute}');
+                          }
                           await DataManager.instance.addSelfStudyTimeBlock(block);
                         }
                         setState(() {
@@ -1740,20 +1862,28 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           // 드래그 등록 분기:
                           // - 블록 생성/등록(=pending 누적)은 ClassesView에서 처리
                           // - 등록모드에서는 서버 리로드(loadStudentTimeBlocks)를 호출하면 pending이 사라질 수 있으므로 금지
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes.length=${startTimes.length}');
-                          print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
+                          }
                           return;
                         } else if (startTimes.length == 1) {
                           // 클릭 등록 분기: 블록 생성/등록부터 수행
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes.length=${startTimes.length}');
-                          print('[DEBUG][onCellStudentsSelected] 선택된 학생: ${student.id}, 이름: ${student.name}');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
+                          }
                           final blockMinutes = 30; // 한 블록 30분 기준
                           final lessonDuration = DataManager.instance.academySettings.lessonDuration;
                           final blockCount = (lessonDuration / blockMinutes).ceil();
                           List<DateTime> actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
                           
-                          print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                          }
                           // 효력 기간 입력
                           final range = await _pickBlockEffectiveRange(context);
                           if (range == null) {
@@ -1778,7 +1908,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               break;
                             }
                           }
-                          print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
+                          }
                           if (hasConflict) {
                             showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
                             return;
@@ -1793,28 +1926,47 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             endDate: range.end,
                           );
                           blocks = _applySelectedClassId(blocks);
-                          print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: ${blocks.map((b) => b.toJson()).toList()}');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: count=${blocks.length}');
+                          }
                           if (_isStudentRegistrationMode) {
                             // 등록모드: 로컬에만 추가, 서버 업서트/regen은 모드 종료 시 일괄 처리
                             await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
-                            final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                            print('[DEBUG][onCellStudentsSelected] (defer) 로컬 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
+                            if (_kRegistrationPerfDebug) {
+                              final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                              // ignore: avoid_print
+                              print('[DEBUG][onCellStudentsSelected] (defer) 로컬 저장 후 blocksCount=${allBlocksAfter.length}');
+                            }
                           } else {
                             // 일반 모드: 즉시 업서트
                             await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
-                            print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                            if (_kRegistrationPerfDebug) {
+                              // ignore: avoid_print
+                              print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                            }
                             await DataManager.instance.loadStudentTimeBlocks();
-                            final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
-                            print('[DEBUG][onCellStudentsSelected] 저장 후 전체 블록: ${allBlocksAfter.map((b) => b.toJson()).toList()}');
+                            if (_kRegistrationPerfDebug) {
+                              final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                              // ignore: avoid_print
+                              print('[DEBUG][onCellStudentsSelected] 저장 후 blocksCount=${allBlocksAfter.length}');
+                            }
                           }
                           final usedCount = DataManager.instance.getStudentSetCount(student.id);
-                          print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          }
                           setState(() {
                     
                             
                             if (false) { // 자동 종료 로직 비활성화
-                              print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
+                              if (_kRegistrationPerfDebug) {
+                                // ignore: avoid_print
+                                print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
+                              }
                               _isStudentRegistrationMode = false;
                               _selectedStudentWithInfo = null;
                               _selectedDayIndex = null;
@@ -1822,12 +1974,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
                               _selectedStartTimeMinute = null;
                             }
                           });
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                          }
                           
                           if (false && mounted) { // 자동 종료 로직 비활성화
                             showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
                           }
-                          print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
+                          if (_kRegistrationPerfDebug) {
+                            // ignore: avoid_print
+                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
+                          }
                         }
                       }
                     },
@@ -1840,7 +1998,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       setState(() {
                         _isSelectMode = selecting;
                         if (!selecting) _selectedStudentIds.clear();
-                        print('[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                        if (_kRegistrationPerfDebug) {
+                          // ignore: avoid_print
+                          print('[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                        }
                       });
                     },
                     weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
@@ -1901,7 +2062,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
               } else {
                 _selectedStudentIds.remove(id);
               }
-              print('[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
+              if (_kRegistrationPerfDebug) {
+                // ignore: avoid_print
+                print('[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
+              }
             });
           },
           onExitSelectMode: exitSelectMode, // 콜백 전달
@@ -2329,7 +2493,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
         setState(() {
           _isSelfStudyRegistrationMode = true;
           _selectedSelfStudyStudent = value;
-          print('[DEBUG][TimetableScreen] showDialog 반환값:  [33m$value [0m');
+          if (_kRegistrationPerfDebug) {
+            // ignore: avoid_print
+            print('[DEBUG][TimetableScreen] showDialog 반환값: $value');
+          }
         });
       }
     });
