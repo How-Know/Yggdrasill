@@ -8,6 +8,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 
@@ -73,6 +74,9 @@ class FileShortcutTab extends StatefulWidget {
 
 class _FileShortcutTabState extends State<FileShortcutTab> {
   static const String _kCategoryKey = 'file_shortcut';
+
+  // 로컬(서버 저장 없음)에서 마지막 선택 범주를 기억
+  static const String _spLastSelectedCategoryId = 'file_shortcut_last_selected_category_id';
 
   // ✅ 탭 재진입(위젯 재생성) 시 "범주 표시가 잠깐 비어있음/불러오는중..." 플리커를 줄이기 위해
   // 마지막으로 렌더링한 상태를 메모리에 보관한다. (앱 실행 중에만 유지)
@@ -148,10 +152,43 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   void initState() {
     super.initState();
     _restoreMemCache();
+    unawaited(_init());
+  }
+
+  Future<void> _init() async {
+    // ✅ 서버 저장 없이 "마지막 선택 범주"를 로컬(SharedPreferences)에서 복원
+    await _restoreLastSelectedCategoryFromPrefs();
+    if (!mounted) return;
     // ✅ 파일 바로가기 탭은 서버 읽기(preferSupabaseRead)가 켜져 있으면
     // 진입 시 네트워크 대기 때문에 로딩이 길어질 수 있다.
     // -> 로컬(SQLite) 캐시를 먼저 빠르게 표시하고, 서버 동기화는 백그라운드로 수행한다.
     unawaited(_bootstrapReload());
+  }
+
+  Future<void> _restoreLastSelectedCategoryFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = (prefs.getString(_spLastSelectedCategoryId) ?? '').trim();
+      if (id.isEmpty) return;
+      // 이미 선택이 있으면(메모리 캐시 등) 덮어쓰지 않음
+      if ((_selectedCategoryId ?? '').trim().isNotEmpty) return;
+      if (!mounted) return;
+      setState(() {
+        _selectedCategoryId = id;
+        // 범주 변경 시 폴더 선택은 무효가 될 수 있으니 초기화
+        _selectedFolderId = null;
+        _target = _FsTarget.category;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveLastSelectedCategoryToPrefs(String categoryId) async {
+    final id = categoryId.trim();
+    if (id.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_spLastSelectedCategoryId, id);
+    } catch (_) {}
   }
 
   @override
@@ -551,6 +588,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       _selectedFolderId = null;
       _target = _FsTarget.category;
     });
+    unawaited(_saveLastSelectedCategoryToPrefs(categoryId));
   }
 
   void _selectFolder(String folderId) {

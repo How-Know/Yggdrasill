@@ -3163,7 +3163,7 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth = 238; // 기존(198)에서 +20% 확장
+      const double panelWidth = 238 * 1.2; // 기존(238)에서 +20% 확장
       const double edgeOpenZoneWidth = 16.8; // 기존 24px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return Stack(children: [
         Positioned(
