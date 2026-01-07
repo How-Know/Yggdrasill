@@ -46,6 +46,58 @@ const bool kDisableGlobalKbAutofocus = bool.fromEnvironment('DISABLE_GLOBAL_KB_A
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
+// ======== Window startup guard (desktop) ========
+//
+// 증상: 부팅 직후에는 최대화로 뜨는데, 앱 로딩(초기화) 중에 다시 작은 창으로 "복귀"되는 케이스가 있다.
+// 원인: Windows/플러그인/엔진 초기화 타이밍에 의해 창 bounds/state가 한 번 더 적용되며 maximize가 풀리는 레이스.
+// 해결: 시작 옵션(전체화면/최대화)이 켜져 있으면, 부팅 후 몇 초 동안 상태를 재확인하고 풀리면 재적용한다.
+Future<void> _guardStartupWindowState({
+  required bool startFullscreen,
+  required bool startMaximized,
+}) async {
+  if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
+  if (!startFullscreen && !startMaximized) return;
+
+  // 체크포인트(누적 지연): 0ms, 250ms, 750ms, 1500ms, 2500ms, 4000ms, 5500ms
+  const steps = <Duration>[
+    Duration.zero,
+    Duration(milliseconds: 250),
+    Duration(milliseconds: 500),
+    Duration(milliseconds: 750),
+    Duration(milliseconds: 1000),
+    Duration(milliseconds: 1500),
+    Duration(milliseconds: 1500),
+  ];
+
+  for (final d in steps) {
+    if (d != Duration.zero) {
+      await Future.delayed(d);
+    }
+    try {
+      final isFull = await windowManager.isFullScreen();
+      final isMax = await windowManager.isMaximized();
+
+      // 설정은 상호배타지만, 데이터 꼬임 대비: fullscreen 우선
+      if (startFullscreen) {
+        if (!isFull) {
+          try {
+            await windowManager.setFullScreen(true);
+          } catch (_) {
+            // 일부 환경에서 fullscreen이 실패할 수 있어 fallback
+            if (!isMax) await windowManager.maximize();
+          }
+        }
+      } else if (startMaximized) {
+        if (!isMax) {
+          await windowManager.maximize();
+        }
+      }
+    } catch (_) {
+      // ignore: 레이스/플러그인 상태에 따라 호출이 실패할 수 있음. 다음 체크포인트에서 재시도한다.
+    }
+  }
+}
+
 // 시험명 목록과 선택된 학교/학년 매핑(메모리 보관)
 final ValueNotifier<List<String>> _examNames = ValueNotifier<List<String>>(<String>[]);
 // examName -> (schoolKey -> set of grades)
@@ -348,6 +400,12 @@ void main() async {
       await windowManager.center();
     }
     await windowManager.focus();
+
+    // ✅ 로딩 중 "작은 창으로 복귀" 레이스 방지: 시작 상태를 몇 초간 재확인/재적용
+    unawaited(_guardStartupWindowState(
+      startFullscreen: fullscreen,
+      startMaximized: maximizeFlag,
+    ));
   });
   // 무인 자동 업데이트 체크(성공 시 프로세스 종료/재실행 처리)
   try { await UpdateService.checkAndUpdateSilently(rootNavigatorKey.currentContext!); } catch (_) {}
