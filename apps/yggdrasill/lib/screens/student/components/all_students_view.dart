@@ -18,6 +18,11 @@ import '../../../widgets/dark_panel_route.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
+// ✅ 성능: Windows 환경에서 대량 print는 UI 스레드를 쉽게 막아 지연을 유발할 수 있다.
+// 기본 OFF, 필요 시 실행 옵션으로만 활성화:
+// flutter run ... --dart-define=YG_STUDENT_LIST_DEBUG=true
+const bool _kStudentListDebug =
+    bool.fromEnvironment('YG_STUDENT_LIST_DEBUG', defaultValue: false);
 
 class AllStudentsView extends StatefulWidget {
   final List<StudentWithInfo> students;
@@ -83,12 +88,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   }) {
     void onDragStarted() {
       setState(() => _showDeleteZone = true);
-      print('[STUDENT][drag] delete zone opened by ${student.student.name}');
+      if (_kStudentListDebug) {
+        // ignore: avoid_print
+        print('[STUDENT][drag] delete zone opened by ${student.student.name}');
+      }
     }
 
     void onDragEnd(_) {
       setState(() => _showDeleteZone = false);
-      print('[STUDENT][drag] delete zone closed');
+      if (_kStudentListDebug) {
+        // ignore: avoid_print
+        print('[STUDENT][drag] delete zone closed');
+      }
     }
 
     if (_useImmediateDrag) {
@@ -219,21 +230,30 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                 ),
               );
               if (result == true) {
-                print(
-                    '[STUDENT][drop] attempting to remove ${student.student.name} from group ${student.student.groupInfo?.name}');
+                if (_kStudentListDebug) {
+                  // ignore: avoid_print
+                  print(
+                      '[STUDENT][drop] attempting to remove ${student.student.name} from group ${student.student.groupInfo?.name}');
+                }
                 await DataManager.instance.updateStudent(
                   studentCopy,
                   basicInfoCopy,
                 );
-                print(
-                    '[STUDENT][drop] updateStudent complete for ${student.student.id}, loading students...');
+                if (_kStudentListDebug) {
+                  // ignore: avoid_print
+                  print(
+                      '[STUDENT][drop] updateStudent complete for ${student.student.id}, loading students...');
+                }
                 await DataManager.instance.loadStudents();
                 setState(() {
                   _showDeleteZone = false;
                 });
                 showAppSnackBar(context, '그룹에서 제외되었습니다.');
               } else {
-                print('[STUDENT][drop] remove cancelled for ${student.student.name}');
+                if (_kStudentListDebug) {
+                  // ignore: avoid_print
+                  print('[STUDENT][drop] remove cancelled for ${student.student.name}');
+                }
               }
             },
             builder: (context, candidateData, rejectedData) {
@@ -267,11 +287,17 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
   List<StudentWithInfo> _applyFilter(List<StudentWithInfo> students) {
     if (widget.activeFilter == null) {
-      print('[DEBUG] 필터 없음, 전체 학생 반환: ${students.length}명');
+      if (_kStudentListDebug) {
+        // ignore: avoid_print
+        print('[DEBUG] 필터 없음, 전체 학생 반환: ${students.length}명');
+      }
       return students;
     }
     
-    print('[DEBUG] 필터 적용 시작: ${widget.activeFilter}');
+    if (_kStudentListDebug) {
+      // ignore: avoid_print
+      print('[DEBUG] 필터 적용 시작: ${widget.activeFilter}');
+    }
     
     final filteredStudents = students.where((studentWithInfo) {
       final student = studentWithInfo.student;
@@ -281,7 +307,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       final educationLevels = filter['educationLevels'] ?? <String>{};
       final grades = filter['grades'] ?? <String>{};
       
-      print('[DEBUG] 학생: ${student.name}, 학년: ${student.grade}, 학교: ${student.school}, 그룹: ${student.groupInfo?.name}');
+      if (_kStudentListDebug) {
+        // ignore: avoid_print
+        print('[DEBUG] 학생: ${student.name}, 학년: ${student.grade}, 학교: ${student.school}, 그룹: ${student.groupInfo?.name}');
+      }
       
       if (educationLevels.isNotEmpty || grades.isNotEmpty) {
         String? studentEducationLevel;
@@ -301,10 +330,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           (studentEducationLevel != null && educationLevels.contains(studentEducationLevel));
         bool matchesGrade = grades.isEmpty || grades.contains(student.grade);
         
-        print('[DEBUG] 학년 필터 - 교육단계: $studentEducationLevel, 매치: $matchesEducationLevel, 학년매치: $matchesGrade');
+        if (_kStudentListDebug) {
+          // ignore: avoid_print
+          print('[DEBUG] 학년 필터 - 교육단계: $studentEducationLevel, 매치: $matchesEducationLevel, 학년매치: $matchesGrade');
+        }
         
         if (!matchesEducationLevel || !matchesGrade) {
-          print('[DEBUG] 학년 필터로 제외: ${student.name}');
+          if (_kStudentListDebug) {
+            // ignore: avoid_print
+            print('[DEBUG] 학년 필터로 제외: ${student.name}');
+          }
           return false;
         }
       }
@@ -312,7 +347,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       // 학교 필터
       final schools = filter['schools'] ?? <String>{};
       if (schools.isNotEmpty && !schools.contains(student.school)) {
-        print('[DEBUG] 학교 필터로 제외: ${student.name} (${student.school})');
+        if (_kStudentListDebug) {
+          // ignore: avoid_print
+          print('[DEBUG] 학교 필터로 제외: ${student.name} (${student.school})');
+        }
         return false;
       }
       
@@ -321,16 +359,25 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       if (groups.isNotEmpty) {
         final studentGroupName = student.groupInfo?.name;
         if (studentGroupName == null || !groups.contains(studentGroupName)) {
-          print('[DEBUG] 그룹 필터로 제외: ${student.name} (${studentGroupName})');
+          if (_kStudentListDebug) {
+            // ignore: avoid_print
+            print('[DEBUG] 그룹 필터로 제외: ${student.name} (${studentGroupName})');
+          }
           return false;
         }
       }
       
-      print('[DEBUG] 필터 통과: ${student.name}');
+      if (_kStudentListDebug) {
+        // ignore: avoid_print
+        print('[DEBUG] 필터 통과: ${student.name}');
+      }
       return true;
     }).toList();
     
-    print('[DEBUG] 필터 적용 완료: ${students.length}명 -> ${filteredStudents.length}명');
+    if (_kStudentListDebug) {
+      // ignore: avoid_print
+      print('[DEBUG] 필터 적용 완료: ${students.length}명 -> ${filteredStudents.length}명');
+    }
     return filteredStudents;
   }
 
