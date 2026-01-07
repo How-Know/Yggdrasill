@@ -269,6 +269,11 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     Color levelBarColor,
     Color levelTextColor,
   ) {
+    // ✅ 성능: 학생 카드마다 classes를 반복 순회하며 색상 맵을 만들면 비용이 커진다.
+    // 패널 빌드 단위로 1회만 생성해서 재사용.
+    final classColorById = <String, Color?>{
+      for (final c in DataManager.instance.classes) c.id: c.color,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -319,10 +324,6 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                             // 기존처럼 학생마다 getStudentClassColorAt() → getStudentTimeBlocksForWeek() (merge+sort)
                             // 를 반복 호출하면(학생 수만큼) UI 스레드가 1~2초 멈출 수 있어,
                             // 여기서는 "블록의 sessionTypeId → classes.color"만 빠르게 매핑해 사용한다.
-                            final classColorById = <String, Color?>{
-                              for (final c in DataManager.instance.classes) c.id: c.color,
-                            };
-
                             Color? indicatorOverride;
                             int? blockNumber;
                             final int? dIdx = dayIndex;

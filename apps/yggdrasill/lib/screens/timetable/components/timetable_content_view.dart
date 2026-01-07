@@ -431,32 +431,24 @@ class TimetableContentViewState extends State<TimetableContentView> {
             : DataManager.instance.students
                 .where((s) => widget.filteredStudentIds!.contains(s.student.id))
                 .toList();
-        final Set<String> allowedIds =
-            allStudents.map((s) => s.student.id).toSet();
+        // ✅ 성능: blocksOfDay(블록)마다 allStudents.firstWhere(O(N))를 하면
+        // O(블록수 * 학생수)로 1~2초씩 멈출 수 있다. id→학생 맵으로 O(1) 조회.
+        final Map<String, StudentWithInfo> studentById = {
+          for (final s in allStudents) s.student.id: s,
+        };
 
         // 그룹핑: key = 시간표상 수업 시작시간(HH:mm)
         final Map<String, List<StudentWithInfo>> groups = {};
+        final Map<String, Set<String>> seenIdsByTime = {};
         for (final b in blocksOfDay) {
-          if (!allowedIds.contains(b.studentId)) continue;
-          final student = allStudents.firstWhere(
-            (s) => s.student.id == b.studentId,
-            orElse: () => StudentWithInfo(
-              student: Student(
-                  id: '',
-                  name: '',
-                  school: '',
-                  grade: 0,
-                  educationLevel: EducationLevel.elementary),
-              basicInfo: StudentBasicInfo(studentId: ''),
-            ),
-          );
+          final student = studentById[b.studentId];
+          if (student == null) continue;
           if (student.student.id.isEmpty) continue;
           final key =
               '${b.startHour.toString().padLeft(2, '0')}:${b.startMinute.toString().padLeft(2, '0')}';
           groups.putIfAbsent(key, () => []);
-          if (!groups[key]!.any((s) => s.student.id == student.student.id)) {
-            groups[key]!.add(student);
-          }
+          final seen = seenIdsByTime.putIfAbsent(key, () => <String>{});
+          if (seen.add(student.student.id)) groups[key]!.add(student);
         }
 
         // 키 정렬: HH:mm 오름차순
@@ -3473,20 +3465,25 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
     // Map<(dayIdx, startTime), List<StudentWithInfo>>
     final Map<String, List<StudentWithInfo>> grouped = {};
+    // ✅ 성능: 기존은 "학생마다 blocks 전체 스캔"이라 검색 결과가 많으면 O(학생수*블록수)로 느려진다.
+    // blocks를 1회 스캔해 studentId -> blocks 를 만들고, 학생 순서대로 그룹에 채워 UI 출력 순서를 유지한다.
+    final Set<String> targetStudentIds =
+        students.map((s) => s.student.id).toSet();
+    final Map<String, List<StudentTimeBlock>> blocksByStudent = {};
+    for (final b in blocks) {
+      if (!targetStudentIds.contains(b.studentId)) continue;
+      if (!(b.number == null || b.number == 1)) continue;
+      final occDate = weekStart.add(Duration(days: b.dayIndex));
+      if (!isActiveOn(occDate, b)) continue;
+      blocksByStudent.putIfAbsent(b.studentId, () => <StudentTimeBlock>[]).add(b);
+    }
     for (final student in students) {
-      // number==1인 블록만 필터링
-      final studentBlocks = blocks
-          .where((b) =>
-              b.studentId == student.student.id &&
-              (b.number == null || b.number == 1))
-          .toList();
+      final studentBlocks = blocksByStudent[student.student.id];
+      if (studentBlocks == null || studentBlocks.isEmpty) continue;
       for (final block in studentBlocks) {
-        final occDate = weekStart.add(Duration(days: block.dayIndex));
-        if (!isActiveOn(occDate, block)) continue;
         final key =
             '${block.dayIndex}-${block.startHour}:${block.startMinute.toString().padLeft(2, '0')}';
-        grouped.putIfAbsent(key, () => []);
-        grouped[key]!.add(student);
+        grouped.putIfAbsent(key, () => []).add(student);
       }
     }
     // key를 요일/시간 순으로 정렬

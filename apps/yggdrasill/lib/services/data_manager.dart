@@ -107,6 +107,10 @@ class DataManager {
   //   UI는 필요 시 week cache를 우선 활용한다.
   final Map<String, List<StudentTimeBlock>> _studentTimeBlocksByWeek = <String, List<StudentTimeBlock>>{};
   final Set<String> _studentTimeBlocksWeekLoading = <String>{};
+  // ✅ 성능: week-cache + 로컬 변경분 merge/sort는 build 중 여러 번 호출될 수 있어 매우 비싸다.
+  // 같은 revision에서는 결과가 동일하므로 주(key)별로 병합 결과를 캐시한다.
+  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksMergedByWeek = <String, List<StudentTimeBlock>>{};
+  final Map<String, int> _studentTimeBlocksMergedByWeekRev = <String, int>{};
 
   static String _ymd(DateTime d) {
     String two(int v) => v.toString().padLeft(2, '0');
@@ -165,6 +169,12 @@ class DataManager {
   List<StudentTimeBlock> getStudentTimeBlocksForWeek(DateTime weekStart) {
     final ws = _weekMonday(weekStart);
     final key = _weekKey(ws);
+    final currentRev = studentTimeBlocksRevision.value;
+    final mergedCached = _studentTimeBlocksMergedByWeek[key];
+    final mergedRev = _studentTimeBlocksMergedByWeekRev[key];
+    if (mergedCached != null && mergedRev == currentRev) {
+      return mergedCached;
+    }
     final we = ws.add(const Duration(days: 6));
     final Map<String, StudentTimeBlock> byId = <String, StudentTimeBlock>{};
 
@@ -193,7 +203,12 @@ class DataManager {
         if (c3 != 0) return c3;
         return a.createdAt.compareTo(b.createdAt);
       });
-    return List.unmodifiable(out);
+    // 타입 추론이 dynamic으로 떨어지는 케이스가 있어 명시적으로 제네릭을 지정한다.
+    final List<StudentTimeBlock> merged =
+        List<StudentTimeBlock>.unmodifiable(out);
+    _studentTimeBlocksMergedByWeek[key] = merged;
+    _studentTimeBlocksMergedByWeekRev[key] = currentRev;
+    return merged;
   }
 
   bool _overlapsRange(StudentTimeBlock b, DateTime rangeStart, DateTime rangeEnd) {
@@ -272,6 +287,9 @@ class DataManager {
   void _bumpStudentTimeBlocksRevision() {
     studentTimeBlocksRevision.value++;
     classAssignmentsRevision.value++;
+    // week 병합 캐시는 revision에 종속이므로 전체 무효화
+    _studentTimeBlocksMergedByWeek.clear();
+    _studentTimeBlocksMergedByWeekRev.clear();
   }
   DateTime _todayDateOnly() {
     final now = DateTime.now();

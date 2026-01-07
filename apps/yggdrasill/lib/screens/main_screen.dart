@@ -40,7 +40,11 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 디버그 로그 스위치 (사이드 시트 출석 분류)
-  static const bool _sideSheetDebug = true;
+  // ✅ 기본 OFF: 사이드 시트/출석 쪽 대량 로그는 UI 스레드를 막아 렉을 유발할 수 있음(특히 Windows).
+  // 필요 시 실행 옵션으로만 활성화:
+  // flutter run ... --dart-define=YG_SIDE_SHEET_DEBUG=true
+  static const bool _sideSheetDebug =
+      bool.fromEnvironment('YG_SIDE_SHEET_DEBUG', defaultValue: false);
   int _selectedIndex = 0; // 0~5 (5는 설정)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;

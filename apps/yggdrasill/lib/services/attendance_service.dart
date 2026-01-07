@@ -57,7 +57,11 @@ class AttendanceService {
   static final AttendanceService instance = AttendanceService._internal();
 
   // 사이드 시트 디버그 플래그와 동일한 목적의 로깅 (planned 생성 검증용)
-  static const bool _sideDebug = true;
+  // ✅ 기본 OFF: planned 생성 과정의 대량 로그는 UI 스레드를 쉽게 막아(특히 Windows) 1~2초 렉을 유발할 수 있다.
+  // 필요 시 실행 옵션으로만 켤 수 있게 한다:
+  // flutter run ... --dart-define=YG_SIDE_DEBUG=true
+  static const bool _sideDebug =
+      bool.fromEnvironment('YG_SIDE_DEBUG', defaultValue: false);
 
   // ✅ 서버는 class_date_time을 UTC 분(minute) 단위로 정규화한다.
   // 클라이언트에서도 동일한 키를 사용해 조회/업데이트가 안정적으로 되도록 맞춘다.
@@ -1733,7 +1737,10 @@ class AttendanceService {
           .inFilter('set_id', setIds.toList())
           .gte('class_date_time', dateAnchor.toIso8601String());
     } catch (e, st) {
-      print('[PLAN][WARN] planned 삭제 실패(student=$studentId sets=$setIds): $e\n$st');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[PLAN][WARN] planned 삭제 실패(student=$studentId sets=$setIds): $e\n$st');
+      }
     }
     final beforeLocal = _attendanceRecords.length;
     _attendanceRecords.removeWhere((r) {
@@ -1814,7 +1821,10 @@ class AttendanceService {
 
     final beforeLocal = _attendanceRecords.length;
     final willRemove = _attendanceRecords.where(match).length;
-    print('[PLAN][purge] start academy=$academyId student=${sid ?? "ALL"} sets=${sets?.length ?? 0} localWillRemove=$willRemove localBefore=$beforeLocal');
+    if (_sideDebug) {
+      // ignore: avoid_print
+      print('[PLAN][purge] start academy=$academyId student=${sid ?? "ALL"} sets=${sets?.length ?? 0} localWillRemove=$willRemove localBefore=$beforeLocal');
+    }
 
     try {
       var q = supa
@@ -1839,7 +1849,10 @@ class AttendanceService {
     _attendanceRecords.removeWhere(match);
     attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
     final afterLocal = _attendanceRecords.length;
-    print('[PLAN][purge] done removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+    if (_sideDebug) {
+      // ignore: avoid_print
+      print('[PLAN][purge] done removed=${beforeLocal - afterLocal} localAfter=$afterLocal');
+    }
   }
 
   /// snapshot 기반 planned가 생성한 batch 세션 중 "planned 상태"만 일괄 삭제한다.
@@ -2146,14 +2159,20 @@ class AttendanceService {
           decisionLogCount++;
         }
         if (cycle == null || cycle == 0) {
-          print(
-              '[WARN][PLAN] cycle null/0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(agg.studentId, classDateTime);
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN] cycle null/0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime (payment_records miss?)');
+            _logCycleDebug(agg.studentId, classDateTime);
+          }
           cycle = 1;
         }
         if (sessionOrder <= 0) {
-          print(
-              '[WARN][PLAN] sessionOrder<=0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime');
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN] sessionOrder<=0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime');
+          }
           sessionOrder = 1;
         }
 
@@ -2176,7 +2195,8 @@ class AttendanceService {
           continue;
         }
         existingPlannedKeys.add(plannedKey);
-        if (!samplePrinted) {
+        if (_sideDebug && !samplePrinted) {
+          // ignore: avoid_print
           print(
               '[PLAN][SAMPLE] set=${agg.setId} student=${agg.studentId} date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(agg.studentId, classDateTime)}');
           samplePrinted = true;
@@ -2596,12 +2616,14 @@ class AttendanceService {
   }
 
   void _logCycleDebug(String studentId, DateTime classDate) {
+    if (!_sideDebug) return;
     final prs = _d
         .getPaymentRecords()
         .where((p) => p.studentId == studentId && p.dueDate != null && p.cycle != null)
         .toList();
     prs.sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
     final list = prs.map((p) => 'cycle=${p.cycle} due=${p.dueDate}').toList();
+    // ignore: avoid_print
     print('[PLAN][CYCLE-DEBUG] student=$studentId date=$classDate payments=${list.join('; ')}');
   }
 
@@ -2613,6 +2635,8 @@ class AttendanceService {
     required int sessionOrderCandidate,
     required String source,
   }) {
+    if (!_sideDebug) return;
+    // ignore: avoid_print
     print(
       '[PLAN][CYCLE-DECISION][$source] student=$studentId set=$setId date=$classDateTime '
       'resolvedCycle=$resolvedCycle sessionOrderCandidate=$sessionOrderCandidate '
@@ -2809,7 +2833,10 @@ class AttendanceService {
           .eq('is_present', false)
           .isFilter('arrival_time', null)
           .gte('class_date_time', anchor.toUtc().toIso8601String());
-      print('[PLAN] deleted planned rows (student): $delRes');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[PLAN] deleted planned rows (student): $delRes');
+      }
       _attendanceRecords.removeWhere((r) =>
           r.studentId == studentId &&
           setIds.contains(r.setId) &&
@@ -2818,7 +2845,10 @@ class AttendanceService {
           r.arrivalTime == null &&
           !r.classDateTime.isBefore(anchor));
     } catch (e) {
-      print('[WARN] planned 삭제 실패(student=$studentId setIds=$setIds): $e');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[WARN] planned 삭제 실패(student=$studentId setIds=$setIds): $e');
+      }
     }
 
     final blocks = (blocksOverride ?? _d.getStudentTimeBlocks())
@@ -2998,14 +3028,20 @@ class AttendanceService {
           }
         }
         if (cycle == null || cycle == 0) {
-          print(
-              '[WARN][PLAN-student] cycle null/0 → 1 set=${agg.setId} student=$studentId date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(studentId, classDateTime);
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN-student] cycle null/0 → 1 set=${agg.setId} student=$studentId date=$classDateTime (payment_records miss?)');
+            _logCycleDebug(studentId, classDateTime);
+          }
           cycle = 1;
         }
         if (sessionOrder <= 0) {
-          print(
-              '[WARN][PLAN-student] sessionOrder<=0 → 1 set=${agg.setId} student=$studentId date=$classDateTime');
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN-student] sessionOrder<=0 → 1 set=${agg.setId} student=$studentId date=$classDateTime');
+          }
           sessionOrder = 1;
         }
 
@@ -3029,7 +3065,8 @@ class AttendanceService {
           );
           decisionLogCount++;
         }
-        if (!samplePrinted) {
+        if (_sideDebug && !samplePrinted) {
+          // ignore: avoid_print
           print(
               '[PLAN][SAMPLE-student] set=${agg.setId} student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
           samplePrinted = true;
@@ -3222,7 +3259,10 @@ class AttendanceService {
       final upRes = await supa.from('attendance_records').upsert(rows, onConflict: 'id');
       _attendanceRecords.addAll(localAdds);
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[PLAN] regen(student) done setIds=$setIds added=${localAdds.length} rowsResp=$upRes');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[PLAN] regen(student) done setIds=$setIds added=${localAdds.length} rowsResp=$upRes');
+      }
     } catch (e, st) {
       print('[ERROR] 예정 출석 upsert 실패(student=$studentId setIds=$setIds): $e\n$st');
     }
@@ -4035,7 +4075,10 @@ class AttendanceService {
           .eq('is_present', false)
           .isFilter('arrival_time', null)
           .gte('class_date_time', anchor.toUtc().toIso8601String());
-      print('[PLAN] deleted planned rows: $delRes');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[PLAN] deleted planned rows: $delRes');
+      }
       _attendanceRecords.removeWhere((r) =>
           r.studentId == studentId &&
           r.setId == setId &&
@@ -4044,7 +4087,10 @@ class AttendanceService {
           r.arrivalTime == null &&
           !r.classDateTime.isBefore(anchor));
     } catch (e) {
-      print('[WARN] planned 삭제 실패(student=$studentId set=$setId): $e');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[WARN] planned 삭제 실패(student=$studentId set=$setId): $e');
+      }
     }
 
     final blocks = (blocksOverride ?? _d.getStudentTimeBlocks())
@@ -4161,14 +4207,20 @@ class AttendanceService {
           sessionOrder = next;
         }
         if (cycle == null || cycle == 0) {
-          print(
-              '[WARN][PLAN-set] cycle null/0 → 1 set=$setId student=$studentId date=$classDateTime (payment_records miss?)');
-          _logCycleDebug(studentId, classDateTime);
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN-set] cycle null/0 → 1 set=$setId student=$studentId date=$classDateTime (payment_records miss?)');
+            _logCycleDebug(studentId, classDateTime);
+          }
           cycle = 1;
         }
         if (sessionOrder <= 0) {
-          print(
-              '[WARN][PLAN-set] sessionOrder<=0 → 1 set=$setId student=$studentId date=$classDateTime');
+          if (_sideDebug) {
+            // ignore: avoid_print
+            print(
+                '[WARN][PLAN-set] sessionOrder<=0 → 1 set=$setId student=$studentId date=$classDateTime');
+          }
           sessionOrder = 1;
         }
 
@@ -4200,7 +4252,8 @@ class AttendanceService {
           );
           decisionLogCount++;
         }
-        if (!samplePrinted) {
+        if (_sideDebug && !samplePrinted) {
+          // ignore: avoid_print
           print(
               '[PLAN][SAMPLE-set] set=$setId student=$studentId date=$classDateTime cycle=$cycle sessionOrder=$sessionOrder dueCycle=${_resolveCycleByDueDate(studentId, classDateTime)}');
           samplePrinted = true;
@@ -4277,7 +4330,10 @@ class AttendanceService {
       final upRes = await supa.from('attendance_records').upsert(rows, onConflict: 'id');
       _attendanceRecords.addAll(localAdds);
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
-      print('[PLAN] regen done set_id=$setId added=${localAdds.length} rowsResp=$upRes');
+      if (_sideDebug) {
+        // ignore: avoid_print
+        print('[PLAN] regen done set_id=$setId added=${localAdds.length} rowsResp=$upRes');
+      }
     } catch (e, st) {
       print('[ERROR] set_id=$setId 예정 출석 upsert 실패: $e\n$st');
     }
