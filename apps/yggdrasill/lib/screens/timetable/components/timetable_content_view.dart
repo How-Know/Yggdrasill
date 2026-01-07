@@ -153,6 +153,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
   final Map<String, Set<String>> _makeupOriginalBlindKeysCache = {};
   int _lastPerfReportedToken = 0;
   bool isClassRegisterMode = false;
+  final ScrollController _daySelectedOverlayScrollController = ScrollController();
+  int _lastClassesRevForIndicator = -1;
+  Map<String, Color?> _classColorByIdCache = const <String, Color?>{};
   // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
   late final VoidCallback _revListener;
 
@@ -259,8 +262,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
     ConsultTrialLessonService.instance.slotsNotifier.removeListener(_revListener);
     // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
     _removeDropdownMenu(false);
+    _daySelectedOverlayScrollController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  void _ensureClassColorByIdCache() {
+    final rev = DataManager.instance.classesRevision.value;
+    if (rev == _lastClassesRevForIndicator) return;
+    _lastClassesRevForIndicator = rev;
+    _classColorByIdCache = <String, Color?>{
+      for (final c in DataManager.instance.classes) c.id: c.color,
+    };
   }
 
   void _showDropdownMenu() {
@@ -440,6 +453,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         // 그룹핑: key = 시간표상 수업 시작시간(HH:mm)
         final Map<String, List<StudentWithInfo>> groups = {};
         final Map<String, Set<String>> seenIdsByTime = {};
+        // slot별 최신 블록 override (학생 카드에서 전체 블록 재탐색/색상 계산 비용 제거)
+        final Map<String, Map<String, StudentTimeBlock>> blockOverrideByTime = {};
         for (final b in blocksOfDay) {
           final student = studentById[b.studentId];
           if (student == null) continue;
@@ -449,6 +464,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
           groups.putIfAbsent(key, () => []);
           final seen = seenIdsByTime.putIfAbsent(key, () => <String>{});
           if (seen.add(student.student.id)) groups[key]!.add(student);
+          final m = blockOverrideByTime.putIfAbsent(key, () => <String, StudentTimeBlock>{});
+          final prev = m[student.student.id];
+          if (prev == null || b.createdAt.isAfter(prev.createdAt)) {
+            m[student.student.id] = b;
+          }
+        }
+        // ✅ 성능: 각 슬롯의 학생 목록은 여기서 1회만 정렬하고,
+        // builder에서는 복사/정렬을 하지 않는다.
+        for (final list in groups.values) {
+          list.sort((a, b) => a.student.name.compareTo(b.student.name));
         }
 
         // 키 정렬: HH:mm 오름차순
@@ -530,80 +555,80 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           border: Border.all(
                               color: const Color(0xFF223131), width: 1),
                         ),
-                        child: Scrollbar(
-                          child: SingleChildScrollView(
-                            padding:
-                                const EdgeInsets.only(bottom: extraScrollSpace),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                ...sortedKeys.map((k) {
-                                  final list = List<StudentWithInfo>.from(groups[k] ?? const <StudentWithInfo>[])
-                                    ..sort((a, b) => a.student.name.compareTo(b.student.name));
-                                  final extras = specialByTime[k] ?? const <Widget>[];
-                                  final parts = k.split(':');
-                                  final int hour = int.tryParse(parts[0]) ?? 0;
-                                  final int minute =
-                                      int.tryParse(parts[1]) ?? 0;
-                                  return Padding(
-                                    padding:
-                                        const EdgeInsets.only(bottom: 16.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Text(
-                                              k,
-                                              style: const TextStyle(
+                        child: sortedKeys.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.all(4.0),
+                                child: Text(
+                                  widget.placeholderText ?? '해당 요일에 등록된 항목이 없습니다.',
+                                  style: const TextStyle(color: Colors.white38, fontSize: 16),
+                                ),
+                              )
+                            : Scrollbar(
+                                controller: _daySelectedOverlayScrollController,
+                                child: ListView.builder(
+                                  controller: _daySelectedOverlayScrollController,
+                                  padding: const EdgeInsets.only(bottom: extraScrollSpace),
+                                  itemCount: sortedKeys.length,
+                                  itemBuilder: (context, idx) {
+                                    final k = sortedKeys[idx];
+                                    final list = groups[k] ?? const <StudentWithInfo>[];
+                                    final extras = specialByTime[k] ?? const <Widget>[];
+                                    final parts = k.split(':');
+                                    final int hour = int.tryParse(parts[0]) ?? 0;
+                                    final int minute = int.tryParse(parts[1]) ?? 0;
+                                    final DateTime slotStart = DateTime(
+                                      dayDate.year,
+                                      dayDate.month,
+                                      dayDate.day,
+                                      hour,
+                                      minute,
+                                    );
+                                    final overridesForTime = blockOverrideByTime[k];
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 16.0),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Text(
+                                                k,
+                                                style: const TextStyle(
                                                   color: Color(0xFFEAF2F2),
                                                   fontSize: 21,
-                                                  fontWeight: FontWeight.w700),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 10),
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(left: 14),
-                                          child: Wrap(
-                                            spacing: 6.4,
-                                            runSpacing: 6.4,
-                                            children: [
-                                              ...extras,
-                                              ...list.map((info) => _buildDraggableStudentCard(
-                                                    info,
-                                                    dayIndex: dayIdx,
-                                                    startTime: DateTime(
-                                                        dayDate.year,
-                                                        dayDate.month,
-                                                        dayDate.day,
-                                                        hour,
-                                                        minute),
-                                                    cellStudents: list,
-                                                  )),
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
                                             ],
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }),
-                                if (sortedKeys.isEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.all(4.0),
-                                    child: Text(
-                                        widget.placeholderText ??
-                                            '해당 요일에 등록된 항목이 없습니다.',
-                                        style: const TextStyle(
-                                            color: Colors.white38,
-                                            fontSize: 16)),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
+                                          const SizedBox(height: 10),
+                                          Padding(
+                                            padding: const EdgeInsets.only(left: 14),
+                                            child: Wrap(
+                                              spacing: 6.4,
+                                              runSpacing: 6.4,
+                                              children: [
+                                                ...extras,
+                                                ...list.map(
+                                                  (info) => _buildDraggableStudentCard(
+                                                    info,
+                                                    dayIndex: dayIdx,
+                                                    startTime: slotStart,
+                                                    cellStudents: list,
+                                                    blockOverride: overridesForTime == null
+                                                        ? null
+                                                        : overridesForTime[info.student.id],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
                       ),
                     ),
                   ],
@@ -1803,11 +1828,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                 for (final s in students)
                                                   s.student.id: s,
                                               };
-                                              final cellStudents = blocksToUse
-                                                  .map((b) =>
-                                                      studentById[b.studentId])
-                                                  .whereType<StudentWithInfo>()
-                                                  .toList();
                                               // 학생별 최신 블록(생성시각 기준) 매핑: 번호/SET/색상 계산 시 재탐색 없이 사용
                                               final Map<String,
                                                       StudentTimeBlock>
@@ -1822,6 +1842,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                       b;
                                                 }
                                               }
+                                              // ✅ 중복 카드 방지:
+                                              // 수업 재배정/실시간 동기화 중간 상태에서 같은 학생이 중복 블록으로 잡히는 경우가 있어도
+                                              // 우측 학생 리스트에는 "학생 1명 = 카드 1개"만 보이게 한다.
+                                              final cellStudents = blockOverrides.keys
+                                                  .map((id) => studentById[id])
+                                                  .whereType<StudentWithInfo>()
+                                                  .toList();
 
                                               return LayoutBuilder(
                                                 builder:
@@ -2803,12 +2830,21 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final cardKey = ValueKey(
       info.student.id + (info.student.groupInfo?.id ?? ''),
     );
+    _ensureClassColorByIdCache();
     final isSelected = widget.selectedStudentIds.contains(info.student.id);
-    final selectedStudents = cellStudents
-            ?.where((s) => widget.selectedStudentIds.contains(s.student.id))
-            .toList() ??
-        [];
-    final selectedCount = selectedStudents.length;
+    // ✅ 성능: day overlay(요일 선택)에서는 슬롯별 학생이 많아도,
+    // "현재 카드가 선택된 경우"에만(=다중 드래그 필요할 때만) selectedStudents를 계산한다.
+    // (기존처럼 모든 카드에서 cellStudents.where를 수행하면 O(n^2)로 느려질 수 있음)
+    List<StudentWithInfo> selectedStudents = const <StudentWithInfo>[];
+    int selectedCount = 0;
+    if (isSelected &&
+        cellStudents != null &&
+        widget.selectedStudentIds.length > 1) {
+      selectedStudents = cellStudents
+          .where((s) => widget.selectedStudentIds.contains(s.student.id))
+          .toList();
+      selectedCount = selectedStudents.length;
+    }
     DateTime _refDateFor(DateTime start) => (start.year > 1)
         ? DateTime(start.year, start.month, start.day)
         : DateTime.now();
@@ -2824,40 +2860,42 @@ class TimetableContentViewState extends State<TimetableContentView> {
     String? setId = blockOverride?.setId;
     int? blockNumber = blockOverride?.number;
     Color? indicatorOverride;
+    StudentTimeBlock? picked = blockOverride;
     if (dayIndex != null && startTime != null) {
       final ref = _refDateFor(startTime);
-      // 우선: 셀 선택 등에서 전달된 override 블록 기준으로 색상 계산(setId로 후보 제한)
-      if (blockOverride != null) {
-        indicatorOverride = DataManager.instance.getStudentClassColorAt(
-          info.student.id,
-          dayIndex,
-          startTime,
-          setId: setId,
-          refDate: ref,
-        );
-      }
-      // fallback: 메모리 블록 재탐색
-      if (indicatorOverride == null) {
-        final blocks = DataManager.instance.studentTimeBlocks
-            .where((b) =>
-                b.studentId == info.student.id &&
-                b.dayIndex == dayIndex &&
-                b.startHour == startTime.hour &&
-                b.startMinute == startTime.minute &&
-                _isActive(b, ref))
-            .toList()
-          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        if (blocks.isNotEmpty) {
-          setId ??= blocks.first.setId;
-          blockNumber ??= blocks.first.number;
+      // fallback: week-cache 기반으로만 탐색(전역 studentTimeBlocks 전체 스캔 금지)
+      if (picked == null) {
+        final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+        final candidates = weekBlocks.where((b) {
+          if (b.studentId != info.student.id) return false;
+          if (b.dayIndex != dayIndex) return false;
+          if (b.startHour != startTime.hour) return false;
+          if (b.startMinute != startTime.minute) return false;
+          if (!_isActive(b, ref)) return false;
+          return true;
+        }).toList();
+        if (candidates.isNotEmpty) {
+          final withSession = candidates
+              .where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty)
+              .toList()
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          if (withSession.isNotEmpty) {
+            picked = withSession.first;
+          } else {
+            candidates.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            picked = candidates.first;
+          }
         }
-        indicatorOverride = DataManager.instance.getStudentClassColorAt(
-          info.student.id,
-          dayIndex,
-          startTime,
-          setId: setId,
-          refDate: ref,
-        );
+      }
+      if (picked != null) {
+        setId ??= picked!.setId;
+        blockNumber ??= picked!.number;
+        final sid = picked!.sessionTypeId;
+        if (sid != null && sid.isNotEmpty && sid != '__default_class__') {
+          indicatorOverride = _classColorByIdCache[sid] ?? Colors.transparent;
+        } else {
+          indicatorOverride = Colors.transparent;
+        }
       }
     }
     // 다중 선택 시 각 학생의 setId도 포함해서 넘김
@@ -2867,7 +2905,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             int? sNumber;
             if (dayIndex != null && startTime != null) {
               final ref = _refDateFor(startTime);
-              final block = DataManager.instance.studentTimeBlocks
+              final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+              final blocks = weekBlocks
                   .where(
                     (b) =>
                         b.studentId == s.student.id &&
@@ -2878,9 +2917,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   )
                   .toList()
                 ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-              if (block.isNotEmpty) {
-                sSetId = block.first.setId;
-                sNumber = block.first.number;
+              if (blocks.isNotEmpty) {
+                sSetId = blocks.first.setId;
+                sNumber = blocks.first.number;
               }
             }
             return {'student': s, 'setId': sSetId, 'number': sNumber};
@@ -3032,9 +3071,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       List<StudentWithInfo> selectedStudents, StudentWithInfo mainInfo) {
     final count = selectedStudents.length;
     Widget buildCard(StudentWithInfo s) {
-      final classColor =
-          DataManager.instance.getStudentClassColor(s.student.id);
-      final indicator = classColor ?? Colors.transparent;
+      // ✅ 성능: drag feedback은 "미리보기"라서 매 카드마다 학생의 수업 색상 계산(=activeBlocks 스캔)을 하지 않는다.
+      // 필요 시 그룹 색상만 가볍게 사용.
+      final indicator = s.student.groupInfo?.color ?? Colors.transparent;
       return Container(
         height: 46,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -4535,10 +4574,15 @@ class _ClassCardState extends State<_ClassCard> {
         skipPlannedRegen: true,
       );
       // 1.5) 낙관적 UI 반영: 닫힌 블록 제거 + 새 블록 추가 후 바로 퍼블리시
-      final others = DataManager.instance.studentTimeBlocks
-          .where((b) => !idsToClose.contains(b.id))
-          .toList();
-      final optimistic = [...others, ...newBlocks];
+      // ✅ 중요:
+      // 기존 블록(idsToClose)은 여기서 "리스트에서 제거"하면,
+      // week-cache(_studentTimeBlocksByWeek)에 남아있는 동일 id 블록이 다시 살아나면서
+      // UI에서 잠깐 사라짐/중복(2개)/정리(1개) 같은 깜빡임이 발생할 수 있다.
+      //
+      // bulkDeleteStudentTimeBlocks가 로컬 메모리의 endDate를 이미 갱신해두므로,
+      // old 블록은 유지한 채(=id 기준으로 week-cache를 덮어씀) 새 블록만 추가한다.
+      final base = List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
+      final optimistic = <StudentTimeBlock>[...base, ...newBlocks];
       print(
           '[TT][class-assign-bulk][optimistic] set=$setId student=${studentWithInfo.student.id} add=${newBlocks.length} close=${idsToClose.length}');
       DataManager.instance
