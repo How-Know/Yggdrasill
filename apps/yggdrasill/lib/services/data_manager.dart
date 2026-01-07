@@ -2716,9 +2716,34 @@ class DataManager {
   List<StudentTimeBlock> get pendingStudentTimeBlocks => List.unmodifiable(_pendingTimeBlocks);
 
   Future<void> discardPendingTimeBlocks(String studentId, {Set<String>? setIds}) async {
-    _pendingTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
-    _studentTimeBlocks.removeWhere((b) => b.studentId == studentId && (setIds == null || (b.setId != null && setIds.contains(b.setId!))));
+    final sid = studentId.trim();
+    if (sid.isEmpty) return;
+
+    // ✅ 중요:
+    // ESC 취소는 "pending(아직 저장되지 않은) 블록만" 폐기해야 한다.
+    // 기존 구현처럼 setIds==null일 때 studentId 기준으로 _studentTimeBlocks를 통째로 remove하면,
+    // - 정원(그리드) / 시간기록 다이얼로그(= _studentTimeBlocks 기반)에서 기존 블록이 사라지고
+    // - 셀 선택 리스트(= week-cache 기반)에는 서버 캐시가 남아 보이는
+    // 불일치/깜빡임이 발생한다.
+    //
+    // 따라서 pending 목록에서 대상 블록 id를 먼저 확정한 뒤, 그 id만 제거한다.
+    final Set<String> pendingIds = _pendingTimeBlocks
+        .where((b) {
+          if (b.studentId != sid) return false;
+          if (setIds == null) return true;
+          final s = (b.setId ?? '').trim();
+          return s.isNotEmpty && setIds.contains(s);
+        })
+        .map((b) => b.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    if (pendingIds.isEmpty) return;
+
+    _pendingTimeBlocks.removeWhere((b) => pendingIds.contains(b.id));
+    _studentTimeBlocks.removeWhere((b) => pendingIds.contains(b.id));
     _publishStudentTimeBlocks();
+    _bumpStudentTimeBlocksRevision();
   }
 
   Future<void> flushPendingTimeBlocks({bool generatePlanned = true}) async {

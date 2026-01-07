@@ -1686,61 +1686,144 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 final existingCount = existingSetIds.length;
                 final pendingCount = pendingSetIds.length;
 
-                return Align(
-                  alignment: Alignment.topCenter,
-                  child: Container(
-                    margin: const EdgeInsets.only(top: 8, bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111418),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: const Color(0xFF223131)),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${studentWithInfo.student.name} · 수업시간 등록',
-                          style: const TextStyle(
-                            color: Color(0xFFEAF2F2),
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            height: 1.05,
-                          ),
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                final actionButtons = Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: '취소 (ESC)',
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
+                          await _cancelRegistrationMode();
+                          if (mounted) {
+                            showAppSnackBar(context, '$currentStudentName 학생의 등록을 취소했습니다.', useRoot: true);
+                          }
+                        },
+                        icon: const Icon(Icons.close_rounded, size: 20),
+                        label: const Text('취소'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white.withOpacity(0.85),
+                          side: const BorderSide(color: Color(0xFF223131)),
+                          // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                          minimumSize: const Size(0, 50),
+                          shape: const StadiumBorder(),
+                          tapTargetSize: MaterialTapTargetSize.padded,
                         ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 8,
-                          runSpacing: 6,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: '저장 (Enter / 우클릭)',
+                      child: FilledButton.icon(
+                        onPressed: () async {
+                          final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
+                          await _endRegistrationMode(flushPlanned: true);
+                          if (mounted) {
+                            showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.', useRoot: true);
+                          }
+                        },
+                        icon: const Icon(Icons.check_rounded, size: 20),
+                        label: const Text('저장'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF33A373),
+                          foregroundColor: Colors.white,
+                          // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                          minimumSize: const Size(0, 50),
+                          shape: const StadiumBorder(),
+                          tapTargetSize: MaterialTapTargetSize.padded,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+
+                final countCapsule = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF111418),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFF223131)),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${studentWithInfo.student.name} · 수업시간 등록',
+                        style: const TextStyle(
+                          color: Color(0xFFEAF2F2),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          height: 1.05,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          Text(
+                            '기존 $existingCount',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.0),
+                          ),
+                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
+                          Text(
+                            '추가 $pendingCount',
+                            style: const TextStyle(color: Color(0xFF33A373), fontSize: 12.5, fontWeight: FontWeight.w800, height: 1.0),
+                          ),
+                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
+                          Text(
+                            'ESC 취소',
+                            style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12.2, fontWeight: FontWeight.w600, height: 1.0),
+                          ),
+                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
+                          const Text(
+                            'Enter/우클릭 저장',
+                            style: TextStyle(color: Color(0xFF33A373), fontSize: 12.2, fontWeight: FontWeight.w700, height: 1.0),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+
+                // ✅ 가운데(카운트 캡슐) / 오른쪽(취소·저장 버튼) 분리 정렬
+                // - 카운트 캡슐은 화면 기준 정중앙
+                // - 버튼은 오른쪽 끝 정렬
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 화면이 좁으면 겹침을 피하기 위해 버튼을 다음 줄로 내려준다.
+                      final bool narrow = constraints.maxWidth < 620;
+                      if (narrow) {
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              '기존 $existingCount',
-                              style: const TextStyle(color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.0),
-                            ),
-                            Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                            Text(
-                              '추가 $pendingCount',
-                              style: const TextStyle(color: Color(0xFF33A373), fontSize: 12.5, fontWeight: FontWeight.w800, height: 1.0),
-                            ),
-                            Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                            Text(
-                              'ESC 취소',
-                              style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12.2, fontWeight: FontWeight.w600, height: 1.0),
-                            ),
-                            Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                            const Text(
-                              'Enter/우클릭 저장',
-                              style: TextStyle(color: Color(0xFF33A373), fontSize: 12.2, fontWeight: FontWeight.w700, height: 1.0),
-                            ),
+                            Center(child: countCapsule),
+                            const SizedBox(height: 10),
+                            Align(alignment: Alignment.centerRight, child: actionButtons),
+                          ],
+                        );
+                      }
+
+                      return SizedBox(
+                        width: double.infinity,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Align(alignment: Alignment.center, child: countCapsule),
+                            Align(alignment: Alignment.centerRight, child: actionButtons),
                           ],
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 );
                       },
