@@ -4761,7 +4761,19 @@ class _ClassCardState extends State<_ClassCard> {
                     children: [
                       Container(
                         width: 10,
-                        height: 36,
+                        // ✅ 인디케이터 높이 = (제목 1줄 + 설명 1줄) 영역 높이와 동일
+                        // 텍스트 스케일(접근성/OS 설정)을 고려해 동적으로 계산한다.
+                        height: (() {
+                          final ts = MediaQuery.textScalerOf(context);
+                          const titleFont = 18.0;
+                          const descFont = 14.0;
+                          const titleH = 1.15;
+                          const descH = 1.15;
+                          const gap = 4.0;
+                          final titlePx = ts.scale(titleFont);
+                          final descPx = ts.scale(descFont);
+                          return (titlePx * titleH) + gap + (descPx * descH);
+                        }()),
                         decoration: BoxDecoration(
                           color: indicatorColor,
                           borderRadius: BorderRadius.circular(4),
@@ -4769,35 +4781,62 @@ class _ClassCardState extends State<_ClassCard> {
                       ),
                       const SizedBox(width: 14),
                       Expanded(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          // ✅ 설명 유무에 따라 카드 높이가 달라지지 않도록(수업 리스트 점프 방지)
-                          // 설명이 없으면 공백 1줄을 유지해 동일한 레이아웃 높이를 확보한다.
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          children: [
-                            Text(
-                              c.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xFFEAF2F2),
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              (c.description.trim().isNotEmpty) ? c.description.trim() : ' ',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
+                        child: Builder(builder: (context) {
+                          final desc = c.description.trim();
+                          final hasDesc = desc.isNotEmpty;
+
+                          const titleStyle = TextStyle(
+                            color: Color(0xFFEAF2F2),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            height: 1.15,
+                          );
+                          const descStyle = TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            height: 1.15,
+                          );
+
+                          final ts = MediaQuery.textScalerOf(context);
+                          const titleFont = 18.0;
+                          const descFont = 14.0;
+                          const titleH = 1.15;
+                          const descH = 1.15;
+                          const gap = 4.0;
+                          final titlePx = ts.scale(titleFont);
+                          final descPx = ts.scale(descFont);
+                          final blockH = (titlePx * titleH) + gap + (descPx * descH);
+
+                          final titleWidget = Text(
+                            c.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: titleStyle,
+                          );
+
+                          return SizedBox(
+                            height: blockH,
+                            child: hasDesc
+                                ? Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      titleWidget,
+                                      const SizedBox(height: gap),
+                                      Text(
+                                        desc,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: descStyle,
+                                      ),
+                                    ],
+                                  )
+                                : Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: titleWidget,
+                                  ),
+                          );
+                        }),
                       ),
                       const SizedBox(width: 10),
                       Text(
