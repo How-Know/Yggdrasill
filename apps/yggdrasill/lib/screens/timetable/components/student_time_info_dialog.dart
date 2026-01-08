@@ -8,6 +8,7 @@ import '../../../models/attendance_record.dart';
 import '../../../models/session_override.dart';
 import '../../../services/attendance_service.dart';
 import '../../../services/data_manager.dart';
+import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/pill_tab_selector.dart';
 
 /// 학생의 "시간 관련 기록"을 요약해서 보여주는 다이얼로그.
@@ -1371,6 +1372,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       DataManager.instance.attendanceRecordsNotifier,
       DataManager.instance.sessionOverridesNotifier,
       DataManager.instance.classesRevision,
+      DataManager.instance.studentPaymentInfoRevision,
     ]);
 
     return AnimatedBuilder(
@@ -1384,6 +1386,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         final classById = <String, ClassInfo>{
           for (final c in DataManager.instance.classes) c.id: c,
         };
+        final latenessThresholdMinutes =
+            DataManager.instance.getStudentPaymentInfo(widget.studentId)?.latenessThreshold ?? 10;
 
         final all = DataManager.instance.attendanceRecords
             .where((r) => r.studentId == widget.studentId)
@@ -1478,6 +1482,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                 cell('등원', flex: 10),
                 cell('하원', flex: 10),
                 cell('수업명', flex: 28),
+                cell('결과', flex: 12, align: TextAlign.center),
               ],
             ),
           );
@@ -1534,6 +1539,14 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             if (isWalkIn) return badge('추가수업', const Color(0xFF4CAF50));
             return badge('기록', const Color(0xFF223131));
           }();
+
+          final AttendanceResult result = judgeAttendanceResult(
+            record: r,
+            now: now,
+            latenessThresholdMinutes: latenessThresholdMinutes,
+            earlyLeaveRatio: 0.6,
+          );
+          final resultWidget = badge(result.label, result.badgeColor);
 
           final rowStyle = TextStyle(
             color: dimmed ? Colors.white38 : text,
@@ -1636,6 +1649,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                         cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
                         cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
                         classCell(),
+                        Expanded(flex: 12, child: Align(alignment: Alignment.centerLeft, child: resultWidget)),
                       ],
                     ),
                     if (expanded) ...[
@@ -1673,6 +1687,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                                 style: rowStyle,
                               ),
                             ),
+                            cell('-', flex: 12, style: rowStyle, align: TextAlign.center),
                           ],
                         ),
                       ),
