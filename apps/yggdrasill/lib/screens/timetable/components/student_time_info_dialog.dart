@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../models/class_info.dart';
+import '../../../models/lesson_occurrence.dart';
 import '../../../models/student.dart';
 import '../../../models/student_time_block.dart';
 import '../../../models/attendance_record.dart';
