@@ -4770,9 +4770,10 @@ class _ClassCardState extends State<_ClassCard> {
                           const titleH = 1.15;
                           const descH = 1.15;
                           const gap = 4.0;
+                          const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
                           final titlePx = ts.scale(titleFont);
                           final descPx = ts.scale(descFont);
-                          return (titlePx * titleH) + gap + (descPx * descH);
+                          return (titlePx * titleH) + gap + (descPx * descH) + extra;
                         }()),
                         decoration: BoxDecoration(
                           color: indicatorColor,
@@ -4803,9 +4804,10 @@ class _ClassCardState extends State<_ClassCard> {
                           const titleH = 1.15;
                           const descH = 1.15;
                           const gap = 4.0;
+                          const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
                           final titlePx = ts.scale(titleFont);
                           final descPx = ts.scale(descFont);
-                          final blockH = (titlePx * titleH) + gap + (descPx * descH);
+                          final blockH = (titlePx * titleH) + gap + (descPx * descH) + extra;
 
                           final titleWidget = Text(
                             c.name,
