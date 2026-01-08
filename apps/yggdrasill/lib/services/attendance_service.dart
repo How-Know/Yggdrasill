@@ -2463,25 +2463,34 @@ class AttendanceService {
           }
         }
 
-        int? cycle = _resolveCycleByDueDate(o.studentId, start);
-        int sessionOrder;
+        // ✅ cycle/session_order 계산:
+        // - replace(대체): 원본 회차에 귀속되어야 하므로 원본 시작시각(가능하면)을 기준으로 계산
+        // - add(추가): session_order는 null이지만 cycle은 결제 사이클 기준으로 둔다
+        final bool isReplace = o.overrideType == OverrideType.replace;
+        final DateTime orderAnchor = (isReplace ? (o.originalClassDateTime ?? start) : start);
+
+        int? cycle = _resolveCycleByDueDate(o.studentId, orderAnchor);
         if (cycle == null) {
-          final monthDate = _monthKey(start);
+          final monthDate = _monthKey(orderAnchor);
           final keyBase = '${o.studentId}|$setId';
           cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
         }
-        final studentCycleKey = '${o.studentId}|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        final dateKey = _dateKey(start);
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
-        }
         if (cycle == null || cycle == 0) cycle = 1;
+
+        int sessionOrder = 1;
+        final om = orderMapOf(o.studentId, cycle);
+        final k = _sessionKeyForOrder(setId: setId, startLocal: orderAnchor);
+        final so = om[k];
+        if (so != null && so > 0) {
+          sessionOrder = so;
+        } else {
+          sessionOrder = fallbackOrder(
+            studentId: o.studentId,
+            cycle: cycle,
+            setId: setId,
+            startLocal: orderAnchor,
+          );
+        }
         if (sessionOrder <= 0) sessionOrder = 1;
 
         // occurrence가 있으면 cycle/session_order를 occurrence 기준으로 고정
