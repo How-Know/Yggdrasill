@@ -4756,25 +4756,38 @@ class _ClassCardState extends State<_ClassCard> {
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  // ✅ 카드 높이 통일:
+                  // - "제목 1줄 + 설명 1줄" 영역 높이를 계산해(텍스트 스케일 반영) 항상 동일한 카드 높이를 유지한다.
+                  // - 설명이 없으면 제목을 해당 2줄 영역의 세로 중앙에 정렬한다.
+                  final String desc = c.description.trim();
+                  final bool hasDesc = desc.isNotEmpty;
+
+                  const titleStyle = TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    height: 1.15,
+                  );
+                  const descStyle = TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    height: 1.15,
+                  );
+                  const gap = 4.0;
+                  const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
+                  final ts = MediaQuery.textScalerOf(context);
+                  final titlePx = ts.scale(titleStyle.fontSize!);
+                  final descPx = ts.scale(descStyle.fontSize!);
+                  final textBlockH =
+                      (titlePx * titleStyle.height!) + gap + (descPx * descStyle.height!) + extra;
+
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
                         width: 10,
-                        // ✅ 인디케이터 높이 = (제목 1줄 + 설명 1줄) 영역 높이와 동일
-                        // 텍스트 스케일(접근성/OS 설정)을 고려해 동적으로 계산한다.
-                        height: (() {
-                          final ts = MediaQuery.textScalerOf(context);
-                          const titleFont = 18.0;
-                          const descFont = 14.0;
-                          const titleH = 1.15;
-                          const descH = 1.15;
-                          const gap = 4.0;
-                          const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
-                          final titlePx = ts.scale(titleFont);
-                          final descPx = ts.scale(descFont);
-                          return (titlePx * titleH) + gap + (descPx * descH) + extra;
-                        }()),
+                        // ✅ 인디케이터 높이 = 제목+설명(2줄) 영역 높이
+                        height: textBlockH,
                         decoration: BoxDecoration(
                           color: indicatorColor,
                           borderRadius: BorderRadius.circular(4),
@@ -4782,63 +4795,39 @@ class _ClassCardState extends State<_ClassCard> {
                       ),
                       const SizedBox(width: 14),
                       Expanded(
-                        child: Builder(builder: (context) {
-                          final desc = c.description.trim();
-                          final hasDesc = desc.isNotEmpty;
-
-                          const titleStyle = TextStyle(
-                            color: Color(0xFFEAF2F2),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            height: 1.15,
-                          );
-                          const descStyle = TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                            height: 1.15,
-                          );
-
-                          final ts = MediaQuery.textScalerOf(context);
-                          const titleFont = 18.0;
-                          const descFont = 14.0;
-                          const titleH = 1.15;
-                          const descH = 1.15;
-                          const gap = 4.0;
-                          const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
-                          final titlePx = ts.scale(titleFont);
-                          final descPx = ts.scale(descFont);
-                          final blockH = (titlePx * titleH) + gap + (descPx * descH) + extra;
-
-                          final titleWidget = Text(
-                            c.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: titleStyle,
-                          );
-
-                          return SizedBox(
-                            height: blockH,
-                            child: hasDesc
-                                ? Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      titleWidget,
-                                      const SizedBox(height: gap),
-                                      Text(
-                                        desc,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: descStyle,
-                                      ),
-                                    ],
-                                  )
-                                : Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: titleWidget,
+                        child: SizedBox(
+                          height: textBlockH,
+                          child: hasDesc
+                              ? Column(
+                                  mainAxisSize: MainAxisSize.max,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      c.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: titleStyle,
+                                    ),
+                                    const SizedBox(height: gap),
+                                    Text(
+                                      desc,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: descStyle,
+                                    ),
+                                  ],
+                                )
+                              : Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    c.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: titleStyle,
                                   ),
-                          );
-                        }),
+                                ),
+                        ),
                       ),
                       const SizedBox(width: 10),
                       Text(
