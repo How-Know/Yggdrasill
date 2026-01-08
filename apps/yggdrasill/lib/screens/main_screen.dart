@@ -473,27 +473,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     
     // 오늘의 등원/하원 상태 복원
     for (final record in todayAttendanceRecords) {
-      // setId를 찾기 위해 해당 학생의 오늘 time block 확인
-      final todayIdx = today.weekday - 1;
-      final studentTimeBlocks = DataManager.instance.studentTimeBlocks
-          .where((block) => 
-              block.studentId == record.studentId && 
-              block.dayIndex == todayIdx)
-          .toList();
-      
-      for (final block in studentTimeBlocks) {
-        if (block.setId != null) {
-          // 등원 시간이 있으면 등원 상태로 설정
-          if (record.arrivalTime != null) {
-            _attendedSetIds.add(block.setId!);
-            _attendTimes[block.setId!] = record.arrivalTime!;
-          }
-          
-          // 하원 시간이 있으면 하원 상태로 설정
-          if (record.departureTime != null) {
-            _leavedSetIds.add(block.setId!);
-            _leaveTimes[block.setId!] = record.departureTime!;
-          }
+      // ✅ 중요:
+      // 같은 학생이 "하루에 2개 수업(서로 다른 set_id)"인 경우가 있으므로,
+      // 출석 기록 1건을 보고 그 학생의 "오늘 요일 전체 setId"를 출석 처리하면 안 된다.
+      // -> record에 대응하는 setId 1개만 복원한다.
+      String? setId = record.setId?.trim();
+      if (setId == null || setId.isEmpty) {
+        setId = _resolveSetIdFromTime(record.studentId, record.classDateTime);
+      }
+      if (setId != null && setId.isNotEmpty) {
+        // 등원 시간이 있으면 등원 상태로 설정
+        if (record.arrivalTime != null) {
+          _attendedSetIds.add(setId);
+          _attendTimes[setId] = record.arrivalTime!;
+        }
+        // 하원 시간이 있으면 하원 상태로 설정
+        if (record.departureTime != null) {
+          _leavedSetIds.add(setId);
+          _leaveTimes[setId] = record.departureTime!;
         }
       }
 
