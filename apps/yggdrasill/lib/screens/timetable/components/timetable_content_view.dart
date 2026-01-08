@@ -4772,9 +4772,9 @@ class _ClassCardState extends State<_ClassCard> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: c.description.isNotEmpty
-                              ? MainAxisAlignment.start
-                              : MainAxisAlignment.center,
+                          // ✅ 설명 유무에 따라 카드 높이가 달라지지 않도록(수업 리스트 점프 방지)
+                          // 설명이 없으면 공백 1줄을 유지해 동일한 레이아웃 높이를 확보한다.
+                          mainAxisAlignment: MainAxisAlignment.start,
                           children: [
                             Text(
                               c.name,
@@ -4787,17 +4787,15 @@ class _ClassCardState extends State<_ClassCard> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            c.description.isNotEmpty
-                                ? Text(
-                                    c.description,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  )
-                                : const SizedBox.shrink(),
+                            Text(
+                              (c.description.trim().isNotEmpty) ? c.description.trim() : ' ',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
+                            ),
                           ],
                         ),
                       ),
