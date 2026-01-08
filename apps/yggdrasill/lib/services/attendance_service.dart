@@ -1314,6 +1314,31 @@ class AttendanceService {
     return updated;
   }
 
+  // ===== debug helpers (read-only) =====
+  // NOTE: UI 디버그 출력에서만 사용. 데이터 변경 없음.
+
+  Map<String, int> debugBuildSessionOrderMapForStudentCycle({
+    required String studentId,
+    required int cycle,
+  }) {
+    return _buildSessionOrderMapForStudentCycle(
+      studentId: studentId,
+      cycle: cycle,
+      blocksOverride: _d.getStudentTimeBlocks(),
+    );
+  }
+
+  String debugSessionKeyForOrder({
+    required String setId,
+    required DateTime startLocal,
+  }) {
+    return _sessionKeyForOrder(setId: setId, startLocal: startLocal);
+  }
+
+  int? debugResolveCycleByDueDate(String studentId, DateTime classDateLocal) {
+    return _resolveCycleByDueDate(studentId, classDateLocal);
+  }
+
   Future<void> subscribeAttendanceRealtime() async {
     try {
       _attendanceRealtimeChannel?.unsubscribe();

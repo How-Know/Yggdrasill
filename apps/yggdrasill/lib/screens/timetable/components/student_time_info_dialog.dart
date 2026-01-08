@@ -1212,6 +1212,14 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   static String _ymd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
   static String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  static String _minuteKey(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    final da = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    return '$y-$mo-$da-$h-$mi';
+  }
   static String _weekdayShort(DateTime d) {
     // DateTime.weekday: Mon=1 ... Sun=7
     switch (d.weekday) {
@@ -1242,6 +1250,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   String? _expandedMakeupKey; // 보강(대조) 카드 펼침 상태
   bool _autoFixOrderTriggered = false;
   bool _autoFixOrderRunning = false;
+  bool _cycleDebugPrinted = false;
 
   static String _rowKey(AttendanceRecord r) {
     final id = (r.id ?? '').trim();
@@ -1439,6 +1448,118 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             ),
           );
         }
+
+        // ✅ 디버그 출력(1회):
+        // - 저장된 cycle/session_order
+        // - occurrence(원본회차) 기반 값
+        // - "현재 스케줄(시간순+set_id)"로 계산한 기대값
+        // 을 비교해서, 어느 소스가 꼬임의 원인인지 확인한다.
+        void debugPrintCycleOrderOnce() {
+          if (_cycleDebugPrinted) return;
+          _cycleDebugPrinted = true;
+
+          final allShown = <AttendanceRecord>[...mergedPast, ...plannedFuture]
+            ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+          if (allShown.isEmpty) return;
+
+          final occById = <String, LessonOccurrence>{
+            for (final o in AttendanceService.instance.lessonOccurrences) o.id: o,
+          };
+
+          // replace(대체)는 원본 시간 기준으로 회차를 보려면 override 맵이 필요
+          final Map<String, DateTime> origByRepMinute = {};
+          for (final o in ovs) {
+            if (o.overrideType != OverrideType.replace) continue;
+            if (o.status == OverrideStatus.canceled) continue;
+            final rep = o.replacementClassDateTime;
+            final orig = o.originalClassDateTime;
+            if (rep == null || orig == null) continue;
+            origByRepMinute[_minuteKey(rep.toLocal())] = orig.toLocal();
+          }
+
+          // cycle별 기대 orderMap
+          final cycles = <int>{
+            for (final r in allShown)
+              if (r.cycle != null && r.cycle! > 0) r.cycle!,
+          }.toList()
+            ..sort();
+          final Map<int, Map<String, int>> orderMapByCycle = {
+            for (final c in cycles)
+              c: AttendanceService.instance.debugBuildSessionOrderMapForStudentCycle(
+                studentId: widget.studentId,
+                cycle: c,
+              ),
+          };
+
+          print('[CYCLEDBG] student=${widget.studentId} rows=${allShown.length} cycles=$cycles');
+          for (final c in cycles) {
+            print('[CYCLEDBG]  cycle=$c orderMapSize=${orderMapByCycle[c]?.length ?? 0}');
+          }
+
+          // dup check (cycle/session_order)
+          final Map<String, List<AttendanceRecord>> dup = {};
+          for (final r in allShown) {
+            final c = r.cycle;
+            final o = r.sessionOrder;
+            if (c == null || o == null) continue;
+            dup.putIfAbsent('$c|$o', () => <AttendanceRecord>[]).add(r);
+          }
+          final dupKeys = dup.entries.where((e) => e.value.length > 1).toList();
+          if (dupKeys.isNotEmpty) {
+            print('[CYCLEDBG] duplicates=${dupKeys.length}');
+            for (final e in dupKeys.take(12)) {
+              final parts = e.key.split('|');
+              print('[CYCLEDBG][DUP] key=${e.key} (cycle=${parts[0]} order=${parts[1]}) count=${e.value.length}');
+              for (final r in e.value.take(4)) {
+                final cname = _classNameOf(r, classById);
+                print(
+                  '[CYCLEDBG][DUP]  dt=${r.classDateTime} set=${r.setId} class="$cname" occ=${r.occurrenceId} planned=${r.isPlanned}',
+                );
+              }
+            }
+          }
+
+          // mismatch check
+          int printed = 0;
+          for (final r in allShown) {
+            final setId = (r.setId ?? '').trim();
+            if (setId.isEmpty) continue;
+            final storedCycle = r.cycle;
+            final storedOrder = r.sessionOrder;
+            if (storedCycle == null || storedCycle <= 0) continue;
+
+            final occId = (r.occurrenceId ?? '').trim();
+            final occ = occId.isEmpty ? null : occById[occId];
+            final dtLocal = r.classDateTime.toLocal();
+            final effectiveLocal = origByRepMinute[_minuteKey(dtLocal)] ?? (occ?.originalClassDateTime ?? dtLocal);
+
+            final map = orderMapByCycle[storedCycle];
+            final expKey = AttendanceService.instance.debugSessionKeyForOrder(setId: setId, startLocal: effectiveLocal);
+            final expectedOrder = map == null ? null : map[expKey];
+            final expectedCycleByDue = AttendanceService.instance.debugResolveCycleByDueDate(widget.studentId, effectiveLocal);
+
+            final bool mismatch =
+                (expectedCycleByDue != null && expectedCycleByDue > 0 && expectedCycleByDue != storedCycle) ||
+                (expectedOrder != null && storedOrder != null && expectedOrder != storedOrder) ||
+                (expectedOrder == null && storedOrder != null);
+            if (!mismatch) continue;
+
+            printed++;
+            if (printed > 40) break;
+            final cname = _classNameOf(r, classById);
+            print(
+              '[CYCLEDBG][ROW] dt=${r.classDateTime} set=$setId class="$cname" '
+              'stored=${storedCycle}/${storedOrder ?? "-"} dueCycle=${expectedCycleByDue ?? "-"} '
+              'expOrder=${expectedOrder ?? "-"} expKey=$expKey '
+              'occ=${occId.isEmpty ? "-" : occId} occKind=${occ?.kind ?? "-"} occOrder=${occ?.cycle}/${occ?.sessionOrder ?? "-"} '
+              'planned=${r.isPlanned} present=${r.isPresent}',
+            );
+          }
+          if (printed == 0) {
+            print('[CYCLEDBG] no mismatches detected (within printed rule)');
+          }
+        }
+        debugPrintCycleOrderOnce();
 
         // ✅ 자동 회차 정리(경량):
         // "같은 날 다른 set_id 수업" 등으로 cycle/session_order가 중복/역순으로 보이면,
