@@ -1128,24 +1128,21 @@ class AttendanceService {
           cleared += 1;
         }
       } else {
-        // 1) occurrence가 있으면 그 값을 우선 사용 (가장 안정적)
+        // ✅ 원칙: cycle/session_order는 "전체 스케줄(시간순 + set_id tie-break)" 기준으로 결정한다.
+        // occurrence는 링크(원본/추가수업 구분) 용도로만 사용하며, order 값은 덮어쓰지 않는다.
         final oid = (r.occurrenceId ?? '').trim();
         final occ = (oid.isEmpty) ? null : occById[oid];
-        if (occ != null) {
-          nextCycle = occ.cycle;
-          nextOrder = occ.sessionOrder; // extra는 null일 수 있음
+        final setId = (r.setId ?? occ?.setId ?? '').trim();
+
+        // 1) cycle은 결제 due_date 기준(없으면 null)
+        nextCycle = _resolveCycleByDueDate(r.studentId, effectiveLocalForOrder);
+        // 2) session_order는 스케줄 맵에서 결정 (setId가 없으면 계산 불가)
+        if (nextCycle != null && nextCycle! > 0 && setId.isNotEmpty) {
+          final map = orderMapOf(r.studentId, nextCycle!);
+          final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
+          nextOrder = map[k];
         } else {
-          // 2) cycle은 결제 due_date 기준
-          nextCycle = _resolveCycleByDueDate(r.studentId, effectiveLocalForOrder);
-          // 3) session_order는 (cycle 범위 내 수업을 시간순으로 나열) 맵에서 결정
-          final setId = (r.setId ?? '').trim();
-          if (nextCycle != null && nextCycle! > 0 && setId.isNotEmpty) {
-            final map = orderMapOf(r.studentId, nextCycle!);
-            final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
-            nextOrder = map[k];
-          } else {
-            nextOrder = null;
-          }
+          nextOrder = null;
         }
       }
 
@@ -1252,32 +1249,34 @@ class AttendanceService {
       final rid = (r.id ?? '').trim();
       if (rid.isEmpty) continue;
 
+      // extra/add는 기본적으로 회차(session_order)를 비우는 정책(기존 유지)
+      if (r.sessionOrder == null) {
+        continue;
+      }
+
+      final oid = (r.occurrenceId ?? '').trim();
+      final occ = oid.isEmpty ? null : occById[oid];
+      final setId = (r.setId ?? occ?.setId ?? '').trim();
+      if (setId.isEmpty) continue;
+
       // replacement인 경우 원본 시각으로 회차 판정
       final repKey = '$sid|${_minuteKey(dt)}';
-      final DateTime effectiveLocalForOrder = originalByReplacementMinute[repKey] ?? dt;
+      final DateTime effectiveLocalForOrder =
+          originalByReplacementMinute[repKey] ?? (occ?.originalClassDateTime ?? dt);
 
       int? nextCycle;
       int? nextOrder;
 
-      // 1) occurrence가 있으면 가장 우선(가장 안정적)
-      final oid = (r.occurrenceId ?? '').trim();
-      final occ = oid.isEmpty ? null : occById[oid];
-      if (occ != null) {
-        nextCycle = occ.cycle;
-        nextOrder = occ.sessionOrder;
-      } else {
-        // 2) cycle은 결제 due_date 기준
-        nextCycle = _resolveCycleByDueDate(sid, effectiveLocalForOrder) ?? r.cycle;
+      // cycle은 결제 due_date 기준(가능한 경우)으로 계산하고, 없으면 기존 값을 유지
+      nextCycle = _resolveCycleByDueDate(sid, effectiveLocalForOrder) ?? r.cycle ?? occ?.cycle;
 
-        // 3) session_order는 (cycle 범위 내 수업을 시간순으로 나열) 맵에서 결정
-        final setId = (r.setId ?? '').trim();
-        if (nextCycle != null && nextCycle! > 0 && setId.isNotEmpty) {
-          final map = orderMapOf(sid, nextCycle!);
-          final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
-          nextOrder = map[k];
-        } else {
-          nextOrder = r.sessionOrder;
-        }
+      // session_order는 결제 사이클 내 "전체 수업"을 시간순(+set_id tie-break)으로 나열한 맵에서 결정
+      if (nextCycle != null && nextCycle! > 0) {
+        final map = orderMapOf(sid, nextCycle!);
+        final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
+        nextOrder = map[k] ?? r.sessionOrder;
+      } else {
+        nextOrder = r.sessionOrder;
       }
 
       if (r.cycle == nextCycle && r.sessionOrder == nextOrder) {
@@ -2375,16 +2374,8 @@ class AttendanceService {
           sessionOrder = 1;
         }
 
-        // ✅ occurrence가 있으면 cycle/session_order를 occurrence 기반 고정값으로 덮어쓴다.
-        // (보강/추가수업으로 cycle 회차가 흔들리지 않게 하는 핵심)
         final occ = regularOccByKey[occKey(agg.studentId, agg.setId, classDateTime)];
-        if (occ != null) {
-          cycle = occ.cycle;
-          final so = occ.sessionOrder;
-          if (so != null && so > 0) {
-            sessionOrder = so;
-          }
-        }
+        // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
 
         final plannedKey = '${agg.studentId}|${agg.setId}|${_dateKey(classDateTime)}';
         if (existingPlannedKeys.contains(plannedKey)) {
@@ -2651,16 +2642,7 @@ class AttendanceService {
         }
         if (sessionOrder <= 0) sessionOrder = 1;
 
-        // occurrence가 있으면 cycle/session_order를 occurrence 기준으로 고정
-        if (occ != null) {
-          cycle = occ!.cycle;
-          if (o.overrideType == OverrideType.replace) {
-            final so = occ!.sessionOrder;
-            if (so != null && so > 0) {
-              sessionOrder = so;
-            }
-          }
-        }
+        // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
 
         final String effectiveSetId = (occ?.setId ?? setId).trim().isNotEmpty ? (occ?.setId ?? setId) : setId;
 
@@ -2779,22 +2761,6 @@ class AttendanceService {
 
   String _dateKey(DateTime dt) => '${dt.year}-${dt.month}-${dt.day}';
 
-
-  void _seedDateOrderByStudentCycle(
-    Map<String, Map<String, int>> dateOrderByKey,
-    Map<String, int> counterByKey,
-  ) {
-    for (final r in _attendanceRecords) {
-      if (r.setId == null || r.setId!.isEmpty || r.cycle == null) continue;
-      final studentCycleKey = '${r.studentId}|${r.cycle}';
-      final dateKey = _dateKey(r.classDateTime);
-      final m = dateOrderByKey.putIfAbsent(studentCycleKey, () => {});
-      if (m.containsKey(dateKey)) continue;
-      final next = (counterByKey[studentCycleKey] ?? 0) + 1;
-      m[dateKey] = next;
-      counterByKey[studentCycleKey] = next;
-    }
-  }
 
   int? _resolveCycleByDueDate(String studentId, DateTime classDate) {
     final prs = _d
@@ -3253,15 +3219,8 @@ class AttendanceService {
           sessionOrder = 1;
         }
 
-        // ✅ occurrence가 있으면 cycle/session_order 고정값으로 덮어쓴다.
         final occ = regularOccByKey[occKey(agg.setId, classDateTime)];
-        if (occ != null) {
-          cycle = occ.cycle;
-          final so = occ.sessionOrder;
-          if (so != null && so > 0) {
-            sessionOrder = so;
-          }
-        }
+        // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
         if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
           _logCycleDecision(
             studentId: studentId,
@@ -3383,19 +3342,12 @@ class AttendanceService {
           }
         }
 
-        // ✅ replace 오버라이드는 원본 occurrence로 귀속(cycle/sessionOrder 고정)
+        // ✅ replace 오버라이드는 원본 occurrence로 귀속(링크용)
         LessonOccurrence? repOcc;
         if (o.overrideType == OverrideType.replace) {
           final orig = o.originalClassDateTime;
           if (orig != null) {
             repOcc = regularOccByKey[occKey(setId, orig)];
-            if (repOcc != null) {
-              cycle = repOcc!.cycle;
-              final so = repOcc!.sessionOrder;
-              if (so != null && so > 0) {
-                sessionOrder = so;
-              }
-            }
           }
         }
 
@@ -3839,7 +3791,7 @@ class AttendanceService {
         }
       }
 
-      // session_order 계산: student+cycle 기준
+      // ✅ cycle/session_order는 "전체 스케줄(시간순 + set_id tie-break)" 기준으로 결정한다.
       int? cycle = _resolveCycleByDueDate(ov.studentId, minStart);
       if (cycle == null) {
         final Map<String, DateTime> earliestMonthByKey = {};
@@ -3847,21 +3799,19 @@ class AttendanceService {
         _seedCycleMaps(earliestMonthByKey, monthCountByKey);
         cycle = _calcCycle(earliestMonthByKey, '${ov.studentId}|$inferredSetId', _monthKey(minStart));
       }
-      final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-      final Map<String, int> counterByStudentCycle = {};
-      _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
-      final studentCycleKey = '${ov.studentId}|$cycle';
-      final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-      final dateKey = _dateKey(minStart);
-      final int sessionOrder = m.containsKey(dateKey)
-          ? m[dateKey]!
-          : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
-
-      // occurrence가 있으면 cycle/sessionOrder를 occurrence 기준으로 고정
-      final int fixedCycle = occ?.cycle ?? ((cycle == null || cycle == 0) ? 1 : cycle);
-      final int fixedOrder = (occ?.sessionOrder != null && (occ!.sessionOrder ?? 0) > 0)
-          ? occ!.sessionOrder!
-          : (sessionOrder <= 0 ? 1 : sessionOrder);
+      if (cycle == null || cycle == 0) cycle = 1;
+      final int fixedCycle = cycle;
+      int fixedOrder = 1;
+      final om = _buildSessionOrderMapForStudentCycle(
+        studentId: ov.studentId,
+        cycle: fixedCycle,
+        blocksOverride: _d.getStudentTimeBlocks(),
+      );
+      final k = _sessionKeyForOrder(setId: inferredSetId, startLocal: minStart);
+      final so = om[k];
+      if (so != null && so > 0) {
+        fixedOrder = so;
+      }
 
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
@@ -4111,28 +4061,33 @@ class AttendanceService {
       }
     }
 
-    int? cycle = _resolveCycleByDueDate(ov.studentId, target);
+    // ✅ cycle/session_order는 "전체 스케줄(시간순 + set_id tie-break)" 기준으로 결정한다.
+    final DateTime orderAnchor =
+        (ov.overrideType == OverrideType.replace) ? (ov.originalClassDateTime ?? target) : target;
+
+    int? cycle = _resolveCycleByDueDate(ov.studentId, orderAnchor);
     if (cycle == null) {
       final Map<String, DateTime> earliestMonthByKey = {};
       final Map<String, int> monthCountByKey = {};
       _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-      cycle = _calcCycle(earliestMonthByKey, '${ov.studentId}|$setId', _monthKey(target));
+      cycle = _calcCycle(earliestMonthByKey, '${ov.studentId}|$setId', _monthKey(orderAnchor));
     }
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
-    final studentCycleKey = '${ov.studentId}|$cycle';
-    final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-    final dateKey = _dateKey(target);
-    final int sessionOrder = m.containsKey(dateKey)
-        ? m[dateKey]!
-        : ((counterByStudentCycle[studentCycleKey] ?? 0) + 1);
+    if (cycle == null || cycle == 0) cycle = 1;
+    final int fixedCycle = cycle;
 
-    // occurrence가 있으면 cycle/session_order를 occurrence 기준으로 고정
-    final int fixedCycle = occ?.cycle ?? ((cycle == null || cycle == 0) ? 1 : cycle);
-    final int? fixedOrder = (ov.overrideType == OverrideType.replace && occ?.sessionOrder != null && (occ!.sessionOrder ?? 0) > 0)
-        ? occ!.sessionOrder
-        : (sessionOrder <= 0 ? 1 : sessionOrder);
+    int? fixedOrder;
+    if (ov.overrideType != OverrideType.add) {
+      final om = _buildSessionOrderMapForStudentCycle(
+        studentId: ov.studentId,
+        cycle: fixedCycle,
+        blocksOverride: _d.getStudentTimeBlocks(),
+      );
+      final effectiveSet = ((occ?.setId ?? setId).trim().isNotEmpty) ? (occ?.setId ?? setId) : setId;
+      final k = _sessionKeyForOrder(setId: effectiveSet, startLocal: orderAnchor);
+      fixedOrder = om[k];
+      if (fixedOrder != null && fixedOrder! <= 0) fixedOrder = null;
+      fixedOrder ??= 1;
+    }
 
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
@@ -4315,12 +4270,18 @@ class AttendanceService {
     final Map<String, DateTime> earliestMonthByKey = {};
     final Map<String, int> monthCountByKey = {};
     _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    final Map<String, Map<String, int>> dateOrderByKey = {};
-    final Map<String, int> counterByKey = {};
-    _seedDateOrderBySetCycle(dateOrderByKey, counterByKey);
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
+
+    final Map<int, Map<String, int>> orderMapCache = {};
+    Map<String, int> orderMapOf(int cycle) {
+      return orderMapCache.putIfAbsent(
+        cycle,
+        () => _buildSessionOrderMapForStudentCycle(
+          studentId: studentId,
+          cycle: cycle,
+          blocksOverride: _d.getStudentTimeBlocks(),
+        ),
+      );
+    }
 
     // ===== lesson_occurrences(원본 회차) 보장/맵 (세트 단위 regen) =====
     String minKey(DateTime dt) =>
@@ -4396,23 +4357,12 @@ class AttendanceService {
         }
 
         final keyBase = '$studentId|$setId';
-        final dateKey = _dateKey(classDateTime);
 
         int? cycle = _resolveCycleByDueDate(studentId, classDateTime);
-        int sessionOrder;
+        int sessionOrder = 1;
         if (cycle == null) {
           final monthDate = _monthKey(classDateTime);
           cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
-        }
-        final studentCycleKey = '$studentId|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
-        } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
         }
         if (cycle == null || cycle == 0) {
           if (_sideDebug) {
@@ -4423,6 +4373,16 @@ class AttendanceService {
           }
           cycle = 1;
         }
+
+        // ✅ session_order는 결제 사이클 내 "전체 스케줄"을 시간순(+set_id)으로 나열한 값
+        if (cycle != null && cycle > 0) {
+          final map = orderMapOf(cycle);
+          final k = _sessionKeyForOrder(setId: setId, startLocal: classDateTime);
+          final so = map[k];
+          if (so != null && so > 0) {
+            sessionOrder = so;
+          }
+        }
         if (sessionOrder <= 0) {
           if (_sideDebug) {
             // ignore: avoid_print
@@ -4432,15 +4392,8 @@ class AttendanceService {
           sessionOrder = 1;
         }
 
-        // ✅ occurrence가 있으면 cycle/session_order 고정값으로 덮어쓴다.
         final occ = regularOccByMinute[minKey(classDateTime)];
-        if (occ != null) {
-          cycle = occ.cycle;
-          final so = occ.sessionOrder;
-          if (so != null && so > 0) {
-            sessionOrder = so;
-          }
-        }
+        // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
         final plannedKey = '$studentId|$setId|${_dateKey(classDateTime)}';
         if (existingPlannedKeys.contains(plannedKey)) {
           if (_sideDebug) {
