@@ -1181,6 +1181,139 @@ class AttendanceService {
     return (scanned: targets.length, updated: updated, clearedBeforeRegistration: cleared);
   }
 
+  /// (경량) 특정 학생의 cycle/session_order를 "현재 스케줄" 기준으로 재계산하여 업데이트한다.
+  ///
+  /// - 기존 planned/출석 레코드를 삭제하지 않는다(필드만 수정).
+  /// - 같은 날에 서로 다른 set_id 수업이 있는 경우에도, session_order가 꼬이지 않도록
+  ///   `_buildSessionOrderMapForStudentCycle`(시간순 + set_id tie-break) 로직을 사용한다.
+  ///
+  /// 주의:
+  /// - 이 함수는 **메모리에 로드된 출석 레코드 중** 범위에 걸치는 것만 갱신한다.
+  ///   (대량/전체 백필은 `runCycleSessionOrderBackfillTool` 사용)
+  Future<int> fixCycleSessionOrderForStudentInLoadedRange({
+    required String studentId,
+    required DateTime fromInclusive,
+    required DateTime toExclusive,
+  }) async {
+    final sid = studentId.trim();
+    if (sid.isEmpty) return 0;
+
+    // payment_records는 cycle 계산에 필요
+    try {
+      await _d.loadPaymentRecords();
+    } catch (_) {}
+
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+
+    // replace override: replacement(대체 수업)은 원본 시간 기준으로 cycle/session_order를 계산해야 한다.
+    final Map<String, DateTime> originalByReplacementMinute = {};
+    for (final ov in _d.getSessionOverrides()) {
+      if (ov.studentId != sid) continue;
+      if (ov.overrideType != OverrideType.replace) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final rep = ov.replacementClassDateTime;
+      final orig = ov.originalClassDateTime;
+      if (rep == null || orig == null) continue;
+      originalByReplacementMinute['$sid|${_minuteKey(rep.toLocal())}'] = orig.toLocal();
+    }
+
+    final Map<String, LessonOccurrence> occById = {
+      for (final o in _lessonOccurrences)
+        if (o.id.trim().isNotEmpty) o.id: o,
+    };
+
+    final DateTime fromLocal = fromInclusive.toLocal();
+    final DateTime toLocal = toExclusive.toLocal();
+    if (!fromLocal.isBefore(toLocal)) return 0;
+
+    // per-student-cycle order map cache
+    final Map<String, Map<String, int>> orderMapCache = {};
+    Map<String, int> orderMapOf(String studentId, int cycle) {
+      final key = '$studentId|$cycle';
+      return orderMapCache.putIfAbsent(
+        key,
+        () => _buildSessionOrderMapForStudentCycle(
+          studentId: studentId,
+          cycle: cycle,
+          blocksOverride: _d.getStudentTimeBlocks(),
+        ),
+      );
+    }
+
+    int updated = 0;
+
+    for (final r in _attendanceRecords) {
+      if (r.studentId != sid) continue;
+      final dt = r.classDateTime.toLocal();
+      if (dt.isBefore(fromLocal) || !dt.isBefore(toLocal)) continue;
+
+      final rid = (r.id ?? '').trim();
+      if (rid.isEmpty) continue;
+
+      // replacement인 경우 원본 시각으로 회차 판정
+      final repKey = '$sid|${_minuteKey(dt)}';
+      final DateTime effectiveLocalForOrder = originalByReplacementMinute[repKey] ?? dt;
+
+      int? nextCycle;
+      int? nextOrder;
+
+      // 1) occurrence가 있으면 가장 우선(가장 안정적)
+      final oid = (r.occurrenceId ?? '').trim();
+      final occ = oid.isEmpty ? null : occById[oid];
+      if (occ != null) {
+        nextCycle = occ.cycle;
+        nextOrder = occ.sessionOrder;
+      } else {
+        // 2) cycle은 결제 due_date 기준
+        nextCycle = _resolveCycleByDueDate(sid, effectiveLocalForOrder) ?? r.cycle;
+
+        // 3) session_order는 (cycle 범위 내 수업을 시간순으로 나열) 맵에서 결정
+        final setId = (r.setId ?? '').trim();
+        if (nextCycle != null && nextCycle! > 0 && setId.isNotEmpty) {
+          final map = orderMapOf(sid, nextCycle!);
+          final k = _sessionKeyForOrder(setId: setId, startLocal: effectiveLocalForOrder);
+          nextOrder = map[k];
+        } else {
+          nextOrder = r.sessionOrder;
+        }
+      }
+
+      if (r.cycle == nextCycle && r.sessionOrder == nextOrder) {
+        continue;
+      }
+
+      try {
+        await supa
+            .from('attendance_records')
+            .update({'cycle': nextCycle, 'session_order': nextOrder})
+            .eq('academy_id', academyId)
+            .eq('id', rid);
+
+        final idx = _attendanceRecords.indexWhere((x) => x.id == rid);
+        if (idx != -1) {
+          _attendanceRecords[idx] = _attendanceRecords[idx].copyWith(
+            cycle: nextCycle,
+            sessionOrder: nextOrder,
+            updatedAt: DateTime.now(),
+          );
+        }
+        updated += 1;
+      } catch (e) {
+        if (_sideDebug) {
+          // ignore: avoid_print
+          print('[FIX][cycle/session][WARN] update failed id=$rid: $e');
+        }
+      }
+    }
+
+    if (updated > 0) {
+      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    }
+    return updated;
+  }
+
   Future<void> subscribeAttendanceRealtime() async {
     try {
       _attendanceRealtimeChannel?.unsubscribe();

@@ -1240,6 +1240,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   }
 
   String? _expandedMakeupKey; // 보강(대조) 카드 펼침 상태
+  bool _autoFixOrderTriggered = false;
+  bool _autoFixOrderRunning = false;
 
   static String _rowKey(AttendanceRecord r) {
     final id = (r.id ?? '').trim();
@@ -1437,6 +1439,81 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             ),
           );
         }
+
+        // ✅ 자동 회차 정리(경량):
+        // "같은 날 다른 set_id 수업" 등으로 cycle/session_order가 중복/역순으로 보이면,
+        // 현재 로드된 범위 내에서만 재계산하여 서버에 업데이트한다.
+        void maybeAutoFixOrder() {
+          if (_autoFixOrderTriggered || _autoFixOrderRunning) return;
+          final allShown = <AttendanceRecord>[...mergedPast, ...plannedFuture];
+          if (allShown.isEmpty) return;
+
+          // 1) 중복(cycle/sessionOrder 동일) 탐지
+          final Map<String, int> counts = {};
+          for (final r in allShown) {
+            final c = r.cycle;
+            final o = r.sessionOrder;
+            if (c == null || o == null) continue;
+            final k = '$c|$o';
+            counts[k] = (counts[k] ?? 0) + 1;
+          }
+          final hasDup = counts.values.any((v) => v > 1);
+
+          // 2) 시간순 정렬인데 회차가 역전되는 케이스 탐지
+          bool hasReverse = false;
+          final withOrder = allShown.where((r) => r.cycle != null && r.sessionOrder != null).toList()
+            ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+          for (int i = 1; i < withOrder.length; i++) {
+            final prev = withOrder[i - 1];
+            final cur = withOrder[i];
+            if (prev.cycle != cur.cycle) continue;
+            if (prev.sessionOrder == null || cur.sessionOrder == null) continue;
+            if (prev.sessionOrder! > cur.sessionOrder!) {
+              hasReverse = true;
+              break;
+            }
+          }
+
+          if (!hasDup && !hasReverse) return;
+
+          _autoFixOrderTriggered = true;
+          _autoFixOrderRunning = true;
+
+          // 표시 중인 최소~최대 범위만 업데이트(여유 1일)
+          DateTime minDt = allShown.first.classDateTime;
+          DateTime maxDt = allShown.first.classDateTime;
+          for (final r in allShown) {
+            final d = r.classDateTime;
+            if (d.isBefore(minDt)) minDt = d;
+            if (d.isAfter(maxDt)) maxDt = d;
+          }
+          final from = DateTime(minDt.year, minDt.month, minDt.day).subtract(const Duration(days: 1));
+          final to = DateTime(maxDt.year, maxDt.month, maxDt.day).add(const Duration(days: 2));
+
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            if (!mounted) return;
+            try {
+              final updated = await AttendanceService.instance.fixCycleSessionOrderForStudentInLoadedRange(
+                studentId: widget.studentId,
+                fromInclusive: from,
+                toExclusive: to,
+              );
+              if (!mounted) return;
+              if (updated > 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('회차를 정리했습니다. (${updated}건)')),
+                );
+              }
+            } finally {
+              if (mounted) {
+                setState(() {
+                  _autoFixOrderRunning = false;
+                });
+              }
+            }
+          });
+        }
+        maybeAutoFixOrder();
 
         Widget cell(String v, {required int flex, TextAlign align = TextAlign.left, TextStyle? style}) {
           return Expanded(
