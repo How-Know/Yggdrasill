@@ -1482,7 +1482,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                 cell('등원', flex: 10),
                 cell('하원', flex: 10),
                 cell('수업명', flex: 28),
-                cell('결과', flex: 12, align: TextAlign.center),
+                cell('결과', flex: 12, align: TextAlign.right),
               ],
             ),
           );
@@ -1649,7 +1649,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                         cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
                         cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
                         classCell(),
-                        Expanded(flex: 12, child: Align(alignment: Alignment.centerLeft, child: resultWidget)),
+                        Expanded(flex: 12, child: Align(alignment: Alignment.centerRight, child: resultWidget)),
                       ],
                     ),
                     if (expanded) ...[

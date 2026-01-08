@@ -2025,9 +2025,48 @@ class AttendanceService {
     final Map<String, DateTime> earliestMonthByKey = {};
     final Map<String, int> monthCountByKey = {};
     _seedCycleMaps(earliestMonthByKey, monthCountByKey);
-    final Map<String, Map<String, int>> dateOrderByStudentCycle = {};
-    final Map<String, int> counterByStudentCycle = {};
-    _seedDateOrderByStudentCycle(dateOrderByStudentCycle, counterByStudentCycle);
+    // ✅ 회차(session_order)는 "결제 사이클 내 수업을 시간순(+set_id tie-break)"으로 정렬한 값이어야 한다.
+    // 기존(dateKey=yyyy-mm-dd) 기반 계산은 "같은 날 다른 set_id 수업"을 1개로 합쳐버려 회차가 깨질 수 있음.
+    final Map<String, Map<String, int>> orderMapCache = {};
+    Map<String, int> orderMapOf(String studentId, int cycle) {
+      final key = '$studentId|$cycle';
+      return orderMapCache.putIfAbsent(
+        key,
+        () => _buildSessionOrderMapForStudentCycle(
+          studentId: studentId,
+          cycle: cycle,
+          // cycle 전체 순서를 계산할 때는 "전체 블록"이 필요
+          blocksOverride: _d.getStudentTimeBlocks(),
+        ),
+      );
+    }
+    final Map<String, Map<String, int>> fallbackOrderByStudentCycle = {};
+    final Map<String, int> fallbackCounterByStudentCycle = {};
+    int fallbackOrder({
+      required String studentId,
+      required int cycle,
+      required String setId,
+      required DateTime startLocal,
+    }) {
+      final studentCycleKey = '$studentId|$cycle';
+      final m = fallbackOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
+      final k = _sessionKeyForOrder(setId: setId, startLocal: startLocal);
+      final existing = m[k];
+      if (existing != null && existing > 0) return existing;
+
+      // orderMap이 부분적으로라도 있으면, 그 최대값 이후로만 fallback을 부여해 충돌을 피한다.
+      int base = fallbackCounterByStudentCycle[studentCycleKey] ?? 0;
+      if (base <= 0) {
+        final om = orderMapOf(studentId, cycle);
+        for (final v in om.values) {
+          if (v > base) base = v;
+        }
+      }
+      final next = base + 1;
+      fallbackCounterByStudentCycle[studentCycleKey] = next;
+      m[k] = next;
+      return next;
+    }
 
     // 기존 planned 중복 방지 키:
     // ⚠️ _attendanceRecords는 Supabase(PostgREST) max_rows 설정에 의해 ~1000개로 잘릴 수 있어(실제 로그: recordsLen≈990),
@@ -2106,7 +2145,13 @@ class AttendanceService {
         }
       }
 
-      for (final agg in aggBySet.values) {
+      final aggs = aggBySet.values.toList()
+        ..sort((a, b) {
+          final cmp = a.start.compareTo(b.start);
+          if (cmp != 0) return cmp;
+          return a.setId.compareTo(b.setId);
+        });
+      for (final agg in aggs) {
         final classDateTime = agg.start;
         final classEndTime = agg.end;
         final keyBase = '${agg.studentId}|${agg.setId}';
@@ -2132,20 +2177,25 @@ class AttendanceService {
         }
 
         int? cycle = _resolveCycleByDueDate(agg.studentId, classDateTime);
-        int sessionOrder;
         if (cycle == null) {
           final monthDate = _monthKey(classDateTime);
           cycle = _calcCycle(earliestMonthByKey, keyBase, monthDate);
         }
-        final studentCycleKey = '${agg.studentId}|$cycle';
-        final m = dateOrderByStudentCycle.putIfAbsent(studentCycleKey, () => {});
-        if (m.containsKey(dateKey)) {
-          sessionOrder = m[dateKey]!;
+        if (cycle == null || cycle == 0) cycle = 1;
+
+        int sessionOrder = 1;
+        final om = orderMapOf(agg.studentId, cycle);
+        final k = _sessionKeyForOrder(setId: agg.setId, startLocal: classDateTime);
+        final so = om[k];
+        if (so != null && so > 0) {
+          sessionOrder = so;
         } else {
-          final next = (counterByStudentCycle[studentCycleKey] ?? 0) + 1;
-          m[dateKey] = next;
-          counterByStudentCycle[studentCycleKey] = next;
-          sessionOrder = next;
+          sessionOrder = fallbackOrder(
+            studentId: agg.studentId,
+            cycle: cycle,
+            setId: agg.setId,
+            startLocal: classDateTime,
+          );
         }
         if (decisionLogCount < 3 || cycle == null || cycle == 0 || sessionOrder <= 0) {
           _logCycleDecision(
@@ -2157,15 +2207,6 @@ class AttendanceService {
             source: 'plan-init',
           );
           decisionLogCount++;
-        }
-        if (cycle == null || cycle == 0) {
-          if (_sideDebug) {
-            // ignore: avoid_print
-            print(
-                '[WARN][PLAN] cycle null/0 → 1 set=${agg.setId} student=${agg.studentId} date=$classDateTime (payment_records miss?)');
-            _logCycleDebug(agg.studentId, classDateTime);
-          }
-          cycle = 1;
         }
         if (sessionOrder <= 0) {
           if (_sideDebug) {
