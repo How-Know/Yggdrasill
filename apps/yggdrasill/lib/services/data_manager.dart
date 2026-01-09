@@ -1325,7 +1325,11 @@ class DataManager {
 
   Future<void> updateSessionOverride(SessionOverride newData) async {
     try {
-      _validateOverride(newData);
+      // ✅ 운영시간 방어 로직은 더이상 사용하지 않음.
+      // - 특히 취소/삭제(canceled)는 어떤 경우에도 막히면 안 된다.
+      if (newData.status != OverrideStatus.canceled) {
+        _validateOverride(newData);
+      }
       final supa = Supabase.instance.client;
       final base = {
         'student_id': newData.studentId,
@@ -1380,28 +1384,7 @@ class DataManager {
     if (duration <= 0 || duration > 360) {
       throw Exception('기간이 올바르지 않습니다. (1~360분)');
     }
-    // 운영시간 체크
-    final weekday = replacement.weekday % 7; // DateTime weekday: 1=Mon..7=Sun → 0~6로 변환
-    final hours = _operatingHours.firstWhere(
-      (h) => h.dayOfWeek == (weekday == 0 ? 6 : weekday - 1),
-      orElse: () => OperatingHours(dayOfWeek: 0, startHour: 0, startMinute: 0, endHour: 23, endMinute: 59),
-    );
-    final repStart = Duration(hours: replacement.hour, minutes: replacement.minute);
-    final repEnd = repStart + Duration(minutes: duration);
-    final opStart = Duration(hours: hours.startHour, minutes: hours.startMinute);
-    final opEnd = Duration(hours: hours.endHour, minutes: hours.endMinute);
-    if (repStart < opStart || repEnd > opEnd) {
-      throw Exception('운영시간을 벗어났습니다. (${hours.startHour.toString().padLeft(2,'0')}:${hours.startMinute.toString().padLeft(2,'0')}~${hours.endHour.toString().padLeft(2,'0')}:${hours.endMinute.toString().padLeft(2,'0')})');
-    }
-    // 휴게시간과 겹침 금지
-    for (final b in hours.breakTimes) {
-      final bStart = Duration(hours: b.startHour, minutes: b.startMinute);
-      final bEnd = Duration(hours: b.endHour, minutes: b.endMinute);
-      final overlap = repStart < bEnd && repEnd > bStart;
-      if (overlap) {
-        throw Exception('휴게시간과 겹칩니다.');
-      }
-    }
+    // ✅ 운영시간/휴게시간 검증 제거 (요청 사항)
     // 기존 보강들과 충돌 금지(동일 학생)
     for (final other in _sessionOverrides) {
       if (other.id == ov.id || other.studentId != ov.studentId) continue;

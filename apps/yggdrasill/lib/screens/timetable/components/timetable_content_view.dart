@@ -2572,13 +2572,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
     final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
     final metaStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
     final kindStyle = TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 13, fontWeight: FontWeight.w700);
+    // ✅ SwipeActionReveal 뒤 패널이 "비치지" 않도록 카드 배경은 항상 불투명(opaque) 컬러로 만든다.
+    // - base 색은 alphaBlend로 섞어 "톤"만 주되 최종 alpha=1 유지
+    final Color bg = Color.alphaBlend(base.withOpacity(0.18), const Color(0xFF15171C));
+    final Color borderC = base.withOpacity(0.35);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeInOut,
       decoration: BoxDecoration(
-        color: base.withOpacity(0.16),
+        color: bg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.transparent, width: 1),
+        border: Border.all(color: borderC, width: 1),
       ),
       child: Material(
         color: Colors.transparent,
@@ -2589,12 +2593,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
               children: [
-                // 인디케이터는 필요 없으므로 투명(자리/모양은 유지)
+                // ✅ 학생카드와 동일한 인디케이터(종류 색상)
                 Container(
                   width: 6,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: Colors.transparent,
+                    color: base,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
