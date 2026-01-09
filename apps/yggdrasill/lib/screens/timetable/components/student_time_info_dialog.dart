@@ -11,6 +11,7 @@ import '../../../services/attendance_service.dart';
 import '../../../services/data_manager.dart';
 import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/pill_tab_selector.dart';
+import '../../../widgets/makeup_quick_dialog.dart';
 
 /// 학생의 "시간 관련 기록"을 요약해서 보여주는 다이얼로그.
 ///
@@ -1848,9 +1849,32 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                   if (showCatchMakeup) ...[
                     const SizedBox(width: 10),
                     TextButton(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('보강 잡기 기능은 준비중입니다.')),
+                      onPressed: () async {
+                        if (!mounted) return;
+                        StudentWithInfo? studentWithInfo;
+                        for (final s in DataManager.instance.students) {
+                          if (s.student.id == widget.studentId) {
+                            studentWithInfo = s;
+                            break;
+                          }
+                        }
+                        if (studentWithInfo == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('학생 정보를 찾을 수 없습니다.')),
+                          );
+                          return;
+                        }
+
+                        final originalAttendanceId = (r.id ?? '').trim().isEmpty ? null : r.id;
+                        await showDialog<bool>(
+                          context: context,
+                          barrierDismissible: true,
+                          builder: (context) => MakeupScheduleDialog(
+                            studentWithInfo: studentWithInfo!,
+                            absentAttendanceId: originalAttendanceId,
+                            originalDateTime: r.classDateTime,
+                            originalClassName: cname,
+                          ),
                         );
                       },
                       style: TextButton.styleFrom(

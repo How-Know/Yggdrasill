@@ -532,6 +532,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       // ignore: avoid_print
       print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
     }
+    // ✅ 보강 시간 선택: 드래그로 선택한 범위 중 "시작" 슬롯을 단일 선택으로 간주
+    if (mode == 'makeup' && widget.onTimeSelected != null) {
+      if (startTimes.isNotEmpty) {
+        widget.onTimeSelected!(dayIdx, startTimes.first);
+      }
+      return;
+    }
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       // 단일 슬롯은 "기준 수업시간(lessonDuration)"만큼 블록을 생성하는 클릭 로직과 동일해야 하므로
       // 상위 콜백으로 위임한다(등록모드에서는 콜백 쪽에서 pending 누적).

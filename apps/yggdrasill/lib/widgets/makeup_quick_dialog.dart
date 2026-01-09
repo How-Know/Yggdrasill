@@ -578,28 +578,147 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
       final dst = '${dt.month}/${dt.day} ${_two(dt.hour)}:${_two(dt.minute)}';
       await showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: _mkBg,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: _mkBorder),
-          ),
-          title: const Text('보강 등록 확인', style: TextStyle(color: _mkText, fontWeight: FontWeight.w800)),
-          content: Text(
-            '$studentName 학생의 "$classLabel"을\n$src → $dst 로 보강 예약했습니다.',
-            style: const TextStyle(color: _mkTextSub, height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: TextButton.styleFrom(
-                foregroundColor: _mkTextSub,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        builder: (context) {
+          String dow(int weekday) {
+            const days = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'};
+            return days[weekday] ?? '?';
+          }
+
+          String pretty(DateTime d) {
+            return '${d.month}/${d.day} (${dow(d.weekday)}) ${_two(d.hour)}:${_two(d.minute)}';
+          }
+
+          final bool isReplace = widget.originalDateTime != null;
+          final String title = isReplace ? '보강 예약 완료' : '추가 수업 예약 완료';
+          final String srcPretty = widget.originalDateTime == null ? '선택 전' : pretty(widget.originalDateTime!);
+          final String dstPretty = pretty(dt);
+
+          Widget timeCard({
+            required IconData icon,
+            required String label,
+            required String value,
+            required Color iconColor,
+          }) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: _mkFieldBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _mkBorder.withOpacity(0.9)),
               ),
-              child: const Text('확인'),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: iconColor.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: iconColor.withOpacity(0.25)),
+                    ),
+                    child: Icon(icon, color: iconColor, size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label, style: const TextStyle(color: _mkTextSub, fontSize: 12, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 2),
+                        Text(
+                          value,
+                          style: const TextStyle(color: _mkText, fontSize: 15, fontWeight: FontWeight.w900),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: _mkBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: _mkBorder),
             ),
-          ],
-        ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 10),
+            contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+            title: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _mkAccent.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _mkAccent.withOpacity(0.28)),
+                  ),
+                  child: const Icon(Icons.check_rounded, color: _mkAccent, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: const TextStyle(color: _mkText, fontSize: 18, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$studentName · $classLabel',
+                        style: const TextStyle(color: _mkTextSub, fontSize: 13, fontWeight: FontWeight.w700),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                timeCard(
+                  icon: Icons.event,
+                  label: isReplace ? '원본 수업' : '기준 수업',
+                  value: isReplace ? srcPretty : src,
+                  iconColor: Colors.white70,
+                ),
+                const SizedBox(height: 10),
+                const Center(child: Icon(Icons.south_rounded, color: _mkTextSub)),
+                const SizedBox(height: 10),
+                timeCard(
+                  icon: Icons.event_repeat_rounded,
+                  label: '보강 시간',
+                  value: dstPretty,
+                  iconColor: _mkAccent,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '시간표에서 선택한 시간으로 보강이 예약되었습니다.',
+                  style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w600, height: 1.35),
+                ),
+              ],
+            ),
+            actions: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _mkAccent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('확인', style: TextStyle(fontWeight: FontWeight.w900)),
+                ),
+              ),
+            ],
+          );
+        },
       );
       Navigator.of(context).pop(true); // 보강 저장 후 즉시 닫기
     } catch (e) {
@@ -659,8 +778,9 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
                             scrollController: _scrollController,
                             operatingHours: _hours,
                             breakTimeColor: const Color(0xFF424242),
-                            registrationModeType: null,
-                            isRegistrationMode: false,
+                            // ✅ 보강 시간 선택: 클릭 + 드래그 모두 허용(수업시간 등록과 동일한 드래그 UX 재사용)
+                            registrationModeType: 'makeup',
+                            isRegistrationMode: true,
                             selectedDayIndex: null,
                             weekStartDate: _weekStart,
                             selectedStudentWithInfo: null,
