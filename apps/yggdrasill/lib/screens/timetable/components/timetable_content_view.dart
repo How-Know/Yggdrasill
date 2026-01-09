@@ -20,6 +20,9 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import '../../../services/consult_inquiry_demand_service.dart';
 import '../../../services/consult_trial_lesson_service.dart';
+import '../../consult/consult_notes_screen.dart';
+import '../../../services/consult_note_controller.dart';
+import '../../../widgets/dark_panel_route.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -2563,6 +2566,144 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
   }
 
+  Future<void> _openConsultNote(String noteId) async {
+    final id = noteId.trim();
+    if (id.isEmpty) return;
+    // 노트 화면이 이미 열려있으면 "노트 전환"만 요청한다.
+    ConsultNoteController.instance.requestOpen(id);
+    if (ConsultNoteController.instance.isScreenOpen) return;
+    try {
+      final nav = Navigator.of(context, rootNavigator: true);
+      await nav.push(DarkPanelRoute<void>(child: const ConsultNotesScreen()));
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, '문의 노트를 열 수 없습니다.', useRoot: true);
+      }
+    }
+  }
+
+  Future<void> _confirmAndRemoveInquirySlot(ConsultInquiryDemandSlot slot) async {
+    final noteId = slot.sourceNoteId.trim();
+    if (noteId.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0B1112),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF223131)),
+        ),
+        title: const Text('희망수업 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        content: const Text(
+          '이 희망수업 시간을 삭제할까요?',
+          style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFB74C4C),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            ),
+            child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      await ConsultInquiryDemandService.instance.load();
+      final all = ConsultInquiryDemandService.instance.slots.where((s) => s.sourceNoteId == noteId).toList();
+      final removeKey = ConsultInquiryDemandService.slotKey(slot.dayIndex, slot.hour, slot.minute);
+      final remain = all.map((s) => ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute)).toSet();
+      remain.remove(removeKey);
+      if (remain.isEmpty) {
+        await ConsultInquiryDemandService.instance.removeForNote(noteId);
+      } else {
+        await ConsultInquiryDemandService.instance.upsertForNote(
+          noteId: noteId,
+          title: slot.title,
+          startWeek: slot.startWeek,
+          slotKeys: remain,
+        );
+      }
+      if (mounted) {
+        showAppSnackBar(context, '희망수업이 삭제되었습니다.', useRoot: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
+      }
+    }
+  }
+
+  Widget _wrapSwipeActions({
+    required Widget child,
+    required Future<void> Function() onEdit,
+    required Future<void> Function() onDelete,
+  }) {
+    const double paneW = 140;
+    final radius = BorderRadius.circular(12);
+    final actionPane = Padding(
+      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: const Color(0xFF223131),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: () async => onEdit(),
+                borderRadius: BorderRadius.circular(10),
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: Colors.white.withOpacity(0.06),
+                hoverColor: Colors.white.withOpacity(0.03),
+                child: const SizedBox.expand(
+                  child: Center(
+                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Material(
+              color: const Color(0xFFB74C4C),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: () async => onDelete(),
+                borderRadius: BorderRadius.circular(10),
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: Colors.white.withOpacity(0.08),
+                hoverColor: Colors.white.withOpacity(0.04),
+                child: const SizedBox.expand(
+                  child: Center(
+                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return SwipeActionReveal(
+      enabled: true,
+      actionPaneWidth: paneW,
+      borderRadius: radius,
+      actionPane: actionPane,
+      child: child,
+    );
+  }
+
   Widget _buildSpecialSlotCard({
     required String kind,
     required String title,
@@ -2854,9 +2995,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final name = s?.student.name ?? '학생';
       // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
       if (ov.overrideType == OverrideType.replace) {
-        add(rep.hour, rep.minute, _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: 1));
+        final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: 1);
+        add(
+          rep.hour,
+          rep.minute,
+          _wrapSwipeActions(
+            child: core,
+            onEdit: () => _editMakeupOverride(ov),
+            onDelete: () => _confirmAndCancelMakeupOverride(ov),
+          ),
+        );
       } else {
-        add(rep.hour, rep.minute, _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: 1));
+        final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: 1);
+        add(
+          rep.hour,
+          rep.minute,
+          _wrapSwipeActions(
+            child: core,
+            onEdit: () => _editMakeupOverride(ov),
+            onDelete: () => _confirmAndCancelMakeupOverride(ov),
+          ),
+        );
       }
     }
 
@@ -2866,7 +3025,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
       for (final s in list) {
         if (s.dayIndex != dayIdx) continue;
         // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
-        add(s.hour, s.minute, _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: 1));
+        final core = _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: 1);
+        add(
+          s.hour,
+          s.minute,
+          _wrapSwipeActions(
+            child: core,
+            onEdit: () => _openConsultNote(s.sourceNoteId),
+            onDelete: () => _confirmAndRemoveInquirySlot(s),
+          ),
+        );
       }
     }
 
