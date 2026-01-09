@@ -756,7 +756,8 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
       ),
       content: SizedBox(
         width: 1032, // 860 * 1.2
-        height: 672, // 560 * 1.2
+        // ✅ 보강 잡기(시간표 다이얼로그) 높이 +30%
+        height: 874, // 672 * 1.3
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
