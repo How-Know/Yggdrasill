@@ -1252,6 +1252,16 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
   bool _autoFixOrderTriggered = false;
   bool _autoFixOrderRunning = false;
   bool _cycleDebugPrinted = false;
+  final GlobalKey _todayDividerKey = GlobalKey(debugLabel: 'attendanceTodayDivider');
+  final ScrollController _scrollController = ScrollController();
+  bool _didCenterTodayDivider = false;
+  bool _centeringTodayDividerPending = false;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   static String _rowKey(AttendanceRecord r) {
     final id = (r.id ?? '').trim();
@@ -1342,7 +1352,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF0B1112),
-        title: const Text('보강 연결', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        title: const Text('예정 연결', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
         content: Text(
           '이 추가수업을 선택한 예정 수업과 연결하여 보강(상쇄) 처리할까요?\n\n'
           '연결하면 해당 예정 수업은 제거되고, 이 기록이 보강으로 표시됩니다.',
@@ -1415,7 +1425,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           return !d.isBefore(qs) && !d.isAfter(qe);
         }
 
-        // 순수 예정(planned) 전체 (보강 연결 후보로도 사용)
+        // 순수 예정(planned) 전체 (추가수업의 '예정 연결' 후보로도 사용)
         final purePlanned = all.where(_isPurePlanned).toList()
           ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
 
@@ -1765,6 +1775,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           );
 
           final bool showConnectMakeup = !isPlannedRow && isWalkIn && !isMakeup && !isAddOverride;
+          final bool showCatchMakeup = isPlannedRow || result == AttendanceResult.absent;
 
           DateTime? origStart;
           DateTime? origEnd;
@@ -1790,7 +1801,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           }
 
           Widget classCell() {
-            if (!showConnectMakeup) {
+            final bool hasAction = showConnectMakeup || showCatchMakeup;
+            if (!hasAction) {
               return Expanded(
                 flex: 28,
                 child: Text(
@@ -1801,6 +1813,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                 ),
               );
             }
+
             return Expanded(
               flex: 28,
               child: Row(
@@ -1813,22 +1826,43 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                       style: rowStyle,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  TextButton(
-                    onPressed: () async {
-                      final candidates = purePlanned.where((p) => p.id != r.id).toList();
-                      await _connectWalkInToPlanned(walkIn: r, candidates: candidates, classById: classById);
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      minimumSize: const Size(0, 34),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  if (showConnectMakeup) ...[
+                    const SizedBox(width: 10),
+                    TextButton(
+                      onPressed: () async {
+                        final candidates = purePlanned.where((p) => p.id != r.id).toList();
+                        await _connectWalkInToPlanned(walkIn: r, candidates: candidates, classById: classById);
+                      },
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        minimumSize: const Size(0, 34),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        '예정 연결',
+                        style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900),
+                      ),
                     ),
-                    child: const Text(
-                      '보강 연결',
-                      style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900),
+                  ],
+                  if (showCatchMakeup) ...[
+                    const SizedBox(width: 10),
+                    TextButton(
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('보강 잡기 기능은 준비중입니다.')),
+                        );
+                      },
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        minimumSize: const Size(0, 34),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        '보강 잡기',
+                        style: TextStyle(color: Color(0xFF1976D2), fontWeight: FontWeight.w900),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             );
@@ -1925,6 +1959,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final label = _ymdWithWeekday(today);
           const accent = Color(0xFF33A373);
           return Padding(
+            key: _todayDividerKey,
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: Row(
               children: [
@@ -1950,8 +1985,10 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           items.add(const SizedBox(height: 8));
         }
 
+        final showTodayDivider = mergedPast.isNotEmpty && plannedFuture.isNotEmpty;
+
         // 2) 오늘 기준 구분선 (과거/미래 모두 있을 때만)
-        if (mergedPast.isNotEmpty && plannedFuture.isNotEmpty) {
+        if (showTodayDivider) {
           items.add(todayDivider());
         }
 
@@ -1962,13 +1999,36 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           items.add(const SizedBox(height: 8));
         }
 
+        // ✅ 진입 시: 오늘 디바이더가 가운데 오도록(가능한 경우) 1회 스크롤 정렬
+        void maybeCenterTodayDivider() {
+          if (!showTodayDivider) return;
+          if (_didCenterTodayDivider || _centeringTodayDividerPending) return;
+          _centeringTodayDividerPending = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _centeringTodayDividerPending = false;
+            if (!mounted) return;
+            final ctx = _todayDividerKey.currentContext;
+            if (ctx == null) return;
+            Scrollable.ensureVisible(
+              ctx,
+              alignment: 0.5,
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+            );
+            _didCenterTodayDivider = true;
+          });
+        }
+        maybeCenterTodayDivider();
+
         return Column(
           children: [
             headerRow(),
             const SizedBox(height: 10),
             Expanded(
               child: Scrollbar(
+                controller: _scrollController,
                 child: ListView(
+                  controller: _scrollController,
                   children: items,
                 ),
               ),
