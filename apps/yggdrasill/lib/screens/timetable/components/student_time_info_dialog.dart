@@ -2142,32 +2142,6 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
 
           Widget classCell() {
             final bool hasAction = showConnectMakeup || showCatchMakeup;
-            if (!hasAction) {
-              return Expanded(
-                flex: 28,
-                child: Tooltip(
-                  message: '클릭하여 수업명 수정',
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => editClassNameOf(r),
-                      borderRadius: BorderRadius.circular(6),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Text(
-                          cname,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: rowStyle,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }
-
             final classNameWidget = Tooltip(
               message: '클릭하여 수업명 수정',
               child: Material(
@@ -2182,19 +2156,33 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: rowStyle,
-                      textAlign: TextAlign.center,
+                      textAlign: TextAlign.left,
                     ),
                   ),
                 ),
               ),
             );
 
+            if (!hasAction) {
+              return Expanded(
+                flex: 28,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: classNameWidget,
+                ),
+              );
+            }
+
             return Expanded(
               flex: 28,
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Flexible(child: classNameWidget),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: classNameWidget,
+                    ),
+                  ),
                   if (showConnectMakeup) ...[
                     const SizedBox(width: 10),
                     TextButton(
