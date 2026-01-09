@@ -2322,6 +2322,244 @@ class TimetableContentViewState extends State<TimetableContentView> {
   static const Color _kAddGreen = Color(0xFF4CAF50); // 추가수업(add) / 시범수업(trial)
   static const Color _kInquiryOrange = Color(0xFFF2B45B); // 희망수업(inquiry)
 
+  Future<void> _editMakeupOverride(SessionOverride ov) async {
+    final rep = ov.replacementClassDateTime;
+    if (rep == null) return;
+
+    DateTime repDate = DateTime(rep.year, rep.month, rep.day);
+    TimeOfDay repTime = TimeOfDay.fromDateTime(rep);
+    int durationMin = ov.durationMinutes ?? DataManager.instance.academySettings.lessonDuration;
+
+    DateTime? pickDate(DateTime initial) async {
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: initial,
+        firstDate: DateTime(2000),
+        lastDate: DateTime(2100),
+        builder: (ctx, child) => Theme(
+          data: Theme.of(ctx).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1B6B63),
+              onPrimary: Colors.white,
+              surface: Color(0xFF0B1112),
+              onSurface: Color(0xFFEAF2F2),
+            ),
+            dialogBackgroundColor: const Color(0xFF0B1112),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        ),
+      );
+      return picked;
+    }
+
+    TimeOfDay? pickTime(TimeOfDay initial) async {
+      final picked = await showTimePicker(
+        context: context,
+        initialTime: initial,
+        helpText: '시간 선택',
+        builder: (ctx, child) => Theme(
+          data: Theme.of(ctx).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF1B6B63),
+              onPrimary: Colors.white,
+              surface: Color(0xFF0B1112),
+              onSurface: Color(0xFFEAF2F2),
+            ),
+            dialogBackgroundColor: const Color(0xFF0B1112),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        ),
+      );
+      return picked;
+    }
+
+    String two(int n) => n.toString().padLeft(2, '0');
+    String fmtDate(DateTime d) => '${d.year}.${two(d.month)}.${two(d.day)}';
+    String fmtTime(TimeOfDay t) => '${two(t.hour)}:${two(t.minute)}';
+
+    final String kindLabel = ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
+
+    final updated = await showDialog<SessionOverride>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF0B1112),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF223131)),
+          ),
+          title: Text(
+            '$kindLabel 수정',
+            style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900),
+          ),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (ov.overrideType == OverrideType.replace && ov.originalClassDateTime != null) ...[
+                  Text(
+                    '원본: ${fmtDate(ov.originalClassDateTime!)} ${two(ov.originalClassDateTime!.hour)}:${two(ov.originalClassDateTime!.minute)}',
+                    style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                const Text('보강 시간', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          final picked = await pickDate(repDate);
+                          if (picked == null) return;
+                          setState(() => repDate = DateTime(picked.year, picked.month, picked.day));
+                        },
+                        child: Text('날짜: ${fmtDate(repDate)}'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          final picked = await pickTime(repTime);
+                          if (picked == null) return;
+                          setState(() => repTime = picked);
+                        },
+                        child: Text('시간: ${fmtTime(repTime)}'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const Text('기간(분)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 120,
+                      child: TextFormField(
+                        initialValue: durationMin.toString(),
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w700),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: const Color(0xFF15171C),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: Color(0xFF223131)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 2),
+                          ),
+                        ),
+                        onChanged: (v) {
+                          final n = int.tryParse(v);
+                          if (n == null) return;
+                          if (n <= 0 || n > 360) return;
+                          durationMin = n;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('분', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            ),
+            TextButton(
+              onPressed: () {
+                final repDt = DateTime(repDate.year, repDate.month, repDate.day, repTime.hour, repTime.minute);
+                final next = ov.copyWith(
+                  replacementClassDateTime: repDt,
+                  durationMinutes: durationMin,
+                  updatedAt: DateTime.now(),
+                );
+                Navigator.of(ctx).pop(next);
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF1B6B63),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              ),
+              child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (updated == null) return;
+
+    try {
+      await DataManager.instance.updateSessionOverride(updated);
+      if (mounted) {
+        showAppSnackBar(context, '$kindLabel이 수정되었습니다.', useRoot: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, '$kindLabel 수정 실패: $e', useRoot: true);
+      }
+    }
+  }
+
+  Future<void> _confirmAndCancelMakeupOverride(SessionOverride ov) async {
+    final String kindLabel = ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0B1112),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF223131)),
+        ),
+        title: Text('$kindLabel 삭제', style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        content: Text(
+          '정말로 이 $kindLabel을 삭제할까요?\n(삭제된 항목은 보강 관리에서 확인할 수 있습니다)',
+          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFB74C4C),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            ),
+            child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      await DataManager.instance.cancelSessionOverride(ov.id);
+      if (mounted) {
+        showAppSnackBar(context, '$kindLabel이 삭제되었습니다.', useRoot: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, '$kindLabel 삭제 실패: $e', useRoot: true);
+      }
+    }
+  }
+
   Widget _buildSpecialSlotCard({
     required String kind,
     required String title,
@@ -2427,9 +2665,123 @@ class TimetableContentViewState extends State<TimetableContentView> {
       }
       final name = s?.student.name ?? '학생';
       if (ov.overrideType == OverrideType.replace) {
-        out.add(_buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: number));
+        final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: number);
+        if (widget.isSelectMode) {
+          out.add(core);
+        } else {
+          const double paneW = 140;
+          final radius = BorderRadius.circular(12);
+          final actionPane = Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFF223131),
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      onTap: () async => _editMakeupOverride(ov),
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.06),
+                      hoverColor: Colors.white.withOpacity(0.03),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFFB74C4C),
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      onTap: () async => _confirmAndCancelMakeupOverride(ov),
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.08),
+                      hoverColor: Colors.white.withOpacity(0.04),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+          out.add(SwipeActionReveal(
+            enabled: true,
+            actionPaneWidth: paneW,
+            borderRadius: radius,
+            actionPane: actionPane,
+            child: core,
+          ));
+        }
       } else {
-        out.add(_buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: number));
+        final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: number);
+        if (widget.isSelectMode) {
+          out.add(core);
+        } else {
+          const double paneW = 140;
+          final radius = BorderRadius.circular(12);
+          final actionPane = Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFF223131),
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      onTap: () async => _editMakeupOverride(ov),
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.06),
+                      hoverColor: Colors.white.withOpacity(0.03),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFFB74C4C),
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      onTap: () async => _confirmAndCancelMakeupOverride(ov),
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.08),
+                      hoverColor: Colors.white.withOpacity(0.04),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+          out.add(SwipeActionReveal(
+            enabled: true,
+            actionPaneWidth: paneW,
+            borderRadius: radius,
+            actionPane: actionPane,
+            child: core,
+          ));
+        }
       }
     }
 

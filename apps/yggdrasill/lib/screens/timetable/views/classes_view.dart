@@ -727,9 +727,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       children: [
         SingleChildScrollView(
           controller: widget.scrollController,
-          child: ValueListenableBuilder<int>(
-            valueListenable: DataManager.instance.studentTimeBlocksRevision,
-            builder: (context, __, ___) {
+          child: AnimatedBuilder(
+            animation: Listenable.merge([
+              DataManager.instance.studentTimeBlocksRevision,
+              DataManager.instance.sessionOverridesNotifier,
+            ]),
+            builder: (context, _) {
               final studentTimeBlocks = DataManager.instance.studentTimeBlocks;
               final lessonDuration = DataManager.instance.academySettings.lessonDuration;
               final String? _pendingStudentId = (widget.isRegistrationMode &&
