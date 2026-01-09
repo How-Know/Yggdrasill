@@ -1648,12 +1648,333 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         }
         maybeAutoFixOrder();
 
+        Future<DateTime?> pickDate(DateTime initial) async {
+          final picked = await showDatePicker(
+            context: context,
+            initialDate: initial,
+            firstDate: DateTime(2000),
+            lastDate: DateTime(2100),
+            locale: const Locale('ko', 'KR'),
+            builder: (context, child) {
+              return Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF1B6B63),
+                    onPrimary: Colors.white,
+                    surface: Color(0xFF0B1112),
+                    onSurface: Color(0xFFEAF2F2),
+                  ),
+                  dialogBackgroundColor: const Color(0xFF0B1112),
+                ),
+                child: child!,
+              );
+            },
+          );
+          return picked;
+        }
+
+        Future<TimeOfDay?> pickTime(TimeOfDay initial) async {
+          final picked = await showTimePicker(
+            context: context,
+            initialTime: initial,
+            helpText: '시간 선택',
+            builder: (context, child) {
+              return Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF1B6B63),
+                    onPrimary: Colors.white,
+                    surface: Color(0xFF0B1112),
+                    onSurface: Color(0xFFEAF2F2),
+                  ),
+                  dialogBackgroundColor: const Color(0xFF0B1112),
+                ),
+                child: child!,
+              );
+            },
+          );
+          return picked;
+        }
+
+        Future<void> updateAttendanceRecordWithSnack(AttendanceRecord next) async {
+          final rid = (next.id ?? '').trim();
+          if (rid.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정할 기록 ID가 없습니다.')));
+            return;
+          }
+          try {
+            await AttendanceService.instance.updateAttendanceRecord(next.copyWith(updatedAt: DateTime.now()));
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정되었습니다.')));
+          } on StateError catch (e) {
+            if (!context.mounted) return;
+            if (e.message == 'CONFLICT_ATTENDANCE_VERSION') {
+              await AttendanceService.instance.loadAttendanceRecords();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('다른 기기에서 먼저 수정했습니다. 새로고침 후 다시 시도하세요.')),
+              );
+              return;
+            }
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          } catch (e) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+          }
+        }
+
+        Future<void> editDateOf(AttendanceRecord r) async {
+          final picked = await pickDate(_dateOnly(r.classDateTime));
+          if (picked == null) return;
+          var dur = r.classEndTime.difference(r.classDateTime);
+          if (dur.inMinutes <= 0) {
+            dur = Duration(minutes: DataManager.instance.academySettings.lessonDuration);
+          }
+          final nextStart = DateTime(picked.year, picked.month, picked.day, r.classDateTime.hour, r.classDateTime.minute);
+          final nextEnd = nextStart.add(dur);
+          DateTime? shiftToDay(DateTime? t) =>
+              t == null ? null : DateTime(picked.year, picked.month, picked.day, t.hour, t.minute);
+          final next = r.copyWith(
+            classDateTime: nextStart,
+            classEndTime: nextEnd,
+            arrivalTime: shiftToDay(r.arrivalTime),
+            departureTime: shiftToDay(r.departureTime),
+          );
+          await updateAttendanceRecordWithSnack(next);
+        }
+
+        Future<void> editTimeRangeOf(AttendanceRecord r) async {
+          TimeOfDay startT = TimeOfDay.fromDateTime(r.classDateTime);
+          TimeOfDay endT = TimeOfDay.fromDateTime(r.classEndTime);
+
+          int toMin(TimeOfDay t) => t.hour * 60 + t.minute;
+          String fmt(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => StatefulBuilder(
+              builder: (ctx, setState) => AlertDialog(
+                backgroundColor: const Color(0xFF0B1112),
+                title: const Text('시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+                content: SizedBox(
+                  width: 420,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('수업 시간 범위를 선택하세요.', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () async {
+                                final p = await pickTime(startT);
+                                if (p == null) return;
+                                setState(() => startT = p);
+                              },
+                              child: Text('시작: ${fmt(startT)}'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () async {
+                                final p = await pickTime(endT);
+                                if (p == null) return;
+                                setState(() => endT = p);
+                              },
+                              child: Text('끝: ${fmt(endT)}'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('수정', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (ok != true) return;
+
+          final startMin = toMin(startT);
+          final endMin = toMin(endT);
+          if (endMin <= startMin) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('끝 시간은 시작 시간보다 늦어야 합니다.')));
+            return;
+          }
+          final base = _dateOnly(r.classDateTime);
+          final nextStart = DateTime(base.year, base.month, base.day, startT.hour, startT.minute);
+          final nextEnd = DateTime(base.year, base.month, base.day, endT.hour, endT.minute);
+          final next = r.copyWith(classDateTime: nextStart, classEndTime: nextEnd);
+          await updateAttendanceRecordWithSnack(next);
+        }
+
+        Future<void> editArrivalOf(AttendanceRecord r) async {
+          final action = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('등원 시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: const Text(
+                '어떻게 변경할까요?',
+                style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('cancel'),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('clear'),
+                  child: const Text('없음', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('pick'),
+                  child: const Text('시간 선택', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          );
+          if (action == null || action == 'cancel') return;
+
+          DateTime? nextArrival;
+          if (action == 'pick') {
+            final initial = r.arrivalTime == null ? TimeOfDay.fromDateTime(r.classDateTime) : TimeOfDay.fromDateTime(r.arrivalTime!);
+            final picked = await pickTime(initial);
+            if (picked == null) return;
+            final base = _dateOnly(r.classDateTime);
+            nextArrival = DateTime(base.year, base.month, base.day, picked.hour, picked.minute);
+          } else if (action == 'clear') {
+            nextArrival = null;
+          }
+
+          final next = r.copyWith(
+            arrivalTime: nextArrival,
+            // 시간 기록이 들어가면 출석으로 간주하는 것이 자연스럽다.
+            isPresent: (nextArrival != null) ? true : r.isPresent,
+          );
+          await updateAttendanceRecordWithSnack(next);
+        }
+
+        Future<void> editDepartureOf(AttendanceRecord r) async {
+          final action = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('하원 시간 수정', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: const Text(
+                '어떻게 변경할까요?',
+                style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('cancel'),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('clear'),
+                  child: const Text('없음', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('pick'),
+                  child: const Text('시간 선택', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          );
+          if (action == null || action == 'cancel') return;
+
+          DateTime? nextDeparture;
+          if (action == 'pick') {
+            final initial = r.departureTime == null ? TimeOfDay.fromDateTime(r.classEndTime) : TimeOfDay.fromDateTime(r.departureTime!);
+            final picked = await pickTime(initial);
+            if (picked == null) return;
+            final base = _dateOnly(r.classDateTime);
+            nextDeparture = DateTime(base.year, base.month, base.day, picked.hour, picked.minute);
+          } else if (action == 'clear') {
+            nextDeparture = null;
+          }
+
+          final next = r.copyWith(
+            departureTime: nextDeparture,
+            isPresent: (nextDeparture != null) ? true : r.isPresent,
+          );
+          await updateAttendanceRecordWithSnack(next);
+        }
+
+        Future<void> editClassNameOf(AttendanceRecord r) async {
+          final classes = DataManager.instance.classes.where((c) => c.id.trim().isNotEmpty).toList();
+          final selected = await showDialog<String?>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              title: const Text('수업명 변경', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+              content: SizedBox(
+                width: 520,
+                height: 520,
+                child: ListView.separated(
+                  itemCount: classes.length + 1,
+                  separatorBuilder: (_, __) => const Divider(color: Color(0xFF223131), height: 1),
+                  itemBuilder: (context, i) {
+                    if (i == 0) {
+                      return ListTile(
+                        title: const Text('기본 수업', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+                        subtitle: const Text('session_type_id = null', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                        onTap: () => Navigator.of(ctx).pop(''),
+                      );
+                    }
+                    final c = classes[i - 1];
+                    return ListTile(
+                      title: Text(c.name, style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+                      subtitle: Text(c.id, style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600)),
+                      onTap: () => Navigator.of(ctx).pop(c.id),
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          );
+          if (selected == null) return;
+          final nextSid = selected.trim().isEmpty ? null : selected.trim();
+          final nextName = () {
+            if (nextSid == null) return '기본 수업';
+            for (final c in classes) {
+              if (c.id == nextSid) return c.name.trim().isEmpty ? '수업' : c.name.trim();
+            }
+            return r.className.trim().isEmpty ? '수업' : r.className.trim();
+          }();
+
+          final next = r.copyWith(
+            sessionTypeId: nextSid,
+            className: nextName,
+          );
+          await updateAttendanceRecordWithSnack(next);
+        }
+
         Widget cell(
           String v, {
           required int flex,
-          TextAlign align = TextAlign.left,
+          TextAlign align = TextAlign.center,
           TextStyle? style,
           EdgeInsetsGeometry? padding,
+          VoidCallback? onTap,
+          String? tooltip,
         }) {
           Widget child = Text(
             v,
@@ -1669,6 +1990,22 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           );
           if (padding != null) {
             child = Padding(padding: padding, child: child);
+          }
+          if (onTap != null) {
+            child = Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: child,
+                ),
+              ),
+            );
+            if (tooltip != null && tooltip.trim().isNotEmpty) {
+              child = Tooltip(message: tooltip.trim(), child: child);
+            }
           }
           return Expanded(
             flex: flex,
@@ -1695,14 +2032,14 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             ),
             child: Row(
               children: [
-                cell('사이클/회차', flex: 10, align: TextAlign.center),
-                cell('날짜', flex: 18),
-                cell('시간', flex: 16),
-                cell('구분', flex: 10),
-                cell('등원', flex: 10),
-                cell('하원', flex: 10),
-                cell('수업명', flex: 28),
-                cell('결과', flex: 12, align: TextAlign.right, padding: const EdgeInsets.only(right: 10)),
+                cell('회차', flex: 10, align: TextAlign.center),
+                cell('날짜', flex: 18, align: TextAlign.center),
+                cell('시간', flex: 16, align: TextAlign.center),
+                cell('구분', flex: 10, align: TextAlign.center),
+                cell('등원', flex: 10, align: TextAlign.center),
+                cell('하원', flex: 10, align: TextAlign.center),
+                cell('수업명', flex: 28, align: TextAlign.center),
+                cell('결과', flex: 12, align: TextAlign.center),
               ],
             ),
           );
@@ -1757,7 +2094,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
               );
             }
             if (isAddOverride) return badge('추가', const Color(0xFF4CAF50));
-            if (isWalkIn) return badge('추가수업', const Color(0xFF4CAF50));
+            if (isWalkIn) return badge('추가', const Color(0xFF4CAF50));
             return badge('기록', const Color(0xFF223131));
           }();
 
@@ -1807,27 +2144,56 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
             if (!hasAction) {
               return Expanded(
                 flex: 28,
-                child: Text(
-                  cname,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: rowStyle,
+                child: Tooltip(
+                  message: '클릭하여 수업명 수정',
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => editClassNameOf(r),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          cname,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: rowStyle,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               );
             }
 
-            return Expanded(
-              flex: 28,
-              child: Row(
-                children: [
-                  Expanded(
+            final classNameWidget = Tooltip(
+              message: '클릭하여 수업명 수정',
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => editClassNameOf(r),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Text(
                       cname,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: rowStyle,
+                      textAlign: TextAlign.center,
                     ),
                   ),
+                ),
+              ),
+            );
+
+            return Expanded(
+              flex: 28,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(child: classNameWidget),
                   if (showConnectMakeup) ...[
                     const SizedBox(width: 10),
                     TextButton(
@@ -1912,13 +2278,37 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                     Row(
                       children: [
                         cell(cycleStr, flex: 10, style: rowStyle, align: TextAlign.center),
-                        cell(dateStr, flex: 18, style: rowStyle),
-                        cell(timeStr, flex: 16, style: rowStyle),
-                        Expanded(flex: 10, child: Align(alignment: Alignment.centerLeft, child: statusWidget)),
-                        cell(r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()), flex: 10, style: rowStyle),
-                        cell(r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()), flex: 10, style: rowStyle),
+                        cell(
+                          dateStr,
+                          flex: 18,
+                          style: rowStyle,
+                          onTap: () => editDateOf(r),
+                          tooltip: '클릭하여 날짜 수정',
+                        ),
+                        cell(
+                          timeStr,
+                          flex: 16,
+                          style: rowStyle,
+                          onTap: () => editTimeRangeOf(r),
+                          tooltip: '클릭하여 시간 수정',
+                        ),
+                        Expanded(flex: 10, child: Align(alignment: Alignment.center, child: statusWidget)),
+                        cell(
+                          r.arrivalTime == null ? '-' : _hm(r.arrivalTime!.toLocal()),
+                          flex: 10,
+                          style: rowStyle,
+                          onTap: () => editArrivalOf(r),
+                          tooltip: '클릭하여 등원시간 수정',
+                        ),
+                        cell(
+                          r.departureTime == null ? '-' : _hm(r.departureTime!.toLocal()),
+                          flex: 10,
+                          style: rowStyle,
+                          onTap: () => editDepartureOf(r),
+                          tooltip: '클릭하여 하원시간 수정',
+                        ),
                         classCell(),
-                        Expanded(flex: 12, child: Align(alignment: Alignment.centerRight, child: resultWidget)),
+                        Expanded(flex: 12, child: Align(alignment: Alignment.center, child: resultWidget)),
                       ],
                     ),
                     if (expanded) ...[
