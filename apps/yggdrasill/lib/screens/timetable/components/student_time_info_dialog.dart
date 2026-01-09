@@ -1637,21 +1637,31 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         }
         maybeAutoFixOrder();
 
-        Widget cell(String v, {required int flex, TextAlign align = TextAlign.left, TextStyle? style}) {
+        Widget cell(
+          String v, {
+          required int flex,
+          TextAlign align = TextAlign.left,
+          TextStyle? style,
+          EdgeInsetsGeometry? padding,
+        }) {
+          Widget child = Text(
+            v,
+            textAlign: align,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style ??
+                const TextStyle(
+                  color: text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+          );
+          if (padding != null) {
+            child = Padding(padding: padding, child: child);
+          }
           return Expanded(
             flex: flex,
-            child: Text(
-              v,
-              textAlign: align,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style ??
-                  const TextStyle(
-                    color: text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
+            child: child,
           );
         }
 
@@ -1681,7 +1691,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                 cell('등원', flex: 10),
                 cell('하원', flex: 10),
                 cell('수업명', flex: 28),
-                cell('결과', flex: 12, align: TextAlign.right),
+                cell('결과', flex: 12, align: TextAlign.right, padding: const EdgeInsets.only(right: 10)),
               ],
             ),
           );
@@ -1719,7 +1729,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final statusWidget = () {
             if (isPlannedRow) {
               final past = _dateOnly(dt).isBefore(today);
-              return badge(past ? '미출석' : '예정', past ? const Color(0xFF5B4B2B) : const Color(0xFF223131));
+              // ✅ 구분: 과거 예정(미출석)은 '기록'으로 통합
+              return badge(past ? '기록' : '예정', const Color(0xFF223131));
             }
             if (isMakeup) {
               return MouseRegion(
@@ -1931,10 +1942,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         }
 
         final items = <Widget>[];
-        items.add(headerRow());
-        items.add(const SizedBox(height: 10));
 
-        // 1) 과거(출석 기록 + 오늘 이전 예정/미출석)
+        // 1) 과거(출석 기록 + 오늘 이전 예정)
         for (final r in mergedPast) {
           final dimmed = false; // ✅ 출결기록 비활성(흐림) 효과 제거
           items.add(rowTile(r: r, dimmed: dimmed, isPlannedRow: _isPurePlanned(r)));
@@ -1953,10 +1962,18 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           items.add(const SizedBox(height: 8));
         }
 
-        return Scrollbar(
-          child: ListView(
-            children: items,
-          ),
+        return Column(
+          children: [
+            headerRow(),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Scrollbar(
+                child: ListView(
+                  children: items,
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

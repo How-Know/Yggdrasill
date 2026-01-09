@@ -9,7 +9,6 @@ import '../models/attendance_record.dart';
 /// - 지각 판정: 등원 시간이 시작+latenessThresholdMinutes 이후면 지각.
 enum AttendanceResult {
   planned, // 예정(미래/오늘)
-  noShow, // 미출석(과거 예정)
   absent, // 결석(명시적 불참)
   earlyLeave, // 조퇴(60% 미만 출석 후 하원)
   late, // 지각
@@ -23,8 +22,6 @@ extension AttendanceResultX on AttendanceResult {
     switch (this) {
       case AttendanceResult.planned:
         return '예정';
-      case AttendanceResult.noShow:
-        return '미출석';
       case AttendanceResult.absent:
         return '결석';
       case AttendanceResult.earlyLeave:
@@ -53,8 +50,6 @@ extension AttendanceResultX on AttendanceResult {
         return const Color(0xFF8E6CEF);
       case AttendanceResult.absent:
         return const Color(0xFFE57373);
-      case AttendanceResult.noShow:
-        return const Color(0xFF5B4B2B);
       case AttendanceResult.planned:
         return const Color(0xFF223131);
       case AttendanceResult.present:
@@ -82,8 +77,8 @@ AttendanceResult judgeAttendanceResult({
   if (_isPurePlanned(record)) {
     final today = _dateOnly(now);
     final d = _dateOnly(record.classDateTime);
-    // "오늘 이전"은 미출석(=노쇼), 오늘 포함 미래는 예정
-    return d.isBefore(today) ? AttendanceResult.noShow : AttendanceResult.planned;
+    // "오늘 이전"은 결석(미출석 포함), 오늘 포함 미래는 예정
+    return d.isBefore(today) ? AttendanceResult.absent : AttendanceResult.planned;
   }
 
   // 2) 명시적 결석
