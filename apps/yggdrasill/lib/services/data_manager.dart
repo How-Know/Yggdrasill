@@ -1918,6 +1918,14 @@ class DataManager {
         });
       }
 
+      // ✅ 일부 환경/스키마에서는 학생 삭제가 보강/예외(session_overrides)를 자동 정리하지 못해 orphan이 남을 수 있음.
+      // 학생 삭제 전에 session_overrides를 선삭제하여 "학생 삭제 후에도 보강기록이 남는" 문제를 방지한다.
+      await timed('session_overrides 삭제(선)', () async {
+        await supa.from('session_overrides').delete().eq('student_id', id).eq('academy_id', academyId);
+      });
+      _sessionOverrides.removeWhere((o) => o.studentId == id);
+      sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+
       // 1-shot 삭제 먼저 시도 (빠른 케이스는 여기서 끝)
       try {
         await timed('students 삭제(1-shot)', () async {
@@ -1942,6 +1950,8 @@ class DataManager {
     // 학생의 보강/예외(SessionOverride)도 함께 삭제
     await AcademyDbService.instance.deleteSessionOverridesByStudentId(id);
     print('[DEBUG][deleteStudent] SessionOverrides 삭제 완료: id=$id');
+    _sessionOverrides.removeWhere((o) => o.studentId == id);
+    sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
     // 학생의 부가 정보도 함께 삭제
     await AcademyDbService.instance.deleteStudentBasicInfo(id);
     print('[DEBUG][deleteStudent] StudentBasicInfo 삭제 완료: id=$id');
@@ -1951,6 +1961,10 @@ class DataManager {
     try {
       final supa = Supabase.instance.client;
       final academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      // ✅ 보강/예외(SessionOverride)도 서버에서 함께 제거(세션 오버라이드는 Supabase에서 로드됨)
+      await supa.from('session_overrides').delete()
+        .eq('student_id', id)
+        .eq('academy_id', academyId);
       await supa.from('attendance_records').delete()
         .eq('student_id', id)
         .eq('academy_id', academyId)

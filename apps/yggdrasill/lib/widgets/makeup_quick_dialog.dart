@@ -584,14 +584,21 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
             return days[weekday] ?? '?';
           }
 
-          String pretty(DateTime d) {
-            return '${d.month}/${d.day} (${dow(d.weekday)}) ${_two(d.hour)}:${_two(d.minute)}';
+          String prettyRange(DateTime start, DateTime end) {
+            return '${start.month}/${start.day} (${dow(start.weekday)}) '
+                '${_two(start.hour)}:${_two(start.minute)}~${_two(end.hour)}:${_two(end.minute)}';
           }
 
           final bool isReplace = widget.originalDateTime != null;
           final String title = isReplace ? '보강 예약 완료' : '추가 수업 예약 완료';
-          final String srcPretty = widget.originalDateTime == null ? '선택 전' : pretty(widget.originalDateTime!);
-          final String dstPretty = pretty(dt);
+          final DateTime dstEnd = dt.add(Duration(minutes: duration));
+          final String srcPretty = widget.originalDateTime == null
+              ? '선택 전'
+              : prettyRange(
+                  widget.originalDateTime!,
+                  widget.originalDateTime!.add(Duration(minutes: duration)),
+                );
+          final String dstPretty = prettyRange(dt, dstEnd);
 
           Widget timeCard({
             required IconData icon,
