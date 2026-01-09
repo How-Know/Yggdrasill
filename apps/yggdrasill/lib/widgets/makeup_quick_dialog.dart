@@ -4,7 +4,7 @@ import '../models/education_level.dart';
 import '../models/attendance_record.dart';
 import '../models/student_time_block.dart';
 import '../models/class_info.dart';
-import '../screens/timetable/components/attendance_check_view.dart' show ClassSession, AttendanceCheckView;
+import '../screens/timetable/components/attendance_check_view.dart' show ClassSession;
 import '../screens/timetable/components/timetable_header.dart';
 import '../services/data_manager.dart';
 import '../models/session_override.dart';
@@ -296,50 +296,43 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
   }
 
   Future<void> _openSchedule(StudentWithInfo s, {String? absentRecordId}) async {
-    // PERF: 시작 로그
-    // ignore: avoid_print
-    print('[PERF][QuickMakeup] openSchedule start: ${DateTime.now().toIso8601String()}');
-    // 기존 수강탭의 수업일정 리스트 다이얼로그 UX 재사용: AttendanceCheckView의 리스트 다이얼로그 사용
-    DateTime? pickedOriginal;
-    String? pickedClassName;
-    bool? listResult = await showDialog<bool>(
+    final picked = await showDialog<AttendanceRecord>(
       context: context,
       barrierDismissible: true,
-      builder: (context) => Opacity(
-        opacity: 0.0,
-        child: AttendanceCheckView(
-          selectedStudent: s,
-          autoOpenListOnStart: true,
-          onReplaceSelected: (session) async {
-            pickedOriginal = session.dateTime;
-            pickedClassName = session.className;
-            // ignore: avoid_print
-            print('[PERF][QuickMakeup] picked original at list: ${pickedOriginal!.toIso8601String()}');
-            if (Navigator.of(context).canPop()) {
-              Navigator.of(context).pop(true); // 닫고 다음 단계로 이동
-            }
-          },
-          listOnly: true,
-        ),
-      ),
+      builder: (context) => _MakeupOriginalLessonPickerDialog(studentWithInfo: s),
     );
-    // 일부 플랫폼에서 위의 pop 콜백이 먼저 실행되어 listResult가 null일 수 있으므로 보호
-    if (pickedOriginal == null) return;
-    // ignore: avoid_print
-    print('[PERF][QuickMakeup] list closed: ${DateTime.now().toIso8601String()}');
-    if (pickedOriginal == null) return;
+    if (picked == null) return;
+
+    final classById = <String, ClassInfo>{
+      for (final c in DataManager.instance.classes) c.id: c,
+    };
+    String classNameOf(AttendanceRecord r) {
+      final sid = (r.sessionTypeId ?? '').trim();
+      if (sid.isEmpty || sid == '__default_class__') {
+        final n = r.className.trim();
+        return n.isEmpty ? '기본 수업' : n;
+      }
+      final c = classById[sid];
+      return (c == null || c.name.trim().isEmpty) ? (r.className.trim().isEmpty ? '기본 수업' : r.className.trim()) : c.name.trim();
+    }
+
+    final pickedOriginal = picked.classDateTime;
+    final pickedClassName = classNameOf(picked);
+    final pickedAttendanceId = (picked.id ?? '').trim().isNotEmpty ? picked.id : absentRecordId;
+    final int durMin0 = picked.classEndTime.difference(picked.classDateTime).inMinutes;
+    final int? originalDurationMinutes = durMin0 > 0 ? durMin0 : null;
+
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
       builder: (context) => MakeupScheduleDialog(
         studentWithInfo: s,
-        absentAttendanceId: absentRecordId,
+        absentAttendanceId: pickedAttendanceId,
         originalDateTime: pickedOriginal,
         originalClassName: pickedClassName,
+        originalDurationMinutes: originalDurationMinutes,
       ),
     );
-    // ignore: avoid_print
-    print('[PERF][QuickMakeup] schedule dialog closed: ${DateTime.now().toIso8601String()}, saved=$saved');
     if (saved == true) {
       // 보강 저장 후 빠른 보강(현재 다이얼로그)도 닫기
       Navigator.of(context).pop();
@@ -523,12 +516,334 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
   }
 }
 
+/// 빠른 보강등록: "원본 수업" 선택 다이얼로그
+///
+/// - 시간기록 다이얼로그(출석기록 탭)와 동일하게 `attendance_records`를 기준으로 표시
+/// - 결석(과거) + 예정(오늘 포함 미래)만 보여준다.
+/// - 컬럼: 수업 일정 / 시간 / 회차 / 수업명
+class _MakeupOriginalLessonPickerDialog extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+  const _MakeupOriginalLessonPickerDialog({required this.studentWithInfo});
+
+  @override
+  State<_MakeupOriginalLessonPickerDialog> createState() => _MakeupOriginalLessonPickerDialogState();
+}
+
+class _MakeupOriginalLessonPickerDialogState extends State<_MakeupOriginalLessonPickerDialog> {
+  bool _loading = true;
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  static String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  static String _ymd(DateTime d) => '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
+  static String _weekdayShort(DateTime d) {
+    switch (d.weekday) {
+      case DateTime.monday:
+        return '월';
+      case DateTime.tuesday:
+        return '화';
+      case DateTime.wednesday:
+        return '수';
+      case DateTime.thursday:
+        return '목';
+      case DateTime.friday:
+        return '금';
+      case DateTime.saturday:
+        return '토';
+      case DateTime.sunday:
+        return '일';
+      default:
+        return '';
+    }
+  }
+
+  static String _ymdWithWeekday(DateTime d) {
+    final dd = _dateOnly(d);
+    return '${_ymd(dd)} (${_weekdayShort(dd)})';
+  }
+
+  bool _isPurePlanned(AttendanceRecord r) {
+    return r.isPlanned == true && !r.isPresent && r.arrivalTime == null && r.departureTime == null;
+  }
+
+  String _cycleLabel(AttendanceRecord r) {
+    final c = r.cycle;
+    final o = r.sessionOrder;
+    if (c == null && o == null) return '-';
+    if (c == null) return '-/$o';
+    if (o == null) return '$c/-';
+    return '$c/$o';
+  }
+
+  String _classNameOf(AttendanceRecord r, Map<String, ClassInfo> classById) {
+    final sid = (r.sessionTypeId ?? '').trim();
+    if (sid.isEmpty || sid == '__default_class__') {
+      final n = r.className.trim();
+      return n.isEmpty ? '기본 수업' : n;
+    }
+    final c = classById[sid];
+    return (c == null || c.name.trim().isEmpty) ? (r.className.trim().isEmpty ? '기본 수업' : r.className.trim()) : c.name.trim();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      await DataManager.instance.loadAttendanceRecords();
+      await DataManager.instance.loadSessionOverrides();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final studentName = widget.studentWithInfo.student.name;
+
+    Widget headerCell(String v, {required int flex}) {
+      return Expanded(
+        flex: flex,
+        child: Text(
+          v,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: _mkText, fontSize: 13, fontWeight: FontWeight.w900),
+        ),
+      );
+    }
+
+    Widget headerRow() {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF223131),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _mkBorder, width: 1),
+        ),
+        child: Row(
+          children: [
+            headerCell('수업 일정', flex: 22),
+            headerCell('시간', flex: 18),
+            headerCell('회차', flex: 10),
+            headerCell('수업명', flex: 30),
+          ],
+        ),
+      );
+    }
+
+    Widget sectionDivider(String label) {
+      const accent = Color(0xFF33A373);
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Expanded(child: Container(height: 1, color: accent.withOpacity(0.6))),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Container(height: 1, color: accent.withOpacity(0.6))),
+          ],
+        ),
+      );
+    }
+
+    Widget rowTile({
+      required AttendanceRecord r,
+      required Map<String, ClassInfo> classById,
+    }) {
+      final dateStr = _ymdWithWeekday(r.classDateTime.toLocal());
+      final timeStr = '${_hm(r.classDateTime.toLocal())}~${_hm(r.classEndTime.toLocal())}';
+      final orderStr = _cycleLabel(r);
+      final cname = _classNameOf(r, classById);
+
+      Widget cell(String v, {required int flex, TextAlign align = TextAlign.center, EdgeInsetsGeometry? padding}) {
+        Widget child = Text(
+          v,
+          textAlign: align,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: _mkText, fontSize: 13, fontWeight: FontWeight.w700),
+        );
+        if (padding != null) child = Padding(padding: padding, child: child);
+        return Expanded(flex: flex, child: child);
+      }
+
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => Navigator.of(context).pop(r),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF15171C),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _mkBorder, width: 1),
+            ),
+            child: Row(
+              children: [
+                cell(dateStr, flex: 22),
+                cell(timeStr, flex: 18),
+                cell(orderStr, flex: 10),
+                cell(cname, flex: 30, align: TextAlign.left, padding: const EdgeInsets.only(left: 24)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return AlertDialog(
+      backgroundColor: _mkBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _mkBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: IconButton(
+              tooltip: '뒤로',
+              icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+              padding: EdgeInsets.zero,
+              onPressed: () => Navigator.of(context).pop(null),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              '수업 일정 선택 · $studentName',
+              style: const TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 860,
+        height: 620,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: _mkAccent))
+            : Builder(
+                builder: (context) {
+                  final now = DateTime.now();
+                  final today = _dateOnly(now);
+                  final classById = <String, ClassInfo>{
+                    for (final c in DataManager.instance.classes) c.id: c,
+                  };
+
+                  final all = DataManager.instance.attendanceRecords
+                      .where((r) => r.studentId == widget.studentWithInfo.student.id)
+                      .toList();
+
+                  final absent = <AttendanceRecord>[];
+                  final planned = <AttendanceRecord>[];
+
+                  for (final r in all) {
+                    if (_isPurePlanned(r)) {
+                      // 예정은 "오늘 포함 미래"만 별도로 표시
+                      final d = _dateOnly(r.classDateTime.toLocal());
+                      if (d.isBefore(today)) {
+                        absent.add(r); // 과거 planned는 결석으로 취급
+                      } else {
+                        planned.add(r);
+                      }
+                      continue;
+                    }
+                    // 명시적 결석(또는 과거 미출석 기록)
+                    if (!r.isPresent) {
+                      absent.add(r);
+                    }
+                  }
+
+                  absent.sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+                  planned.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+                  if (absent.isEmpty && planned.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        '결석/예정 수업이 없습니다.',
+                        style: TextStyle(color: Colors.white54, fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                    );
+                  }
+
+                  final items = <Widget>[];
+                  if (absent.isNotEmpty) {
+                    items.add(sectionDivider('결석'));
+                    for (final r in absent) {
+                      items.add(rowTile(r: r, classById: classById));
+                      items.add(const SizedBox(height: 8));
+                    }
+                  }
+                  if (planned.isNotEmpty) {
+                    items.add(sectionDivider('예정'));
+                    for (final r in planned) {
+                      items.add(rowTile(r: r, classById: classById));
+                      items.add(const SizedBox(height: 8));
+                    }
+                  }
+
+                  return Column(
+                    children: [
+                      headerRow(),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: Scrollbar(
+                          child: ListView(
+                            children: items,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          style: TextButton.styleFrom(
+            foregroundColor: _mkTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
+        ),
+      ],
+    );
+  }
+}
+
 class MakeupScheduleDialog extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
   final String? absentAttendanceId;
   final DateTime? originalDateTime; // 있으면 replace(이번 회차만 변경)
   final String? originalClassName;
-  const MakeupScheduleDialog({super.key, required this.studentWithInfo, this.absentAttendanceId, this.originalDateTime, this.originalClassName});
+  final int? originalDurationMinutes;
+  const MakeupScheduleDialog({
+    super.key,
+    required this.studentWithInfo,
+    this.absentAttendanceId,
+    this.originalDateTime,
+    this.originalClassName,
+    this.originalDurationMinutes,
+  });
 
   @override
   State<MakeupScheduleDialog> createState() => _MakeupScheduleDialogState();
@@ -556,10 +871,10 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
     });
   }
 
-  Future<void> _addMakeup(int dayIdx, DateTime timeOfDay) async {
+  Future<void> _addMakeup(int dayIdx, DateTime timeOfDay, {int? durationMinutesOverride}) async {
     final date = _weekStart.add(Duration(days: dayIdx));
     final dt = DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
-    final duration = DataManager.instance.academySettings.lessonDuration;
+    final duration = durationMinutesOverride ?? widget.originalDurationMinutes ?? DataManager.instance.academySettings.lessonDuration;
     final bool isReplace = widget.originalDateTime != null;
     final ov = SessionOverride(
       studentId: widget.studentWithInfo.student.id,
@@ -799,6 +1114,10 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
                             selectedStudentWithInfo: null,
                             onTimeSelected: (dayIdx, startTime) async {
                               await _addMakeup(dayIdx, startTime);
+                              setState(() {});
+                            },
+                            onTimeRangeSelected: (dayIdx, startTime, durationMinutes) async {
+                              await _addMakeup(dayIdx, startTime, durationMinutesOverride: durationMinutes);
                               setState(() {});
                             },
                           ),

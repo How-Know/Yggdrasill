@@ -84,6 +84,8 @@ class ClassesView extends StatefulWidget {
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
+  /// 드래그 등으로 "시간 범위"를 선택했을 때 사용 (예: 보강 잡기에서 선택된 셀 수만큼 duration 반영)
+  final void Function(int dayIdx, DateTime startTime, int durationMinutes)? onTimeRangeSelected;
   final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
   final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
   /// 문의(희망수업) 오버레이 라벨 클릭 시 호출 (예: 문의 노트로 이동)
@@ -109,6 +111,7 @@ class ClassesView extends StatefulWidget {
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
     this.onTimeSelected,
+    this.onTimeRangeSelected,
     this.onCellStudentsSelected,
     this.onCellSelfStudyStudentsChanged,
     this.onInquiryNoteTap,
@@ -532,10 +535,20 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       // ignore: avoid_print
       print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
     }
-    // ✅ 보강 시간 선택: 드래그로 선택한 범위 중 "시작" 슬롯을 단일 선택으로 간주
-    if (mode == 'makeup' && widget.onTimeSelected != null) {
+    // ✅ 보강 시간 선택: 드래그로 선택한 셀 수만큼 durationMinutes를 확장해서 전달
+    if (mode == 'makeup') {
       if (startTimes.isNotEmpty) {
-        widget.onTimeSelected!(dayIdx, startTimes.first);
+        int slotMinutes = 30;
+        if (timeBlocks.length >= 2) {
+          final d = timeBlocks[1].startTime.difference(timeBlocks[0].startTime).inMinutes;
+          if (d > 0) slotMinutes = d;
+        }
+        final durMin = slotMinutes * startTimes.length;
+        if (widget.onTimeRangeSelected != null) {
+          widget.onTimeRangeSelected!(dayIdx, startTimes.first, durMin);
+        } else if (widget.onTimeSelected != null) {
+          widget.onTimeSelected!(dayIdx, startTimes.first);
+        }
       }
       return;
     }
