@@ -19,6 +19,7 @@ import 'package:mneme_flutter/models/education_level.dart';
 import 'package:mneme_flutter/widgets/app_snackbar.dart';
 import 'package:mneme_flutter/widgets/class_student_card.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
+import 'package:mneme_flutter/widgets/schedule_locked_by_makeup_dialog.dart';
 import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
 import '../../../../models/session_override.dart';
@@ -578,13 +579,22 @@ class TimetableCell extends StatelessWidget {
             return;
           }
           print('[DRAG][drop:summary] remove=${toRemove.map((b) => b.id).toList()} add=${toAdd.map((b) => b.id).toList()} failed=${failedStudents.map((f)=>f.student.id).toList()}');
-          // 예약 이동: 기존 블록은 range.start - 1일로 닫아 "즉시 종료(어제)"를 방지
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(
-            toRemove.map((b) => b.id).toList(),
-            skipPlannedRegen: true,
-            endDateOverride: closeDate,
-          );
-          await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
+          try {
+            // 예약 이동: 기존 블록은 range.start - 1일로 닫아 "즉시 종료(어제)"를 방지
+            await DataManager.instance.bulkDeleteStudentTimeBlocks(
+              toRemove.map((b) => b.id).toList(),
+              skipPlannedRegen: true,
+              endDateOverride: closeDate,
+            );
+            await DataManager.instance.bulkAddStudentTimeBlocks(toAdd);
+          } on ScheduleLockedByMakeupException catch (e) {
+            if (!context.mounted) return;
+            await showScheduleLockedByMakeupDialog(context, e, useRoot: true);
+            return;
+          } catch (e) {
+            showAppSnackBar(context, '이동 실패: $e', useRoot: true);
+            return;
+          }
           await DataManager.instance.loadStudents();
           if (failedStudents.isNotEmpty) {
             await showDialog(
@@ -767,16 +777,25 @@ class TimetableCell extends StatelessWidget {
           }
 
           print('[DRAG][class-move] remove=${oldIds.length} add=${newBlocks.length} targetDay=$dayIdx targetTime=${startTime.hour}:${startTime.minute}');
-          await DataManager.instance.bulkDeleteStudentTimeBlocks(
-            oldIds,
-            immediate: true,
-            skipPlannedRegen: true,
-            endDateOverride: closeDate,
-          );
-          await DataManager.instance.bulkAddStudentTimeBlocks(
-            [...newBlocks, ...revertBlocks],
-            immediate: true,
-          );
+          try {
+            await DataManager.instance.bulkDeleteStudentTimeBlocks(
+              oldIds,
+              immediate: true,
+              skipPlannedRegen: true,
+              endDateOverride: closeDate,
+            );
+            await DataManager.instance.bulkAddStudentTimeBlocks(
+              [...newBlocks, ...revertBlocks],
+              immediate: true,
+            );
+          } on ScheduleLockedByMakeupException catch (e) {
+            if (!context.mounted) return;
+            await showScheduleLockedByMakeupDialog(context, e, useRoot: true);
+            return;
+          } catch (e) {
+            showAppSnackBar(context, '이동 실패: $e', useRoot: true);
+            return;
+          }
           await DataManager.instance.loadStudents();
           final timetableContentViewState = context.findAncestorStateOfType<TimetableContentViewState>();
           if (timetableContentViewState != null) {

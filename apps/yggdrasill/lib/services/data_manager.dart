@@ -50,6 +50,18 @@ class StudentWithInfo {
   int? get studentSessionCycle => 1;
 }
 
+/// 보강(replace, planned)이 잡힌 원본 수업(시간표 블록) 수정 방지용 예외.
+///
+/// - UI에서는 메시지를 그대로 노출해 "보강부터 처리"를 안내한다.
+class ScheduleLockedByMakeupException implements Exception {
+  final String message;
+  final SessionOverride? blockingOverride;
+  const ScheduleLockedByMakeupException(this.message, {this.blockingOverride});
+
+  @override
+  String toString() => message;
+}
+
 class DataManager {
   static final DataManager instance = DataManager._internal();
   DataManager._internal();
@@ -305,6 +317,112 @@ class DataManager {
 
   List<StudentTimeBlock> _activeBlocks(DateTime date) =>
       _studentTimeBlocks.where((b) => _isBlockActiveOn(b, date)).toList();
+
+  // ===== 보강(Replace) 예약 시 시간표 수정 잠금 =====
+  SessionOverride? _findBlockingPlannedMakeupForStudentTimeBlocks(
+    List<StudentTimeBlock> targets,
+  ) {
+    if (targets.isEmpty) return null;
+
+    // 보강(replace) + 예정(planned)만 잠금 대상으로 본다.
+    final plannedMakeups = _sessionOverrides.where((o) {
+      if (o.overrideType != OverrideType.replace) return false;
+      if (o.status != OverrideStatus.planned) return false;
+      if (o.reason != OverrideReason.makeup) return false;
+      return true;
+    }).toList();
+    if (plannedMakeups.isEmpty) return null;
+
+    // 1) set_id가 있는 오버라이드는 set_id로 빠르게 매칭
+    final Map<String, SessionOverride> lockByStudentSetKey = {};
+    for (final ov in plannedMakeups) {
+      final sid = ov.studentId.trim();
+      final setId = (ov.setId ?? '').trim();
+      if (sid.isEmpty || setId.isEmpty) continue;
+      lockByStudentSetKey.putIfAbsent('$sid|$setId', () => ov);
+    }
+
+    // 2) set_id가 없는 오버라이드는 original datetime → 현재 시간표 블록에서 set_id를 역추적
+    //    (빠른 조회를 위해 student|day|hh|mm 키로 블록들을 인덱싱)
+    final Map<String, List<StudentTimeBlock>> blocksByKey = {};
+    for (final b in _studentTimeBlocks) {
+      final sid = b.studentId.trim();
+      if (sid.isEmpty) continue;
+      final k = '$sid|${b.dayIndex}|${b.startHour}|${b.startMinute}';
+      blocksByKey.putIfAbsent(k, () => <StudentTimeBlock>[]).add(b);
+    }
+
+    final Map<String, SessionOverride> lockByStudentSetKeyInferred = {};
+    final Map<String, SessionOverride> lockByBlockIdInferred = {};
+    for (final ov in plannedMakeups) {
+      final sid = ov.studentId.trim();
+      if (sid.isEmpty) continue;
+      final setId = (ov.setId ?? '').trim();
+      if (setId.isNotEmpty) continue; // 이미 처리됨
+
+      final orig = ov.originalClassDateTime;
+      if (orig == null) continue;
+      final dayIdx = orig.weekday - 1; // 0: 월요일
+      final k = '$sid|$dayIdx|${orig.hour}|${orig.minute}';
+      final cand = blocksByKey[k];
+      if (cand == null || cand.isEmpty) continue;
+
+      // 원본 날짜가 블록의 유효기간에 포함되는지까지 확인하여 set_id를 추론
+      StudentTimeBlock? hit;
+      for (final b in cand) {
+        if (_isBlockActiveOn(b, orig)) {
+          hit = b;
+          break;
+        }
+      }
+      if (hit == null) continue;
+
+      final resolvedSetId = (hit.setId ?? '').trim();
+      if (resolvedSetId.isNotEmpty) {
+        lockByStudentSetKeyInferred.putIfAbsent('$sid|$resolvedSetId', () => ov);
+      } else {
+        // legacy(세트 없음) 블록: id 단위로 잠금
+        lockByBlockIdInferred.putIfAbsent(hit.id, () => ov);
+      }
+    }
+
+    // 3) 대상 블록이 잠금 대상인지 확인
+    for (final b in targets) {
+      final sid = b.studentId.trim();
+      if (sid.isEmpty) continue;
+      final setId = (b.setId ?? '').trim();
+      if (setId.isNotEmpty) {
+        final key = '$sid|$setId';
+        final ov = lockByStudentSetKey[key] ?? lockByStudentSetKeyInferred[key];
+        if (ov != null) return ov;
+      } else {
+        final ov = lockByBlockIdInferred[b.id];
+        if (ov != null) return ov;
+      }
+    }
+    return null;
+  }
+
+  void _assertStudentTimeBlockChangeAllowed(
+    List<StudentTimeBlock> targets, {
+    String action = '수정',
+  }) {
+    final ov = _findBlockingPlannedMakeupForStudentTimeBlocks(targets);
+    if (ov == null) return;
+
+    String fmt(DateTime d) =>
+        '${d.month}/${d.day} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+    final orig = ov.originalClassDateTime;
+    final rep = ov.replacementClassDateTime;
+    final parts = <String>[
+      '보강이 예약된 수업은 ${action}할 수 없습니다.',
+      '보강을 먼저 취소/처리한 후 다시 시도해주세요. (보강 관리)',
+      if (rep != null || orig != null)
+        '(${rep != null ? '보강 ${fmt(rep)}' : ''}${rep != null && orig != null ? ' · ' : ''}${orig != null ? '원본 ${fmt(orig)}' : ''})',
+    ];
+    throw ScheduleLockedByMakeupException(parts.join('\n'), blockingOverride: ov);
+  }
 
   void _publishStudentTimeBlocks({DateTime? refDate}) {
     final date = refDate ?? _todayDateOnly();
@@ -2277,10 +2395,13 @@ class DataManager {
     String? sidForSync;
     final today = _todayDateOnly();
     final endDate = today.subtract(const Duration(days: 1));
+    final removedBlocks = _studentTimeBlocks.where((b) => b.id == id).toList();
+    if (removedBlocks.isNotEmpty) {
+      _assertStudentTimeBlockChangeAllowed(removedBlocks, action: '삭제');
+    }
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
-        sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
+        sidForSync = removedBlocks.isNotEmpty ? removedBlocks.first.studentId : null;
         await Supabase.instance.client.from('student_time_blocks').update({
           'end_date': endDate.toIso8601String().split('T').first,
         }).eq('id', id);
@@ -2805,6 +2926,9 @@ class DataManager {
     DateTime? endDateOverride, // 기본: 오늘-1일. 예약 변경 등에서 특정 날짜로 닫기 위해 사용
   }) async {
     final removedBlocks = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
+    if (removedBlocks.isNotEmpty) {
+      _assertStudentTimeBlockChangeAllowed(removedBlocks, action: '삭제');
+    }
     final affectedStudents = removedBlocks.map((b) => b.studentId).toSet();
     final today = _todayDateOnly();
     final endDate = endDateOverride != null
@@ -2882,6 +3006,10 @@ class DataManager {
 
     final before = List<StudentTimeBlock>.from(_studentTimeBlocks);
     final beforePending = List<StudentTimeBlock>.from(_pendingTimeBlocks);
+    final deletingBlocks = before.where((b) => ids.contains(b.id)).toList();
+    if (deletingBlocks.isNotEmpty) {
+      _assertStudentTimeBlockChangeAllowed(deletingBlocks, action: '삭제');
+    }
 
     // ✅ 낙관적 반영(기존 bulkDelete와 동일한 패턴)
     _pendingTimeBlocks.removeWhere((b) => ids.contains(b.id));
@@ -2957,6 +3085,7 @@ class DataManager {
 
     final all = _studentTimeBlocks.where((b) => b.studentId == sid && b.setId == sset).toList();
     if (all.isEmpty) return;
+    _assertStudentTimeBlockChangeAllowed(all, action: '수정');
 
     bool isActiveOnRef(StudentTimeBlock b) => _isBlockActiveOn(b, date);
     bool isFutureSegment(StudentTimeBlock b) {
@@ -3038,6 +3167,7 @@ class DataManager {
       throw Exception('수업블록을 찾지 못했습니다. (id=$blockId)');
     }
     final prev = _studentTimeBlocks[prevIndex];
+    _assertStudentTimeBlockChangeAllowed([prev], action: '수정');
     final next = prev.copyWith(startDate: sd, endDate: ed);
 
     final now = DateTime.now();
@@ -3092,6 +3222,10 @@ class DataManager {
   }) async {
     final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
     if (ids.isEmpty) return;
+    final targets = _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
+    if (targets.isNotEmpty) {
+      _assertStudentTimeBlockChangeAllowed(targets, action: '수정');
+    }
 
     final sd = DateTime(startDate.year, startDate.month, startDate.day);
     final ed = endDate == null ? null : DateTime(endDate.year, endDate.month, endDate.day);
@@ -3163,6 +3297,10 @@ class DataManager {
   }) async {
     final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
     if (ids.isEmpty) return;
+    final targets = _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
+    if (targets.isNotEmpty) {
+      _assertStudentTimeBlockChangeAllowed(targets, action: '수정');
+    }
 
     final now = DateTime.now();
     final patch = <String, dynamic>{
@@ -3232,6 +3370,7 @@ class DataManager {
       throw Exception('수업블록을 찾지 못했습니다. (id=$id)');
     }
     final prev = _studentTimeBlocks[idx];
+    _assertStudentTimeBlockChangeAllowed([prev], action: '수정');
     final now = DateTime.now();
     final next = prev.copyWith(
       dayIndex: dayIndex,
@@ -3324,6 +3463,10 @@ class DataManager {
           .toList();
       if (toClose.isEmpty) {
         toClose.add(id);
+      }
+      final closingBlocks = _studentTimeBlocks.where((b) => toClose.contains(b.id)).toList();
+      if (closingBlocks.isNotEmpty) {
+        _assertStudentTimeBlockChangeAllowed(closingBlocks, action: '수정');
       }
       _studentTimeBlocks = _studentTimeBlocks
           .map((b) => toClose.contains(b.id) ? b.copyWith(endDate: endDate) : b)

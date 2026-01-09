@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import '../../../models/session_override.dart';
 import '../../../services/consult_inquiry_demand_service.dart';
 import '../../../services/consult_trial_lesson_service.dart';
+import '../../../widgets/schedule_locked_by_makeup_dialog.dart';
 
 /// registrationModeType: 'student' | 'selfStudy' | null
 typedef RegistrationModeType = String?;
@@ -1679,7 +1680,13 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                           }
                           await DataManager.instance.removeStudentTimeBlock(block.id);
                         }
-                      } catch (_) {}
+                      } on ScheduleLockedByMakeupException catch (e) {
+                        if (!context.mounted) return;
+                        await showScheduleLockedByMakeupDialog(context, e, useRoot: true);
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
+                      }
                     }
                   },
                   child: SizedBox(

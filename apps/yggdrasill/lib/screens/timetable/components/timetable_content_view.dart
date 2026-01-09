@@ -23,6 +23,7 @@ import '../../../services/consult_trial_lesson_service.dart';
 import '../../consult/consult_notes_screen.dart';
 import '../../../services/consult_note_controller.dart';
 import '../../../widgets/dark_panel_route.dart';
+import '../../../widgets/schedule_locked_by_makeup_dialog.dart';
 
 class TimetableContentView extends StatefulWidget {
   final Widget timetableChild;
@@ -2009,7 +2010,35 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                     }
                                   }
 
-                                  await Future.wait(futures);
+                                  try {
+                                    await Future.wait(futures);
+                                  } on ScheduleLockedByMakeupException catch (e) {
+                                    if (mounted) {
+                                      setState(() {
+                                        _showDeleteZone = false;
+                                      });
+                                      await showScheduleLockedByMakeupDialog(
+                                        context,
+                                        e,
+                                        useRoot: true,
+                                      );
+                                    }
+                                    if (widget.onExitSelectMode != null) {
+                                      widget.onExitSelectMode!();
+                                    }
+                                    return;
+                                  } catch (e) {
+                                    if (mounted) {
+                                      setState(() {
+                                        _showDeleteZone = false;
+                                      });
+                                      showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
+                                    }
+                                    if (widget.onExitSelectMode != null) {
+                                      widget.onExitSelectMode!();
+                                    }
+                                    return;
+                                  }
                                   await DataManager.instance.loadStudents();
                                   await DataManager.instance
                                       .loadStudentTimeBlocks();
@@ -2636,6 +2665,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
       }
       if (mounted) {
         showAppSnackBar(context, '희망수업이 삭제되었습니다.', useRoot: true);
+      }
+    } on ScheduleLockedByMakeupException catch (e) {
+      if (mounted) {
+        await showScheduleLockedByMakeupDialog(context, e, useRoot: true);
       }
     } catch (e) {
       if (mounted) {
