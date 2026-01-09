@@ -2327,7 +2327,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                             Expanded(
                               flex: 10,
                               child: Align(
-                                alignment: Alignment.centerLeft,
+                                alignment: Alignment.center,
                                 child: badge('원본', const Color(0xFF223131)),
                               ),
                             ),
@@ -2335,11 +2335,32 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                             cell('-', flex: 10, style: rowStyle),
                             Expanded(
                               flex: 28,
-                              child: Text(
-                                cname,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: rowStyle,
+                              child: Tooltip(
+                                message: '클릭하여 수업명 수정',
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () => editClassNameOf(r),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 4),
+                                      child: Row(
+                                        children: [
+                                          const SizedBox(width: 24),
+                                          Expanded(
+                                            child: Text(
+                                              cname,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: rowStyle,
+                                              textAlign: TextAlign.left,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                             cell('-', flex: 12, style: rowStyle, align: TextAlign.center),
