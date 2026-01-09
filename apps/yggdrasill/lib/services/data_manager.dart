@@ -1384,6 +1384,10 @@ class DataManager {
     if (duration <= 0 || duration > 360) {
       throw Exception('기간이 올바르지 않습니다. (1~360분)');
     }
+
+    // 겹침 체크용 범위(분 단위)
+    final repStart = Duration(hours: replacement.hour, minutes: replacement.minute);
+    final repEnd = repStart + Duration(minutes: duration);
     // ✅ 운영시간/휴게시간 검증 제거 (요청 사항)
     // 기존 보강들과 충돌 금지(동일 학생)
     for (final other in _sessionOverrides) {
