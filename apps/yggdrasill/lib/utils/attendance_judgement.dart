@@ -41,15 +41,19 @@ extension AttendanceResultX on AttendanceResult {
   Color get badgeColor {
     switch (this) {
       case AttendanceResult.completed:
-        return const Color(0xFF33A373);
+        // 앱 톤에 맞게 조금 더 딥한 그린
+        return const Color(0xFF2A9B6B);
       case AttendanceResult.arrived:
         return const Color(0xFF223131);
       case AttendanceResult.late:
-        return const Color(0xFFF2B45B);
+        // 앱 톤에 맞게 덜 밝은 앰버
+        return const Color(0xFFE2A64C);
       case AttendanceResult.earlyLeave:
-        return const Color(0xFF8E6CEF);
+        // 앱 톤에 맞게 덜 형광 느낌의 퍼플
+        return const Color(0xFF7B62D3);
       case AttendanceResult.absent:
-        return const Color(0xFFE57373);
+        // 앱 톤에 맞게 덜 밝은 레드
+        return const Color(0xFFDA5A5A);
       case AttendanceResult.planned:
         return const Color(0xFF223131);
       case AttendanceResult.present:
