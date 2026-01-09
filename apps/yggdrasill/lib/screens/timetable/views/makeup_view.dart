@@ -21,6 +21,8 @@ class _MakeupViewState extends State<MakeupView> {
     _selectedMonthStart = DateTime(now.year, now.month, 1);
     // 다이얼로그가 열릴 때 최신 보강 목록을 즉시 새로고침
     Future.microtask(() => DataManager.instance.loadSessionOverrides());
+    // 출석기록 기반으로 보강 "수행 여부"를 판단하므로 출석기록도 최신화
+    Future.microtask(() => DataManager.instance.loadAttendanceRecords());
   }
 
   @override
@@ -85,18 +87,17 @@ class _MakeupViewState extends State<MakeupView> {
   }
 
   Widget _buildContent() {
-    return ValueListenableBuilder<List<SessionOverride>>(
-      valueListenable: DataManager.instance.sessionOverridesNotifier,
-      builder: (context, overrides, _) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        DataManager.instance.sessionOverridesNotifier,
+        DataManager.instance.attendanceRecordsNotifier,
+      ]),
+      builder: (context, _) {
+        final overrides = DataManager.instance.sessionOverridesNotifier.value;
         // 보강(reason: makeup)만 대상으로 함
-        final makeups = overrides
-            .where((o) => o.reason == OverrideReason.makeup)
-            .toList();
+        final makeups = overrides.where((o) => o.reason == OverrideReason.makeup).toList();
 
-        final Widget body = _segmentIndex == 0
-            ? _buildScheduledList(makeups)
-            : _buildDeletedList(makeups);
-
+        final Widget body = _segmentIndex == 0 ? _buildScheduledList(makeups) : _buildDeletedList(makeups);
         // 전체 영역을 채워 hit-test 누락을 방지
         return SizedBox.expand(child: body);
       },
@@ -243,7 +244,9 @@ class _MakeupViewState extends State<MakeupView> {
                   separatorBuilder: (_, __) => const SizedBox(height: 12),
                   itemBuilder: (context, index) {
                     final item = rows[index];
-                    final isCompleted = item.status == OverrideStatus.completed;
+                    final rep = item.replacementClassDateTime;
+                    final record = rep == null ? null : DataManager.instance.getAttendanceRecord(item.studentId, rep);
+                    final isCompleted = record != null && record.arrivalTime != null && record.departureTime != null;
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [

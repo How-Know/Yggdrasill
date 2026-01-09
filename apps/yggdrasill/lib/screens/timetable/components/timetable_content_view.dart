@@ -2593,12 +2593,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
               children: [
-                // ✅ 학생카드와 동일한 인디케이터(종류 색상)
+                // ✅ 특수 카드(보강/추가/희망/시범)는 색상 인디케이터를 사용하지 않는다.
                 Container(
                   width: 6,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: base,
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
