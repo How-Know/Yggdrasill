@@ -618,6 +618,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                     blockOverride: overridesForTime == null
                                                         ? null
                                                         : overridesForTime[info.student.id],
+                                                    // ✅ 요일 선택 리스트에서도 스와이프(수정/삭제) 허용
+                                                    // - 선택모드에서도 관리가 가능해야 한다는 요구 반영
+                                                    allowSwipeInSelectMode: true,
                                                   ),
                                                 ),
                                               ],
@@ -3180,6 +3183,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
     StudentTimeBlock? blockOverride,
     bool highlightBorder = false,
     VoidCallback? onTapCard,
+    /// 선택모드에서도 스와이프 액션(수정/삭제)을 허용할지 여부
+    /// - 요일 선택 리스트처럼 "선택 UI"와 무관하게 빠르게 편집/삭제하고 싶을 때 사용
+    bool allowSwipeInSelectMode = false,
   }) {
     // print('[DEBUG][_buildDraggableStudentCard] 호출: student=${info.student.name}, dayIndex=$dayIndex, startTime=$startTime');
     // 학생의 고유성을 보장하는 key 생성 (그룹이 있으면 그룹 id까지 포함)
@@ -3349,7 +3355,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
           );
 
           // 좌측 스와이프로 수정/삭제 액션 노출
-          final bool canSwipe = !widget.isSelectMode && dayIndex != null && startTime != null;
+          final bool canSwipe = dayIndex != null &&
+              startTime != null &&
+              (!widget.isSelectMode || allowSwipeInSelectMode);
           if (!canSwipe) return core;
 
           final DateTime refDate = _cellDateOnlyForDayIndex(dayIndex!);
