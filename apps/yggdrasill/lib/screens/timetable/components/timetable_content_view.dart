@@ -2330,7 +2330,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     TimeOfDay repTime = TimeOfDay.fromDateTime(rep);
     int durationMin = ov.durationMinutes ?? DataManager.instance.academySettings.lessonDuration;
 
-    DateTime? pickDate(DateTime initial) async {
+    Future<DateTime?> pickDate(DateTime initial) async {
       final picked = await showDatePicker(
         context: context,
         initialDate: initial,
@@ -2352,7 +2352,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       return picked;
     }
 
-    TimeOfDay? pickTime(TimeOfDay initial) async {
+    Future<TimeOfDay?> pickTime(TimeOfDay initial) async {
       final picked = await showTimePicker(
         context: context,
         initialTime: initial,
