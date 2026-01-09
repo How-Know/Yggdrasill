@@ -84,7 +84,8 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
       backgroundColor: bg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SizedBox(
-        width: 980,
+        // ✅ 요청: 시간기록 다이얼로그 폭 +20%
+        width: 1176, // 980 * 1.2
         height: 720,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
