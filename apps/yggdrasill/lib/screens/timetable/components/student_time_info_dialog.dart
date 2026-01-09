@@ -2151,12 +2151,19 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                   borderRadius: BorderRadius.circular(6),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Text(
-                      cname,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: rowStyle,
-                      textAlign: TextAlign.left,
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 24),
+                        Expanded(
+                          child: Text(
+                            cname,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: rowStyle,
+                            textAlign: TextAlign.left,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
