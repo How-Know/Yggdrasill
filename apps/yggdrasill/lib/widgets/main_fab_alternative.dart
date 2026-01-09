@@ -141,17 +141,17 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     icon: Icons.event_repeat_rounded,
                     slideAnimation: _slideAnimation2,
                     onTap: () {
+                      // ✅ 즉시 드롭다운 닫기(다이얼로그가 열려있는 동안에도 FAB 메뉴가 남지 않게)
+                      setState(() {
+                        _isFabExpanded = false;
+                        _fabController.reverse();
+                        _removeMenuOverlay();
+                      });
                       showDialog(
                         context: context,
                         barrierDismissible: true,
                         builder: (context) => const MakeupQuickDialog(),
-                      ).then((_) {
-                        setState(() {
-                          _isFabExpanded = false;
-                          _fabController.reverse();
-                          _removeMenuOverlay();
-                        });
-                      });
+                      );
                     },
                   ),
                   _buildMenuButton(

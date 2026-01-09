@@ -262,9 +262,13 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
 
   List<String> _computeRecommendedStudents() {
     final now = DateTime.now();
-    final weekAgo = now.subtract(const Duration(days: 7));
+    // ✅ 어제까지(오늘 제외) 1주일치 결석만 추천 대상으로 본다.
+    // - 오늘/미래 예정은 결석으로 보기 이르므로 제외
+    final today = DateTime(now.year, now.month, now.day);
+    final weekAgo = today.subtract(const Duration(days: 7)); // [weekAgo, today)
     final absent = DataManager.instance.attendanceRecords.where((r) {
-      return !r.isPresent && r.classDateTime.isAfter(weekAgo) && r.classDateTime.isBefore(now.add(const Duration(days: 1)));
+      final dt = r.classDateTime;
+      return !r.isPresent && !dt.isBefore(weekAgo) && dt.isBefore(today);
     }).toList();
     // 최근 무단결석 레코드 매핑(학생당 가장 최근)
     _recentAbsentByStudentId.clear();
@@ -379,8 +383,9 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
         ],
       ),
       content: SizedBox(
-        width: 720,
-        height: 560,
+        // ✅ 요청: 빠른 보강등록 다이얼로그 크기 -30%
+        width: 504, // 720 * 0.7
+        height: 392, // 560 * 0.7
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
