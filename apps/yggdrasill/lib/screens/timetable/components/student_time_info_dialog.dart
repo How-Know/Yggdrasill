@@ -1775,7 +1775,8 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           );
 
           final bool showConnectMakeup = !isPlannedRow && isWalkIn && !isMakeup && !isAddOverride;
-          final bool showCatchMakeup = isPlannedRow || result == AttendanceResult.absent;
+          // ✅ 추가수업(walk-in)은 '예정 연결'만 보여야 함 → 보강 잡기 버튼은 숨김
+          final bool showCatchMakeup = !isWalkIn && (isPlannedRow || result == AttendanceResult.absent);
 
           DateTime? origStart;
           DateTime? origEnd;
