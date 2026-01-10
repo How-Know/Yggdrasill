@@ -1,4 +1,4 @@
-﻿import 'package:uuid/uuid.dart';
+import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -3159,12 +3159,13 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   // 터치 전용 드래그 상태 (엣지 오픈)
   bool _edgeTouchActive = false;
   Offset? _edgeDragStart;
+  Timer? _edgeHoverTimer;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       const double panelWidth = 238 * 1.2; // 기존(238)에서 +20% 확장
-      const double edgeOpenZoneWidth = 16.8; // 기존 24px에서 -30% (호버/엣지 스와이프 오픈 영역)
+      const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return Stack(children: [
         Positioned(
           right: 0,
@@ -3177,9 +3178,18 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
               // 마우스 호버로 오픈 (기존 동작)
               MouseRegion(
                 onEnter: (_) {
-                  _setOpen(true);
+                  // ✅ 폭을 줄여도 "화면 끝까지" 가면 체감이 비슷할 수 있어
+                  // 실수로 스치기만 해도 열리는 걸 줄이기 위해 약간의 지연을 둔다.
+                  _edgeHoverTimer?.cancel();
+                  if (widget.isOpenListenable.value) return;
+                  _edgeHoverTimer = Timer(const Duration(milliseconds: 180), () {
+                    if (!mounted) return;
+                    _setOpen(true);
+                  });
                 },
                 onExit: (_) {
+                  _edgeHoverTimer?.cancel();
+                  _edgeHoverTimer = null;
                 },
                 child: const SizedBox.shrink(),
               ),
@@ -3248,6 +3258,13 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   }
 
   // NOTE: 닫힘은 사이드시트 상단의 화살표 버튼으로만 허용 (자동 닫힘 제거)
+
+  @override
+  void dispose() {
+    _edgeHoverTimer?.cancel();
+    _edgeHoverTimer = null;
+    super.dispose();
+  }
 }
 
 class _MemoPanel extends StatelessWidget {

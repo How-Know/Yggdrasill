@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabaseClient';
 
 const tokens = {
-  bg: '#1F1F1F',
+  // ✅ 앱(학생 탭) 배경색과 통일 (Flutter: 0xFF0B1112)
+  bg: '#0B1112',
   panel: '#18181A',
   border: '#2A2A2A',
   text: '#FFFFFF',

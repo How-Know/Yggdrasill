@@ -1,12 +1,6 @@
 import React from 'react';
 import { supabase } from '../lib/supabaseClient';
-
-const tokens = {
-  panel: '#18181A',
-  border: '#2A2A2A',
-  text: '#FFFFFF',
-  textDim: 'rgba(255,255,255,0.7)'
-};
+import { tokens } from '../theme';
 
 type Row = {
   id: string; name: string; email?: string|null; school?: string|null; grade?: string|null;

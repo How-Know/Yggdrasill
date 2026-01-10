@@ -35,6 +35,7 @@ import 'components/timetable_search_field.dart';
 import '../consult/consult_notes_screen.dart';
 import '../../services/consult_note_controller.dart';
 import '../../widgets/dark_panel_route.dart';
+import '../../widgets/dialog_tokens.dart';
 import 'dart:developer' as dev;
 
 // 등록모드/드래그 선택은 이벤트가 매우 자주 발생한다.
@@ -1082,16 +1083,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
       '고1', '고2', '고3', 'N수',
     ];
     // 학교 chips (학생 정보 기준, 중복 제거)
-    final schools = students.map((s) => s.student.school).toSet().toList();
+    final schools = students
+        .map((s) => s.student.school.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
     // 그룹 chips (등록된 그룹명)
-    final groupNames = groups.map((g) => g.name).toList();
+    final groupNames = groups.map((g) => g.name.trim()).where((n) => n.isNotEmpty).toList()
+      ..sort();
     // 수업 chips (등록된 수업명)
-    final classNames = classes.map((c) => c.name).toList();
-    final chipBorderColor = const Color(0xFFB0B0B0);
-    final chipSelectedBg = const Color(0xFF353545); // 진한 회색
-    final chipUnselectedBg = const Color(0xFF1F1F1F); // 다이얼로그 배경색
-    final chipLabelStyle = TextStyle(color: chipBorderColor, fontWeight: FontWeight.w500, fontSize: 15);
-    final chipShape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
+    final classNames = classes.map((c) => c.name.trim()).where((n) => n.isNotEmpty).toList()
+      ..sort();
     // chips 임시 상태 변수
     Set<String> tempSelectedEducationLevels = Set.from(_selectedEducationLevels);
     Set<String> tempSelectedGrades = Set.from(_selectedGrades);
@@ -1104,184 +1107,180 @@ class _TimetableScreenState extends State<TimetableScreen> {
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF1F1F1F),
-              contentPadding: const EdgeInsets.fromLTRB(32, 28, 32, 16),
-              title: const Text('filter', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: kDlgBorder),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+              contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              title: const Text(
+                '필터',
+                style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+              ),
               content: SizedBox(
-                width: 480,
+                width: 640,
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 학년 chips
-                      Row(
-                        children: [
-                          Icon(Icons.school_outlined, color: chipBorderColor, size: 20),
-                          const SizedBox(width: 6),
-                          Text('학년별', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8, runSpacing: 8,
-                        children: [
-                          ...educationLevels.map((level) => FilterChip(
-                            label: Text(level, style: chipLabelStyle),
-                            selected: tempSelectedEducationLevels.contains(level),
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  tempSelectedEducationLevels.add(level);
-                                } else {
-                                  tempSelectedEducationLevels.remove(level);
-                                }
-                              });
-                            },
-                            backgroundColor: chipUnselectedBg,
-                            selectedColor: chipSelectedBg,
-                            side: BorderSide(color: chipBorderColor, width: 1.2),
-                            shape: chipShape,
-                            showCheckmark: true,
-                            checkmarkColor: chipBorderColor,
-                          )),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8, runSpacing: 8,
-                        children: [
-                          ...grades.map((grade) => FilterChip(
-                            label: Text(grade, style: chipLabelStyle),
-                            selected: tempSelectedGrades.contains(grade),
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  tempSelectedGrades.add(grade);
-                                } else {
-                                  tempSelectedGrades.remove(grade);
-                                }
-                              });
-                            },
-                            backgroundColor: chipUnselectedBg,
-                            selectedColor: chipSelectedBg,
-                            side: BorderSide(color: chipBorderColor, width: 1.2),
-                            shape: chipShape,
-                            showCheckmark: true,
-                            checkmarkColor: chipBorderColor,
-                          )),
-                        ],
-                      ),
+                      const Divider(color: kDlgBorder, height: 1),
                       const SizedBox(height: 18),
-                      // 학교 chips
-                      Row(
-                        children: [
-                          Icon(Icons.location_city_outlined, color: chipBorderColor, size: 20),
-                          const SizedBox(width: 6),
-                          Text('학교', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
+
+                      const YggDialogSectionHeader(icon: Icons.school_outlined, title: '학년'),
                       Wrap(
-                        spacing: 8, runSpacing: 8,
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
-                          ...schools.map((school) => FilterChip(
-                            label: Text(school, style: chipLabelStyle),
-                            selected: tempSelectedSchools.contains(school),
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  tempSelectedSchools.add(school);
-                                } else {
-                                  tempSelectedSchools.remove(school);
-                                }
-                              });
-                            },
-                            backgroundColor: chipUnselectedBg,
-                            selectedColor: chipSelectedBg,
-                            side: BorderSide(color: chipBorderColor, width: 1.2),
-                            shape: chipShape,
-                            showCheckmark: true,
-                            checkmarkColor: chipBorderColor,
-                          )),
+                          ...educationLevels.map((level) => YggDialogFilterChip(
+                                label: level,
+                                selected: tempSelectedEducationLevels.contains(level),
+                                onSelected: (selected) {
+                                  setState(() {
+                                    if (selected) {
+                                      tempSelectedEducationLevels.add(level);
+                                    } else {
+                                      tempSelectedEducationLevels.remove(level);
+                                    }
+                                  });
+                                },
+                              )),
                         ],
                       ),
-                      const SizedBox(height: 18),
-                      // 그룹 chips
-                      Row(
-                        children: [
-                          Icon(Icons.groups_2_outlined, color: chipBorderColor, size: 20),
-                          const SizedBox(width: 6),
-                          Text('그룹', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       Wrap(
-                        spacing: 8, runSpacing: 8,
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
-                          ...groupNames.map((group) => FilterChip(
-                            label: Text(group, style: chipLabelStyle),
-                            selected: tempSelectedGroups.contains(group),
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  tempSelectedGroups.add(group);
-                                } else {
-                                  tempSelectedGroups.remove(group);
-                                }
-                              });
-                            },
-                            backgroundColor: chipUnselectedBg,
-                            selectedColor: chipSelectedBg,
-                            side: BorderSide(color: chipBorderColor, width: 1.2),
-                            shape: chipShape,
-                            showCheckmark: true,
-                            checkmarkColor: chipBorderColor,
-                          )),
+                          ...grades.map((grade) => YggDialogFilterChip(
+                                label: grade,
+                                selected: tempSelectedGrades.contains(grade),
+                                onSelected: (selected) {
+                                  setState(() {
+                                    if (selected) {
+                                      tempSelectedGrades.add(grade);
+                                    } else {
+                                      tempSelectedGrades.remove(grade);
+                                    }
+                                  });
+                                },
+                              )),
                         ],
                       ),
-                      const SizedBox(height: 18),
-                      // 수업 chips
-                      Row(
-                        children: [
-                          Icon(Icons.class_outlined, color: chipBorderColor, size: 20),
-                          const SizedBox(width: 6),
-                          Text('수업', style: TextStyle(color: Color(0xFFB0B0B0), fontSize: 16, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8, runSpacing: 8,
-                        children: [
-                          ...classNames.map((className) => FilterChip(
-                            label: Text(className, style: chipLabelStyle),
-                            selected: tempSelectedClasses.contains(className),
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  tempSelectedClasses.add(className);
-                                } else {
-                                  tempSelectedClasses.remove(className);
-                                }
-                              });
-                            },
-                            backgroundColor: chipUnselectedBg,
-                            selectedColor: chipSelectedBg,
-                            side: BorderSide(color: chipBorderColor, width: 1.2),
-                            shape: chipShape,
-                            showCheckmark: true,
-                            checkmarkColor: chipBorderColor,
-                          )),
-                        ],
-                      ),
+                      const SizedBox(height: 20),
+
+                      const YggDialogSectionHeader(icon: Icons.location_city_outlined, title: '학교'),
+                      if (schools.isEmpty)
+                        const Text(
+                          '등록된 학교 정보가 없습니다.',
+                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ...schools.map((school) => YggDialogFilterChip(
+                                  label: school,
+                                  selected: tempSelectedSchools.contains(school),
+                                  onSelected: (selected) {
+                                    setState(() {
+                                      if (selected) {
+                                        tempSelectedSchools.add(school);
+                                      } else {
+                                        tempSelectedSchools.remove(school);
+                                      }
+                                    });
+                                  },
+                                )),
+                          ],
+                        ),
+                      const SizedBox(height: 20),
+
+                      const YggDialogSectionHeader(icon: Icons.groups_2_outlined, title: '그룹'),
+                      if (groupNames.isEmpty)
+                        const Text(
+                          '등록된 그룹이 없습니다.',
+                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ...groupNames.map((group) => YggDialogFilterChip(
+                                  label: group,
+                                  selected: tempSelectedGroups.contains(group),
+                                  onSelected: (selected) {
+                                    setState(() {
+                                      if (selected) {
+                                        tempSelectedGroups.add(group);
+                                      } else {
+                                        tempSelectedGroups.remove(group);
+                                      }
+                                    });
+                                  },
+                                )),
+                          ],
+                        ),
+                      const SizedBox(height: 20),
+
+                      const YggDialogSectionHeader(icon: Icons.class_outlined, title: '수업'),
+                      if (classNames.isEmpty)
+                        const Text(
+                          '등록된 수업이 없습니다.',
+                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ...classNames.map((className) => YggDialogFilterChip(
+                                  label: className,
+                                  selected: tempSelectedClasses.contains(className),
+                                  onSelected: (selected) {
+                                    setState(() {
+                                      if (selected) {
+                                        tempSelectedClasses.add(className);
+                                      } else {
+                                        tempSelectedClasses.remove(className);
+                                      }
+                                    });
+                                  },
+                                )),
+                          ],
+                        ),
                     ],
                   ),
                 ),
               ),
               actions: [
                 TextButton(
+                  onPressed: () {
+                    setState(() {
+                      tempSelectedEducationLevels.clear();
+                      tempSelectedGrades.clear();
+                      tempSelectedSchools.clear();
+                      tempSelectedGroups.clear();
+                      tempSelectedClasses.clear();
+                    });
+                  },
+                  style: TextButton.styleFrom(
+                    foregroundColor: kDlgTextSub,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  ),
+                  child: const Text('초기화'),
+                ),
+                TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('취소', style: TextStyle(color: Color(0xFFB0B0B0))),
+                  style: TextButton.styleFrom(
+                    foregroundColor: kDlgTextSub,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  ),
+                  child: const Text('취소'),
                 ),
                 FilledButton(
                   onPressed: () {
@@ -1300,8 +1299,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     };
                     Navigator.of(context).pop(true);
                   },
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
-                  child: const Text('적용', style: TextStyle(color: Colors.white)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kDlgAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text('적용',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                 ),
               ],
             );

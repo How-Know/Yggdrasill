@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { tokens } from '../theme';
 
 type TraitQuestion = {
   id: string;
@@ -134,10 +135,10 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     if (idx > 0) setIdx(idx - 1);
   }
 
-  if (loading) return <p>불러오는 중...</p>;
+  if (loading) return <p style={{ color: tokens.textDim }}>불러오는 중...</p>;
   if (submitted) return (
     <div style={{ minHeight:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
-      <div style={{ fontSize: 18, color: '#FFFFFF', fontWeight: 900 }}>참여해 주셔서 감사합니다!</div>
+      <div style={{ fontSize: 18, color: tokens.text, fontWeight: 900 }}>참여해 주셔서 감사합니다!</div>
     </div>
   );
 
@@ -145,12 +146,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
       {current && (
         <div>
-          <div style={{ color: '#9aa4af', marginBottom: 8 }}>{idx + 1} / {questions.length} · {current.trait}</div>
+          <div style={{ color: tokens.textFaint, marginBottom: 8 }}>{idx + 1} / {questions.length} · {current.trait}</div>
           <div style={{ fontSize: 22, marginBottom: 18 }}>{current.text}</div>
           {current.image_url && (
             <div style={{ marginBottom: 16 }}>
               {!imgLoaded && (
-                <div style={{ width:'100%', height:220, background:'#2A2A2A', border:'1px solid #2A2A2A', borderRadius:8 }} />
+                <div style={{ width:'100%', height:220, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:8 }} />
               )}
               <img loading="lazy" src={imgSrc || undefined} alt="question" onLoad={()=>setImgLoaded(true)} onError={async()=>{
                    try {
@@ -171,7 +172,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                    } catch {}
                    setImgLoaded(true);
                  }}
-                   style={{ maxWidth:'100%', borderRadius: 8, border:'1px solid #2A2A2A', opacity: imgLoaded ? 1 : 0, transition:'opacity 150ms' }} />
+                   style={{ maxWidth:'100%', borderRadius: 8, border:`1px solid ${tokens.border}`, opacity: imgLoaded ? 1 : 0, transition:'opacity 150ms' }} />
             </div>
           )}
           {current.type === 'scale' ? (
@@ -185,7 +186,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                 const centerIdx = (min === 1 && max === 10) ? 5 : Math.ceil(count / 2);
                 return (
                   <div style={{ width: `${containerWidth}px`, margin: '0 auto' }}>
-                    <div style={{ display:'grid', gridTemplateColumns:`repeat(${count}, ${btnW}px)`, columnGap:gap, color:'#9aa4af', fontSize:13, marginBottom:8 }}>
+                    <div style={{ display:'grid', gridTemplateColumns:`repeat(${count}, ${btnW}px)`, columnGap:gap, color:tokens.textFaint, fontSize:13, marginBottom:8 }}>
                       <div style={{ gridColumn:'1', justifySelf:'start', whiteSpace:'nowrap' }}>전혀 그렇지 않다</div>
                       <div style={{ gridColumn:String(centerIdx), justifySelf:'center', whiteSpace:'nowrap' }}>보통이다</div>
                       <div style={{ gridColumn:String(count), justifySelf:'end', whiteSpace:'nowrap' }}>매우 그렇다</div>
@@ -196,7 +197,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                         const on = scaleValue === v;
                         return (
                           <button key={v} type="button" onClick={()=>setScaleValue(v)}
-                            style={{ width:btnW, height:btnW, borderRadius:10, border:`1px solid #2A2A2A`, background:on?'#1976D2':'#2A2A2A', color:'#fff', cursor:'pointer', fontSize:16 }}>{v}</button>
+                            style={{ width:btnW, height:btnW, borderRadius:10, border:`1px solid ${tokens.border}`, background:on?tokens.accent:tokens.field, color:'#fff', cursor:'pointer', fontSize:16 }}>{v}</button>
                         );
                       })}
                     </div>
@@ -205,12 +206,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               })()}
             </div>
           ) : (
-            <textarea value={textValue} onChange={(e)=>setTextValue(e.target.value)} rows={4} style={{ width:'100%', padding:12, background:'#2A2A2A', border:'1px solid #2A2A2A', borderRadius:10, color:'#fff', marginBottom:24 }} />
+            <textarea value={textValue} onChange={(e)=>setTextValue(e.target.value)} rows={4} style={{ width:'100%', padding:12, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:10, color:tokens.text, marginBottom:24 }} />
           )}
           <div style={{ display:'flex', gap:12, justifyContent:'flex-end' }}>
             {/* < 버튼 */}
             <button type="button" onClick={onPrev}
-              style={{ width:48, height:48, lineHeight:'48px', background:'transparent', color:'#9aa4af', border:'1px solid #2A2A2A', borderRadius:12, opacity: idx===0?0.4:1, pointerEvents: idx===0?'none':'auto', cursor: idx===0?'default':'pointer', fontSize:18 }}
+              style={{ width:48, height:48, lineHeight:'48px', background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, borderRadius:12, opacity: idx===0?0.4:1, pointerEvents: idx===0?'none':'auto', cursor: idx===0?'default':'pointer', fontSize:18 }}
               onMouseEnter={(e)=>{ if (idx>0) (e.currentTarget as HTMLButtonElement).style.filter = 'brightness(1.1)'; }}
               onMouseLeave={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'none'; }}>{'<'}</button>
             {/* > 버튼: 이전으로 돌아간 경우에만 사용 가능 (이미 방문한 범위 내) */}
@@ -218,14 +219,14 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               const canRight = (idx < maxVisitedIndex) && isAnswered;
               return (
                 <button type="button" onClick={onNext}
-                  style={{ width:48, height:48, lineHeight:'48px', background:'transparent', color:'#9aa4af', border:'1px solid #2A2A2A', borderRadius:12, opacity: canRight ? 1 : 0.4, pointerEvents: canRight ? 'auto' : 'none', cursor: canRight ? 'pointer' : 'default', fontSize:18 }}
+                  style={{ width:48, height:48, lineHeight:'48px', background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, borderRadius:12, opacity: canRight ? 1 : 0.4, pointerEvents: canRight ? 'auto' : 'none', cursor: canRight ? 'pointer' : 'default', fontSize:18 }}
                   onMouseEnter={(e)=>{ if (canRight) (e.currentTarget as HTMLButtonElement).style.filter = 'brightness(1.1)'; }}
                   onMouseLeave={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'none'; }}>{'>'}</button>
               );
             })()}
             {/* 다음/제출 버튼 */}
             <button type="button" onClick={onNext}
-              style={{ background:'#1976D2', color:'#fff', border:'none', padding:'12px 22px', borderRadius:12, fontWeight:900, fontSize:16, boxShadow:'0 0 0 1px rgba(255,255,255,0.04) inset', cursor:'pointer' }}
+              style={{ background:tokens.accent, color:'#fff', border:'none', padding:'12px 22px', borderRadius:12, fontWeight:900, fontSize:16, boxShadow:'0 0 0 1px rgba(255,255,255,0.04) inset', cursor:'pointer' }}
               onMouseEnter={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'brightness(1.08)'; }}
               onMouseLeave={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'none'; }}>
               {idx + 1 === questions.length ? '제출' : '다음'}
@@ -234,16 +235,16 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         </div>
       )}
       {toast && (
-        <div style={{ marginTop: 12, fontSize: 13, color: '#7ED957' }}>{toast}</div>
+        <div style={{ marginTop: 12, fontSize: 13, color: tokens.accent }}>{toast}</div>
       )}
 
       {needAnswerOpen && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.44)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:60 }}>
-          <div style={{ width:'min(420px,92vw)', background:'#18181A', border:'1px solid #2A2A2A', borderRadius:12, padding:20 }}>
+          <div style={{ width:'min(420px,92vw)', background:tokens.panel, border:`1px solid ${tokens.border}`, borderRadius:12, padding:20 }}>
             <div style={{ fontSize:16, fontWeight:800, marginBottom:8 }}>안내</div>
-            <div style={{ color:'#9aa4af', marginBottom:14 }}>답변을 선택한 다음에 진행해 주세요.</div>
+            <div style={{ color:tokens.textFaint, marginBottom:14 }}>답변을 선택한 다음에 진행해 주세요.</div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={()=>setNeedAnswerOpen(false)} style={{ background:'#1976D2', color:'#fff', border:'none', padding:'10px 18px', borderRadius:10, cursor:'pointer', fontWeight:700 }}>확인</button>
+              <button onClick={()=>setNeedAnswerOpen(false)} style={{ background:tokens.accent, color:'#fff', border:'none', padding:'10px 18px', borderRadius:10, cursor:'pointer', fontWeight:700 }}>확인</button>
             </div>
           </div>
         </div>
@@ -251,13 +252,13 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
       {confirmOpen && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50 }}>
-          <div style={{ width:'min(520px,92vw)', background:'#18181A', border:'1px solid #2A2A2A', borderRadius:12, padding:20 }}>
+          <div style={{ width:'min(520px,92vw)', background:tokens.panel, border:`1px solid ${tokens.border}`, borderRadius:12, padding:20 }}>
             <div style={{ fontSize:18, fontWeight:900, marginBottom:12 }}>제출 확인</div>
-            <div style={{ color:'#9aa4af', marginBottom:16 }}>제출 후에는 답변을 수정할 수 없습니다. 제출하시겠습니까?</div>
+            <div style={{ color:tokens.textFaint, marginBottom:16 }}>제출 후에는 답변을 수정할 수 없습니다. 제출하시겠습니까?</div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:'#9aa4af', border:'1px solid #2A2A2A', padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
+              <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
               <button onClick={async()=>{ const ok = await saveCurrentAnswer(); if (!ok) return; setSubmitted(true); setToast('제출이 완료되었습니다. 감사합니다!'); sessionStorage.removeItem('trait_response_id'); setConfirmOpen(false); }}
-                style={{ background:'#1976D2', color:'#fff', border:'none', padding:'10px 20px', borderRadius:10, cursor:'pointer', fontWeight:800 }}>제출</button>
+                style={{ background:tokens.accent, color:'#fff', border:'none', padding:'10px 20px', borderRadius:10, cursor:'pointer', fontWeight:800 }}>제출</button>
             </div>
           </div>
         </div>

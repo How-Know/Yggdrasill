@@ -236,37 +236,20 @@ class StudentScreenState extends State<StudentScreen> {
   Widget _buildFilterButton() {
     const double controlHeight = 48;
     final hasFilter = _activeFilter != null;
+    Future<void> openDialog() async {
+      final result = await showDialog<Map<String, Set<String>>>(
+        context: context,
+        builder: (context) => StudentFilterDialog(initialFilter: _activeFilter),
+      );
+      if (!mounted) return;
+      // ✅ result == null: 취소/필터 없음(초기화 포함) → 필터 해제
+      setState(() => _activeFilter = result);
+    }
+
+    // ✅ 모양은 예전 스타일(검색 버튼과 동일한 pill)로 롤백
     return GestureDetector(
-      onTap: () async {
-        if (hasFilter) {
-          setState(() {
-            _activeFilter = null;
-          });
-        } else {
-          final result = await showDialog<Map<String, Set<String>>>(
-            context: context,
-            builder: (context) => StudentFilterDialog(
-              initialFilter: _activeFilter,
-            ),
-          );
-          if (result != null) {
-            setState(() {
-              _activeFilter = result;
-            });
-          }
-        }
-      },
-      onLongPress: () async {
-        final result = await showDialog<Map<String, Set<String>>>(
-          context: context,
-          builder: (context) => StudentFilterDialog(
-            initialFilter: _activeFilter,
-          ),
-        );
-        if (result != null) {
-          setState(() => _activeFilter = result);
-        }
-      },
+      onTap: openDialog,
+      onLongPress: hasFilter ? () => setState(() => _activeFilter = null) : null,
       child: Container(
         width: controlHeight,
         height: controlHeight,
@@ -280,20 +263,23 @@ class StudentScreenState extends State<StudentScreen> {
             Center(
               child: Icon(
                 hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
-                color: hasFilter ? _studentPrimaryTextColor : _studentMutedTextColor,
+                color:
+                    hasFilter ? _studentPrimaryTextColor : _studentMutedTextColor,
                 size: 24,
               ),
             ),
             if (hasFilter)
-              Positioned(
+              const Positioned(
                 top: 8,
                 right: 8,
-                child: Container(
+                child: SizedBox(
                   width: 9,
                   height: 9,
-                  decoration: const BoxDecoration(
-                    color: _studentPrimaryTextColor,
-                    shape: BoxShape.circle,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: _studentPrimaryTextColor,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ),
               ),
@@ -820,11 +806,16 @@ class StudentScreenState extends State<StudentScreen> {
                   return Container(
                     margin: const EdgeInsets.only(right: 24),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1F1F1F),
+                      // ✅ 학생 탭 기본 배경과 동일하게 맞춰
+                      // 탭바/상단바/웹 사이 "중복 디바이더"처럼 보이는 경계감을 줄인다.
+                      color: const Color(0xFF0B1112),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.transparent, width: 1),
                     ),
-                    child: const TendencyWebView(),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: const TendencyWebView(),
+                    ),
                   );
                 }
               },

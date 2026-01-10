@@ -1,0 +1,1 @@
+{"root":["./src/admin.tsx","./src/main.tsx","./src/theme.ts","./src/vite-env.d.ts","./src/components/admingate.tsx","./src/components/topbar.tsx","./src/lib/supabaseclient.ts","./src/pages/adminpage.tsx","./src/pages/adminquestionspage.tsx","./src/pages/resultspage.tsx","./src/pages/surveypage.tsx"],"version":"5.9.2"}
