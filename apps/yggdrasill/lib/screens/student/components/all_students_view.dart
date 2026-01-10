@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import 'package:intl/intl.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import '../../../models/attendance_record.dart';
 import '../../../models/payment_record.dart';
 import '../../../widgets/student_card.dart';
@@ -15,6 +17,7 @@ import '../../../widgets/app_snackbar.dart';
 import '../../../widgets/student_filter_dialog.dart';
 import '../../../models/student_time_block.dart';
 import '../../../widgets/dark_panel_route.dart';
+import '../../../widgets/swipe_action_reveal.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
@@ -469,12 +472,32 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 ),
                               ],
                             ),
-                            Text(
-                              '업데이트 ${DateFormat('MM.dd').format(DateTime.now())}',
-                              style: const TextStyle(
-                                color: _studentListMutedTextColor,
-                                fontSize: 16,
-                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '업데이트 ${DateFormat('MM.dd').format(DateTime.now())}',
+                                  style: const TextStyle(
+                                    color: _studentListMutedTextColor,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: IconButton(
+                                    tooltip: '엑셀 내보내기(준비중)',
+                                    onPressed: () {
+                                      // TODO: 학생현황 엑셀 내보내기 기능 연결
+                                    },
+                                    icon: const Icon(Symbols.output, color: Colors.white70, size: 26),
+                                    splashRadius: 22,
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -557,17 +580,46 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ),
                         const SizedBox(height: 16),
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(24, 15, 24, 0),
+                          // ✅ 우측 여백을 줄여 + 버튼을 더 오른쪽으로 붙임
+                          padding: const EdgeInsets.fromLTRB(24, 15, 12, 0),
                           child: Row(
-                            children: const [
-                              Icon(Icons.groups_rounded, color: _studentListPrimaryTextColor, size: 28),
-                              SizedBox(width: 12),
-                              Text(
+                            children: [
+                              const Icon(Icons.groups_rounded, color: _studentListPrimaryTextColor, size: 28),
+                              const SizedBox(width: 12),
+                              const Text(
                                 '그룹',
                                 style: TextStyle(
                                   color: _studentListPrimaryTextColor,
                                   fontSize: 25,
                                   fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const Spacer(),
+                              // ✅ 그룹 추가 버튼: 시간탭 "수업 리스트" + 버튼 스타일과 통일
+                              Padding(
+                                padding: const EdgeInsets.only(top: 0, right: 0),
+                                child: SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: IconButton(
+                                    tooltip: '그룹 추가',
+                                    onPressed: () async {
+                                      final result = await showDialog<GroupInfo>(
+                                        context: context,
+                                        builder: (context) => GroupRegistrationDialog(
+                                          onSave: (_) {},
+                                        ),
+                                      );
+                                      if (result != null) {
+                                        widget.onGroupAdded(result);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.add_rounded),
+                                    iconSize: 30,
+                                    color: _studentListPrimaryTextColor,
+                                    padding: EdgeInsets.zero,
+                                    splashRadius: 26,
+                                  ),
                                 ),
                               ),
                             ],
@@ -582,6 +634,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 padding: const EdgeInsets.symmetric(horizontal: 12),
                                 child: ReorderableListView.builder(
                               physics: const AlwaysScrollableScrollPhysics(),
+                              dragStartBehavior: DragStartBehavior.down,
                               buildDefaultDragHandles: false,
                               // 삭제 드롭존이 나타나도 그룹 리스트가 "밀리지" 않도록 하단 여백을 확보
                               padding: const EdgeInsets.only(bottom: 90),
@@ -589,9 +642,19 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 return AnimatedBuilder(
                                   animation: animation,
                                   builder: (BuildContext context, Widget? child) {
-                                    return Material(
-                                      color: Colors.transparent,
-                                      child: child,
+                                    // ✅ 드래그 피드백: 마우스에 "붙는 느낌" + 살짝 확대/부유 효과
+                                    final t = Curves.easeOutCubic.transform(animation.value);
+                                    final scale = 1.0 + (0.03 * t);
+                                    final elev = 2.0 + (8.0 * t);
+                                    return Transform.scale(
+                                      scale: scale,
+                                      alignment: Alignment.centerLeft,
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        elevation: elev,
+                                        shadowColor: Colors.black.withOpacity(0.45),
+                                        child: child,
+                                      ),
                                     );
                                   },
                                   child: child,
@@ -607,9 +670,15 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
                               return Padding(
                                 key: ValueKey(groupInfo.id),
-                                padding: const EdgeInsets.only(bottom: 13.0),
+                                padding: const EdgeInsets.only(bottom: 12.0),
                                 child: DragTarget<StudentWithInfo>(
-                                  onWillAccept: (student) => student != null,
+                                  onWillAccept: (student) {
+                                    if (student == null) return false;
+                                    final cap = groupInfo.capacity;
+                                    // null/0 이면 제한 없음
+                                    if (cap != null && cap > 0 && studentsInGroup.length >= cap) return false;
+                                    return true;
+                                  },
                                   onAccept: (student) {
                                     final oldGroupInfo = student.groupInfo;
                                     widget.onStudentMoved(student, groupInfo);
@@ -624,11 +693,33 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   },
                                   builder: (context, candidateData, rejectedData) {
                                     final bool isHovering = candidateData.isNotEmpty;
-                                    final Color borderColor = isHovering
-                                        ? groupInfo.color
-                                        : (isFiltered ? Colors.white70 : Colors.transparent);
+                                    final bool highlight = isHovering || isFiltered;
+                                    final Color borderColor = highlight ? groupInfo.color : Colors.transparent;
+                                    final Color indicatorColor = groupInfo.color;
 
-                                    return Container(
+                                    // ✅ 수업카드(_ClassCard)와 동일한 "모양/사이즈/텍스트 높이 정렬"을 그룹에도 적용
+                                    const titleStyle = TextStyle(
+                                      color: _studentListPrimaryTextColor,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.15,
+                                    );
+                                    const descStyle = TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                      height: 1.15,
+                                    );
+                                    const gap = 4.0;
+                                    const extra = 2.0;
+                                    final String desc = groupInfo.description.trim();
+                                    final bool hasDesc = desc.isNotEmpty;
+                                    final ts = MediaQuery.textScalerOf(context);
+                                    final titlePx = ts.scale(titleStyle.fontSize!);
+                                    final descPx = ts.scale(descStyle.fontSize!);
+                                    final textBlockH =
+                                        (titlePx * titleStyle.height!) + gap + (descPx * descStyle.height!) + extra;
+
+                                    final cardBody = Container(
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF15171C),
                                         borderRadius: BorderRadius.circular(12),
@@ -637,133 +728,180 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       child: Material(
                                         color: Colors.transparent,
                                         borderRadius: BorderRadius.circular(12),
-                                        child: InkWell(
-                                          borderRadius: BorderRadius.circular(12),
-                                          splashFactory: NoSplash.splashFactory,
-                                          splashColor: Colors.transparent,
-                                          highlightColor: Colors.transparent,
-                                          hoverColor: Colors.transparent,
-                                          onTap: () => _applyGroupFilter(groupInfo.name),
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-                                            child: Row(
-                                              crossAxisAlignment: CrossAxisAlignment.center,
-                                              children: [
-                                                Container(
-                                                  width: 10,
-                                                  height: 36,
-                                                  decoration: BoxDecoration(
-                                                    color: groupInfo.color,
-                                                    borderRadius: BorderRadius.circular(4),
-                                                  ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                                          child: Row(
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: [
+                                              Container(
+                                                width: 10,
+                                                height: textBlockH,
+                                                decoration: BoxDecoration(
+                                                  color: indicatorColor,
+                                                  borderRadius: BorderRadius.circular(4),
                                                 ),
-                                                const SizedBox(width: 18),
-                                                Expanded(
-                                                  child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      Text(
-                                                        groupInfo.name,
-                                                        maxLines: 1,
-                                                        overflow: TextOverflow.ellipsis,
-                                                        style: const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 18,
-                                                          fontWeight: FontWeight.w600,
-                                                        ),
-                                                      ),
-                                                      if (groupInfo.description.isNotEmpty) ...[
-                                                        const SizedBox(height: 4),
-                                                        Text(
-                                                          groupInfo.description,
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow.ellipsis,
-                                                          style: const TextStyle(
-                                                            color: Colors.white70,
-                                                            fontSize: 14,
+                                              ),
+                                              const SizedBox(width: 14),
+                                              Expanded(
+                                                child: SizedBox(
+                                                  height: textBlockH,
+                                                  child: hasDesc
+                                                      ? Column(
+                                                          mainAxisSize: MainAxisSize.max,
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          mainAxisAlignment: MainAxisAlignment.start,
+                                                          children: [
+                                                            Text(
+                                                              groupInfo.name,
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: titleStyle,
+                                                            ),
+                                                            const SizedBox(height: gap),
+                                                            Text(
+                                                              desc,
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: descStyle,
+                                                            ),
+                                                          ],
+                                                        )
+                                                      : Align(
+                                                          alignment: Alignment.centerLeft,
+                                                          child: Text(
+                                                            groupInfo.name,
+                                                            maxLines: 1,
+                                                            overflow: TextOverflow.ellipsis,
+                                                            style: titleStyle,
                                                           ),
                                                         ),
-                                                      ],
-                                                    ],
-                                                  ),
                                                 ),
-                                                const SizedBox(width: 12),
-                                                Text(
-                                                  groupInfo.capacity == null
-                                                      ? '${studentsInGroup.length}명'
-                                                      : '${studentsInGroup.length}/${groupInfo.capacity}명',
-                                                  style: const TextStyle(
-                                                    color: Colors.white70,
-                                                    fontSize: 15,
-                                                    fontWeight: FontWeight.w500,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                IconButton(
-                                                  onPressed: () async {
-                                                    final dialogStudents = widget.students.where((s) => s.groupInfo?.id == groupInfo.id).toList();
-                                                    final result = await showDialog<GroupInfo>(
-                                                      context: context,
-                                                      builder: (context) => GroupRegistrationDialog(
-                                                        editMode: true,
-                                                        groupInfo: groupInfo,
-                                                        currentMemberCount: dialogStudents.length,
-                                                        onSave: (updatedGroup) {},
-                                                      ),
-                                                    );
-                                                    if (result != null) {
-                                                      widget.onGroupUpdated(result, index);
-                                                    }
-                                                  },
-                                                  icon: const Icon(Icons.edit_rounded),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Text(
+                                                (groupInfo.capacity == null || (groupInfo.capacity ?? 0) <= 0)
+                                                    ? '${studentsInGroup.length}명'
+                                                    : '${studentsInGroup.length}/${groupInfo.capacity}명',
+                                                style: const TextStyle(
                                                   color: Colors.white70,
-                                                  splashRadius: 22,
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
                                                 ),
-                                                IconButton(
-                                                  onPressed: () async {
-                                                    final confirm = await showDialog<bool>(
-                                                      context: context,
-                                                      builder: (context) => AlertDialog(
-                                                        backgroundColor: const Color(0xFF232326),
-                                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                                        title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
-                                                        content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
-                                                        actions: [
-                                                          TextButton(
-                                                            onPressed: () => Navigator.of(context).pop(false),
-                                                            child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                                          ),
-                                                          TextButton(
-                                                            onPressed: () => Navigator.of(context).pop(true),
-                                                            child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    );
-                                                    if (confirm == true) {
-                                                      widget.onGroupDeleted(groupInfo);
-                                                    }
-                                                  },
-                                                  icon: const Icon(Icons.delete_rounded),
-                                                  color: Colors.white70,
-                                                  splashRadius: 22,
-                                                ),
-                                                ReorderableDragStartListener(
-                                                  index: index,
-                                                  child: IconButton(
-                                                    onPressed: () {},
-                                                    icon: const Icon(Icons.drag_handle_rounded),
-                                                    color: Colors.white54,
-                                                    splashRadius: 22,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),
                                     );
+
+                                    final baseBody = GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () => _applyGroupFilter(groupInfo.name),
+                                      child: cardBody,
+                                    );
+
+                                    // 스와이프(드래그) 액션: 수업카드와 동일한 UX(편집/삭제)
+                                    const double paneW = 140;
+                                    final radius = BorderRadius.circular(12);
+                                    final actionPane = Padding(
+                                      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Material(
+                                              color: const Color(0xFF223131),
+                                              borderRadius: BorderRadius.circular(10),
+                                              child: InkWell(
+                                                onTap: () async {
+                                                  final dialogStudents = widget.students
+                                                      .where((s) => s.groupInfo?.id == groupInfo.id)
+                                                      .toList();
+                                                  final result = await showDialog<GroupInfo>(
+                                                    context: context,
+                                                    builder: (context) => GroupRegistrationDialog(
+                                                      editMode: true,
+                                                      groupInfo: groupInfo,
+                                                      currentMemberCount: dialogStudents.length,
+                                                      onSave: (_) {},
+                                                    ),
+                                                  );
+                                                  if (result != null) {
+                                                    widget.onGroupUpdated(result, index);
+                                                  }
+                                                },
+                                                borderRadius: BorderRadius.circular(10),
+                                                splashFactory: NoSplash.splashFactory,
+                                                highlightColor: Colors.white.withOpacity(0.06),
+                                                hoverColor: Colors.white.withOpacity(0.03),
+                                                child: const SizedBox.expand(
+                                                  child: Center(
+                                                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Material(
+                                              color: const Color(0xFFB74C4C),
+                                              borderRadius: BorderRadius.circular(10),
+                                              child: InkWell(
+                                                onTap: () async {
+                                                  final confirm = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (context) => AlertDialog(
+                                                      backgroundColor: const Color(0xFF232326),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                      title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
+                                                      content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+                                                      actions: [
+                                                        TextButton(
+                                                          onPressed: () => Navigator.of(context).pop(false),
+                                                          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                                                        ),
+                                                        TextButton(
+                                                          onPressed: () => Navigator.of(context).pop(true),
+                                                          child: const Text('삭제', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (confirm == true) {
+                                                    widget.onGroupDeleted(groupInfo);
+                                                  }
+                                                },
+                                                borderRadius: BorderRadius.circular(10),
+                                                splashFactory: NoSplash.splashFactory,
+                                                highlightColor: Colors.white.withOpacity(0.08),
+                                                hoverColor: Colors.white.withOpacity(0.04),
+                                                child: const SizedBox.expand(
+                                                  child: Center(
+                                                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+
+                                    final swiped = SwipeActionReveal(
+                                      enabled: true,
+                                      actionPaneWidth: paneW,
+                                      borderRadius: radius,
+                                      actionPane: actionPane,
+                                      child: baseBody,
+                                    );
+
+                                    // ✅ 수업리스트와 동일: 기본은 "오래 눌러" 순서 이동(reorder)
+                                    return isFiltered
+                                        ? swiped
+                                        : ReorderableDelayedDragStartListener(
+                                            index: index,
+                                            child: swiped,
+                                          );
                                   },
                                 ),
                               );

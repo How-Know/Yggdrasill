@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../../models/group_info.dart';
 import '../../models/operating_hours.dart';
 import '../../models/student.dart';
@@ -528,14 +528,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
     // }
   }
 
-  void _scrollToCurrentTime() {
+  void _scrollToCurrentTime({bool preferAnimate = false}) {
     final timeBlocks = _generateTimeBlocks();
-    // 타임블록 개수 및 각 블록 정보 로그 출력
-    // print('[DEBUG][_scrollToCurrentTime] timeBlocks.length: ' + timeBlocks.length.toString());
-    for (int i = 0; i < timeBlocks.length; i++) {
-      final block = timeBlocks[i];
-      // print('[DEBUG][_scrollToCurrentTime] block[$i]: ' + TimeOfDay(hour: block.startTime.hour, minute: block.startTime.minute).format(context) + ' ~ ' + block.endTime.toString());
-    }
+    if (timeBlocks.isEmpty) return;
     // 현재 시간
     final now = TimeOfDay.now();
     int currentIdx = 0;
@@ -569,12 +564,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final maxOffset = _timetableScrollController.position.maxScrollExtent;
       final minOffset = _timetableScrollController.position.minScrollExtent;
       final scrollTo = targetOffset.clamp(minOffset, maxOffset);
-      // print('[DEBUG][_scrollToCurrentTime] scrollTo: ' + scrollTo.toString() + ', minOffset: ' + minOffset.toString() + ', maxOffset: ' + maxOffset.toString());
-      _timetableScrollController.animateTo(
-        scrollTo,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-      );
+      final cur = _timetableScrollController.offset;
+      final delta = (scrollTo - cur).abs();
+      // ✅ 성능: 긴 거리 이동은 animateTo가 프레임 부하를 유발할 수 있어 jumpTo로 처리
+      // (짧은 거리만 부드럽게 애니메이션)
+      if (preferAnimate) {
+        // ✅ 첫 진입 UX: "순간이동" 대신 부드럽게 이동
+        // ✅ 성능: 거리 기반으로 duration을 짧게(최대 420ms) 제한
+        // 너무 짧으면 시각적으로 "점프"처럼 느껴질 수 있어 최소 시간을 조금 올린다.
+        final ms = (240 + (delta / (blockHeight * 20) * 220)).clamp(240, 520).round();
+        _timetableScrollController.animateTo(
+          scrollTo,
+          duration: Duration(milliseconds: ms),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _timetableScrollController.jumpTo(scrollTo);
+      }
     } else {
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
@@ -642,7 +648,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
     });
     // 운영시간 로드 후 스크롤 및 자동 선택 로그
     if (!_hasScrolledToCurrentTime) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime(preferAnimate: true));
       _hasScrolledToCurrentTime = true;
     }
     // 운영시간 내라면 현재 시간 셀 자동 선택 (그리드 타임블록에 스냅)
@@ -1445,7 +1451,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           });
 
                           if ((i == 0) && !_hasScrolledOnTabClick) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime());
+                            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime(preferAnimate: true));
                             _hasScrolledOnTabClick = true;
                           }
                         },

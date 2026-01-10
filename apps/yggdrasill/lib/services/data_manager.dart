@@ -3893,7 +3893,14 @@ class DataManager {
   }
 
   void setGroupsOrder(List<GroupInfo> newOrder) {
-    _groups = newOrder.where((g) => g != null).toList();
+    // ✅ 재정렬된 순서에 맞춰 displayOrder를 0부터 재계산해야 서버 display_order가 갱신된다.
+    // (기존 구현은 이전 displayOrder 값을 유지해 upsert해도 순서가 안 바뀌는 문제가 있었음)
+    final recalculated = <GroupInfo>[];
+    for (int i = 0; i < newOrder.length; i++) {
+      final g = newOrder[i];
+      recalculated.add(g.copyWith(displayOrder: i));
+    }
+    _groups = recalculated.where((g) => g != null).toList();
     _groupsById = {for (var g in _groups) g.id: g};
     _notifyListeners();
     saveGroups();

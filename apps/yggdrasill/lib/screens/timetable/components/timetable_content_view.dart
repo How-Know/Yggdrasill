@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
@@ -2321,21 +2322,41 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                     itemCount: classes.length,
                                                     buildDefaultDragHandles:
                                                         false,
+                                                    dragStartBehavior:
+                                                        DragStartBehavior.down,
                                                     onReorder: _onReorder,
                                                     proxyDecorator: (child,
                                                         index, animation) {
-                                                      return Material(
-                                                        color:
-                                                            Colors.transparent,
-                                                        child: Container(
-                                                          margin:
-                                                              const EdgeInsets
-                                                                  .symmetric(
-                                                                  vertical: 0,
-                                                                  horizontal:
-                                                                      0),
-                                                          child: child,
-                                                        ),
+                                                      // ✅ 드래그 피드백: 그룹리스트와 동일하게 "마우스에 붙는 느낌"
+                                                      // - 살짝 확대 + 떠오르는 그림자
+                                                      return AnimatedBuilder(
+                                                        animation: animation,
+                                                        builder: (context, _) {
+                                                          final t =
+                                                              Curves.easeOutCubic
+                                                                  .transform(
+                                                                      animation
+                                                                          .value);
+                                                          final scale =
+                                                              1.0 + (0.03 * t);
+                                                          final elev =
+                                                              2.0 + (8.0 * t);
+                                                          return Transform.scale(
+                                                            scale: scale,
+                                                            alignment: Alignment
+                                                                .centerLeft,
+                                                            child: Material(
+                                                              color: Colors
+                                                                  .transparent,
+                                                              elevation: elev,
+                                                              shadowColor: Colors
+                                                                  .black
+                                                                  .withOpacity(
+                                                                      0.45),
+                                                              child: child,
+                                                            ),
+                                                          );
+                                                        },
                                                       );
                                                     },
                                                     itemBuilder:

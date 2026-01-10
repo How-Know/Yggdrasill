@@ -24,6 +24,9 @@ class TimetableHeader extends StatefulWidget {
 
 class _TimetableHeaderState extends State<TimetableHeader> {
   int _selectedSegment = 0; // 0: 모든, 1: 학년, 2: 학교, 3: 그룹
+  static const Color _kNowIndicator = Color(0xFF33A373);
+  bool _isSameYmd(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 
   List<DateTime> _getWeekDays() {
     final monday = widget.selectedDate.subtract(Duration(days: widget.selectedDate.weekday - 1));
@@ -224,6 +227,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
               // 요일 헤더들
               ...List.generate(7, (index) {
                 final date = weekDays[index];
+                final isToday = _isSameYmd(date, DateTime.now());
                 return Expanded(
                   child: Tooltip(
                     message: _formatDate(date),
@@ -247,7 +251,23 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              SizedBox(height: 15), // 요일 글자와 밑줄 사이 여백 복구
+                              SizedBox(
+                                height: 15, // 시간 헤더와 줄 맞춤
+                                child: Align(
+                                  alignment: Alignment.topCenter,
+                                  child: isToday
+                                      ? Container(
+                                          width: double.infinity, // 시간표 그리드 셀 너비와 동일(요일 컬럼 전체)
+                                          height: 8, // 시간 인디케이터 두께(8)와 통일
+                                          margin: const EdgeInsets.only(top: 8),
+                                          decoration: BoxDecoration(
+                                            color: _kNowIndicator,
+                                            borderRadius: BorderRadius.circular(3),
+                                          ),
+                                        )
+                                      : const SizedBox.shrink(),
+                                ),
+                              ),
                             ],
                           ),
                         ),

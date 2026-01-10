@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:uuid/uuid.dart';
 import '../../../services/schedule_store.dart';
@@ -1768,6 +1768,8 @@ class _ScheduleTimeline extends StatefulWidget {
 
 class _ScheduleTimelineState extends State<_ScheduleTimeline> {
   final ScrollController _controller = ScrollController();
+  double? _lastAutoTarget;
+  bool _autoScrollScheduled = false;
 
   @override
   Widget build(BuildContext context) {
@@ -1804,9 +1806,31 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
         target = target.clamp(0.0, math.max(0.0, totalWidth - viewport));
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_controller.hasClients) {
-            _controller.jumpTo(target);
-          }
+          if (!mounted) return;
+          if (_autoScrollScheduled) return;
+          if (!_controller.hasClients) return;
+
+          // ✅ 기존 로직은 build마다 jumpTo가 반복되어 "순간이동"처럼 보이고,
+          // 사용자가 스크롤해도 다시 강제로 되돌리는 문제가 있었다.
+          // 타겟이 의미 있게 바뀔 때만, 1회 애니메이션으로 자연스럽게 이동한다.
+          final cur = _controller.offset;
+          final delta = (target - cur).abs();
+          final last = _lastAutoTarget;
+          final bool targetChanged = last == null || (target - last).abs() >= 2.0;
+          if (!targetChanged || delta < 2.0) return;
+
+          _autoScrollScheduled = true;
+          _lastAutoTarget = target;
+          final ms = (180 + (delta / 1200.0 * 180)).clamp(180, 420).round();
+          _controller
+              .animateTo(
+                target,
+                duration: Duration(milliseconds: ms),
+                curve: Curves.easeOutCubic,
+              )
+              .whenComplete(() {
+                if (mounted) _autoScrollScheduled = false;
+              });
         });
 
         return ListView.builder(

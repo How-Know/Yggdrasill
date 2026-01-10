@@ -776,9 +776,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _showClassRegistrationDialog() {
-    if (_studentScreenKey.currentState != null) {
-      _studentScreenKey.currentState!.showClassRegistrationDialog();
-    }
+    // ✅ 학생 탭 "추가" 정책 변경:
+    // 드롭다운(학생/그룹) 제거 → 추가 버튼은 항상 학생 등록으로 진입
+    _showStudentRegistrationDialog();
   }
 
   void _showStudentRegistrationDialog() {

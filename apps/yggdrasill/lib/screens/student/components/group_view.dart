@@ -217,7 +217,9 @@ class _GroupViewState extends State<GroupView> {
                   child: DragTarget<StudentWithInfo>(
                     onWillAccept: (student) {
                       if (student == null) return false;
-                      if (studentsInGroup.length >= (groupInfo.capacity ?? 0)) {
+                      final cap = groupInfo.capacity;
+                      // null/0 이면 제한 없음
+                      if (cap != null && cap > 0 && studentsInGroup.length >= cap) {
                         // 정원 초과 경고 다이얼로그 (비동기지만, 드롭 자체를 막기 위해 동기적으로 false 반환)
                         WidgetsBinding.instance.addPostFrameCallback((_) async {
                           await showDialog(
@@ -249,7 +251,8 @@ class _GroupViewState extends State<GroupView> {
                       }
                       // 반드시 UI에서 capacity 체크
                       print('[DEBUG] 현재 그룹 인원: ${studentsInGroup.length}, 정원: ${groupInfo.capacity}');
-                      if (studentsInGroup.length >= (groupInfo.capacity ?? 0)) {
+                      final cap = groupInfo.capacity;
+                      if (cap != null && cap > 0 && studentsInGroup.length >= cap) {
                         print('[DEBUG] 정원 초과 다이얼로그 진입');
                         await showDialog(
                           context: context,

@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../../models/session_override.dart';
@@ -19,7 +19,7 @@ import 'components/school_view.dart';
 import 'components/date_view.dart';
 import 'student_course_detail_screen.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import '../../widgets/custom_tab_bar.dart';
+import '../../widgets/pill_tab_selector.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
 import 'components/tendency_webview.dart';
@@ -50,13 +50,9 @@ class StudentScreenState extends State<StudentScreen> {
   StudentViewType _viewType = StudentViewType.all;
   final TextEditingController _searchController = ImeAwareTextEditingController();
   String _searchQuery = '';
-  // 학생 탭 상단: 스플릿 버튼 및 검색 확장 상태
-  String _studentAddSelection = '학생';
-  bool _studentDropdownOpen = false;
+  // 학생 탭 상단: 검색 확장 상태
   bool _isSearchExpanded = false;
   final FocusNode _searchFocusNode = FocusNode();
-  final GlobalKey _studentDropdownKey = GlobalKey();
-  OverlayEntry? _studentDropdownEntry;
   final GlobalKey _toolsDropdownAnchorKey = GlobalKey();
   OverlayEntry? _toolsDropdownEntry;
   bool _toolsDropdownOpen = false;
@@ -123,7 +119,6 @@ class StudentScreenState extends State<StudentScreen> {
   @override
   void dispose() {
     _searchFocusNode.dispose();
-    _removeStudentSplitDropdown();
     _removeToolsDropdown();
     _searchController.dispose();
     super.dispose();
@@ -136,39 +131,7 @@ class StudentScreenState extends State<StudentScreen> {
     ).toList();
   }
 
-  void _showStudentSplitDropdown() {
-    _removeStudentSplitDropdown();
-    final overlay = Overlay.of(context);
-    final box = _studentDropdownKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final buttonPos = box.localToGlobal(Offset.zero);
-    final buttonSize = box.size;
-    _studentDropdownEntry = OverlayEntry(
-      builder: (context) => Positioned(
-        left: buttonPos.dx,
-        top: buttonPos.dy + buttonSize.height + 4,
-        child: Material(
-          color: Colors.transparent,
-          child: _studentSplitDropdown(
-            selected: _studentAddSelection,
-            onSelected: (value) {
-              setState(() {
-                _studentAddSelection = value;
-                _studentDropdownOpen = false;
-              });
-              _removeStudentSplitDropdown();
-            },
-          ),
-        ),
-      ),
-    );
-    overlay.insert(_studentDropdownEntry!);
-  }
-
-  void _removeStudentSplitDropdown() {
-    _studentDropdownEntry?.remove();
-    _studentDropdownEntry = null;
-  }
+  // (상단 학생 추가 버튼은 드롭다운 없이 단일 동작)
 
   void _openStudentCourseDetail(StudentWithInfo studentWithInfo) {
     setState(() {
@@ -526,144 +489,39 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   Widget _buildStudentAddSplitButton() {
+    // ✅ 시간메뉴 상단 "+ 추가" 버튼과 동일한 알약 스타일
     const double controlHeight = 48;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Row(
-        children: [
-          SizedBox(
-            width: 120,
-            height: controlHeight,
-            child: Material(
-              color: _studentAccentColor,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(32),
-                bottomLeft: Radius.circular(32),
-                topRight: Radius.circular(6),
-                bottomRight: Radius.circular(6),
-              ),
-              child: InkWell(
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(32),
-                  bottomLeft: Radius.circular(32),
-                  topRight: Radius.circular(6),
-                  bottomRight: Radius.circular(6),
+    const double mainButtonWidth = 130;
+    return SizedBox(
+      width: mainButtonWidth,
+      height: controlHeight,
+      child: Material(
+        color: _studentAccentColor,
+        borderRadius: BorderRadius.circular(controlHeight / 2),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(controlHeight / 2),
+          onTap: showStudentRegistrationDialog,
+          child: const Padding(
+            padding: EdgeInsets.only(right: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Icon(Icons.add, color: _studentPrimaryTextColor, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  '추가',
+                  style: TextStyle(
+                    color: _studentPrimaryTextColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                onTap: () {
-                  if (_studentAddSelection == '학생') {
-                    showStudentRegistrationDialog();
-                  } else {
-                    showClassRegistrationDialog();
-                  }
-                },
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.add, color: _studentPrimaryTextColor, size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      '추가',
-                      style: const TextStyle(
-                        color: _studentPrimaryTextColor,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ),
-          Container(
-            height: controlHeight,
-            width: 4,
-            color: Colors.transparent,
-            child: Center(
-              child: Container(
-                width: 2,
-                height: 30,
-                color: Colors.white.withOpacity(0.1),
-              ),
-            ),
-          ),
-          GestureDetector(
-            key: _studentDropdownKey,
-            onTap: () {
-              setState(() {
-                _studentDropdownOpen = !_studentDropdownOpen;
-              });
-              if (_studentDropdownOpen) {
-                _showStudentSplitDropdown();
-              } else {
-                _removeStudentSplitDropdown();
-              }
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              width: controlHeight,
-              height: controlHeight,
-              decoration: ShapeDecoration(
-                color: _studentAccentColor,
-                shape: RoundedRectangleBorder(
-                  borderRadius: _studentDropdownOpen
-                      ? BorderRadius.circular(50)
-                      : const BorderRadius.only(
-                          topLeft: Radius.circular(6),
-                          bottomLeft: Radius.circular(6),
-                          topRight: Radius.circular(32),
-                          bottomRight: Radius.circular(32),
-                        ),
-                ),
-              ),
-              child: Center(
-                child: AnimatedRotation(
-                  turns: _studentDropdownOpen ? 0.5 : 0.0,
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  child: const Icon(Icons.keyboard_arrow_down,
-                      color: Colors.white, size: 26),
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
-    );
-  }
-
-  // 시간표 드롭다운과 동일한 스타일의 항목을 생성 (호버 효과 포함)
-  Widget _buildDropdownHoverItem(String label, bool selected, VoidCallback onTap) {
-    bool hovered = false;
-    return StatefulBuilder(
-      builder: (context, setState) {
-        final highlight = hovered || selected;
-        return MouseRegion(
-          onEnter: (_) => setState(() => hovered = true),
-          onExit: (_) => setState(() => hovered = false),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              width: 140,
-              height: 40,
-              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
-              decoration: BoxDecoration(
-                color: highlight ? const Color(0xFF383838).withOpacity(0.7) : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              alignment: Alignment.centerLeft,
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -721,10 +579,11 @@ class StudentScreenState extends State<StudentScreen> {
                 onStudentMoved: (studentWithInfo, newGroup) async {
                   print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
                   if (newGroup != null) {
-                    // capacity 체크
+                    // capacity 체크 (null/0 이면 제한 없음)
                     final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
+                    final cap = newGroup.capacity;
                     print('[DEBUG] onStudentMoved - 현재 그룹 인원: \\${groupStudents.length}, 정원: \\${newGroup.capacity}');
-                    if (groupStudents.length >= (newGroup.capacity ?? 0)) {
+                    if (cap != null && cap > 0 && groupStudents.length >= cap) {
                       print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
                       await showDialog(
                         context: context,
@@ -853,51 +712,7 @@ class StudentScreenState extends State<StudentScreen> {
   //   );
   // }
 
-  void showClassRegistrationDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => GroupRegistrationDialog(
-        editMode: false,
-        onSave: (groupInfo) {
-          print('[DEBUG] GroupRegistrationDialog 호출: student_screen.dart, groupInfo.id=\x1b[33m [33m${groupInfo.id}\x1b[0m');
-          DataManager.instance.addGroup(groupInfo);
-          showAppSnackBar(context, '그룹이 등록되었습니다.');
-        },
-      ),
-    );
-  }
-
-  // 스플릿 드롭다운 오버레이용 간단 메뉴 위젯
-  // 선택지: 학생 / 그룹
-  Widget _studentSplitDropdown({
-    required String selected,
-    required ValueChanged<String> onSelected,
-  }) {
-    final List<String> labels = ['학생', '그룹'];
-    return Container(
-      width: 140,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF2A2A2A), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final label in labels)
-            _buildDropdownHoverItem(label, selected == label, () => onSelected(label)),
-        ],
-      ),
-    );
-  }
+  // 그룹 추가는 그룹 리스트 타이틀의 + 버튼에서 처리한다.
 
   void showStudentRegistrationDialog() {
     showDialog(
@@ -945,7 +760,7 @@ class StudentScreenState extends State<StudentScreen> {
                       flex: 2,
                       child: Align(
                         alignment: Alignment.center,
-                        child: CustomTabBar(
+                        child: PillTabSelector(
                           selectedIndex: _customTabIndex,
                           tabs: const ['학생', '성향'],
                           onTabSelected: (i) {
@@ -1058,7 +873,8 @@ class StudentScreenState extends State<StudentScreen> {
               onStudentMoved: (studentWithInfo, newGroup) async {
                 if (newGroup != null) {
                   final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
-                  if (groupStudents.length >= (newGroup.capacity ?? 0)) {
+                  final cap = newGroup.capacity;
+                  if (cap != null && cap > 0 && groupStudents.length >= cap) {
                     await showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
