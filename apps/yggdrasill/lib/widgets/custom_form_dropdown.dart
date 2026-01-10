@@ -83,18 +83,16 @@ class _CustomFormDropdownState<T> extends State<CustomFormDropdown<T>> {
                         },
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          // ✅ 과한 색상 하이라이트 제거(무난한 스타일)
                           decoration: isSelected
                               ? BoxDecoration(
-                                  color: const Color(0xFF33A373).withOpacity(0.15),
-                                  border: const Border(
-                                    left: BorderSide(color: Color(0xFF33A373), width: 3),
-                                  ),
+                                  color: Colors.white.withOpacity(0.06),
                                 )
                               : null,
                           child: Text(
                             widget.itemLabelBuilder(item),
                             style: TextStyle(
-                              color: isSelected ? const Color(0xFF33A373) : const Color(0xFFEAF2F2),
+                              color: const Color(0xFFEAF2F2),
                               fontSize: 15,
                               fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                             ),

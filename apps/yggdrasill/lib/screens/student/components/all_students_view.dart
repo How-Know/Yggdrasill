@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../../models/attendance_record.dart';
 import '../../../models/payment_record.dart';
+import '../../../models/session_override.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
@@ -18,6 +19,7 @@ import '../../../widgets/student_filter_dialog.dart';
 import '../../../models/student_time_block.dart';
 import '../../../widgets/dark_panel_route.dart';
 import '../../../widgets/swipe_action_reveal.dart';
+import '../../../utils/attendance_judgement.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
@@ -70,6 +72,7 @@ class AllStudentsView extends StatefulWidget {
 class _AllStudentsViewState extends State<AllStudentsView> {
   bool _showDeleteZone = false;
   StudentWithInfo? _detailsStudent;
+  int _detailsWeekOffset = 0; // 0: 이번주, 1: 다음주 ...
 
   bool get _useImmediateDrag {
     if (kIsWeb) return true;
@@ -135,6 +138,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   void _onShowDetails(StudentWithInfo s) {
     setState(() {
       _detailsStudent = s;
+      _detailsWeekOffset = 0; // 학생 변경 시 이번주로 리셋
     });
   }
   void _clearDetails() {
@@ -560,9 +564,23 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       Expanded(
                         flex: 1,
                         child: _detailsStudent != null
-                            ? _EmbeddedStudentDetailsCard(
-                                studentWithInfo: _detailsStudent!,
-                                onRequestCourseView: widget.onRequestCourseView,
+                            ? AnimatedBuilder(
+                                // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
+                                // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
+                                animation: Listenable.merge([
+                                  DataManager.instance.sessionOverridesNotifier,
+                                  DataManager.instance.attendanceRecordsNotifier,
+                                  DataManager.instance.studentPaymentInfoRevision,
+                                ]),
+                                builder: (context, _) => _EmbeddedStudentDetailsCard(
+                                  studentWithInfo: _detailsStudent!,
+                                  onRequestCourseView: widget.onRequestCourseView,
+                                  weekOffset: _detailsWeekOffset,
+                                  onWeekOffsetChanged: (next) =>
+                                      setState(() => _detailsWeekOffset = next),
+                                  onCloseDetails: () =>
+                                      setState(() => _detailsStudent = null),
+                                ),
                               )
                             : Container(
                                 decoration: BoxDecoration(
@@ -1033,15 +1051,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       children: [
         Row(
           children: [
-            Container(
-              width: 6,
-              height: 28,
-              decoration: BoxDecoration(
-                color: const Color(0xFF223131),
-                borderRadius: BorderRadius.circular(3),
-              ),
+            Icon(
+              level == EducationLevel.elementary
+                  ? Symbols.cruelty_free
+                  : (level == EducationLevel.middle
+                      ? Symbols.android
+                      : Symbols.settings_accessibility),
+              color: _studentListPrimaryTextColor,
+              size: 26,
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 15),
             Text(
               title,
               style: const TextStyle(
@@ -1184,10 +1203,40 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
   final Function(StudentWithInfo) onRequestCourseView;
+  final int weekOffset; // 0: 이번주, 1: 다음주 ...
+  final ValueChanged<int> onWeekOffsetChanged;
+  final VoidCallback onCloseDetails;
   const _EmbeddedStudentDetailsCard({
     required this.studentWithInfo,
     required this.onRequestCourseView,
+    required this.weekOffset,
+    required this.onWeekOffsetChanged,
+    required this.onCloseDetails,
   });
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  DateTime _mondayOf(DateTime d) {
+    final base = _dateOnly(d);
+    return base.subtract(Duration(days: base.weekday - DateTime.monday));
+  }
+
+  bool _isActiveOn(StudentTimeBlock b, DateTime refDate) {
+    final start = _dateOnly(b.startDate);
+    final end = b.endDate != null ? _dateOnly(b.endDate!) : null;
+    return !start.isAfter(refDate) && (end == null || !end.isBefore(refDate));
+  }
+
+  String _weekRangeLabel(DateTime monday) {
+    final end = monday.add(const Duration(days: 6));
+    final f = DateFormat('MM.dd');
+    return '${f.format(monday)} ~ ${f.format(end)}';
+  }
+
+  String _weekdayWithDate(int dayIndex, DateTime monday) {
+    const labels = ['월', '화', '수', '목', '금', '토', '일'];
+    final d = monday.add(Duration(days: dayIndex.clamp(0, 6)));
+    return '${labels[dayIndex.clamp(0, 6)]}(${DateFormat('MM.dd').format(d)})';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1203,12 +1252,33 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     final DateTime todayStart = DateTime(now.year, now.month, now.day);
     final DateTime registrationDate = basicInfo.registrationDate ?? now;
 
-    final List<AttendanceRecord> recentAttendance = List<AttendanceRecord>.from(
-      DataManager.instance.attendanceRecords.where((r) => r.studentId == student.id),
-    )..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+    // ✅ 최근 출석(판정 포함): 시간기록 다이얼로그와 같은 소스/판정 로직을 사용
+    final latenessThresholdMinutes =
+        DataManager.instance.getStudentPaymentInfo(student.id)?.latenessThreshold ?? 10;
+    bool _isPurePlannedAttendance(AttendanceRecord r) {
+      return r.isPlanned == true &&
+          !r.isPresent &&
+          r.arrivalTime == null &&
+          r.departureTime == null;
+    }
+    final allAttendance = DataManager.instance.attendanceRecords
+        .where((r) => r.studentId == student.id)
+        .toList();
+    final purePlanned = allAttendance.where(_isPurePlannedAttendance).toList();
+    final actual = allAttendance.where((r) => !_isPurePlannedAttendance(r)).toList();
+    final plannedPast = purePlanned
+        .where((r) => _dateOnly(r.classDateTime).isBefore(todayStart))
+        .toList();
+    final mergedPast = <AttendanceRecord>[...actual, ...plannedPast]
+      ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
 
+    // ✅ 수업시간: "기준 주(이번주/다음주…)"의 요일 실제 날짜 기준으로 필터링
+    final nowWeekMonday = _mondayOf(DateTime.now());
+    final refMonday = nowWeekMonday.add(Duration(days: weekOffset * 7));
     final List<StudentTimeBlock> timeBlocks = DataManager.instance.studentTimeBlocks
-        .where((block) => block.studentId == student.id)
+        .where((b) =>
+            b.studentId == student.id &&
+            _isActiveOn(b, refMonday.add(Duration(days: b.dayIndex))))
         .toList()
       ..sort((a, b) {
         if (a.dayIndex != b.dayIndex) return a.dayIndex.compareTo(b.dayIndex);
@@ -1217,8 +1287,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
         return aMinutes.compareTo(bMinutes);
       });
 
-    final List<AttendanceRecord> previousAttendance = recentAttendance
-        .where((record) => record.classDateTime.isBefore(todayStart))
+    final List<AttendanceRecord> previousAttendance = mergedPast
+        .where((r) => _dateOnly(r.classDateTime).isBefore(todayStart))
         .take(3)
         .toList();
 
@@ -1305,7 +1375,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: background.withOpacity(0.15),
+          // ✅ 칩 내부 배경색 제거(투명)
+          color: Colors.transparent,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: background.withOpacity(0.6), width: borderWidth),
         ),
@@ -1360,7 +1431,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                 const SizedBox.shrink(),
               const Spacer(),
               Text(
-                _weekdayLabel(earliest.dayIndex),
+                _weekdayWithDate(earliest.dayIndex, refMonday),
                 style: labelStyle.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
               ),
               const SizedBox(width: 16),
@@ -1375,36 +1446,72 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     if (previousAttendance.isNotEmpty) {
       attendanceChips = previousAttendance.map((record) {
         final String dateLabel = DateFormat('MM.dd').format(record.classDateTime);
-        final bool isLate = record.arrivalTime != null &&
-            record.arrivalTime!.isAfter(record.classDateTime.add(const Duration(minutes: 10)));
-        final Color chipColor;
-        if (!record.isPresent) {
-          chipColor = const Color(0xFFE57373);
-        } else if (isLate) {
-          chipColor = const Color(0xFFF2B45B);
-        } else {
-          chipColor = const Color(0xFF33A373);
-        }
+        final AttendanceResult result = judgeAttendanceResult(
+          record: record,
+          now: now,
+          latenessThresholdMinutes: latenessThresholdMinutes,
+        );
+        final Color chipColor = result.badgeColor;
         final Widget chip = Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: chipColor.withOpacity(0.15),
+            // ✅ 칩 내부 배경색 제거(투명)
+            color: Colors.transparent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: chipColor.withOpacity(0.8), width: 2),
+            border: Border.all(color: chipColor.withOpacity(0.8), width: 1.5),
           ),
           child: Text(
             dateLabel,
             style: TextStyle(color: chipColor, fontWeight: FontWeight.w600),
           ),
         );
-        return record.isPresent
-            ? Tooltip(
-                message: '등원 ${_hhmm(record.arrivalTime)} · 하원 ${_hhmm(record.departureTime)}',
-                child: chip,
-              )
-            : chip;
+        final String detail =
+            '${result.label} · 등원 ${_hhmm(record.arrivalTime)} · 하원 ${_hhmm(record.departureTime)}';
+        return Tooltip(message: detail, child: chip);
       }).toList();
     }
+
+    // ✅ 보강 계획(예정) 칩: 있는 학생만 최근활동에 한 줄 추가
+    final plannedMakeups = DataManager.instance.sessionOverrides
+        .where((o) =>
+            o.studentId == student.id &&
+            (o.status == OverrideStatus.planned ||
+                o.status == OverrideStatus.completed) &&
+            o.reason == OverrideReason.makeup &&
+            o.replacementClassDateTime != null)
+        .toList()
+      ..sort((a, b) => a.replacementClassDateTime!.compareTo(b.replacementClassDateTime!));
+
+    final List<Widget> makeupChips = plannedMakeups.take(3).map((ov) {
+      final rep = ov.replacementClassDateTime!.toLocal();
+      final label = DateFormat('MM.dd').format(rep);
+      const Color c = Color(0xFF1976D2);
+      // ✅ 보강관리 다이얼로그와 동일한 완료 판정:
+      // replacement 시각의 출석기록에 등/하원이 모두 있으면 "출석 완료"로 본다.
+      final record = DataManager.instance.getAttendanceRecord(student.id, rep);
+      final bool isDone = record != null && record.arrivalTime != null && record.departureTime != null;
+      final labeledChip = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          // ✅ 칩 내부 배경색 제거(투명)
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: c.withOpacity(0.8), width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isDone) ...[
+              const Icon(Icons.check_rounded, color: c, size: 16),
+              const SizedBox(width: 4),
+            ],
+            Text(label, style: const TextStyle(color: c, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+      final tooltip = '보강 ${DateFormat('MM.dd HH:mm').format(rep)}';
+      return Tooltip(message: tooltip, child: labeledChip);
+    }).toList();
 
     Widget attendanceRow() {
       if (previousAttendance.isEmpty) {
@@ -1478,9 +1585,10 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: status.color.withOpacity(0.15),
+                        // ✅ 칩 내부 배경색 제거(투명)
+                        color: Colors.transparent,
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: status.color.withOpacity(0.8), width: 2),
+                        border: Border.all(color: status.color.withOpacity(0.8), width: 1.5),
                       ),
                       child: Text(
                         status.label,
@@ -1489,6 +1597,28 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     ),
                   );
                 }).toList(),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget? makeupPlanRow() {
+      if (makeupChips.isEmpty) return null;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: Text('보강 계획', style: labelStyle)),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
+                children: makeupChips,
               ),
             ),
           ),
@@ -1558,6 +1688,48 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                 section(
                   icon: Icons.schedule_outlined,
                   title: '수업 시간',
+                  action: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '이전 주',
+                        onPressed: weekOffset > 0
+                            ? () => onWeekOffsetChanged(weekOffset - 1)
+                            : null,
+                        icon: Icon(
+                          Icons.chevron_left,
+                          color: weekOffset > 0 ? Colors.white70 : Colors.white24,
+                          size: 20,
+                        ),
+                        splashRadius: 16,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 26, minHeight: 26),
+                        visualDensity:
+                            const VisualDensity(horizontal: -4, vertical: -4),
+                      ),
+                      Text(
+                        '${weekOffset == 0 ? '이번주' : '다음주(+${weekOffset}주)'} ${_weekRangeLabel(refMonday)}',
+                        style: const TextStyle(
+                          color: Color(0xFF9FB3B3),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '다음 주',
+                        onPressed: () => onWeekOffsetChanged(weekOffset + 1),
+                        icon: const Icon(Icons.chevron_right,
+                            color: Colors.white70, size: 20),
+                        splashRadius: 16,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 26, minHeight: 26),
+                        visualDensity:
+                            const VisualDensity(horizontal: -4, vertical: -4),
+                      ),
+                    ],
+                  ),
                   children: scheduleChildren,
                 ),
                 const SizedBox(height: 12),
@@ -1577,6 +1749,10 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   ),
                   children: [
                     attendanceRow(),
+                    if (makeupChips.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      makeupPlanRow()!,
+                    ],
                     const SizedBox(height: 16),
                     paymentChipsRow(monthlyStatuses),
                   ],
@@ -1609,6 +1785,119 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     Text(
                       memoText,
                       style: valueStyle.copyWith(fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          await showDialog(
+                            context: context,
+                            builder: (context) => StudentRegistrationDialog(
+                              student: student,
+                              onSave: (updated, basicInfo) async {
+                                await DataManager.instance
+                                    .updateStudent(updated, basicInfo);
+                                showAppSnackBar(context, '학생 정보가 수정되었습니다.',
+                                    useRoot: true);
+                              },
+                              groups: DataManager.instance.groups,
+                            ),
+                          );
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF9FB3B3),
+                          side: const BorderSide(color: Color(0xFF4D5A5A)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                        ),
+                        icon: const Icon(Icons.edit_outlined, size: 16),
+                        label: const Text('수정'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              backgroundColor: const Color(0xFF232326),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
+                              title: const Text('퇴원',
+                                  style: TextStyle(color: Colors.white)),
+                              content: Text(
+                                '${student.name} 학생을 퇴원(삭제) 처리하시겠습니까?',
+                                style:
+                                    const TextStyle(color: Colors.white70),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(false),
+                                  child: const Text('취소',
+                                      style:
+                                          TextStyle(color: Colors.white70)),
+                                ),
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(true),
+                                  child: const Text('퇴원',
+                                      style: TextStyle(
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed != true) return;
+                          try {
+                            await DataManager.instance.deleteStudent(student.id);
+                            showAppSnackBar(context, '퇴원 처리되었습니다.',
+                                useRoot: true);
+                            onCloseDetails();
+                          } catch (e) {
+                            showAppSnackBar(context, '퇴원 처리 실패: $e',
+                                useRoot: true);
+                          }
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFE57373),
+                          side: const BorderSide(color: Color(0xFFE57373)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                        ),
+                        icon: const Icon(Icons.logout_rounded, size: 16),
+                        label: const Text('퇴원'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          showAppSnackBar(context, '휴원 기능은 준비중입니다.',
+                              useRoot: true);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF9FB3B3),
+                          side: const BorderSide(color: Color(0xFF4D5A5A)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                        ),
+                        icon:
+                            const Icon(Icons.pause_circle_outline, size: 16),
+                        label: const Text('휴원'),
+                      ),
                     ),
                   ],
                 ),
