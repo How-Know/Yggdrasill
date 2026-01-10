@@ -155,6 +155,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
   // 보강(Replace) 원본 블라인드 키 캐시: studentId -> keys
   // (셀 클릭 시 블록마다 반복 계산되는 것을 방지)
   final Map<String, Set<String>> _makeupOriginalBlindKeysCache = {};
+  // ✅ 검색(상단 검색바) 타이핑 성능 최적화:
+  // "현재 보고 있는 주"의 보강(replace/makeup)만 slotKey 단위로 미리 인덱싱해서,
+  // 검색 입력마다 전체 sessionOverrides를 스캔하지 않도록 한다.
+  DateTime? _cachedWeekStartForMakeupIndex;
+  int _cachedMakeupIndexSourceLen = -1;
+  DateTime? _cachedMakeupIndexLatestUpdatedAt;
+  Map<String, List<SessionOverride>> _cachedMakeupOverridesBySlotKey = const {};
   int _lastPerfReportedToken = 0;
   bool isClassRegisterMode = false;
   final ScrollController _daySelectedOverlayScrollController = ScrollController();
@@ -207,6 +214,62 @@ class TimetableContentViewState extends State<TimetableContentView> {
     return labels[dayIdx.clamp(0, 6)];
   }
 
+  Map<String, List<SessionOverride>> _getWeekMakeupOverridesBySlotKey(DateTime weekStart) {
+    final wk = DateTime(weekStart.year, weekStart.month, weekStart.day);
+    final all = DataManager.instance.sessionOverrides;
+
+    DateTime? latest;
+    for (final o in all) {
+      final u = o.updatedAt;
+      if (latest == null || u.isAfter(latest!)) latest = u;
+    }
+
+    final bool cacheHit =
+        _cachedWeekStartForMakeupIndex == wk &&
+        _cachedMakeupIndexSourceLen == all.length &&
+        ((_cachedMakeupIndexLatestUpdatedAt == null && latest == null) ||
+            (_cachedMakeupIndexLatestUpdatedAt != null &&
+                latest != null &&
+                _cachedMakeupIndexLatestUpdatedAt!.isAtSameMomentAs(latest)));
+    if (cacheHit) return _cachedMakeupOverridesBySlotKey;
+
+    final weekEnd = wk.add(const Duration(days: 7));
+    final out = <String, List<SessionOverride>>{};
+    for (final ov in all) {
+      if (ov.reason != OverrideReason.makeup) continue;
+      if (ov.overrideType != OverrideType.replace) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final rep = ov.replacementClassDateTime;
+      if (rep == null) continue;
+      if (rep.isBefore(wk) || !rep.isBefore(weekEnd)) continue;
+      final d = (rep.weekday - 1).clamp(0, 6);
+      final k = '$d-${rep.hour}:${rep.minute.toString().padLeft(2, '0')}';
+      (out[k] ??= <SessionOverride>[]).add(ov);
+    }
+
+    // 정렬: 시간 → 학생명(가능하면)
+    final nameById = <String, String>{
+      for (final s in DataManager.instance.students) s.student.id: s.student.name,
+    };
+    for (final e in out.entries) {
+      e.value.sort((a, b) {
+        final ar = a.replacementClassDateTime!;
+        final br = b.replacementClassDateTime!;
+        final t = ar.compareTo(br);
+        if (t != 0) return t;
+        final an = nameById[a.studentId] ?? '';
+        final bn = nameById[b.studentId] ?? '';
+        return an.compareTo(bn);
+      });
+    }
+
+    _cachedWeekStartForMakeupIndex = wk;
+    _cachedMakeupIndexSourceLen = all.length;
+    _cachedMakeupIndexLatestUpdatedAt = latest;
+    _cachedMakeupOverridesBySlotKey = out;
+    return out;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -219,6 +282,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
         _cachedCellPanelKey = null;
         _cachedCellPanelWidget = null;
         _makeupOriginalBlindKeysCache.clear();
+        _cachedWeekStartForMakeupIndex = null;
+        _cachedMakeupIndexSourceLen = -1;
+        _cachedMakeupIndexLatestUpdatedAt = null;
+        _cachedMakeupOverridesBySlotKey = const {};
       });
     };
     DataManager.instance.studentTimeBlocksRevision.addListener(_revListener);
@@ -1941,8 +2008,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             Padding(
                               padding: const EdgeInsets.only(top: 16.0),
                               child: DragTarget<Map<String, dynamic>>(
-                                onWillAccept: (data) => true,
+                                onWillAccept: (data) {
+                                  if (data == null) return false;
+                                  if (data['type'] != 'move') return false;
+                                  if (data['students'] is! List) return false;
+                                  if (!data.containsKey('oldDayIndex') ||
+                                      !data.containsKey('oldStartTime')) {
+                                    return false;
+                                  }
+                                  return true;
+                                },
                                 onAccept: (data) async {
+                                  if (data['type'] != 'move') return;
                                   final students = (data['students'] as List)
                                       .map((e) => e is StudentWithInfo
                                           ? e
@@ -2737,6 +2814,36 @@ class TimetableContentViewState extends State<TimetableContentView> {
     );
   }
 
+  Widget _wrapDraggableSpecialCard({
+    required Map<String, dynamic> dragData,
+    required Widget child,
+    required Widget feedback,
+  }) {
+    return LongPressDraggable<Map<String, dynamic>>(
+      data: dragData,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      maxSimultaneousDrags: 1,
+      hapticFeedbackOnStart: true,
+      // ✅ feedback는 "포인터 이벤트/호버"에 관여하면(특히 데스크탑)
+      // MouseTracker assertion/렉이 발생할 수 있어 반드시 IgnorePointer로 분리한다.
+      feedback: Material(
+        color: Colors.transparent,
+        child: IgnorePointer(
+          ignoring: true,
+          // ✅ Draggable feedback은 Overlay(Positioned) 아래에서 "폭/높이 제약이 없을 수" 있어,
+          // 내부에 Expanded/Row가 있는 카드가 레이아웃 실패(hasSize=false)로 터질 수 있다.
+          // 따라서 폭은 반드시 유한(maxWidth)으로 제한한다.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 280),
+            child: RepaintBoundary(child: feedback),
+          ),
+        ),
+      ),
+      childWhenDragging: AbsorbPointer(child: child),
+      child: child,
+    );
+  }
+
   Widget _buildSpecialSlotCard({
     required String kind,
     required String title,
@@ -2847,6 +2954,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final name = s?.student.name ?? '학생';
       if (ov.overrideType == OverrideType.replace) {
         final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: number);
+        final draggable = _wrapDraggableSpecialCard(
+          dragData: <String, dynamic>{
+            'type': 'override-move',
+            'overrideId': ov.id,
+            'oldDayIndex': dayIdx,
+            'oldStartTime': rep,
+          },
+          child: core,
+          feedback: core,
+        );
         if (widget.isSelectMode) {
           out.add(core);
         } else {
@@ -2901,11 +3018,21 @@ class TimetableContentViewState extends State<TimetableContentView> {
             actionPaneWidth: paneW,
             borderRadius: radius,
             actionPane: actionPane,
-            child: core,
+            child: draggable,
           ));
         }
       } else {
         final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: number);
+        final draggable = _wrapDraggableSpecialCard(
+          dragData: <String, dynamic>{
+            'type': 'override-move',
+            'overrideId': ov.id,
+            'oldDayIndex': dayIdx,
+            'oldStartTime': rep,
+          },
+          child: core,
+          feedback: core,
+        );
         if (widget.isSelectMode) {
           out.add(core);
         } else {
@@ -2960,7 +3087,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
             actionPaneWidth: paneW,
             borderRadius: radius,
             actionPane: actionPane,
-            child: core,
+            child: draggable,
           ));
         }
       }
@@ -2975,7 +3102,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final int end = base + lessonMin;
         if (!(cellMin >= base && cellMin < end)) continue;
         final int number = ((cellMin - base) ~/ blockMinutes) + 1;
-        out.add(_buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: number));
+        final core = _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: number);
+        if (widget.isSelectMode) {
+          out.add(core);
+        } else {
+          out.add(_wrapDraggableSpecialCard(
+            dragData: <String, dynamic>{
+              'type': 'inquiry-move',
+              'noteId': s.sourceNoteId,
+              'oldKey': ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute),
+            },
+            child: core,
+            feedback: core,
+          ));
+        }
       }
     }
 
@@ -3029,22 +3169,42 @@ class TimetableContentViewState extends State<TimetableContentView> {
       // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
       if (ov.overrideType == OverrideType.replace) {
         final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: 1);
+        final draggable = _wrapDraggableSpecialCard(
+          dragData: <String, dynamic>{
+            'type': 'override-move',
+            'overrideId': ov.id,
+            'oldDayIndex': dayIdx,
+            'oldStartTime': rep,
+          },
+          child: core,
+          feedback: core,
+        );
         add(
           rep.hour,
           rep.minute,
           _wrapSwipeActions(
-            child: core,
+            child: draggable,
             onEdit: () => _editMakeupOverride(ov),
             onDelete: () => _confirmAndCancelMakeupOverride(ov),
           ),
         );
       } else {
         final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: 1);
+        final draggable = _wrapDraggableSpecialCard(
+          dragData: <String, dynamic>{
+            'type': 'override-move',
+            'overrideId': ov.id,
+            'oldDayIndex': dayIdx,
+            'oldStartTime': rep,
+          },
+          child: core,
+          feedback: core,
+        );
         add(
           rep.hour,
           rep.minute,
           _wrapSwipeActions(
-            child: core,
+            child: draggable,
             onEdit: () => _editMakeupOverride(ov),
             onDelete: () => _confirmAndCancelMakeupOverride(ov),
           ),
@@ -3059,11 +3219,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
         if (s.dayIndex != dayIdx) continue;
         // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
         final core = _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: 1);
+        final draggable = _wrapDraggableSpecialCard(
+          dragData: <String, dynamic>{
+            'type': 'inquiry-move',
+            'noteId': s.sourceNoteId,
+            'oldKey': ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute),
+          },
+          child: core,
+          feedback: core,
+        );
         add(
           s.hour,
           s.minute,
           _wrapSwipeActions(
-            child: core,
+            child: draggable,
             onEdit: () => _openConsultNote(s.sourceNoteId),
             onDelete: () => _confirmAndRemoveInquirySlot(s),
           ),
@@ -3634,107 +3803,137 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   Widget _buildDragFeedback(
       List<StudentWithInfo> selectedStudents, StudentWithInfo mainInfo) {
-    final count = selectedStudents.length;
-    Widget buildCard(StudentWithInfo s) {
-      // ✅ 성능: drag feedback은 "미리보기"라서 매 카드마다 학생의 수업 색상 계산(=activeBlocks 스캔)을 하지 않는다.
-      // 필요 시 그룹 색상만 가볍게 사용.
-      final indicator = s.student.groupInfo?.color ?? Colors.transparent;
-      return Container(
-        height: 46,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF15171C),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF223131), width: 1),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 5,
-              height: 22,
-              decoration: BoxDecoration(
-                color: indicator,
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                s.student.name,
-                style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
-            ),
-          ],
+    // ✅ 보강 카드 feedback 스타일로 통일:
+    // - 유한 폭(Overlay unconstrained 방지)
+    // - IgnorePointer + RepaintBoundary(마우스 트래커/히트테스트 이슈 방지)
+    // - 피드백에는 색상 인디케이터를 노출하지 않는다.
+    const double maxW = 280;
+    const double cardH = 46;
+    const double stackDx = 10;
+    const double stackDy = 6;
+
+    // 다중 이동 시에도 "드래그한 카드(mainInfo)"를 최상단으로
+    final raw = selectedStudents.isEmpty
+        ? <StudentWithInfo>[mainInfo]
+        : <StudentWithInfo>[
+            mainInfo,
+            ...selectedStudents.where((s) => s.student.id != mainInfo.student.id),
+          ];
+    final dedup = <String, StudentWithInfo>{};
+    for (final s in raw) {
+      dedup[s.student.id] = s;
+    }
+    final dragged = <StudentWithInfo>[
+      dedup[mainInfo.student.id] ?? mainInfo,
+      ...dedup.values.where((s) => s.student.id != mainInfo.student.id),
+    ];
+    final count = dragged.length;
+
+    Widget feedbackCard({
+      required StudentWithInfo s,
+      required bool showText,
+    }) {
+      const nameStyle = TextStyle(
+        color: Color(0xFFEAF2F2),
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+      );
+      const metaStyle = TextStyle(
+        color: Colors.white60,
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+      );
+      final schoolLabel = s.student.school.isNotEmpty ? s.student.school : '';
+      return SizedBox(
+        height: cardH,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF15171C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF223131), width: 1),
+          ),
+          child: !showText
+              ? const SizedBox.shrink()
+              : Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        s.student.name,
+                        style: nameStyle,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ),
+                    if (schoolLabel.isNotEmpty) ...[
+                      const SizedBox(width: 10),
+                      Text(
+                        schoolLabel,
+                        style: metaStyle,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ],
+                  ],
+                ),
         ),
       );
     }
 
-    if (count <= 1) {
-      return Material(
-        color: Colors.transparent,
-        child: SizedBox(
-          width: 150,
-          height: 56,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: SizedBox(width: 140, child: buildCard(mainInfo)),
+    Widget countBadge(int n) {
+      return Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFF223131), width: 1),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          '+$n',
+          style: const TextStyle(
+            color: Color(0xFFEAF2F2),
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
           ),
         ),
       );
     }
 
-    final showCount = count >= 4 ? 3 : count;
-    final cards = List.generate(showCount, (i) {
-      final s = selectedStudents[i];
-      final opacity = (0.85 - i * 0.18).clamp(0.3, 1.0);
-      return Positioned(
-        left: i * 12.0,
-        child: Opacity(
-          opacity: opacity,
-          child: SizedBox(width: 140, child: buildCard(s)),
+    final top = feedbackCard(s: dragged.first, showText: true);
+    final back = feedbackCard(s: dragged.first, showText: false);
+
+    final Widget body;
+    if (count <= 1) {
+      body = top;
+    } else {
+      final int depth = (count - 1).clamp(1, 2);
+      body = SizedBox(
+        width: maxW,
+        height: cardH + stackDy * depth,
+        child: Stack(
+          children: [
+            for (int i = depth; i >= 1; i--)
+              Positioned(
+                left: stackDx * i,
+                top: stackDy * i,
+                child: Opacity(opacity: 0.35, child: back),
+              ),
+            Positioned(left: 0, top: 0, child: top),
+            Positioned(right: 8, top: 8, child: countBadge(count)),
+          ],
         ),
       );
-    }).toList();
+    }
 
     return Material(
       color: Colors.transparent,
-      child: SizedBox(
-        width: 150,
-        height: 56,
-        child: Stack(
-          alignment: Alignment.centerLeft,
-          children: [
-            ...cards,
-            if (count >= 4)
-              Positioned(
-                right: 6,
-                top: 6,
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF15171C),
-                    shape: BoxShape.circle,
-                    border:
-                        Border.all(color: const Color(0xFF223131), width: 1),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '+$count',
-                    style: const TextStyle(
-                      color: Color(0xFFEAF2F2),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-          ],
+      child: IgnorePointer(
+        ignoring: true,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: maxW),
+          child: RepaintBoundary(child: body),
         ),
       ),
     );
@@ -4090,17 +4289,81 @@ class TimetableContentViewState extends State<TimetableContentView> {
         grouped.putIfAbsent(key, () => []).add(student);
       }
     }
-    // key를 요일/시간 순으로 정렬
-    final sortedKeys = grouped.keys.toList()
+
+    // ✅ 검색 결과에도 "해당 주차의 보강(Replace/Makeup)" 카드 노출
+    // - 보강은 time_blocks가 없는 슬롯에도 잡힐 수 있어, 슬롯 키를 별도로 만든다.
+    final Map<String, List<Widget>> makeupCardsByKey = {};
+    final infoById = <String, StudentWithInfo>{
+      for (final s in students) s.student.id: s,
+    };
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    void addMakeupCard(int dayIdx, int h, int m, Widget w) {
+      // time_blocks 그룹키와 동일 포맷(hour는 패딩하지 않음)
+      final k = '$dayIdx-$h:${m.toString().padLeft(2, '0')}';
+      (makeupCardsByKey[k] ??= <Widget>[]).add(w);
+    }
+
+    final bySlot = _getWeekMakeupOverridesBySlotKey(weekStart);
+    if (bySlot.isNotEmpty) {
+      for (final entry in bySlot.entries) {
+        final slotKey = entry.key;
+        final ovs = entry.value;
+        // 검색 결과의 대상 학생만 필터링 (타이핑마다 전체 override 스캔 방지)
+        for (final ov in ovs) {
+          if (!targetStudentIds.contains(ov.studentId)) continue;
+          final rep = ov.replacementClassDateTime;
+          if (rep == null) continue;
+          final dayIdx = (rep.weekday - 1).clamp(0, 6);
+          final name = infoById[ov.studentId]?.student.name ?? '학생';
+          final core = _buildSpecialSlotCard(
+            kind: '보강',
+            title: name,
+            base: _kMakeupBlue,
+            blockNumber: 1,
+          );
+          final draggable = _wrapDraggableSpecialCard(
+            dragData: <String, dynamic>{
+              'type': 'override-move',
+              'overrideId': ov.id,
+              'oldDayIndex': dayIdx,
+              'oldStartTime': rep,
+            },
+            child: core,
+            feedback: core,
+          );
+          // slotKey는 이미 'dayIdx-hour:mm' 포맷
+          (makeupCardsByKey[slotKey] ??= <Widget>[]).add(
+            widget.isSelectMode
+                ? core
+                : _wrapSwipeActions(
+                    child: draggable,
+                    onEdit: () => _editMakeupOverride(ov),
+                    onDelete: () => _confirmAndCancelMakeupOverride(ov),
+                  ),
+          );
+        }
+      }
+    }
+    // key를 요일/시간 순으로 정렬 (time_blocks + 보강 슬롯)
+    final sortedKeys = <String>{
+      ...grouped.keys,
+      ...makeupCardsByKey.keys,
+    }.toList()
       ..sort((a, b) {
         final aDay = int.parse(a.split('-')[0]);
-        final aTime = a.split('-')[1];
         final bDay = int.parse(b.split('-')[0]);
-        final bTime = b.split('-')[1];
         if (aDay != bDay) return aDay.compareTo(bDay);
-        return aTime.compareTo(bTime);
+        final aTime = a.split('-')[1];
+        final bTime = b.split('-')[1];
+        final aHour = int.parse(aTime.split(':')[0]);
+        final aMin = int.parse(aTime.split(':')[1]);
+        final bHour = int.parse(bTime.split(':')[0]);
+        final bMin = int.parse(bTime.split(':')[1]);
+        if (aHour != bHour) return aHour.compareTo(bHour);
+        return aMin.compareTo(bMin);
       });
-    if (grouped.isEmpty) {
+    if (sortedKeys.isEmpty) {
       return const Padding(
         padding: EdgeInsets.only(top: 32.0),
         child: Center(
@@ -4120,11 +4383,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
           final min = int.parse(timeStr.split(':')[1]);
           final dayTimeLabel =
               '${_weekdayLabel(dayIdx)} ${hour.toString().padLeft(2, '0')}:${min.toString().padLeft(2, '0')}';
-          final students = grouped[key]!;
+          final slotStudents = grouped[key] ?? const <StudentWithInfo>[];
+          final makeupCards = makeupCardsByKey[key] ?? const <Widget>[];
           // 검색 결과(showWeekdayInTimeLabel=true)에서는 수업명 라벨을 숨기기 위해 조건부 계산
           String className = '';
-          if (!showWeekdayInTimeLabel && students.isNotEmpty) {
-            final studentId = students.first.student.id;
+          if (!showWeekdayInTimeLabel && slotStudents.isNotEmpty) {
+            final studentId = slotStudents.first.student.id;
             final occDate = weekStart.add(Duration(days: dayIdx));
             final slotCandidates = blocks
                 .where((b) =>
@@ -4173,14 +4437,25 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   child: Wrap(
                     spacing: 6.4,
                     runSpacing: 6.4,
-                    children: students
-                        .map((info) => Padding(
-                              padding: const EdgeInsets.only(right: 8.0),
-                              child: _buildDraggableStudentCard(info,
-                                  dayIndex: dayIdx,
-                                  startTime: DateTime(0, 1, 1, hour, min)),
-                            ))
-                        .toList(),
+                    children: [
+                      // 보강 카드 먼저
+                      ...makeupCards.map(
+                        (w) => Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: w,
+                        ),
+                      ),
+                      ...slotStudents.map(
+                        (info) => Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: _buildDraggableStudentCard(
+                            info,
+                            dayIndex: dayIdx,
+                            startTime: DateTime(0, 1, 1, hour, min),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 if (className.isNotEmpty) ...[

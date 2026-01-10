@@ -20,6 +20,7 @@ import 'package:mneme_flutter/widgets/app_snackbar.dart';
 import 'package:mneme_flutter/widgets/class_student_card.dart';
 import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:mneme_flutter/widgets/schedule_locked_by_makeup_dialog.dart';
+import 'package:mneme_flutter/services/consult_inquiry_demand_service.dart';
 import '../../components/timetable_content_view.dart';
 import '../../../../models/operating_hours.dart';
 import '../../../../models/session_override.dart';
@@ -223,10 +224,16 @@ Future<_BlockRange?> _pickEffectiveRange(BuildContext context, DateTime defaultD
 }
 
 class OverlayLabel {
+  final String overrideId;
   final String text;
   final OverrideType type; // add 또는 replace
   final bool isCompleted; // 출석(등원+하원) 완료된 보강/추가수업 표시용
-  const OverlayLabel({required this.text, required this.type, this.isCompleted = false});
+  const OverlayLabel({
+    required this.overrideId,
+    required this.text,
+    required this.type,
+    this.isCompleted = false,
+  });
 }
 
 class InquiryOverlayLabel {
@@ -247,6 +254,9 @@ class TimetableCell extends StatelessWidget {
   final String cellKey;
   final DateTime startTime;
   final DateTime endTime;
+  /// 현재 렌더링 중인 "주 시작(월요일)" 날짜(date-only)
+  /// - 보강/추가수업 드래그 이동 시 target replacementClassDateTime 계산에 사용
+  final DateTime weekStartDate;
   final List<StudentTimeBlock> students;
   final bool isBreakTime;
   final bool isExpanded;
@@ -276,6 +286,7 @@ class TimetableCell extends StatelessWidget {
     required this.cellKey,
     required this.startTime,
     required this.endTime,
+    required this.weekStartDate,
     required this.students,
     required this.isBreakTime,
     required this.isExpanded,
@@ -298,24 +309,6 @@ class TimetableCell extends StatelessWidget {
     this.onInquiryOverlayTap,
   });
 
-  // [추가] 운영시간/휴식시간 체크 함수 (ClassesViewState에서 복사)
-  bool _areAllTimesWithinOperatingAndBreak(int dayIdx, List<DateTime> times) {
-    final op = operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
-    if (op == null) return false;
-    for (final t in times) {
-      final tMinutes = t.hour * 60 + t.minute;
-      final opStart = op.startHour * 60 + op.startMinute;
-      final opEnd = op.endHour * 60 + op.endMinute;
-      if (tMinutes < opStart || tMinutes > opEnd) return false;
-      for (final br in op.breakTimes) {
-        final brStart = br.startHour * 60 + br.startMinute;
-        final brEnd = br.endHour * 60 + br.endMinute;
-        if (tMinutes >= brStart && tMinutes < brEnd) return false;
-      }
-    }
-    return true;
-  }
-
   @override
   Widget build(BuildContext context) {
     bool _isBlockActiveOnDate(StudentTimeBlock block, DateTime date) {
@@ -324,10 +317,27 @@ class TimetableCell extends StatelessWidget {
       return !start.isAfter(date) && (end == null || !end.isBefore(date));
     }
 
+    DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+    final weekStart = _dateOnly(weekStartDate);
+    final cellDate = weekStart.add(Duration(days: dayIdx));
+    final cellStartDateTime = DateTime(
+      cellDate.year,
+      cellDate.month,
+      cellDate.day,
+      startTime.hour,
+      startTime.minute,
+    );
+
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
-        print('[DRAG][drop:onWillAccept] data=$data');
+        // NOTE: 드래그 중 onWillAccept는 매우 자주 호출되므로 print는 렉 유발.
         if (data == null) return false;
+        if (data['type'] == 'override-move') {
+          return data['overrideId'] != null;
+        }
+        if (data['type'] == 'inquiry-move') {
+          return data['noteId'] != null && data['oldKey'] != null;
+        }
         if (data['type'] == 'move') {
           return data.containsKey('students') && data.containsKey('oldDayIndex') && data.containsKey('oldStartTime');
         }
@@ -337,6 +347,68 @@ class TimetableCell extends StatelessWidget {
         return false;
       },
       onAccept: (data) async {
+        if (data['type'] == 'override-move') {
+          try {
+            final overrideId = data['overrideId']?.toString() ?? '';
+            if (overrideId.isEmpty) return;
+
+            final ov = DataManager.instance.sessionOverrides.firstWhereOrNull((o) => o.id == overrideId);
+            if (ov == null) return;
+            if (ov.status == OverrideStatus.completed) {
+              showAppSnackBar(context, '완료된 수업은 이동할 수 없습니다.', useRoot: true);
+              return;
+            }
+
+            final updated = ov.copyWith(replacementClassDateTime: cellStartDateTime);
+            await DataManager.instance.updateSessionOverride(updated);
+          } catch (e) {
+            showAppSnackBar(context, '이동 실패: $e', useRoot: true);
+          }
+          return;
+        }
+
+        if (data['type'] == 'inquiry-move') {
+          try {
+            final noteId = data['noteId']?.toString() ?? '';
+            final oldKey = data['oldKey']?.toString() ?? '';
+            if (noteId.isEmpty || oldKey.isEmpty) return;
+
+            await ConsultInquiryDemandService.instance.load();
+            final slots = ConsultInquiryDemandService.instance.slots
+                .where((s) => s.sourceNoteId == noteId)
+                .toList();
+            if (slots.isEmpty) return;
+
+            final title = slots.first.title;
+            DateTime startWeek = _dateOnly(slots.first.startWeek);
+            for (final s in slots) {
+              final sw = _dateOnly(s.startWeek);
+              if (sw.isBefore(startWeek)) startWeek = sw;
+            }
+
+            final keys = slots
+                .map((s) => ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute))
+                .toSet();
+            final newKey = ConsultInquiryDemandService.slotKey(dayIdx, startTime.hour, startTime.minute);
+            if (newKey == oldKey) return;
+            if (keys.contains(newKey)) {
+              showAppSnackBar(context, '이미 선택된 희망시간입니다.', useRoot: true);
+              return;
+            }
+            keys.remove(oldKey);
+            keys.add(newKey);
+            await ConsultInquiryDemandService.instance.upsertForNote(
+              noteId: noteId,
+              title: title,
+              startWeek: startWeek,
+              slotKeys: keys,
+            );
+          } catch (e) {
+            showAppSnackBar(context, '이동 실패: $e', useRoot: true);
+          }
+          return;
+        }
+
         if (data['type'] == 'move') {
           // 학생 이동 기존 로직
           final studentsRaw = (data['students'] as List);
@@ -345,7 +417,7 @@ class TimetableCell extends StatelessWidget {
               .toList();
           final oldDayIndex = data['oldDayIndex'] as int?;
           final oldStartTime = data['oldStartTime'] as DateTime?;
-          final refDate = DateTime(startTime.year, startTime.month, startTime.day);
+          final refDate = DateTime(cellDate.year, cellDate.month, cellDate.day);
           final range = await _pickEffectiveRange(context, refDate);
           if (range == null) return;
           final effectiveStart = DateTime(range.start.year, range.start.month, range.start.day);
@@ -367,7 +439,7 @@ class TimetableCell extends StatelessWidget {
 
           final ids = students.map((s) => s.student.id).join(',');
           final setIds = studentsRaw.map((e) => e is StudentWithInfo ? 'null' : (e['setId']?.toString() ?? 'null')).join(',');
-          print('[DRAG][drop:onAccept] ids=$ids setIds=$setIds from=$oldDayIndex/${oldStartTime?.hour}:${oldStartTime?.minute} -> to=$dayIdx/${startTime.hour}:${startTime.minute}');
+          // NOTE: 드래그 중 print는 렉 유발 가능(필요 시 디버그 플래그로만 출력)
           List<StudentTimeBlock> toRemove = [];
           List<StudentTimeBlock> toAdd = [];
           List<StudentWithInfo> failedStudents = [];
@@ -910,7 +982,7 @@ class TimetableCell extends StatelessWidget {
                             : (isReplace
                                 ? const Color(0xFF1976D2).withOpacity(0.18) // 파란 형광펜
                                 : const Color(0xFF4CAF50).withOpacity(0.18)); // 초록 형광펜 (추가수업)
-                        return Container(
+                        final Widget chip = Container(
                           width: double.infinity,
                           margin: const EdgeInsets.only(bottom: 2.0),
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -931,6 +1003,31 @@ class TimetableCell extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                        );
+                        // 완료된(출석 기록 완료) 항목은 이동 불가
+                        if (item.isCompleted) return chip;
+                        final dragData = <String, dynamic>{
+                          'type': 'override-move',
+                          'overrideId': item.overrideId,
+                          'oldDayIndex': dayIdx,
+                          'oldStartTime': cellStartDateTime,
+                        };
+                        return LongPressDraggable<Map<String, dynamic>>(
+                          data: dragData,
+                          dragAnchorStrategy: pointerDragAnchorStrategy,
+                          maxSimultaneousDrags: 1,
+                          hapticFeedbackOnStart: true,
+                          feedback: Material(
+                            color: Colors.transparent,
+                            child: IgnorePointer(
+                              ignoring: true,
+                              child: RepaintBoundary(
+                                child: SizedBox(width: 220, child: chip),
+                              ),
+                            ),
+                          ),
+                          childWhenDragging: Opacity(opacity: 0.45, child: chip),
+                          child: chip,
                         );
                       }),
                       ...trialOverlays.map((item) {
@@ -993,12 +1090,40 @@ class TimetableCell extends StatelessWidget {
                             ),
                           ),
                         );
-                        if (!canTap) return chip;
-                        // 라벨 탭은 셀 탭(학생리스트/선택)과 분리되어야 하므로 별도 제스처로 소비한다.
-                        return GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => onInquiryOverlayTap?.call(item.noteId),
-                          child: chip,
+                        final Widget tappable = canTap
+                            ? GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => onInquiryOverlayTap?.call(item.noteId),
+                                child: chip,
+                              )
+                            : chip;
+                        // noteId가 없는(레거시/비정상) 라벨은 이동 불가
+                        if (item.noteId.trim().isEmpty) return tappable;
+                        final dragData = <String, dynamic>{
+                          'type': 'inquiry-move',
+                          'noteId': item.noteId,
+                          'oldKey': ConsultInquiryDemandService.slotKey(
+                            dayIdx,
+                            startTime.hour,
+                            startTime.minute,
+                          ),
+                        };
+                        return LongPressDraggable<Map<String, dynamic>>(
+                          data: dragData,
+                          dragAnchorStrategy: pointerDragAnchorStrategy,
+                          maxSimultaneousDrags: 1,
+                          hapticFeedbackOnStart: true,
+                          feedback: Material(
+                            color: Colors.transparent,
+                            child: IgnorePointer(
+                              ignoring: true,
+                              child: RepaintBoundary(
+                                child: SizedBox(width: 220, child: tappable),
+                              ),
+                            ),
+                          ),
+                          childWhenDragging: Opacity(opacity: 0.45, child: tappable),
+                          child: tappable,
                         );
                       }),
                     ],

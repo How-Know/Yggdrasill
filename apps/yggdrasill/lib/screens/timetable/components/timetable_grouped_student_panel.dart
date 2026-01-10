@@ -627,6 +627,10 @@ class _DraggablePanelCard extends StatelessWidget {
       'startTime': startTime,
       'isSelfStudy': false,
     };
+    final feedbackStudents = dragStudents.map((e) => e['student'] as StudentWithInfo).toList();
+    // 다중 이동 시에도 "드래그한 카드"가 맨 위로 오도록 재정렬
+    feedbackStudents.removeWhere((s) => s.student.id == student.student.id);
+    feedbackStudents.insert(0, student);
 
     final core = LongPressDraggable<Map<String, dynamic>>(
       data: dragData,
@@ -641,7 +645,7 @@ class _DraggablePanelCard extends StatelessWidget {
         onDragEnd?.call();
       },
       feedback: _PanelDragFeedback(
-        students: dragStudents.map((e) => e['student'] as StudentWithInfo).toList(),
+        students: feedbackStudents,
         dayIndex: dayIndex,
         startTime: startTime,
       ),
@@ -726,108 +730,121 @@ class _PanelDragFeedback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ 보강 카드 feedback 스타일로 통일(인디케이터 제거 + 스택형)
+    const double maxW = 280;
+    const double cardH = 46;
+    const double stackDx = 10;
+    const double stackDy = 6;
+
     final count = students.length;
-    if (count <= 1) {
-      return _feedbackFrame(child: _feedbackCard(students.first));
-    }
-    final showCount = count >= 4 ? 3 : count;
-    final cards = List.generate(showCount, (i) {
-      final s = students[i];
-      final opacity = (0.85 - i * 0.18).clamp(0.3, 1.0);
-      return Positioned(
-        left: i * 12.0,
-        child: Opacity(
-          opacity: opacity,
-          child: SizedBox(width: 140, child: _feedbackCard(s)),
+    final main = students.isEmpty ? null : students.first;
+    if (main == null) return const SizedBox.shrink();
+
+    Widget feedbackCard({
+      required StudentWithInfo s,
+      required bool showText,
+    }) {
+      const nameStyle = TextStyle(
+        color: Color(0xFFEAF2F2),
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+      );
+      const metaStyle = TextStyle(
+        color: Colors.white60,
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+      );
+      final schoolLabel = s.student.school.isNotEmpty ? s.student.school : '';
+      return SizedBox(
+        height: cardH,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF15171C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF223131), width: 1),
+          ),
+          child: !showText
+              ? const SizedBox.shrink()
+              : Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        s.student.name,
+                        style: nameStyle,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ),
+                    if (schoolLabel.isNotEmpty) ...[
+                      const SizedBox(width: 10),
+                      Text(
+                        schoolLabel,
+                        style: metaStyle,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ],
+                  ],
+                ),
         ),
       );
-    }).toList();
+    }
 
-    return _feedbackFrame(
-      child: Stack(
-        alignment: Alignment.centerLeft,
-        children: [
-          ...cards,
-          if (count >= 4)
-            Positioned(
-              right: 6,
-              top: 6,
-              child: Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF15171C),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF223131), width: 1),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  '+$count',
-                  style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _feedbackFrame({required Widget child}) {
-    return Material(
-      color: Colors.transparent,
-      child: SizedBox(
-        width: 150,
-        height: 56,
-        child: child,
-      ),
-    );
-  }
-
-  Widget _feedbackCard(StudentWithInfo s) {
-    final groupColor = s.student.groupInfo?.color;
-    Color? classColor;
-    classColor = DataManager.instance.getStudentClassColorAt(
-      s.student.id,
-      dayIndex,
-      startTime,
-      refDate: DateTime(startTime.year, startTime.month, startTime.day),
-    );
-    classColor ??= DataManager.instance.getStudentClassColor(s.student.id);
-    final Color indicatorColor = classColor ?? Colors.transparent;
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        height: 46,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    Widget countBadge(int n) {
+      return Container(
+        width: 28,
+        height: 28,
         decoration: BoxDecoration(
           color: const Color(0xFF15171C),
-          borderRadius: BorderRadius.circular(8),
+          shape: BoxShape.circle,
           border: Border.all(color: const Color(0xFF223131), width: 1),
         ),
-        child: Row(
+        alignment: Alignment.center,
+        child: Text(
+          '+$n',
+          style: const TextStyle(
+            color: Color(0xFFEAF2F2),
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
+      );
+    }
+
+    final top = feedbackCard(s: main, showText: true);
+    final back = feedbackCard(s: main, showText: false);
+
+    final Widget body;
+    if (count <= 1) {
+      body = top;
+    } else {
+      final int depth = (count - 1).clamp(1, 2);
+      body = SizedBox(
+        width: maxW,
+        height: cardH + stackDy * depth,
+        child: Stack(
           children: [
-            Container(
-              width: 5,
-              height: 22,
-              decoration: BoxDecoration(
-                color: indicatorColor,
-                borderRadius: BorderRadius.circular(3),
+            for (int i = depth; i >= 1; i--)
+              Positioned(
+                left: stackDx * i,
+                top: stackDy * i,
+                child: Opacity(opacity: 0.35, child: back),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                s.student.name,
-                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 14, fontWeight: FontWeight.w600),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
-            ),
+            Positioned(left: 0, top: 0, child: top),
+            Positioned(right: 8, top: 8, child: countBadge(count)),
           ],
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: IgnorePointer(
+        ignoring: true,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: maxW),
+          child: RepaintBoundary(child: body),
         ),
       ),
     );

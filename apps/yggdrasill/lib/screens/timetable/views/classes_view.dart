@@ -972,7 +972,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   final label =
                       ov.overrideType == OverrideType.add ? '$name 추가수업' : '$name 보강';
                   (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
-                    OverlayLabel(text: label, type: ov.overrideType, isCompleted: isCompleted),
+                    OverlayLabel(overrideId: ov.id, text: label, type: ov.overrideType, isCompleted: isCompleted),
                   );
 
                   // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
@@ -1366,7 +1366,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                                       cellKey: cellKey,
                                       startTime: timeBlocks[blockIdx].startTime,
                                       endTime: timeBlocks[blockIdx].endTime,
-                                       students: filteredActiveBlocks,
+                                      weekStartDate: widget.weekStartDate,
+                                      students: filteredActiveBlocks,
                                       isBreakTime: isBreakTime,
                                       isExpanded: isExpanded,
                                       isDragHighlight: isDragHighlight,
