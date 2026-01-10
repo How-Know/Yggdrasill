@@ -8,13 +8,15 @@ import '../../models/student.dart';
 import '../../services/data_manager.dart';
 import 'components/attendance_indicator.dart';
 import 'components/student_course_history_tab.dart';
+import '../../utils/attendance_judgement.dart';
 
 class StudentCourseDetailScreen extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
   const StudentCourseDetailScreen({super.key, required this.studentWithInfo});
 
   @override
-  State<StudentCourseDetailScreen> createState() => _StudentCourseDetailScreenState();
+  State<StudentCourseDetailScreen> createState() =>
+      _StudentCourseDetailScreenState();
 }
 
 class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
@@ -28,8 +30,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   }
 
   Future<void> _openAttendanceEditDialog(AttendanceRecord record) async {
-    final TextEditingController arrivalController = TextEditingController(text: _hhmm(record.arrivalTime));
-    final TextEditingController departureController = TextEditingController(text: _hhmm(record.departureTime));
+    final TextEditingController arrivalController =
+        TextEditingController(text: _hhmm(record.arrivalTime));
+    final TextEditingController departureController =
+        TextEditingController(text: _hhmm(record.departureTime));
 
     TimeOfDay? _parse(String? text) {
       if (text == null || text.isEmpty || text == '--:--') return null;
@@ -58,7 +62,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           title: const Text(
             '출석 수정',
-            style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Color(0xFFEAF2F2),
+                fontSize: 20,
+                fontWeight: FontWeight.bold),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -77,7 +84,9 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                 await DataManager.instance.deleteAttendanceRecord(record.id!);
                 Navigator.of(context).pop(true);
               },
-              child: const Text('삭제', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+              child: const Text('삭제',
+                  style: TextStyle(
+                      color: Colors.redAccent, fontWeight: FontWeight.bold)),
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -86,13 +95,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B6B63),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
               onPressed: () async {
                 final arr = _parse(arrivalController.text);
                 final dep = _parse(departureController.text);
-                DateTime? newArrival = arr != null ? _combine(record.classDateTime, arr) : null;
-                DateTime? newDeparture = dep != null ? _combine(record.classDateTime, dep) : null;
+                DateTime? newArrival =
+                    arr != null ? _combine(record.classDateTime, arr) : null;
+                DateTime? newDeparture =
+                    dep != null ? _combine(record.classDateTime, dep) : null;
                 await DataManager.instance.updateAttendanceRecord(
                   record.copyWith(
                     arrivalTime: newArrival,
@@ -126,20 +138,22 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       if (!_attendanceScrollController.hasClients) return;
 
       final studentId = widget.studentWithInfo.student.id;
-      final records = DataManager.instance.getAttendanceRecordsForStudent(studentId)
+      final records = DataManager.instance
+          .getAttendanceRecordsForStudent(studentId)
         ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
-      
+
       // Find the index of the first record that belongs to the target month (or older if none in that month)
       // Since it's sorted descending (latest first), the first record matching year/month is the latest in that month.
-      int targetIndex = records.indexWhere((r) => 
-        r.classDateTime.year == targetMonth.year && r.classDateTime.month == targetMonth.month
-      );
+      int targetIndex = records.indexWhere((r) =>
+          r.classDateTime.year == targetMonth.year &&
+          r.classDateTime.month == targetMonth.month);
 
       // If no record in that month, find the first record *before* that month (older)
       if (targetIndex == -1) {
-         targetIndex = records.indexWhere((r) => r.classDateTime.isBefore(DateTime(targetMonth.year, targetMonth.month)));
+        targetIndex = records.indexWhere((r) => r.classDateTime
+            .isBefore(DateTime(targetMonth.year, targetMonth.month)));
       }
-      
+
       // If still -1 (meaning all records are in future relative to targetMonth?), scroll to 0
       if (targetIndex == -1) targetIndex = 0;
 
@@ -174,24 +188,25 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
               Expanded(
                 child: Align(
                   alignment: Alignment.topCenter,
-                child: SingleChildScrollView(
+                  child: SingleChildScrollView(
                     padding: const EdgeInsets.only(bottom: 32),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1180),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                layoutBuilder: (Widget? currentChild, List<Widget> previousChildren) {
-                  return Stack(
-                    alignment: Alignment.topCenter,
-                    children: <Widget>[
-                      ...previousChildren,
-                      if (currentChild != null) currentChild,
-                    ],
-                  );
-                },
-                child: _buildActiveTabContent(),
-              ),
-            ),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1180),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 250),
+                        layoutBuilder: (Widget? currentChild,
+                            List<Widget> previousChildren) {
+                          return Stack(
+                            alignment: Alignment.topCenter,
+                            children: <Widget>[
+                              ...previousChildren,
+                              if (currentChild != null) currentChild,
+                            ],
+                          );
+                        },
+                        child: _buildActiveTabContent(),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -217,7 +232,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       default:
         return KeyedSubtree(
           key: const ValueKey('history'),
-          child: StudentCourseHistoryTab(studentWithInfo: widget.studentWithInfo),
+          child:
+              StudentCourseHistoryTab(studentWithInfo: widget.studentWithInfo),
         );
     }
   }
@@ -244,20 +260,23 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         Expanded(
           child: Stack(
             alignment: Alignment.center,
-          children: [
+            children: [
               Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 360),
                   child: Text(
-              name,
+                    name,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-            ),
-            ),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
               ),
               _buildTabSelector(),
-          ],
+            ],
           ),
         ),
       ],
@@ -315,14 +334,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                           child: AnimatedDefaultTextStyle(
                             duration: const Duration(milliseconds: 200),
                             style: TextStyle(
-                              color: isSelected ? Colors.white : const Color(0xFF7E8A8A),
+                              color: isSelected
+                                  ? Colors.white
+                                  : const Color(0xFF7E8A8A),
                               fontWeight: FontWeight.w600,
                               fontSize: 14,
                             ),
                             child: Text(label),
-              ),
-            ),
-          ),
+                          ),
+                        ),
+                      ),
                     );
                   }).toList(),
                 ),
@@ -346,7 +367,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('출결 현황', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700)),
+          const Text('출결 현황',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,7 +386,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: const Color(0xFF223131)),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 18),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -370,17 +396,22 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                           children: [
                             IconButton(
                               onPressed: () => _updateMonth(-1),
-                              icon: const Icon(Icons.chevron_left, color: Colors.white70),
+                              icon: const Icon(Icons.chevron_left,
+                                  color: Colors.white70),
                             ),
                             const SizedBox(width: 12),
-                        Text(
+                            Text(
                               monthLabel,
-                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600),
                             ),
                             const SizedBox(width: 12),
                             IconButton(
                               onPressed: () => _updateMonth(1),
-                              icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                              icon: const Icon(Icons.chevron_right,
+                                  color: Colors.white70),
                             ),
                           ],
                         ),
@@ -419,7 +450,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   }
 
   Widget _buildCalendarGrid() {
-    final daysInMonth = DateUtils.getDaysInMonth(_currentDate.year, _currentDate.month);
+    final daysInMonth =
+        DateUtils.getDaysInMonth(_currentDate.year, _currentDate.month);
     final firstDayOfMonth = DateTime(_currentDate.year, _currentDate.month, 1);
     final weekdayOfFirstDay = firstDayOfMonth.weekday;
     final today = DateTime.now();
@@ -434,7 +466,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
             children: headers
                 .map((day) => Expanded(
                       child: Center(
-                        child: Text(day, style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w600)),
+                        child: Text(day,
+                            style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600)),
                       ),
                     ))
                 .toList(),
@@ -443,12 +479,14 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         Expanded(
           child: GridView.builder(
             physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7),
             itemCount: daysInMonth + weekdayOfFirstDay - 1,
             itemBuilder: (context, index) {
               if (index < weekdayOfFirstDay - 1) return const SizedBox.shrink();
               final dayNumber = index - (weekdayOfFirstDay - 1) + 1;
-              final date = DateTime(_currentDate.year, _currentDate.month, dayNumber);
+              final date =
+                  DateTime(_currentDate.year, _currentDate.month, dayNumber);
               final isToday = DateUtils.isSameDay(date, today);
               final studentId = widget.studentWithInfo.student.id;
 
@@ -457,7 +495,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                 margin: const EdgeInsets.all(6),
                 decoration: isToday
                     ? BoxDecoration(
-                        border: Border.all(color: const Color(0xFF1B6B63), width: 3),
+                        border: Border.all(
+                            color: const Color(0xFF1B6B63), width: 3),
                         borderRadius: BorderRadius.circular(12),
                       )
                     : null,
@@ -469,7 +508,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 20,
-                          fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
+                          fontWeight:
+                              isToday ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
                     ),
@@ -478,11 +518,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       left: 0,
                       right: 0,
                       child: Center(
-                      child: AttendanceIndicator(
-                        studentId: studentId,
-                        date: date,
+                        child: AttendanceIndicator(
+                          studentId: studentId,
+                          date: date,
                           width: indicatorWidth,
-                        thickness: 6,
+                          thickness: 6,
                         ),
                       ),
                     ),
@@ -491,7 +531,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                       left: 0,
                       right: 0,
                       child: Center(
-                        child: _AddOverrideDot(studentId: studentId, date: date),
+                        child:
+                            _AddOverrideDot(studentId: studentId, date: date),
                       ),
                     ),
                   ],
@@ -506,14 +547,18 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
 
   Widget _buildCalendarLegend() {
     const Color _colorPresent = Color(0xFF33A373); // 정상
-    const Color _colorLate = Color(0xFFF2B45B);    // 지각
-    const Color _colorAbsent = Color(0xFFE57373);  // 결석
+    const Color _colorLate = Color(0xFFF2B45B); // 지각
+    const Color _colorEarlyLeave = Color(0xFF7B62D3); // 조퇴
+    const Color _colorAbsent = Color(0xFFE57373); // 결석
+    const Color _colorPlanned = Color(0xFF3C4747); // ✅ 예정(회색)
     const Color _colorOverride = Color(0xFF5DD6FF); // 보강/추가수업
 
     final List<_LegendEntry> legends = [
       const _LegendEntry('출석', _colorPresent),
       const _LegendEntry('지각', _colorLate),
+      const _LegendEntry('조퇴', _colorEarlyLeave),
       const _LegendEntry('결석', _colorAbsent),
+      const _LegendEntry('예정', _colorPlanned),
       const _LegendEntry('보강, 추가수업', _colorOverride),
     ];
 
@@ -531,12 +576,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   Container(
                     width: 16,
                     height: 16,
-                    decoration: BoxDecoration(color: entry.color, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                        color: entry.color, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     entry.label,
-                    style: const TextStyle(color: Colors.white70, fontSize: 17, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -548,9 +597,9 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
 
   Widget _buildAttendanceListPanel() {
     final studentId = widget.studentWithInfo.student.id;
-    final uniqueRecords = _uniqueAttendanceRecords(studentId);
+    final records = _attendanceRecordsForMonth(studentId, _currentDate);
 
-    if (uniqueRecords.isEmpty) {
+    if (records.isEmpty) {
       return Container(
         decoration: BoxDecoration(
           color: const Color(0xFF151C21),
@@ -566,13 +615,27 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       );
     }
 
-    final int total = uniqueRecords.length;
+    final now = DateTime.now();
+    final latenessThresholdMinutes = DataManager.instance
+            .getStudentPaymentInfo(studentId)
+            ?.latenessThreshold ??
+        10;
+
+    // ✅ 지각률/결석률은 "예정"은 제외하고 계산 (시간기록 다이얼로그와 동일한 판정 기준)
+    int total = 0;
     int lateCount = 0;
     int absentCount = 0;
-    for (final record in uniqueRecords) {
-      if (_isAbsent(record)) {
+    for (final record in records) {
+      final result = judgeAttendanceResult(
+        record: record,
+        now: now,
+        latenessThresholdMinutes: latenessThresholdMinutes,
+      );
+      if (result == AttendanceResult.planned) continue;
+      total++;
+      if (result == AttendanceResult.absent) {
         absentCount++;
-      } else if (_isLate(record)) {
+      } else if (result == AttendanceResult.late) {
         lateCount++;
       }
     }
@@ -592,10 +655,15 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: TextStyle(color: color.withOpacity(0.9), fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(label,
+                  style: TextStyle(
+                      color: color.withOpacity(0.9),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               Text('${rate.toStringAsFixed(1)}%',
-                  style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w700)),
+                  style: TextStyle(
+                      color: color, fontSize: 20, fontWeight: FontWeight.w700)),
             ],
           ),
         ),
@@ -628,80 +696,78 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
               child: ListView.builder(
                 controller: _attendanceScrollController,
                 padding: EdgeInsets.zero,
-                itemCount: uniqueRecords.length,
+                itemCount: records.length,
                 itemExtent: 82.0,
                 itemBuilder: (context, index) {
-                  final record = uniqueRecords[index];
-                  final dateLabel = DateFormat('MM.dd (E)', 'ko').format(record.classDateTime);
-                  final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
-                  int? cycle;
-                  int? sessionOrder;
-                  if (registrationDate != null) {
-                    final regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
-                    cycle = _calculateCycleNumber(regDate, record.classDateTime);
-                    final sameCycle = uniqueRecords
-                        .where((r) => _calculateCycleNumber(regDate, r.classDateTime) == cycle)
-                        .toList()
-                      ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
-                    sessionOrder = sameCycle.indexOf(record) + 1;
-                  }
+                  final record = records[index];
+                  final dateLabel = DateFormat('MM.dd (E)', 'ko')
+                      .format(record.classDateTime);
+                  final int? cycle = record.cycle;
+                  final int? sessionOrder = record.sessionOrder;
 
                   // 수업명 및 보강/추가수업 배지
                   String className = '';
                   String? overrideBadge;
                   final overrides = DataManager.instance.sessionOverrides;
                   bool sameMinute(DateTime a, DateTime b) =>
-                      a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+                      a.year == b.year &&
+                      a.month == b.month &&
+                      a.day == b.day &&
+                      a.hour == b.hour &&
+                      a.minute == b.minute;
                   SessionOverride? matchedOverride;
                   for (final ov in overrides) {
                     final repl = ov.replacementClassDateTime;
                     if (repl == null) continue;
                     if (ov.studentId != record.studentId) continue;
                     if (sameMinute(repl, record.classDateTime)) {
-                      overrideBadge = ov.overrideType == OverrideType.add ? '추가수업' : '보강';
+                      overrideBadge =
+                          ov.overrideType == OverrideType.add ? '추가수업' : '보강';
                       matchedOverride = ov;
                       break;
                     }
                   }
                   className = _resolveDisplayClassName(record, matchedOverride);
 
-                  final String? tooltipMessage = (matchedOverride?.originalClassDateTime != null)
+                  final String? tooltipMessage = (matchedOverride
+                              ?.originalClassDateTime !=
+                          null)
                       ? '원본 : ${DateFormat('MM.dd (E)', 'ko').format(matchedOverride!.originalClassDateTime!)} '
                           '${_hhmm(matchedOverride!.originalClassDateTime)} ~ ${_hhmm(matchedOverride!.originalClassDateTime!.add(Duration(minutes: matchedOverride!.durationMinutes ?? 60)))}'
                       : null;
 
-                  String statusText;
-                  Color statusColor;
-                  if (!record.isPresent) {
-                    statusText = '결석';
-                    statusColor = const Color(0xFFE57373);
-                  } else {
-                    final lateThreshold = record.classDateTime.add(const Duration(minutes: 10));
-                    if (record.arrivalTime != null && record.arrivalTime!.isAfter(lateThreshold)) {
-                      statusText = '지각';
-                      statusColor = const Color(0xFFF2B45B);
-                    } else {
-                      statusText = '출석';
-                      statusColor = const Color(0xFF33A373);
-                    }
-                  }
+                  final AttendanceResult result = judgeAttendanceResult(
+                    record: record,
+                    now: now,
+                    latenessThresholdMinutes: latenessThresholdMinutes,
+                  );
+                  final String statusText = result.label;
+                  final Color statusColor = result.badgeColor;
 
                   Widget card = Container(
                     decoration: const BoxDecoration(
-                      border: Border(bottom: BorderSide(color: Color(0xFF223131), width: 1)),
+                      border: Border(
+                          bottom:
+                              BorderSide(color: Color(0xFF223131), width: 1)),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 18),
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 8, horizontal: 18),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
                             Expanded(
-                    child: Row(
+                              child: Row(
                                 children: [
                                   Text(
-                                    cycle != null && sessionOrder != null ? '${cycle}회차 ${sessionOrder}회' : '',
-                                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                                    cycle != null && sessionOrder != null
+                                        ? '${cycle}회차 ${sessionOrder}회'
+                                        : '',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700),
                                   ),
                                   const SizedBox(width: 8),
                                   Flexible(
@@ -713,21 +779,32 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                                             className,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                                            style: const TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600),
                                           ),
                                         ),
                                         if (overrideBadge != null) ...[
                                           const SizedBox(width: 6),
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 9, vertical: 3),
                                             decoration: BoxDecoration(
-                                              color: const Color(0xFF5DD6FF).withOpacity(0.22),
-                                              borderRadius: BorderRadius.circular(999),
-                                              border: Border.all(color: const Color(0xFF5DD6FF).withOpacity(0.65)),
+                                              color: const Color(0xFF5DD6FF)
+                                                  .withOpacity(0.22),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                              border: Border.all(
+                                                  color: const Color(0xFF5DD6FF)
+                                                      .withOpacity(0.65)),
                                             ),
                                             child: Text(
                                               overrideBadge!,
-                                              style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 11.5, fontWeight: FontWeight.w800),
+                                              style: const TextStyle(
+                                                  color: Color(0xFF5DD6FF),
+                                                  fontSize: 11.5,
+                                                  fontWeight: FontWeight.w800),
                                             ),
                                           ),
                                         ],
@@ -741,36 +818,48 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                             Text(
                               '${_hhmm(record.classDateTime)} ~ ${_hhmm(record.classEndTime)}',
                               textAlign: TextAlign.right,
-                              style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700),
                             ),
                           ],
                         ),
                         const SizedBox(height: 6),
                         Row(
-                      children: [
-                        Text(
-                          dateLabel,
-                              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-                        ),
-                        const Spacer(),
-                        if (record.isPresent) ...[
-                          Text(
-                            '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
-                                style: const TextStyle(color: Colors.white70, fontSize: 14),
-                          ),
+                          children: [
+                            Text(
+                              dateLabel,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                            const Spacer(),
+                            if (record.isPresent) ...[
+                              Text(
+                                '${_hhmm(record.arrivalTime)} ~ ${_hhmm(record.departureTime)}',
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 14),
+                              ),
                               const SizedBox(width: 10),
-                        ],
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: statusColor.withOpacity(0.5)),
-                          ),
-                          child: Text(
-                            statusText,
-                                style: TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w700),
-                          ),
+                            ],
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: statusColor.withOpacity(0.18),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                    color: statusColor.withOpacity(0.5)),
+                              ),
+                              child: Text(
+                                statusText,
+                                style: TextStyle(
+                                    color: statusColor,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700),
+                              ),
                             ),
                           ],
                         ),
@@ -787,7 +876,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: const Color(0xFF2B3A42)),
                       ),
-                      textStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      textStyle: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600),
                       child: card,
                     );
                   }
@@ -807,7 +899,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
 
   Widget _buildPaymentSection() {
     final student = widget.studentWithInfo.student;
-    final payments = DataManager.instance.getPaymentRecordsForStudent(student.id)
+    final payments = DataManager.instance
+        .getPaymentRecordsForStudent(student.id)
       ..sort((a, b) => b.dueDate.compareTo(a.dueDate));
     final DateTime now = DateTime.now();
     final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
@@ -815,16 +908,18 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     PaymentRecord upcoming;
     if (payments.isNotEmpty) {
       upcoming = payments.lastWhere(
-        (record) => record.paidDate == null && !record.dueDate.isBefore(nextMonthStart),
+        (record) =>
+            record.paidDate == null && !record.dueDate.isBefore(nextMonthStart),
         orElse: () {
           return payments.firstWhere(
-      (record) => record.paidDate == null,
+            (record) => record.paidDate == null,
             orElse: () => payments.first,
           );
         },
       );
     } else {
-      upcoming = PaymentRecord(studentId: student.id, cycle: 1, dueDate: nextMonthStart);
+      upcoming = PaymentRecord(
+          studentId: student.id, cycle: 1, dueDate: nextMonthStart);
     }
 
     return Container(
@@ -836,7 +931,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('납부 내역', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700)),
+          const Text('납부 내역',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -855,9 +954,9 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                     _buildPaymentHistoryList(
                       upcomingRecord: upcoming,
                       maxHeight: 420,
-              ),
-            ],
-          ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -869,29 +968,35 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   Widget _buildUpcomingPaymentCard(PaymentRecord upcoming) {
     return Container(
       padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
+      decoration: BoxDecoration(
         color: const Color(0xFF151C21),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFF223131)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF223131)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '다음 납부 예정일',
-            style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Text(
+        children: [
+          Text(
+            '다음 납부 예정일',
+            style: TextStyle(
+                color: Colors.white.withOpacity(0.7),
+                fontSize: 14,
+                fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
             DateFormat('yyyy.MM.dd').format(upcoming.dueDate),
-                  style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 24, fontWeight: FontWeight.w800),
-                ),
-                if (upcoming.paidDate != null)
-                  Padding(
+            style: const TextStyle(
+                color: Color(0xFF90CAF9),
+                fontSize: 24,
+                fontWeight: FontWeight.w800),
+          ),
+          if (upcoming.paidDate != null)
+            Padding(
               padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '납부 완료 (${DateFormat('MM.dd').format(upcoming.paidDate!)})',
+              child: Text(
+                '납부 완료 (${DateFormat('MM.dd').format(upcoming.paidDate!)})',
                 style: const TextStyle(color: Colors.white60, fontSize: 14),
               ),
             ),
@@ -899,18 +1004,20 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
-              onPressed: () => _showPaymentDatePicker(upcoming, markAsPaid: false),
+              onPressed: () =>
+                  _showPaymentDatePicker(upcoming, markAsPaid: false),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF9FB3B3),
                 side: const BorderSide(color: Color(0xFF4D5A5A)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-                  child: const Text('예정일 수정'),
+              child: const Text('예정일 수정'),
             ),
-                ),
-              ],
-            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -918,15 +1025,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
     final studentId = widget.studentWithInfo.student.id;
     final int year = DateTime.now().year;
-    final List<DateTime> months = List.generate(12, (index) => DateTime(year, index + 1, 1));
+    final List<DateTime> months =
+        List.generate(12, (index) => DateTime(year, index + 1, 1));
 
     if (registrationDate == null) {
-    return Container(
-      decoration: BoxDecoration(
+      return Container(
+        decoration: BoxDecoration(
           color: const Color(0xFF151C21),
           borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF223131)),
-      ),
+          border: Border.all(color: const Color(0xFF223131)),
+        ),
         child: const Center(
           child: Text('등록일 정보가 없습니다.', style: TextStyle(color: Colors.white60)),
         ),
@@ -951,20 +1059,22 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         itemCount: months.length,
         itemBuilder: (context, index) {
           final month = months[index];
-          final status = _resolveMonthlyStatus(studentId, registrationDate, month);
-          final Color ringColor = status.dimmed ? status.color.withOpacity(0.55) : status.color;
+          final status =
+              _resolveMonthlyStatus(studentId, registrationDate, month);
+          final Color ringColor =
+              status.dimmed ? status.color.withOpacity(0.55) : status.color;
           final Color textColor = status.dimmed ? Colors.white60 : Colors.white;
 
-    return Container(
-      decoration: BoxDecoration(
+          return Container(
+            decoration: BoxDecoration(
               color: const Color(0xFF10171B),
               borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF223131)),
-      ),
+              border: Border.all(color: const Color(0xFF223131)),
+            ),
             child: Center(
-      child: Column(
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
-        children: [
+                children: [
                   Container(
                     width: 58,
                     height: 58,
@@ -1008,14 +1118,17 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final studentId = widget.studentWithInfo.student.id;
     final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
     if (registrationDate == null) {
-      return const Center(child: Text('등록일 정보가 없습니다.', style: TextStyle(color: Colors.white60)));
+      return const Center(
+          child:
+              Text('등록일 정보가 없습니다.', style: TextStyle(color: Colors.white60)));
     }
 
     final now = DateTime.now();
     final currentMonth = DateTime(now.year, now.month);
     final List<DateTime> months = [];
     DateTime probe = DateTime(registrationDate.year, registrationDate.month);
-    while (!probe.isAfter(DateTime(currentMonth.year, currentMonth.month + 3))) {
+    while (
+        !probe.isAfter(DateTime(currentMonth.year, currentMonth.month + 3))) {
       months.add(probe);
       probe = DateTime(probe.year, probe.month + 1);
     }
@@ -1028,9 +1141,11 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final List<_PaymentEntry> pastEntries = [];
     _PaymentEntry? upcomingEntry;
 
-    final sortedMonths = List<DateTime>.from(months)..sort((a, b) => a.compareTo(b));
+    final sortedMonths = List<DateTime>.from(months)
+      ..sort((a, b) => a.compareTo(b));
     for (final month in sortedMonths) {
-      final paymentDate = _getActualPaymentDateForMonth(studentId, registrationDate, month);
+      final paymentDate =
+          _getActualPaymentDateForMonth(studentId, registrationDate, month);
       final cycle = _calculateCycleNumber(registrationDate, paymentDate);
       final record = DataManager.instance.getPaymentRecord(studentId, cycle);
       final entry = _PaymentEntry(
@@ -1055,16 +1170,19 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       ...pastEntries,
     ];
 
-    final TextStyle labelStyle = const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600);
-    final TextStyle dateStyle = const TextStyle(color: Colors.white70, fontSize: 17);
+    final TextStyle labelStyle = const TextStyle(
+        color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600);
+    final TextStyle dateStyle =
+        const TextStyle(color: Colors.white70, fontSize: 17);
     final double chipFontSize = 14;
 
     final listView = ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       physics: const BouncingScrollPhysics(),
       itemCount: entries.length,
-      separatorBuilder: (_, __) => const Divider(color: Color(0xFF223131), height: 1),
-            itemBuilder: (context, index) {
+      separatorBuilder: (_, __) =>
+          const Divider(color: Color(0xFF223131), height: 1),
+      itemBuilder: (context, index) {
         final entry = entries[index];
         final bool isPaid = entry.record?.paidDate != null;
         final bool isUpcoming = entry.dueDate.isAfter(today);
@@ -1084,13 +1202,16 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
         return InkWell(
           onTap: () => _showPaymentDatePicker(
             entry.record ??
-                PaymentRecord(studentId: studentId, cycle: entry.cycle, dueDate: entry.dueDate),
+                PaymentRecord(
+                    studentId: studentId,
+                    cycle: entry.cycle,
+                    dueDate: entry.dueDate),
             markAsPaid: true,
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             child: Row(
-        children: [
+              children: [
                 Text('${entry.cycle}회차', style: labelStyle),
                 const SizedBox(width: 20),
                 Text(
@@ -1099,7 +1220,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.18),
                     borderRadius: BorderRadius.circular(6),
@@ -1107,18 +1229,23 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   ),
                   child: Text(
                     statusText,
-                    style: TextStyle(color: statusColor, fontSize: chipFontSize, fontWeight: FontWeight.w700),
-                      ),
-              ),
-            ],
-          ),
+                    style: TextStyle(
+                        color: statusColor,
+                        fontSize: chipFontSize,
+                        fontWeight: FontWeight.w700),
+                  ),
                 ),
-              );
-            },
+              ],
+            ),
+          ),
+        );
+      },
     );
 
     final scrollable = Scrollbar(child: listView);
-    final content = maxHeight != null ? SizedBox(height: maxHeight, child: scrollable) : scrollable;
+    final content = maxHeight != null
+        ? SizedBox(height: maxHeight, child: scrollable)
+        : scrollable;
 
     return Container(
       decoration: BoxDecoration(
@@ -1130,31 +1257,56 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     );
   }
 
-  List<AttendanceRecord> _uniqueAttendanceRecords(String studentId) {
-    final records = DataManager.instance.getAttendanceRecordsForStudent(studentId)
-      ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
-    final Map<DateTime, AttendanceRecord> uniqueMap = {};
-    for (final record in records) {
-      final dayKey = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
-      final existing = uniqueMap[dayKey];
-      if (existing == null || _compareAttendancePriority(record, existing) < 0) {
-        uniqueMap[dayKey] = record;
-      }
-    }
-    final result = uniqueMap.values.toList()
-      ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
-    return result;
+  bool _isPurePlannedAttendance(AttendanceRecord r) {
+    return r.isPlanned == true &&
+        !r.isPresent &&
+        r.arrivalTime == null &&
+        r.departureTime == null;
   }
 
-  _MonthlyDotInfo _resolveMonthlyStatus(String studentId, DateTime registrationDate, DateTime month) {
-    final DateTime regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
-    final DateTime dueDate = _getActualPaymentDateForMonth(studentId, regDate, month);
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// ✅ 시간기록 다이얼로그(출석 기록 탭)과 동일한 데이터 기준으로,
+  /// 현재 선택된 월 범위 내의 출석/예정 기록을 세션 단위로 반환한다.
+  ///
+  /// - 하루 1개로 압축하지 않는다(=기존 _uniqueAttendanceRecords 제거 목적)
+  /// - planned도 포함하되 judgeAttendanceResult가 '예정/결석'으로 분기한다.
+  List<AttendanceRecord> _attendanceRecordsForMonth(
+    String studentId,
+    DateTime month,
+  ) {
+    final monthStart = DateTime(month.year, month.month, 1);
+    final monthEnd = DateTime(month.year, month.month + 1, 0); // inclusive
+
+    bool inMonth(DateTime dt) {
+      final d = _dateOnly(dt);
+      return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+    }
+
+    final all = DataManager.instance.attendanceRecords
+        .where((r) => r.studentId == studentId && inMonth(r.classDateTime))
+        .toList();
+
+    // "실기록" + "planned" 모두 보여주되,
+    // 정렬은 최신이 위로(기존 UI와 동일)
+    all.sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+    return all;
+  }
+
+  _MonthlyDotInfo _resolveMonthlyStatus(
+      String studentId, DateTime registrationDate, DateTime month) {
+    final DateTime regDate = DateTime(
+        registrationDate.year, registrationDate.month, registrationDate.day);
+    final DateTime dueDate =
+        _getActualPaymentDateForMonth(studentId, regDate, month);
     if (dueDate.isBefore(regDate)) {
-      return const _MonthlyDotInfo(color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
+      return const _MonthlyDotInfo(
+          color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
     final int cycle = _calculateCycleNumber(regDate, dueDate);
     if (cycle <= 0) {
-      return const _MonthlyDotInfo(color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
+      return const _MonthlyDotInfo(
+          color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
     final record = DataManager.instance.getPaymentRecord(studentId, cycle);
     if (record?.paidDate != null) {
@@ -1172,20 +1324,29 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final dateStart = DateTime(date.year, date.month, date.day);
     final dateEnd = dateStart.add(const Duration(days: 1));
     bool sameMinute(DateTime a, DateTime b) =>
-        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+        a.year == b.year &&
+        a.month == b.month &&
+        a.day == b.day &&
+        a.hour == b.hour &&
+        a.minute == b.minute;
 
-    final overrideOnDate = overrides.where((o) =>
-        o.studentId == studentId &&
-        (o.overrideType == OverrideType.add || o.overrideType == OverrideType.replace) &&
-        o.status != OverrideStatus.canceled &&
-        o.replacementClassDateTime != null &&
-        o.replacementClassDateTime!.isAfter(dateStart) &&
-        o.replacementClassDateTime!.isBefore(dateEnd)).toList();
+    final overrideOnDate = overrides
+        .where((o) =>
+            o.studentId == studentId &&
+            (o.overrideType == OverrideType.add ||
+                o.overrideType == OverrideType.replace) &&
+            o.status != OverrideStatus.canceled &&
+            o.replacementClassDateTime != null &&
+            o.replacementClassDateTime!.isAfter(dateStart) &&
+            o.replacementClassDateTime!.isBefore(dateEnd))
+        .toList();
 
     if (overrideOnDate.isEmpty) return const SizedBox.shrink();
 
-    final hasReplace = overrideOnDate.any((o) => o.overrideType == OverrideType.replace);
-    final hasAdd = overrideOnDate.any((o) => o.overrideType == OverrideType.add);
+    final hasReplace =
+        overrideOnDate.any((o) => o.overrideType == OverrideType.replace);
+    final hasAdd =
+        overrideOnDate.any((o) => o.overrideType == OverrideType.add);
     final labels = [
       if (hasReplace) '보강',
       if (hasAdd) '추가',
@@ -1195,7 +1356,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       padding: const EdgeInsets.only(bottom: 4),
       child: Text(
         labels,
-        style: const TextStyle(color: Color(0xFF5DD6FF), fontSize: 11, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+            color: Color(0xFF5DD6FF),
+            fontSize: 11,
+            fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -1206,10 +1370,12 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     return DateFormat('HH:mm').format(dt);
   }
 
-  Future<void> _showPaymentDatePicker(PaymentRecord record, {required bool markAsPaid}) async {
+  Future<void> _showPaymentDatePicker(PaymentRecord record,
+      {required bool markAsPaid}) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: markAsPaid ? (record.paidDate ?? DateTime.now()) : record.dueDate,
+      initialDate:
+          markAsPaid ? (record.paidDate ?? DateTime.now()) : record.dueDate,
       firstDate: DateTime(record.dueDate.year - 1, 1, 1),
       lastDate: DateTime(record.dueDate.year + 2, 12, 31),
       builder: (context, child) {
@@ -1230,7 +1396,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     if (picked != null) {
       if (markAsPaid) {
         // 미납/예정 항목 터치 시 실제 납부일을 기록
-        await DataManager.instance.recordPayment(record.studentId, record.cycle, picked);
+        await DataManager.instance
+            .recordPayment(record.studentId, record.cycle, picked);
       } else {
         // 예정일 카드에서 수정 시 납부 처리 없이 예정일만 변경
         await DataManager.instance.postponeDueDate(
@@ -1243,11 +1410,14 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       if (mounted) setState(() {});
     }
   }
-  
-  DateTime _getActualPaymentDateForMonth(String studentId, DateTime registrationDate, DateTime targetMonth) {
+
+  DateTime _getActualPaymentDateForMonth(
+      String studentId, DateTime registrationDate, DateTime targetMonth) {
     // registrationDate는 날짜만 사용 (시간 비교 오차 방지)
-    final regDate = DateTime(registrationDate.year, registrationDate.month, registrationDate.day);
-    final defaultDate = DateTime(targetMonth.year, targetMonth.month, regDate.day);
+    final regDate = DateTime(
+        registrationDate.year, registrationDate.month, registrationDate.day);
+    final defaultDate =
+        DateTime(targetMonth.year, targetMonth.month, regDate.day);
     final cycle = _calculateCycleNumber(regDate, defaultDate);
     final record = DataManager.instance.getPaymentRecord(studentId, cycle);
     if (record != null) return record.dueDate;
@@ -1257,7 +1427,9 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
   int _calculateCycleNumber(DateTime registrationDate, DateTime paymentDate) {
     final regMonth = DateTime(registrationDate.year, registrationDate.month, 1);
     final payMonth = DateTime(paymentDate.year, paymentDate.month, 1);
-    return (payMonth.year - regMonth.year) * 12 + (payMonth.month - regMonth.month) + 1;
+    return (payMonth.year - regMonth.year) * 12 +
+        (payMonth.month - regMonth.month) +
+        1;
   }
 }
 
@@ -1292,26 +1464,6 @@ class _LegendEntry {
   const _LegendEntry(this.label, this.color);
 }
 
-int _compareAttendancePriority(AttendanceRecord a, AttendanceRecord b) {
-  return _attendanceRank(a).compareTo(_attendanceRank(b));
-}
-
-int _attendanceRank(AttendanceRecord record) {
-  if (_isPresent(record) && !_isLate(record)) return 0; // 정상 출석
-  if (_isPresent(record) && _isLate(record)) return 1; // 지각
-  return 2; // 결석
-}
-
-bool _isPresent(AttendanceRecord record) => record.isPresent;
-
-bool _isLate(AttendanceRecord record) {
-  if (!record.isPresent || record.arrivalTime == null) return false;
-  final lateThreshold = record.classDateTime.add(const Duration(minutes: 10));
-  return record.arrivalTime!.isAfter(lateThreshold);
-}
-
-bool _isAbsent(AttendanceRecord record) => !record.isPresent;
-
 class _TimeField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
@@ -1323,7 +1475,11 @@ class _TimeField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         Container(
           decoration: BoxDecoration(
@@ -1334,7 +1490,8 @@ class _TimeField extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: TextField(
             controller: controller,
-            style: const TextStyle(color: Colors.white, fontSize: 15, letterSpacing: 0.2),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 15, letterSpacing: 0.2),
             decoration: const InputDecoration(
               border: InputBorder.none,
               hintText: 'HH:MM',
@@ -1347,7 +1504,8 @@ class _TimeField extends StatelessWidget {
   }
 }
 
-String _resolveDisplayClassName(AttendanceRecord record, SessionOverride? matchedOverride) {
+String _resolveDisplayClassName(
+    AttendanceRecord record, SessionOverride? matchedOverride) {
   // 우선: record.className이 있고 '수업'이 아니면 그대로 사용
   final raw = record.className?.trim();
   if (raw != null && raw.isNotEmpty && raw != '수업') return raw;
@@ -1355,7 +1513,8 @@ String _resolveDisplayClassName(AttendanceRecord record, SessionOverride? matche
   // 보강/추가수업에서 sessionTypeId로 클래스명 찾기
   if (matchedOverride?.sessionTypeId != null) {
     try {
-      final cls = DataManager.instance.classes.firstWhere((c) => c.id == matchedOverride!.sessionTypeId);
+      final cls = DataManager.instance.classes
+          .firstWhere((c) => c.id == matchedOverride!.sessionTypeId);
       if (cls.name.trim().isNotEmpty) return cls.name.trim();
     } catch (_) {}
   }

@@ -187,27 +187,58 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   int _unfilteredDefaultClassCount() {
-    return DataManager.instance.studentTimeBlocks
-        .where((b) => b.sessionTypeId == null)
-        .map((b) => b.studentId)
-        .toSet()
-        .length;
+    final weekStart = _weekMonday(widget.viewDate);
+    final blocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+    bool isActiveOn(DateTime day, StudentTimeBlock b) {
+      final ref = DateTime(day.year, day.month, day.day);
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
+    }
+
+    final ids = <String>{};
+    for (final b in blocks) {
+      if (b.sessionTypeId != null) continue;
+      if (!(b.number == null || b.number == 1)) continue;
+      final occDate = weekStart.add(Duration(days: b.dayIndex));
+      if (!isActiveOn(occDate, b)) continue;
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
+      ids.add(b.studentId);
+    }
+    return ids.length;
   }
 
   int _countStudentsForClass(String? classId) {
     final students = _studentFilterSet();
-    final blocks = DataManager.instance.studentTimeBlocks
-        .where((b) {
-          if (!_isBlockAllowed(b)) return false;
-          if (!students.contains(b.studentId)) return false;
-          if (classId == null) {
-            return b.sessionTypeId == null;
-          }
-          return b.sessionTypeId == classId;
-        })
-        .map((b) => b.studentId)
-        .toSet();
-    return blocks.length;
+    final weekStart = _weekMonday(widget.viewDate);
+    final blocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+    bool isActiveOn(DateTime day, StudentTimeBlock b) {
+      final ref = DateTime(day.year, day.month, day.day);
+      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
+    }
+
+    final ids = <String>{};
+    for (final b in blocks) {
+      if (!_isBlockAllowed(b)) continue;
+      if (!students.contains(b.studentId)) continue;
+      if (!(b.number == null || b.number == 1)) continue;
+      if (classId == null) {
+        if (b.sessionTypeId != null) continue;
+      } else {
+        if (b.sessionTypeId != classId) continue;
+      }
+      final occDate = weekStart.add(Duration(days: b.dayIndex));
+      if (!isActiveOn(occDate, b)) continue;
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
+      ids.add(b.studentId);
+    }
+    return ids.length;
   }
 
   String _weekdayLabel(int dayIdx) {
@@ -3683,6 +3714,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
     return Stack(
       children: [
         Builder(builder: (context) {
+          // ✅ 휴원 기간에는 시간표에서 학생 카드 이동/등록(드래그)을 막는다.
+          // (시각적 비활성화는 카드 opacity로 처리)
+          final DateTime? refForPause = (dayIndex != null && startTime != null)
+              ? DateTime(startTime.year, startTime.month, startTime.day)
+              : null;
+          final bool isPausedHere = refForPause != null
+              ? DataManager.instance.isStudentPausedOn(info.student.id, refForPause)
+              : (DataManager.instance.getActivePauseForStudent(info.student.id) != null);
+
           final dragData = {
             'type': isClassRegisterMode ? 'register' : 'move',
             'students': studentsWithSetId,
@@ -3694,6 +3734,26 @@ class TimetableContentViewState extends State<TimetableContentView> {
             'startTime': startTime,
           };
           // print('[DEBUG][TT] Draggable dragData 준비: type=${dragData['type']}, setId=${dragData['setId']}, oldDayIndex=${dragData['oldDayIndex']}, oldStartTime=${dragData['oldStartTime']}, studentsCount=${(dragData['students'] as List).length});
+          if (isPausedHere) {
+            // ✅ 휴원 기간에는 시간표 위젯에서 학생카드를 아예 숨김
+            return const SizedBox.shrink();
+          }
+
+          final baseCard = _buildSelectableStudentCard(
+            info,
+            selected: widget.selectedStudentIds.contains(info.student.id),
+            isSelectMode: widget.isSelectMode,
+            highlighted: highlightBorder,
+            indicatorColorOverride: indicatorOverride,
+            blockNumber: blockNumber,
+            onTap: onTapCard,
+            onToggleSelect: (next) {
+              if (widget.onStudentSelectChanged != null) {
+                widget.onStudentSelectChanged!(info.student.id, next);
+              }
+            },
+          );
+
           final core = LongPressDraggable<Map<String, dynamic>>(
             data: dragData,
             dragAnchorStrategy: pointerDragAnchorStrategy,
@@ -3729,20 +3789,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 blockNumber: blockNumber,
               ),
             ),
-            child: _buildSelectableStudentCard(
-              info,
-              selected: widget.selectedStudentIds.contains(info.student.id),
-              isSelectMode: widget.isSelectMode,
-              highlighted: highlightBorder,
-              indicatorColorOverride: indicatorOverride,
-              blockNumber: blockNumber,
-              onTap: onTapCard,
-              onToggleSelect: (next) {
-                if (widget.onStudentSelectChanged != null) {
-                  widget.onStudentSelectChanged!(info.student.id, next);
-                }
-              },
-            ),
+            child: baseCard,
           );
 
           // 좌측 스와이프로 수정/삭제 액션 노출
@@ -4299,6 +4346,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       if (!(b.number == null || b.number == 1)) continue;
       final occDate = weekStart.add(Duration(days: b.dayIndex));
       if (!isActiveOn(occDate, b)) continue;
+      // ✅ 휴원 기간에는 시간표 위젯에 수업시간(블록)을 그리지 않는다.
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
       blocksByStudent.putIfAbsent(b.studentId, () => <StudentTimeBlock>[]).add(b);
     }
     for (final student in students) {
@@ -4335,6 +4384,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           if (!targetStudentIds.contains(ov.studentId)) continue;
           final rep = ov.replacementClassDateTime;
           if (rep == null) continue;
+          if (DataManager.instance.isStudentPausedOn(ov.studentId, rep)) continue;
           final dayIdx = (rep.weekday - 1).clamp(0, 6);
           final name = infoById[ov.studentId]?.student.name ?? '학생';
           final core = _buildSpecialSlotCard(

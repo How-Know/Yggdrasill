@@ -839,6 +839,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                       : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
                   if (sd.isAfter(target)) continue;
                   if (ed != null && ed.isBefore(target)) continue;
+                  // ✅ 휴원 기간에는 시간표 위젯에서 수업 블록 자체를 숨김
+                  if (DataManager.instance.isStudentPausedOn(b.studentId, target)) continue;
 
                   final int startMin = b.startHour * 60 + b.startMinute;
                   final int endMin = startMin + b.duration.inMinutes;
@@ -954,6 +956,7 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   final rep = ov.replacementClassDateTime;
                   if (rep == null) continue;
                   if (rep.isBefore(weekStart) || !rep.isBefore(weekEnd)) continue;
+                  if (DataManager.instance.isStudentPausedOn(ov.studentId, rep)) continue;
                   final int d = (rep.weekday - 1).clamp(0, 6);
 
                   final String skStart = ConsultInquiryDemandService.slotKey(d, rep.hour, rep.minute);

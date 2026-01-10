@@ -94,6 +94,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     _queryEnd = DateTime(today.year, today.month + 1, 0);
     _loadPaymentData();
     DataManager.instance.paymentRecordsNotifier.addListener(_loadPaymentData);
+    DataManager.instance.studentChargePointsRevision.addListener(_loadPaymentData);
   }
 
   void _loadPaymentData() {
@@ -125,7 +126,28 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
         for (final r in recordsSorted) r.cycle: r,
       };
 
+      // ✅ 휴원/차감포인트 기반 “유효 납부일” 반영:
+      // student_charge_points.next_due_datetime이 있으면 해당 날짜를 (cycle+1)의 due_date로 간주한다.
+      // (월납도 session-like로 휴원 영향을 반영하는 요구사항)
+      final cps = DataManager.instance.studentChargePoints
+          .where((c) =>
+              c.studentId == studentWithInfo.student.id &&
+              c.nextDueDateTime != null)
+          .toList()
+        ..sort((a, b) => b.cycle.compareTo(a.cycle));
+      final Map<int, DateTime> dueOverrides = <int, DateTime>{};
+      if (cps.isNotEmpty) {
+        final cp = cps.first;
+        final eff = _dateOnly(cp.nextDueDateTime!);
+        final targetCycle = (cp.cycle + 1);
+        if (targetCycle >= 1) {
+          dueOverrides[targetCycle] = eff;
+        }
+      }
+
       DateTime resolveDueDateForCycle(int cycle) {
+        final override = dueOverrides[cycle];
+        if (override != null) return override;
         final direct = byCycle[cycle];
         if (direct != null) return _dateOnly(direct.dueDate);
 
@@ -214,6 +236,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   @override
   void dispose() {
     DataManager.instance.paymentRecordsNotifier.removeListener(_loadPaymentData);
+    DataManager.instance.studentChargePointsRevision.removeListener(_loadPaymentData);
     _overdueScrollCtrl.dispose();
     _upcomingScrollCtrl.dispose();
     _paidListScrollCtrl.dispose();

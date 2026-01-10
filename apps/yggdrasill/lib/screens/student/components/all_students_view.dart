@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
 import '../../../models/education_level.dart';
 import 'package:intl/intl.dart';
@@ -92,6 +93,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     required Widget childWhenDragging,
     required Widget child,
   }) {
+    final bool isPausedNow =
+        DataManager.instance.getActivePauseForStudent(student.student.id) !=
+            null;
+
+    if (isPausedNow) {
+      // ✅ 휴원 학생은 비활성화(드래그 금지)
+      return Opacity(
+        opacity: 0.45,
+        child: child,
+      );
+    }
+
     void onDragStarted() {
       setState(() => _showDeleteZone = true);
       if (_kStudentListDebug) {
@@ -141,8 +154,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       _detailsWeekOffset = 0; // 학생 변경 시 이번주로 리셋
     });
   }
+
   void _clearDetails() {
-    setState(() { _detailsStudent = null; });
+    setState(() {
+      _detailsStudent = null;
+    });
   }
 
   bool get _hasGroupFilter {
@@ -198,94 +214,410 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         child: SizedBox(
           width: double.infinity,
           height: 72,
-          child: DragTarget<StudentWithInfo>(
-            onWillAccept: (student) => student != null,
-            onAccept: (student) async {
-              final studentCopy = student.student.copyWith(
-                clearGroupInfo: true,
-                clearGroupId: true,
-              );
-              final basicInfoCopy = student.basicInfo.copyWith(
-                clearGroupId: true,
-              );
-              final result = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  backgroundColor: const Color(0xFF232326),
-                  shape:
-                      RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  title:
-                      const Text('그룹에서 삭제', style: TextStyle(color: Colors.white)),
-                  content: Text(
-                    '${student.student.name} 학생을 그룹에서 삭제하시겠습니까?',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      child:
-                          const Text('취소', style: TextStyle(color: Colors.white70)),
-                    ),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.red,
+          child: Row(
+            children: [
+              Expanded(
+                child: DragTarget<StudentWithInfo>(
+                  onWillAccept: (student) => student != null,
+                  onAccept: (student) async {
+                    final now = DateTime.now();
+                    final today = DateTime(now.year, now.month, now.day);
+
+                    bool sameDay(DateTime a, DateTime b) =>
+                        a.year == b.year &&
+                        a.month == b.month &&
+                        a.day == b.day;
+
+                    // 1) 오늘 "등원은 했고 하원은 안 한" 출석 레코드가 있으면 → 하원 기록
+                    final List<AttendanceRecord> candidates = DataManager
+                        .instance.attendanceRecords
+                        .where((r) =>
+                            r.studentId == student.student.id &&
+                            r.isPresent &&
+                            r.arrivalTime != null &&
+                            r.departureTime == null &&
+                            sameDay(r.classDateTime, today))
+                        .toList()
+                      ..sort((a, b) => b.arrivalTime!
+                          .toLocal()
+                          .compareTo(a.arrivalTime!.toLocal()));
+
+                    try {
+                      if (candidates.isNotEmpty) {
+                        final rec = candidates.first;
+                        final updated = rec.copyWith(
+                          departureTime: now,
+                          classEndTime: now,
+                        );
+                        await DataManager.instance
+                            .updateAttendanceRecord(updated);
+
+                        // 연결된 "추가수업(OverrideType.add)"이 있으면 completed로 바꾼다(선택).
+                        try {
+                          bool sameMinute(DateTime a, DateTime b) =>
+                              a.year == b.year &&
+                              a.month == b.month &&
+                              a.day == b.day &&
+                              a.hour == b.hour &&
+                              a.minute == b.minute;
+
+                          final ov = DataManager.instance.sessionOverrides
+                              .where((o) =>
+                                  o.studentId == student.student.id &&
+                                  o.overrideType == OverrideType.add &&
+                                  o.status != OverrideStatus.canceled &&
+                                  o.replacementClassDateTime != null &&
+                                  sameMinute(
+                                      o.replacementClassDateTime!.toLocal(),
+                                      rec.classDateTime.toLocal()))
+                              .toList()
+                            ..sort(
+                                (a, b) => b.createdAt.compareTo(a.createdAt));
+                          if (ov.isNotEmpty &&
+                              ov.first.status != OverrideStatus.completed) {
+                            await DataManager.instance.updateSessionOverride(
+                              ov.first.copyWith(
+                                status: OverrideStatus.completed,
+                                updatedAt: DateTime.now(),
+                              ),
+                            );
+                          }
+                        } catch (_) {}
+
+                        await DataManager.instance.loadAttendanceRecords();
+                        if (mounted) {
+                          setState(() => _showDeleteZone = false);
+                          showAppSnackBar(
+                              context, '${student.student.name} 하원 기록 완료');
+                        }
+                        return;
+                      }
+
+                      // 2) 아니면 → 등원 기록(추가수업 + 출석 레코드 생성)
+                      final classDateTime = DateTime(
+                          now.year, now.month, now.day, now.hour, now.minute);
+                      final classEndTime =
+                          classDateTime.add(const Duration(minutes: 1));
+
+                      // ✅ 중복 방지: 동일 분(minute)의 기존 추가수업이 있으면 재사용
+                      bool sameMinute(DateTime a, DateTime b) =>
+                          a.year == b.year &&
+                          a.month == b.month &&
+                          a.day == b.day &&
+                          a.hour == b.hour &&
+                          a.minute == b.minute;
+
+                      final existingAdds = DataManager.instance.sessionOverrides
+                          .where((o) =>
+                              o.studentId == student.student.id &&
+                              o.overrideType == OverrideType.add &&
+                              o.status != OverrideStatus.canceled &&
+                              o.replacementClassDateTime != null &&
+                              sameMinute(o.replacementClassDateTime!.toLocal(),
+                                  classDateTime.toLocal()))
+                          .toList()
+                        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+                      if (existingAdds.isEmpty) {
+                        final ov = SessionOverride(
+                          studentId: student.student.id,
+                          overrideType: OverrideType.add,
+                          replacementClassDateTime: classDateTime,
+                          durationMinutes: 1,
+                          reason: OverrideReason.other,
+                          status: OverrideStatus.planned,
+                        );
+                        await DataManager.instance.addSessionOverride(ov);
+                      }
+
+                      // ✅ 출석 레코드 중복키(academy+student+class_dt) 방지:
+                      // 이미 있으면 insert 대신 arrivalTime 업데이트로 처리한다.
+                      final existing = DataManager.instance.getAttendanceRecord(
+                          student.student.id, classDateTime);
+                      if (existing != null) {
+                        await DataManager.instance.updateAttendanceRecord(
+                          existing.copyWith(
+                            isPresent: true,
+                            arrivalTime: now,
+                            departureTime: null,
+                            classEndTime: classEndTime,
+                            className: existing.className.isNotEmpty
+                                ? existing.className
+                                : '등하원(추가)',
+                            isPlanned: false,
+                          ),
+                        );
+                      } else {
+                        final rec = AttendanceRecord.create(
+                          studentId: student.student.id,
+                          classDateTime: classDateTime,
+                          classEndTime: classEndTime,
+                          className: '등하원(추가)',
+                          isPresent: true,
+                          arrivalTime: now,
+                          departureTime: null,
+                          isPlanned: false,
+                        );
+                        try {
+                          await DataManager.instance.addAttendanceRecord(rec);
+                        } catch (e) {
+                          // 서버에 이미 존재할 수 있으니 로드 후 update로 재시도
+                          final s = e.toString();
+                          if (s.contains('duplicate key') ||
+                              s.contains('23505') ||
+                              s.contains('uidx_attendance_records')) {
+                            await DataManager.instance.loadAttendanceRecords();
+                            final again = DataManager.instance
+                                .getAttendanceRecord(
+                                    student.student.id, classDateTime);
+                            if (again != null) {
+                              await DataManager.instance.updateAttendanceRecord(
+                                again.copyWith(
+                                  isPresent: true,
+                                  arrivalTime: now,
+                                  departureTime: null,
+                                  classEndTime: classEndTime,
+                                  className: again.className.isNotEmpty
+                                      ? again.className
+                                      : '등하원(추가)',
+                                  isPlanned: false,
+                                ),
+                              );
+                            } else {
+                              rethrow;
+                            }
+                          } else {
+                            rethrow;
+                          }
+                        }
+                      }
+                      await DataManager.instance.loadAttendanceRecords();
+
+                      if (mounted) {
+                        setState(() => _showDeleteZone = false);
+                        showAppSnackBar(
+                            context, '${student.student.name} 등원 기록 완료');
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        showAppSnackBar(context, '등하원 기록 실패: $e');
+                      }
+                    }
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    final isHover = candidateData.isNotEmpty;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF15171C),
+                        border: Border.all(
+                          color: isHover
+                              ? const Color(0xFF33A373)
+                              : Colors.white12,
+                          width: isHover ? 3 : 2,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: const Text('확인'),
-                    ),
-                  ],
+                      child: const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.login_rounded,
+                                color: Color(0xFF33A373), size: 26),
+                            SizedBox(height: 2),
+                            Text('등하원',
+                                style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-              if (result == true) {
-                if (_kStudentListDebug) {
-                  // ignore: avoid_print
-                  print(
-                      '[STUDENT][drop] attempting to remove ${student.student.name} from group ${student.student.groupInfo?.name}');
-                }
-                await DataManager.instance.updateStudent(
-                  studentCopy,
-                  basicInfoCopy,
-                );
-                if (_kStudentListDebug) {
-                  // ignore: avoid_print
-                  print(
-                      '[STUDENT][drop] updateStudent complete for ${student.student.id}, loading students...');
-                }
-                await DataManager.instance.loadStudents();
-                setState(() {
-                  _showDeleteZone = false;
-                });
-                showAppSnackBar(context, '그룹에서 제외되었습니다.');
-              } else {
-                if (_kStudentListDebug) {
-                  // ignore: avoid_print
-                  print('[STUDENT][drop] remove cancelled for ${student.student.name}');
-                }
-              }
-            },
-            builder: (context, candidateData, rejectedData) {
-              final isHover = candidateData.isNotEmpty;
-              return AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                width: double.infinity,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: Colors.grey[900],
-                  border: Border.all(
-                    color: isHover ? Colors.red : Colors.grey[700]!,
-                    width: isHover ? 3 : 2,
-                  ),
-                  borderRadius: BorderRadius.circular(12),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DragTarget<StudentWithInfo>(
+                  onWillAccept: (student) => student != null,
+                  onAccept: (student) async {
+                    // ✅ 수업료 납부 기록: 기존 recordPayment RPC 재사용
+                    final records = DataManager.instance
+                        .getPaymentRecordsForStudent(student.student.id)
+                        .where((r) => r.paidDate == null)
+                        .toList()
+                      ..sort((a, b) => a.cycle.compareTo(b.cycle));
+
+                    if (records.isEmpty) {
+                      if (mounted) {
+                        setState(() => _showDeleteZone = false);
+                        showAppSnackBar(context, '미납(미기록) 회차가 없습니다.');
+                      }
+                      return;
+                    }
+                    final target = records.first;
+
+                    final ThemeData pickerTheme = Theme.of(context).copyWith(
+                      colorScheme: const ColorScheme.dark(
+                        primary: Color(0xFF33A373),
+                        surface: Color(0xFF15171C),
+                        onSurface: Colors.white70,
+                      ),
+                      dialogBackgroundColor: const Color(0xFF0B1112),
+                    );
+
+                    final DateTime? picked = await showDatePicker(
+                      context: context,
+                      initialDate: target.paidDate ?? DateTime.now(),
+                      firstDate: DateTime(target.dueDate.year - 1, 1, 1),
+                      lastDate: DateTime(target.dueDate.year + 2, 12, 31),
+                      builder: (context, child) =>
+                          Theme(data: pickerTheme, child: child!),
+                    );
+                    if (picked == null) return;
+
+                    try {
+                      await DataManager.instance.recordPayment(
+                        student.student.id,
+                        target.cycle,
+                        picked,
+                      );
+                      await DataManager.instance.loadPaymentRecords();
+                      if (mounted) {
+                        setState(() => _showDeleteZone = false);
+                        showAppSnackBar(
+                            context, '${student.student.name} 수업료 납부 기록 완료');
+                      }
+                    } catch (e) {
+                      if (mounted) showAppSnackBar(context, '수업료 납부 기록 실패: $e');
+                    }
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    final isHover = candidateData.isNotEmpty;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF15171C),
+                        border: Border.all(
+                          color: isHover
+                              ? const Color(0xFF1B6B63)
+                              : Colors.white12,
+                          width: isHover ? 3 : 2,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.payments_rounded,
+                                color: Color(0xFF1B6B63), size: 26),
+                            SizedBox(height: 2),
+                            Text('수업료 납부',
+                                style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-                child: Center(
-                  child: Icon(
-                    Icons.delete_outline,
-                    color: isHover ? Colors.red : Colors.white70,
-                    size: 36,
-                  ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DragTarget<StudentWithInfo>(
+                  onWillAccept: (student) => student != null,
+                  onAccept: (student) async {
+                    // ✅ 기존 기능: 그룹에서 제외
+                    final studentCopy = student.student.copyWith(
+                      clearGroupInfo: true,
+                      clearGroupId: true,
+                    );
+                    final basicInfoCopy = student.basicInfo.copyWith(
+                      clearGroupId: true,
+                    );
+                    final result = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        backgroundColor: const Color(0xFF232326),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                        title: const Text('그룹삭제',
+                            style: TextStyle(color: Colors.white)),
+                        content: Text(
+                          '${student.student.name} 학생을 그룹에서 삭제하시겠습니까?',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            child: const Text('취소',
+                                style: TextStyle(color: Colors.white70)),
+                          ),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.red,
+                            ),
+                            onPressed: () => Navigator.of(context).pop(true),
+                            child: const Text('확인'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (result != true) return;
+
+                    try {
+                      await DataManager.instance.updateStudent(
+                        studentCopy,
+                        basicInfoCopy,
+                      );
+                      await DataManager.instance.loadStudents();
+                      if (mounted) {
+                        setState(() => _showDeleteZone = false);
+                        showAppSnackBar(context, '그룹에서 제외되었습니다.');
+                      }
+                    } catch (e) {
+                      if (mounted) showAppSnackBar(context, '그룹삭제 실패: $e');
+                    }
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    final isHover = candidateData.isNotEmpty;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF15171C),
+                        border: Border.all(
+                          color: isHover ? Colors.red : Colors.white12,
+                          width: isHover ? 3 : 2,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.delete_outline_rounded,
+                                color: Colors.red, size: 26),
+                            SizedBox(height: 2),
+                            Text('그룹삭제',
+                                style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
       ),
@@ -300,25 +632,26 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       }
       return students;
     }
-    
+
     if (_kStudentListDebug) {
       // ignore: avoid_print
       print('[DEBUG] 필터 적용 시작: ${widget.activeFilter}');
     }
-    
+
     final filteredStudents = students.where((studentWithInfo) {
       final student = studentWithInfo.student;
       final filter = widget.activeFilter!;
-      
+
       // 학년별 필터
       final educationLevels = filter['educationLevels'] ?? <String>{};
       final grades = filter['grades'] ?? <String>{};
-      
+
       if (_kStudentListDebug) {
         // ignore: avoid_print
-        print('[DEBUG] 학생: ${student.name}, 학년: ${student.grade}, 학교: ${student.school}, 그룹: ${student.groupInfo?.name}');
+        print(
+            '[DEBUG] 학생: ${student.name}, 학년: ${student.grade}, 학교: ${student.school}, 그룹: ${student.groupInfo?.name}');
       }
-      
+
       if (educationLevels.isNotEmpty || grades.isNotEmpty) {
         String? studentEducationLevel;
         switch (student.educationLevel) {
@@ -332,16 +665,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             studentEducationLevel = '고등';
             break;
         }
-        
-        bool matchesEducationLevel = educationLevels.isEmpty || 
-          (studentEducationLevel != null && educationLevels.contains(studentEducationLevel));
+
+        bool matchesEducationLevel = educationLevels.isEmpty ||
+            (studentEducationLevel != null &&
+                educationLevels.contains(studentEducationLevel));
         bool matchesGrade = grades.isEmpty || grades.contains(student.grade);
-        
+
         if (_kStudentListDebug) {
           // ignore: avoid_print
-          print('[DEBUG] 학년 필터 - 교육단계: $studentEducationLevel, 매치: $matchesEducationLevel, 학년매치: $matchesGrade');
+          print(
+              '[DEBUG] 학년 필터 - 교육단계: $studentEducationLevel, 매치: $matchesEducationLevel, 학년매치: $matchesGrade');
         }
-        
+
         if (!matchesEducationLevel || !matchesGrade) {
           if (_kStudentListDebug) {
             // ignore: avoid_print
@@ -350,7 +685,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           return false;
         }
       }
-      
+
       // 학교 필터
       final schools = filter['schools'] ?? <String>{};
       if (schools.isNotEmpty && !schools.contains(student.school)) {
@@ -360,7 +695,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         }
         return false;
       }
-      
+
       // 그룹 필터
       final groups = filter['groups'] ?? <String>{};
       if (groups.isNotEmpty) {
@@ -373,17 +708,18 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           return false;
         }
       }
-      
+
       if (_kStudentListDebug) {
         // ignore: avoid_print
         print('[DEBUG] 필터 통과: ${student.name}');
       }
       return true;
     }).toList();
-    
+
     if (_kStudentListDebug) {
       // ignore: avoid_print
-      print('[DEBUG] 필터 적용 완료: ${students.length}명 -> ${filteredStudents.length}명');
+      print(
+          '[DEBUG] 필터 적용 완료: ${students.length}명 -> ${filteredStudents.length}명');
     }
     return filteredStudents;
   }
@@ -393,12 +729,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     // 정렬 데이터 준비
     final filteredStudents = _applyFilter(widget.students);
     final students = filteredStudents;
-    final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedByGrade = {
+    final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedByGrade =
+        {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
       EducationLevel.high: {},
     };
-    final Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedBySchool = {
+    final Map<EducationLevel, Map<String, List<StudentWithInfo>>>
+        groupedBySchool = {
       EducationLevel.elementary: {},
       EducationLevel.middle: {},
       EducationLevel.high: {},
@@ -407,10 +745,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       final student = studentWithInfo.student;
       // 학년별
       groupedByGrade[student.educationLevel]![student.grade] ??= [];
-      groupedByGrade[student.educationLevel]![student.grade]!.add(studentWithInfo);
+      groupedByGrade[student.educationLevel]![student.grade]!
+          .add(studentWithInfo);
       // 학교별
       groupedBySchool[student.educationLevel]![student.school] ??= [];
-      groupedBySchool[student.educationLevel]![student.school]!.add(studentWithInfo);
+      groupedBySchool[student.educationLevel]![student.school]!
+          .add(studentWithInfo);
     }
     for (final level in groupedByGrade.keys) {
       for (final gradeStudents in groupedByGrade[level]!.values) {
@@ -425,232 +765,262 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const SizedBox(width: 0), // 왼쪽 여백
-          Expanded(
-            flex: 2,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Container(
-                  constraints: const BoxConstraints(
-                    minWidth: 624,
-                    maxWidth: 624,
-                  ),
-                  padding: const EdgeInsets.only(left: 34, right: 24, top: 24, bottom: 24),
-                  decoration: BoxDecoration(
-                    color: Color(0xFF0B1112),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 1),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 22),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF223131),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.people_alt_outlined, color: Colors.white70, size: 32),
-                                const SizedBox(width: 16),
-                                Text(
-                                  '학생 현황',
-                                  style: const TextStyle(
-                                    color: _studentListPrimaryTextColor,
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(width: 15),
-                                Text(
-                                  ' ${widget.students.length}명',
-                                  style: const TextStyle(
-                                    color: _studentListMutedTextColor,
-                                    fontSize: 22,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '업데이트 ${DateFormat('MM.dd').format(DateTime.now())}',
-                                  style: const TextStyle(
-                                    color: _studentListMutedTextColor,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                SizedBox(
-                                  width: 48,
-                                  height: 48,
-                                  child: IconButton(
-                                    tooltip: '엑셀 내보내기(준비중)',
-                                    onPressed: () {
-                                      // TODO: 학생현황 엑셀 내보내기 기능 연결
-                                    },
-                                    icon: const Icon(Symbols.output, color: Colors.white70, size: 26),
-                                    splashRadius: 22,
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 27),
-                      const SizedBox(height: 5),
-                      Expanded(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: _hasGroupFilter ? _handleStudentAreaTap : null,
-                          child: ListView(
-                            children: [
-                              _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedByGrade),
-                              const Divider(color: Color(0xFF223131), height: 48),
-                              _buildEducationLevelGroup('중등', EducationLevel.middle, groupedByGrade),
-                              const Divider(color: Color(0xFF223131), height: 48),
-                              _buildEducationLevelGroup('고등', EducationLevel.high, groupedByGrade),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: Container(
-                margin: const EdgeInsets.only(top: 24),
-                height: double.infinity,
-                child: const VerticalDivider(
-                  color: Color(0xFF223131),
-                  width: 1,
-                  thickness: 1,
+      children: [
+        const SizedBox(width: 0), // 왼쪽 여백
+        Expanded(
+          flex: 2,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Container(
+                constraints: const BoxConstraints(
+                  minWidth: 624,
+                  maxWidth: 624,
                 ),
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 1,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Container(
-                  margin: const EdgeInsets.only(right: 10),
-                  constraints: const BoxConstraints(
-                    minWidth: 424,
-                    maxWidth: 424,
-                  ),
-                  padding: const EdgeInsets.only(top: 24),
-                  decoration: BoxDecoration(
-                    color: Color(0xFF0B1112),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 1,
-                        child: _detailsStudent != null
-                            ? AnimatedBuilder(
-                                // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
-                                // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
-                                animation: Listenable.merge([
-                                  DataManager.instance.sessionOverridesNotifier,
-                                  DataManager.instance.attendanceRecordsNotifier,
-                                  DataManager.instance.studentPaymentInfoRevision,
-                                ]),
-                                builder: (context, _) => _EmbeddedStudentDetailsCard(
-                                  studentWithInfo: _detailsStudent!,
-                                  onRequestCourseView: widget.onRequestCourseView,
-                                  weekOffset: _detailsWeekOffset,
-                                  onWeekOffsetChanged: (next) =>
-                                      setState(() => _detailsWeekOffset = next),
-                                  onCloseDetails: () =>
-                                      setState(() => _detailsStudent = null),
-                                ),
-                              )
-                            : Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF0B1112),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFF223131), width: 1.5),
-                                ),
-                                child: const Center(
-                                  child: Text(
-                                    '학생을 선택하면 상세 정보가 여기에 표시됩니다.',
-                                    style: TextStyle(color: Colors.white38, fontSize: 16),
-                                  ),
-                                ),
-                              ),
+                padding: const EdgeInsets.only(
+                    left: 34, right: 24, top: 24, bottom: 24),
+                decoration: BoxDecoration(
+                  color: Color(0xFF0B1112),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 1),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 32, vertical: 22),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF223131),
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                        const SizedBox(height: 16),
-                        Padding(
-                          // ✅ 우측 여백을 줄여 + 버튼을 더 오른쪽으로 붙임
-                          padding: const EdgeInsets.fromLTRB(24, 15, 12, 0),
-                          child: Row(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
                             children: [
-                              const Icon(Icons.groups_rounded, color: _studentListPrimaryTextColor, size: 28),
-                              const SizedBox(width: 12),
-                              const Text(
-                                '그룹',
-                                style: TextStyle(
+                              const Icon(Icons.people_alt_outlined,
+                                  color: Colors.white70, size: 32),
+                              const SizedBox(width: 16),
+                              Text(
+                                '학생 현황',
+                                style: const TextStyle(
                                   color: _studentListPrimaryTextColor,
-                                  fontSize: 25,
+                                  fontSize: 32,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              const Spacer(),
-                              // ✅ 그룹 추가 버튼: 시간탭 "수업 리스트" + 버튼 스타일과 통일
-                              Padding(
-                                padding: const EdgeInsets.only(top: 0, right: 0),
-                                child: SizedBox(
-                                  width: 48,
-                                  height: 48,
-                                  child: IconButton(
-                                    tooltip: '그룹 추가',
-                                    onPressed: () async {
-                                      final result = await showDialog<GroupInfo>(
-                                        context: context,
-                                        builder: (context) => GroupRegistrationDialog(
-                                          onSave: (_) {},
-                                        ),
-                                      );
-                                      if (result != null) {
-                                        widget.onGroupAdded(result);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.add_rounded),
-                                    iconSize: 30,
-                                    color: _studentListPrimaryTextColor,
-                                    padding: EdgeInsets.zero,
-                                    splashRadius: 26,
-                                  ),
+                              const SizedBox(width: 15),
+                              Text(
+                                ' ${widget.students.length}명',
+                                style: const TextStyle(
+                                  color: _studentListMutedTextColor,
+                                  fontSize: 22,
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          flex: 1,
-                          child: Stack(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: ReorderableListView.builder(
+                              Text(
+                                '업데이트 ${DateFormat('MM.dd').format(DateTime.now())}',
+                                style: const TextStyle(
+                                  color: _studentListMutedTextColor,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: IconButton(
+                                  tooltip: '엑셀 내보내기(준비중)',
+                                  onPressed: () {
+                                    // TODO: 학생현황 엑셀 내보내기 기능 연결
+                                  },
+                                  icon: const Icon(Symbols.output,
+                                      color: Colors.white70, size: 26),
+                                  splashRadius: 22,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                      minWidth: 32, minHeight: 32),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 27),
+                    const SizedBox(height: 5),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: _hasGroupFilter ? _handleStudentAreaTap : null,
+                        child: ListView(
+                          children: [
+                            _buildEducationLevelGroup('초등',
+                                EducationLevel.elementary, groupedByGrade),
+                            const Divider(color: Color(0xFF223131), height: 48),
+                            _buildEducationLevelGroup(
+                                '중등', EducationLevel.middle, groupedByGrade),
+                            const Divider(color: Color(0xFF223131), height: 48),
+                            _buildEducationLevelGroup(
+                                '고등', EducationLevel.high, groupedByGrade),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        SizedBox(
+          width: 32,
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 24),
+              height: double.infinity,
+              child: const VerticalDivider(
+                color: Color(0xFF223131),
+                width: 1,
+                thickness: 1,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 1,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Container(
+                margin: const EdgeInsets.only(right: 10),
+                constraints: const BoxConstraints(
+                  minWidth: 424,
+                  maxWidth: 424,
+                ),
+                padding: const EdgeInsets.only(top: 24),
+                decoration: BoxDecoration(
+                  color: Color(0xFF0B1112),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: _detailsStudent != null
+                          ? AnimatedBuilder(
+                              // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
+                              // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
+                              animation: Listenable.merge([
+                                DataManager.instance.sessionOverridesNotifier,
+                                DataManager.instance.attendanceRecordsNotifier,
+                                DataManager.instance.studentPaymentInfoRevision,
+                              ]),
+                              builder: (context, _) =>
+                                  _EmbeddedStudentDetailsCard(
+                                studentWithInfo: _detailsStudent!,
+                                onRequestCourseView: widget.onRequestCourseView,
+                                weekOffset: _detailsWeekOffset,
+                                onWeekOffsetChanged: (next) =>
+                                    setState(() => _detailsWeekOffset = next),
+                                onCloseDetails: () =>
+                                    setState(() => _detailsStudent = null),
+                                onRefreshAfterPauseResume: () async {
+                                  await DataManager.instance.loadStudents();
+                                  if (!mounted) return;
+                                  setState(() {
+                                    // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
+                                    final sid = _detailsStudent?.student.id;
+                                    if (sid != null && sid.isNotEmpty) {
+                                      final idx = DataManager.instance.students
+                                          .indexWhere(
+                                              (s) => s.student.id == sid);
+                                      if (idx != -1) {
+                                        _detailsStudent =
+                                            DataManager.instance.students[idx];
+                                      }
+                                    }
+                                  });
+                                },
+                              ),
+                            )
+                          : Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0B1112),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                    color: const Color(0xFF223131), width: 1.5),
+                              ),
+                              child: const Center(
+                                child: Text(
+                                  '학생을 선택하면 상세 정보가 여기에 표시됩니다.',
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 16),
+                                ),
+                              ),
+                            ),
+                    ),
+                    const SizedBox(height: 16),
+                    Padding(
+                      // ✅ 우측 여백을 줄여 + 버튼을 더 오른쪽으로 붙임
+                      padding: const EdgeInsets.fromLTRB(24, 15, 12, 0),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.groups_rounded,
+                              color: _studentListPrimaryTextColor, size: 28),
+                          const SizedBox(width: 12),
+                          const Text(
+                            '그룹',
+                            style: TextStyle(
+                              color: _studentListPrimaryTextColor,
+                              fontSize: 25,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const Spacer(),
+                          // ✅ 그룹 추가 버튼: 시간탭 "수업 리스트" + 버튼 스타일과 통일
+                          Padding(
+                            padding: const EdgeInsets.only(top: 0, right: 0),
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: IconButton(
+                                tooltip: '그룹 추가',
+                                onPressed: () async {
+                                  final result = await showDialog<GroupInfo>(
+                                    context: context,
+                                    builder: (context) =>
+                                        GroupRegistrationDialog(
+                                      onSave: (_) {},
+                                    ),
+                                  );
+                                  if (result != null) {
+                                    widget.onGroupAdded(result);
+                                  }
+                                },
+                                icon: const Icon(Icons.add_rounded),
+                                iconSize: 30,
+                                color: _studentListPrimaryTextColor,
+                                padding: EdgeInsets.zero,
+                                splashRadius: 26,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      flex: 1,
+                      child: Stack(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: ReorderableListView.builder(
                               physics: const AlwaysScrollableScrollPhysics(),
                               dragStartBehavior: DragStartBehavior.down,
                               buildDefaultDragHandles: false,
@@ -659,9 +1029,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               proxyDecorator: (child, index, animation) {
                                 return AnimatedBuilder(
                                   animation: animation,
-                                  builder: (BuildContext context, Widget? child) {
+                                  builder:
+                                      (BuildContext context, Widget? child) {
                                     // ✅ 드래그 피드백: 마우스에 "붙는 느낌" + 살짝 확대/부유 효과
-                                    final t = Curves.easeOutCubic.transform(animation.value);
+                                    final t = Curves.easeOutCubic
+                                        .transform(animation.value);
                                     final scale = 1.0 + (0.03 * t);
                                     final elev = 2.0 + (8.0 * t);
                                     return Transform.scale(
@@ -670,7 +1042,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       child: Material(
                                         color: Colors.transparent,
                                         elevation: elev,
-                                        shadowColor: Colors.black.withOpacity(0.45),
+                                        shadowColor:
+                                            Colors.black.withOpacity(0.45),
                                         child: child,
                                       ),
                                     );
@@ -681,271 +1054,387 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                               itemCount: widget.groups.length,
                               itemBuilder: (context, index) {
                                 final groupInfo = widget.groups[index];
-                                final liveStudents = DataManager.instance.students;
-                                final studentsInGroup = liveStudents.where((s) => s.groupInfo?.id == groupInfo.id).toList();
-                                final activeGroups = widget.activeFilter?['groups'] ?? <String>{};
-                                final bool isFiltered = activeGroups.contains(groupInfo.name);
+                                final liveStudents =
+                                    DataManager.instance.students;
+                                final studentsInGroup = liveStudents
+                                    .where(
+                                        (s) => s.groupInfo?.id == groupInfo.id)
+                                    .toList();
+                                final activeGroups =
+                                    widget.activeFilter?['groups'] ??
+                                        <String>{};
+                                final bool isFiltered =
+                                    activeGroups.contains(groupInfo.name);
 
-                              return Padding(
-                                key: ValueKey(groupInfo.id),
-                                padding: const EdgeInsets.only(bottom: 12.0),
-                                child: DragTarget<StudentWithInfo>(
-                                  onWillAccept: (student) {
-                                    if (student == null) return false;
-                                    final cap = groupInfo.capacity;
-                                    // null/0 이면 제한 없음
-                                    if (cap != null && cap > 0 && studentsInGroup.length >= cap) return false;
-                                    return true;
-                                  },
-                                  onAccept: (student) {
-                                    final oldGroupInfo = student.groupInfo;
-                                    widget.onStudentMoved(student, groupInfo);
-                                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                                    Future.delayed(const Duration(milliseconds: 50), () {
-                                      showAppSnackBar(
-                                        context,
-                                        '${student.student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
-                                        useRoot: true,
+                                return Padding(
+                                  key: ValueKey(groupInfo.id),
+                                  padding: const EdgeInsets.only(bottom: 12.0),
+                                  child: DragTarget<StudentWithInfo>(
+                                    onWillAccept: (student) {
+                                      if (student == null) return false;
+                                      final cap = groupInfo.capacity;
+                                      // null/0 이면 제한 없음
+                                      if (cap != null &&
+                                          cap > 0 &&
+                                          studentsInGroup.length >= cap)
+                                        return false;
+                                      return true;
+                                    },
+                                    onAccept: (student) {
+                                      final oldGroupInfo = student.groupInfo;
+                                      widget.onStudentMoved(student, groupInfo);
+                                      ScaffoldMessenger.of(context)
+                                          .hideCurrentSnackBar();
+                                      Future.delayed(
+                                          const Duration(milliseconds: 50), () {
+                                        showAppSnackBar(
+                                          context,
+                                          '${student.student.name}님이 ${oldGroupInfo?.name ?? '미배정'} → ${groupInfo.name}으로 이동되었습니다.',
+                                          useRoot: true,
+                                        );
+                                      });
+                                    },
+                                    builder:
+                                        (context, candidateData, rejectedData) {
+                                      final bool isHovering =
+                                          candidateData.isNotEmpty;
+                                      final bool highlight =
+                                          isHovering || isFiltered;
+                                      final Color borderColor = highlight
+                                          ? groupInfo.color
+                                          : Colors.transparent;
+                                      final Color indicatorColor =
+                                          groupInfo.color;
+
+                                      // ✅ 수업카드(_ClassCard)와 동일한 "모양/사이즈/텍스트 높이 정렬"을 그룹에도 적용
+                                      const titleStyle = TextStyle(
+                                        color: _studentListPrimaryTextColor,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.15,
                                       );
-                                    });
-                                  },
-                                  builder: (context, candidateData, rejectedData) {
-                                    final bool isHovering = candidateData.isNotEmpty;
-                                    final bool highlight = isHovering || isFiltered;
-                                    final Color borderColor = highlight ? groupInfo.color : Colors.transparent;
-                                    final Color indicatorColor = groupInfo.color;
+                                      const descStyle = TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 14,
+                                        height: 1.15,
+                                      );
+                                      const gap = 4.0;
+                                      const extra = 2.0;
+                                      final String desc =
+                                          groupInfo.description.trim();
+                                      final bool hasDesc = desc.isNotEmpty;
+                                      final ts =
+                                          MediaQuery.textScalerOf(context);
+                                      final titlePx =
+                                          ts.scale(titleStyle.fontSize!);
+                                      final descPx =
+                                          ts.scale(descStyle.fontSize!);
+                                      final textBlockH =
+                                          (titlePx * titleStyle.height!) +
+                                              gap +
+                                              (descPx * descStyle.height!) +
+                                              extra;
 
-                                    // ✅ 수업카드(_ClassCard)와 동일한 "모양/사이즈/텍스트 높이 정렬"을 그룹에도 적용
-                                    const titleStyle = TextStyle(
-                                      color: _studentListPrimaryTextColor,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w600,
-                                      height: 1.15,
-                                    );
-                                    const descStyle = TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                      height: 1.15,
-                                    );
-                                    const gap = 4.0;
-                                    const extra = 2.0;
-                                    final String desc = groupInfo.description.trim();
-                                    final bool hasDesc = desc.isNotEmpty;
-                                    final ts = MediaQuery.textScalerOf(context);
-                                    final titlePx = ts.scale(titleStyle.fontSize!);
-                                    final descPx = ts.scale(descStyle.fontSize!);
-                                    final textBlockH =
-                                        (titlePx * titleStyle.height!) + gap + (descPx * descStyle.height!) + extra;
-
-                                    final cardBody = Container(
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF15171C),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: borderColor, width: 2),
-                                      ),
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                                          child: Row(
-                                            crossAxisAlignment: CrossAxisAlignment.center,
-                                            children: [
-                                              Container(
-                                                width: 10,
-                                                height: textBlockH,
-                                                decoration: BoxDecoration(
-                                                  color: indicatorColor,
-                                                  borderRadius: BorderRadius.circular(4),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 14),
-                                              Expanded(
-                                                child: SizedBox(
+                                      final cardBody = Container(
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF15171C),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                              color: borderColor, width: 2),
+                                        ),
+                                        child: Material(
+                                          color: Colors.transparent,
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 18, vertical: 16),
+                                            child: Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.center,
+                                              children: [
+                                                Container(
+                                                  width: 10,
                                                   height: textBlockH,
-                                                  child: hasDesc
-                                                      ? Column(
-                                                          mainAxisSize: MainAxisSize.max,
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                                          mainAxisAlignment: MainAxisAlignment.start,
-                                                          children: [
-                                                            Text(
+                                                  decoration: BoxDecoration(
+                                                    color: indicatorColor,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            4),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 14),
+                                                Expanded(
+                                                  child: SizedBox(
+                                                    height: textBlockH,
+                                                    child: hasDesc
+                                                        ? Column(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .max,
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              Text(
+                                                                groupInfo.name,
+                                                                maxLines: 1,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style:
+                                                                    titleStyle,
+                                                              ),
+                                                              const SizedBox(
+                                                                  height: gap),
+                                                              Text(
+                                                                desc,
+                                                                maxLines: 1,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style:
+                                                                    descStyle,
+                                                              ),
+                                                            ],
+                                                          )
+                                                        : Align(
+                                                            alignment: Alignment
+                                                                .centerLeft,
+                                                            child: Text(
                                                               groupInfo.name,
                                                               maxLines: 1,
-                                                              overflow: TextOverflow.ellipsis,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
                                                               style: titleStyle,
                                                             ),
-                                                            const SizedBox(height: gap),
-                                                            Text(
-                                                              desc,
-                                                              maxLines: 1,
-                                                              overflow: TextOverflow.ellipsis,
-                                                              style: descStyle,
-                                                            ),
-                                                          ],
-                                                        )
-                                                      : Align(
-                                                          alignment: Alignment.centerLeft,
-                                                          child: Text(
-                                                            groupInfo.name,
-                                                            maxLines: 1,
-                                                            overflow: TextOverflow.ellipsis,
-                                                            style: titleStyle,
                                                           ),
-                                                        ),
+                                                  ),
                                                 ),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Text(
-                                                (groupInfo.capacity == null || (groupInfo.capacity ?? 0) <= 0)
-                                                    ? '${studentsInGroup.length}명'
-                                                    : '${studentsInGroup.length}/${groupInfo.capacity}명',
-                                                style: const TextStyle(
-                                                  color: Colors.white70,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w500,
+                                                const SizedBox(width: 10),
+                                                Text(
+                                                  (groupInfo.capacity == null ||
+                                                          (groupInfo.capacity ??
+                                                                  0) <=
+                                                              0)
+                                                      ? '${studentsInGroup.length}명'
+                                                      : '${studentsInGroup.length}/${groupInfo.capacity}명',
+                                                  style: const TextStyle(
+                                                    color: Colors.white70,
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
                                                 ),
-                                              ),
-                                            ],
+                                              ],
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    );
+                                      );
 
-                                    final baseBody = GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: () => _applyGroupFilter(groupInfo.name),
-                                      child: cardBody,
-                                    );
+                                      final baseBody = GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () =>
+                                            _applyGroupFilter(groupInfo.name),
+                                        child: cardBody,
+                                      );
 
-                                    // 스와이프(드래그) 액션: 수업카드와 동일한 UX(편집/삭제)
-                                    const double paneW = 140;
-                                    final radius = BorderRadius.circular(12);
-                                    final actionPane = Padding(
-                                      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Material(
-                                              color: const Color(0xFF223131),
-                                              borderRadius: BorderRadius.circular(10),
-                                              child: InkWell(
-                                                onTap: () async {
-                                                  final dialogStudents = widget.students
-                                                      .where((s) => s.groupInfo?.id == groupInfo.id)
-                                                      .toList();
-                                                  final result = await showDialog<GroupInfo>(
-                                                    context: context,
-                                                    builder: (context) => GroupRegistrationDialog(
-                                                      editMode: true,
-                                                      groupInfo: groupInfo,
-                                                      currentMemberCount: dialogStudents.length,
-                                                      onSave: (_) {},
+                                      // 스와이프(드래그) 액션: 수업카드와 동일한 UX(편집/삭제)
+                                      const double paneW = 140;
+                                      final radius = BorderRadius.circular(12);
+                                      final actionPane = Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            6, 6, 6, 6),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Material(
+                                                color: const Color(0xFF223131),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                child: InkWell(
+                                                  onTap: () async {
+                                                    final dialogStudents =
+                                                        widget.students
+                                                            .where((s) =>
+                                                                s.groupInfo
+                                                                    ?.id ==
+                                                                groupInfo.id)
+                                                            .toList();
+                                                    final result =
+                                                        await showDialog<
+                                                            GroupInfo>(
+                                                      context: context,
+                                                      builder: (context) =>
+                                                          GroupRegistrationDialog(
+                                                        editMode: true,
+                                                        groupInfo: groupInfo,
+                                                        currentMemberCount:
+                                                            dialogStudents
+                                                                .length,
+                                                        onSave: (_) {},
+                                                      ),
+                                                    );
+                                                    if (result != null) {
+                                                      widget.onGroupUpdated(
+                                                          result, index);
+                                                    }
+                                                  },
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  splashFactory:
+                                                      NoSplash.splashFactory,
+                                                  highlightColor: Colors.white
+                                                      .withOpacity(0.06),
+                                                  hoverColor: Colors.white
+                                                      .withOpacity(0.03),
+                                                  child: const SizedBox.expand(
+                                                    child: Center(
+                                                      child: Icon(
+                                                          Icons.edit_outlined,
+                                                          color:
+                                                              Color(0xFFEAF2F2),
+                                                          size: 18),
                                                     ),
-                                                  );
-                                                  if (result != null) {
-                                                    widget.onGroupUpdated(result, index);
-                                                  }
-                                                },
-                                                borderRadius: BorderRadius.circular(10),
-                                                splashFactory: NoSplash.splashFactory,
-                                                highlightColor: Colors.white.withOpacity(0.06),
-                                                hoverColor: Colors.white.withOpacity(0.03),
-                                                child: const SizedBox.expand(
-                                                  child: Center(
-                                                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
                                                   ),
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Material(
-                                              color: const Color(0xFFB74C4C),
-                                              borderRadius: BorderRadius.circular(10),
-                                              child: InkWell(
-                                                onTap: () async {
-                                                  final confirm = await showDialog<bool>(
-                                                    context: context,
-                                                    builder: (context) => AlertDialog(
-                                                      backgroundColor: const Color(0xFF232326),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                                      title: Text('${groupInfo.name} 삭제', style: const TextStyle(color: Colors.white)),
-                                                      content: const Text('정말로 이 그룹을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
-                                                      actions: [
-                                                        TextButton(
-                                                          onPressed: () => Navigator.of(context).pop(false),
-                                                          child: const Text('취소', style: TextStyle(color: Colors.white70)),
-                                                        ),
-                                                        TextButton(
-                                                          onPressed: () => Navigator.of(context).pop(true),
-                                                          child: const Text('삭제', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                                                        ),
-                                                      ],
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Material(
+                                                color: const Color(0xFFB74C4C),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                child: InkWell(
+                                                  onTap: () async {
+                                                    final confirm =
+                                                        await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (context) =>
+                                                          AlertDialog(
+                                                        backgroundColor:
+                                                            const Color(
+                                                                0xFF232326),
+                                                        shape: RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        16)),
+                                                        title: Text(
+                                                            '${groupInfo.name} 삭제',
+                                                            style:
+                                                                const TextStyle(
+                                                                    color: Colors
+                                                                        .white)),
+                                                        content: const Text(
+                                                            '정말로 이 그룹을 삭제하시겠습니까?',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white70)),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.of(
+                                                                        context)
+                                                                    .pop(false),
+                                                            child: const Text(
+                                                                '취소',
+                                                                style: TextStyle(
+                                                                    color: Colors
+                                                                        .white70)),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.of(
+                                                                        context)
+                                                                    .pop(true),
+                                                            child: const Text(
+                                                                '삭제',
+                                                                style: TextStyle(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700)),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirm == true) {
+                                                      widget.onGroupDeleted(
+                                                          groupInfo);
+                                                    }
+                                                  },
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  splashFactory:
+                                                      NoSplash.splashFactory,
+                                                  highlightColor: Colors.white
+                                                      .withOpacity(0.08),
+                                                  hoverColor: Colors.white
+                                                      .withOpacity(0.04),
+                                                  child: const SizedBox.expand(
+                                                    child: Center(
+                                                      child: Icon(
+                                                          Icons
+                                                              .delete_outline_rounded,
+                                                          color: Colors.white,
+                                                          size: 18),
                                                     ),
-                                                  );
-                                                  if (confirm == true) {
-                                                    widget.onGroupDeleted(groupInfo);
-                                                  }
-                                                },
-                                                borderRadius: BorderRadius.circular(10),
-                                                splashFactory: NoSplash.splashFactory,
-                                                highlightColor: Colors.white.withOpacity(0.08),
-                                                hoverColor: Colors.white.withOpacity(0.04),
-                                                child: const SizedBox.expand(
-                                                  child: Center(
-                                                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
                                                   ),
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
+                                          ],
+                                        ),
+                                      );
 
-                                    final swiped = SwipeActionReveal(
-                                      enabled: true,
-                                      actionPaneWidth: paneW,
-                                      borderRadius: radius,
-                                      actionPane: actionPane,
-                                      child: baseBody,
-                                    );
+                                      final swiped = SwipeActionReveal(
+                                        enabled: true,
+                                        actionPaneWidth: paneW,
+                                        borderRadius: radius,
+                                        actionPane: actionPane,
+                                        child: baseBody,
+                                      );
 
-                                    // ✅ 수업리스트와 동일: 기본은 "오래 눌러" 순서 이동(reorder)
-                                    return isFiltered
-                                        ? swiped
-                                        : ReorderableDelayedDragStartListener(
-                                            index: index,
-                                            child: swiped,
-                                          );
-                                  },
-                                ),
-                              );
-                            },
-                          onReorder: widget.onReorder,
-                        ),
-                      ),
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                child: _buildRemoveFromGroupDropZone(),
-                              ),
-                            ],
+                                      // ✅ 수업리스트와 동일: 기본은 "오래 눌러" 순서 이동(reorder)
+                                      return isFiltered
+                                          ? swiped
+                                          : ReorderableDelayedDragStartListener(
+                                              index: index,
+                                              child: swiped,
+                                            );
+                                    },
+                                  ),
+                                );
+                              },
+                              onReorder: widget.onReorder,
+                            ),
                           ),
-                        ),
-                      const SizedBox(height: 12),
-                    ],
-                  ),
-                );
-              },
-            ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: _buildRemoveFromGroupDropZone(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              );
+            },
           ),
-          const SizedBox(width: 24), // 오른쪽 여백
-        ],
-      );
+        ),
+        const SizedBox(width: 24), // 오른쪽 여백
+      ],
+    );
   }
 
   Widget _buildEducationLevelGroup(
@@ -954,97 +1443,109 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedStudents,
   ) {
     final students = groupedStudents[level]!;
-    final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
+    final totalCount =
+        students.values.fold<int>(0, (sum, list) => sum + list.length);
 
-    final List<MapEntry<int, List<StudentWithInfo>>> sortedEntries = students.entries
-        .where((entry) => entry.value.isNotEmpty)
-        .toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
+    final List<MapEntry<int, List<StudentWithInfo>>> sortedEntries =
+        students.entries.where((entry) => entry.value.isNotEmpty).toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
 
-    final List<Widget> gradeWidgets = sortedEntries
-        .map<Widget>((entry) {
-          final gradeStudents = entry.value;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 8, left: 5),
-                child: Text(
-                  '${entry.key}학년',
-                  style: const TextStyle(
-                    color: _studentListMutedTextColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+    final List<Widget> gradeWidgets = sortedEntries.map<Widget>((entry) {
+      final gradeStudents = entry.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8, left: 5),
+            child: Text(
+              '${entry.key}학년',
+              style: const TextStyle(
+                color: _studentListMutedTextColor,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
               ),
-              Wrap(
-                spacing: 4,
-                runSpacing: 8,
-                children: gradeStudents.map((student) =>
-                  _buildStudentDraggable(
-                    student: student,
-                    feedback: Material(
-                      color: Colors.transparent,
-                      child: Opacity(
-                        opacity: 0.85,
+            ),
+          ),
+          Wrap(
+            spacing: 4,
+            runSpacing: 8,
+            children: gradeStudents
+                .map((student) => _buildStudentDraggable(
+                      student: student,
+                      feedback: Material(
+                        color: Colors.transparent,
+                        child: Opacity(
+                          opacity: 0.85,
+                          child: StudentCard(
+                            key: ValueKey(
+                                'studentCard_feedback_${student.student.id}'),
+                            studentWithInfo: student,
+                            onShowDetails: (s) {
+                              _onShowDetails(s);
+                              widget.onShowDetails(s);
+                            }, // 연결 복구 + 내장 상세
+                            onDelete: widget.onDeleteStudent,
+                            onUpdate: widget.onStudentUpdated,
+                            onOpenStudentPage: (s) {
+                              Navigator.of(context).push(
+                                DarkPanelRoute(
+                                  child: StudentCourseDetailScreen(
+                                      studentWithInfo: s),
+                                ),
+                              );
+                            },
+                            enableLongPressDrag: false,
+                          ),
+                        ),
+                      ),
+                      childWhenDragging: Opacity(
+                        opacity: 0.3,
                         child: StudentCard(
-                          key: ValueKey('studentCard_feedback_${student.student.id}'),
+                          key: ValueKey(
+                              'studentCard_placeholder_${student.student.id}'),
                           studentWithInfo: student,
-                          onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); }, // 연결 복구 + 내장 상세
+                          onShowDetails: (s) {
+                            _onShowDetails(s);
+                            widget.onShowDetails(s);
+                          },
                           onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
                           onOpenStudentPage: (s) {
                             Navigator.of(context).push(
                               DarkPanelRoute(
-                                child: StudentCourseDetailScreen(studentWithInfo: s),
+                                child: StudentCourseDetailScreen(
+                                    studentWithInfo: s),
                               ),
                             );
                           },
                           enableLongPressDrag: false,
                         ),
                       ),
-                    ),
-                    childWhenDragging: Opacity(
-                      opacity: 0.3,
                       child: StudentCard(
-                        key: ValueKey('studentCard_placeholder_${student.student.id}'),
+                        key: ValueKey('studentCard_${student.student.id}'),
                         studentWithInfo: student,
-                        onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); },
+                        onShowDetails: (s) {
+                          _onShowDetails(s);
+                          widget.onShowDetails(s);
+                        },
                         onDelete: widget.onDeleteStudent,
                         onUpdate: widget.onStudentUpdated,
                         onOpenStudentPage: (s) {
                           Navigator.of(context).push(
                             DarkPanelRoute(
-                              child: StudentCourseDetailScreen(studentWithInfo: s),
+                              child:
+                                  StudentCourseDetailScreen(studentWithInfo: s),
                             ),
                           );
                         },
                         enableLongPressDrag: false,
                       ),
-                    ),
-                    child: StudentCard(
-                      key: ValueKey('studentCard_${student.student.id}'),
-                      studentWithInfo: student,
-                      onShowDetails: (s) { _onShowDetails(s); widget.onShowDetails(s); },
-                      onDelete: widget.onDeleteStudent,
-                      onUpdate: widget.onStudentUpdated,
-                      onOpenStudentPage: (s) {
-                        Navigator.of(context).push(
-                          DarkPanelRoute(
-                            child: StudentCourseDetailScreen(studentWithInfo: s),
-                          ),
-                        );
-                      },
-                      enableLongPressDrag: false,
-                    ),
-                  )
-                ).toList(),
-              ),
-            ],
-          );
-        })
-        .toList();
+                    ))
+                .toList(),
+          ),
+        ],
+      );
+    }).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1094,7 +1595,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedStudents,
   ) {
     final students = groupedStudents[level]!;
-    final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
+    final totalCount =
+        students.values.fold<int>(0, (sum, list) => sum + list.length);
 
     final List<Widget> schoolWidgets = [];
     for (final entry in students.entries.where((e) => e.value.isNotEmpty)) {
@@ -1140,29 +1642,33 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                     ),
                   ),
                 ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(left: 24),
-            child: Wrap(
-              spacing: 4,
-              runSpacing: 8,
-              children: gradeStudents.map((studentWithInfo) => StudentCard(
-                key: ValueKey('studentCard_${studentWithInfo.student.id}'),
-                studentWithInfo: studentWithInfo,
-                onShowDetails: widget.onShowDetails, // 연결 복구
-                onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
-                onUpdate: widget.onStudentUpdated,
-                onOpenStudentPage: (s) {
-                            Navigator.of(context).push(
-                              DarkPanelRoute(
-                      child: StudentCourseDetailScreen(studentWithInfo: s),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 24),
+                    child: Wrap(
+                      spacing: 4,
+                      runSpacing: 8,
+                      children: gradeStudents
+                          .map((studentWithInfo) => StudentCard(
+                                key: ValueKey(
+                                    'studentCard_${studentWithInfo.student.id}'),
+                                studentWithInfo: studentWithInfo,
+                                onShowDetails: widget.onShowDetails, // 연결 복구
+                                onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
+                                onUpdate: widget.onStudentUpdated,
+                                onOpenStudentPage: (s) {
+                                  Navigator.of(context).push(
+                                    DarkPanelRoute(
+                                      child: StudentCourseDetailScreen(
+                                          studentWithInfo: s),
+                                    ),
+                                  );
+                                },
+                              ))
+                          .toList(),
                     ),
-                  );
-                },
-              )).toList(),
-            ),
-          ),
-        ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1198,7 +1704,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       ],
     );
   }
-} 
+}
 
 class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
@@ -1206,12 +1712,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final int weekOffset; // 0: 이번주, 1: 다음주 ...
   final ValueChanged<int> onWeekOffsetChanged;
   final VoidCallback onCloseDetails;
+  final Future<void> Function()? onRefreshAfterPauseResume;
   const _EmbeddedStudentDetailsCard({
     required this.studentWithInfo,
     required this.onRequestCourseView,
     required this.weekOffset,
     required this.onWeekOffsetChanged,
     required this.onCloseDetails,
+    this.onRefreshAfterPauseResume,
   });
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -1246,26 +1754,32 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     final grades = gradesByLevel[student.educationLevel] ?? [];
     final Grade grade = grades.firstWhere(
       (g) => g.value == student.grade,
-      orElse: () => grades.isNotEmpty ? grades.first : Grade(student.educationLevel, '${student.grade}', student.grade),
+      orElse: () => grades.isNotEmpty
+          ? grades.first
+          : Grade(student.educationLevel, '${student.grade}', student.grade),
     );
     final DateTime now = DateTime.now();
     final DateTime todayStart = DateTime(now.year, now.month, now.day);
     final DateTime registrationDate = basicInfo.registrationDate ?? now;
 
     // ✅ 최근 출석(판정 포함): 시간기록 다이얼로그와 같은 소스/판정 로직을 사용
-    final latenessThresholdMinutes =
-        DataManager.instance.getStudentPaymentInfo(student.id)?.latenessThreshold ?? 10;
+    final latenessThresholdMinutes = DataManager.instance
+            .getStudentPaymentInfo(student.id)
+            ?.latenessThreshold ??
+        10;
     bool _isPurePlannedAttendance(AttendanceRecord r) {
       return r.isPlanned == true &&
           !r.isPresent &&
           r.arrivalTime == null &&
           r.departureTime == null;
     }
+
     final allAttendance = DataManager.instance.attendanceRecords
         .where((r) => r.studentId == student.id)
         .toList();
     final purePlanned = allAttendance.where(_isPurePlannedAttendance).toList();
-    final actual = allAttendance.where((r) => !_isPurePlannedAttendance(r)).toList();
+    final actual =
+        allAttendance.where((r) => !_isPurePlannedAttendance(r)).toList();
     final plannedPast = purePlanned
         .where((r) => _dateOnly(r.classDateTime).isBefore(todayStart))
         .toList();
@@ -1275,7 +1789,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     // ✅ 수업시간: "기준 주(이번주/다음주…)"의 요일 실제 날짜 기준으로 필터링
     final nowWeekMonday = _mondayOf(DateTime.now());
     final refMonday = nowWeekMonday.add(Duration(days: weekOffset * 7));
-    final List<StudentTimeBlock> timeBlocks = DataManager.instance.studentTimeBlocks
+    final List<StudentTimeBlock> timeBlocks = DataManager
+        .instance.studentTimeBlocks
         .where((b) =>
             b.studentId == student.id &&
             _isActiveOn(b, refMonday.add(Duration(days: b.dayIndex))))
@@ -1292,7 +1807,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
         .take(3)
         .toList();
 
-    final List<_MonthlyPaymentStatus> monthlyStatuses = _buildRecentMonthlyStatuses(
+    final List<_MonthlyPaymentStatus> monthlyStatuses =
+        _buildRecentMonthlyStatuses(
       currentMonth: DateTime(now.year, now.month),
       registrationDate: registrationDate,
       studentId: student.id,
@@ -1300,9 +1816,13 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
 
     final Color bgColor = const Color(0xFF0B1112);
     final Color outlineColor = const Color(0xFF223131);
-    final TextStyle labelStyle = const TextStyle(color: Color(0xFFAEC0C0), fontSize: 14);
-    final TextStyle valueStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15, fontWeight: FontWeight.w600);
-    final String memoText = (basicInfo.memo ?? '').trim().isEmpty ? '메모가 없습니다.' : (basicInfo.memo ?? '').trim();
+    final TextStyle labelStyle =
+        const TextStyle(color: Color(0xFFAEC0C0), fontSize: 14);
+    final TextStyle valueStyle = const TextStyle(
+        color: Color(0xFFEAF2F2), fontSize: 15, fontWeight: FontWeight.w600);
+    final String memoText = (basicInfo.memo ?? '').trim().isEmpty
+        ? '메모가 없습니다.'
+        : (basicInfo.memo ?? '').trim();
 
     Widget section({
       required IconData icon,
@@ -1378,7 +1898,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
           // ✅ 칩 내부 배경색 제거(투명)
           color: Colors.transparent,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: background.withOpacity(0.6), width: borderWidth),
+          border: Border.all(
+              color: background.withOpacity(0.6), width: borderWidth),
         ),
         child: Text(
           text,
@@ -1409,11 +1930,15 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
         });
 
       scheduleChildren = entries.map((entry) {
-        final blocks = entry.value..sort((a, b) => _timeKey(a).compareTo(_timeKey(b)));
+        final blocks = entry.value
+          ..sort((a, b) => _timeKey(a).compareTo(_timeKey(b)));
         final StudentTimeBlock earliest = _earliestBlock(blocks);
         final StudentTimeBlock latest = _latestBlock(blocks);
-        final String start = _formatTime(earliest.startHour, earliest.startMinute);
-        final DateTime latestEnd = DateTime(2000, 1, 1, latest.startHour, latest.startMinute).add(latest.duration);
+        final String start =
+            _formatTime(earliest.startHour, earliest.startMinute);
+        final DateTime latestEnd =
+            DateTime(2000, 1, 1, latest.startHour, latest.startMinute)
+                .add(latest.duration);
         final String end = _formatTime(latestEnd.hour, latestEnd.minute);
         final int? lessonOrder = earliest.weeklyOrder ?? earliest.number;
 
@@ -1432,7 +1957,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               const Spacer(),
               Text(
                 _weekdayWithDate(earliest.dayIndex, refMonday),
-                style: labelStyle.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
+                style: labelStyle.copyWith(
+                    color: Colors.white, fontWeight: FontWeight.w600),
               ),
               const SizedBox(width: 16),
               Text('$start ~ $end', style: valueStyle),
@@ -1445,7 +1971,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     List<Widget> attendanceChips = [];
     if (previousAttendance.isNotEmpty) {
       attendanceChips = previousAttendance.map((record) {
-        final String dateLabel = DateFormat('MM.dd').format(record.classDateTime);
+        final String dateLabel =
+            DateFormat('MM.dd').format(record.classDateTime);
         final AttendanceResult result = judgeAttendanceResult(
           record: record,
           now: now,
@@ -1480,7 +2007,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             o.reason == OverrideReason.makeup &&
             o.replacementClassDateTime != null)
         .toList()
-      ..sort((a, b) => a.replacementClassDateTime!.compareTo(b.replacementClassDateTime!));
+      ..sort((a, b) =>
+          a.replacementClassDateTime!.compareTo(b.replacementClassDateTime!));
 
     final List<Widget> makeupChips = plannedMakeups.take(3).map((ov) {
       final rep = ov.replacementClassDateTime!.toLocal();
@@ -1489,7 +2017,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       // ✅ 보강관리 다이얼로그와 동일한 완료 판정:
       // replacement 시각의 출석기록에 등/하원이 모두 있으면 "출석 완료"로 본다.
       final record = DataManager.instance.getAttendanceRecord(student.id, rep);
-      final bool isDone = record != null && record.arrivalTime != null && record.departureTime != null;
+      final bool isDone = record != null &&
+          record.arrivalTime != null &&
+          record.departureTime != null;
       final labeledChip = Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
@@ -1505,7 +2035,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               const Icon(Icons.check_rounded, color: c, size: 16),
               const SizedBox(width: 4),
             ],
-            Text(label, style: const TextStyle(color: c, fontWeight: FontWeight.w600)),
+            Text(label,
+                style: const TextStyle(color: c, fontWeight: FontWeight.w600)),
           ],
         ),
       );
@@ -1583,16 +2114,19 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   return Tooltip(
                     message: status.detail,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         // ✅ 칩 내부 배경색 제거(투명)
                         color: Colors.transparent,
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: status.color.withOpacity(0.8), width: 1.5),
+                        border: Border.all(
+                            color: status.color.withOpacity(0.8), width: 1.5),
                       ),
                       child: Text(
                         status.label,
-                        style: TextStyle(color: status.color, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: status.color, fontWeight: FontWeight.w600),
                       ),
                     ),
                   );
@@ -1640,10 +2174,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 28,
-                backgroundColor: student.groupInfo?.color ?? const Color(0xFF2C3A3A),
+                backgroundColor:
+                    student.groupInfo?.color ?? const Color(0xFF2C3A3A),
                 child: Text(
                   student.name.characters.take(2).join(),
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(width: 16),
@@ -1662,7 +2200,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       '${student.school} · $levelName · ${grade.name}',
-                      style: const TextStyle(color: Color(0xFFCFDBDB), fontSize: 15),
+                      style: const TextStyle(
+                          color: Color(0xFFCFDBDB), fontSize: 15),
                     ),
                   ],
                 ),
@@ -1670,11 +2209,15 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text('등록일', style: TextStyle(color: Color(0xFFA6BAB7), fontSize: 12)),
+                  const Text('등록일',
+                      style: TextStyle(color: Color(0xFFA6BAB7), fontSize: 12)),
                   const SizedBox(height: 4),
                   Text(
                     DateFormat('yyyy.MM.dd').format(registrationDate),
-                    style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 15, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -1698,7 +2241,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                             : null,
                         icon: Icon(
                           Icons.chevron_left,
-                          color: weekOffset > 0 ? Colors.white70 : Colors.white24,
+                          color:
+                              weekOffset > 0 ? Colors.white70 : Colors.white24,
                           size: 20,
                         ),
                         splashRadius: 16,
@@ -1741,8 +2285,10 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF9FB3B3),
                       side: const BorderSide(color: Color(0xFF4D5A5A)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
                     ),
                     icon: const Icon(Icons.open_in_new_rounded, size: 16),
                     label: const Text('상세'),
@@ -1763,7 +2309,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   title: '소속 그룹',
                   children: [
                     student.groupInfo != null
-                        ? statusChip(student.groupInfo!.name, student.groupInfo!.color, borderWidth: 2)
+                        ? statusChip(
+                            student.groupInfo!.name, student.groupInfo!.color,
+                            borderWidth: 2)
                         : textValue('미배정'),
                   ],
                 ),
@@ -1774,7 +2322,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   children: [
                     infoRow('전화번호', textValue(basicInfo.phoneNumber ?? '-')),
                     const SizedBox(height: 10),
-                    infoRow('학부모 번호', textValue(basicInfo.parentPhoneNumber ?? '-')),
+                    infoRow('학부모 번호',
+                        textValue(basicInfo.parentPhoneNumber ?? '-')),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1814,18 +2363,217 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
+                              horizontal: 14, vertical: 24),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700),
                         ),
-                        icon: const Icon(Icons.edit_outlined, size: 16),
+                        icon: const Icon(Icons.edit_outlined, size: 20),
                         label: const Text('수정'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () {
-                          showAppSnackBar(context, '휴원 기능은 준비중입니다.',
-                              useRoot: true);
+                        onPressed: () async {
+                          final activePause = DataManager.instance
+                              .getActivePauseForStudent(student.id);
+                          final now = DateTime.now();
+                          final today = DateTime(now.year, now.month, now.day);
+
+                          final ThemeData pickerTheme =
+                              Theme.of(context).copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: Color(0xFF33A373),
+                              surface: Color(0xFF15171C),
+                              onSurface: Colors.white70,
+                            ),
+                            dialogBackgroundColor: const Color(0xFF0B1112),
+                          );
+
+                          if (activePause != null) {
+                            // 등원 처리
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: today,
+                              firstDate: activePause.pausedFrom,
+                              lastDate: DateTime(today.year + 2, 12, 31),
+                              builder: (context, child) => Theme(
+                                data: pickerTheme,
+                                child: child!,
+                              ),
+                            );
+                            if (picked == null) return;
+                            try {
+                              await DataManager.instance.resumeStudent(
+                                studentId: student.id,
+                                resumeDateLocal: picked,
+                              );
+                              if (!context.mounted) return;
+                              // ✅ 등원/휴원 처리 후 학생리스트 즉시 새로고침(상위 State에서 처리)
+                              await (onRefreshAfterPauseResume?.call() ??
+                                  Future<void>.value());
+                              showAppSnackBar(context, '등원 처리되었습니다.',
+                                  useRoot: true);
+                            } catch (e) {
+                              if (!context.mounted) return;
+                              showAppSnackBar(context, '등원 처리 실패: $e',
+                                  useRoot: true);
+                            }
+                            return;
+                          }
+
+                          // 휴원 처리
+                          DateTime? from;
+                          DateTime? to;
+                          final noteController = TextEditingController();
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => StatefulBuilder(
+                              builder: (context, setLocal) => AlertDialog(
+                                backgroundColor: const Color(0xFF232326),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16)),
+                                title: const Text('휴원',
+                                    style: TextStyle(color: Colors.white)),
+                                content: SizedBox(
+                                  width: 420,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        '휴원 기간에는 예정 수업이 생성되지 않습니다.',
+                                        style: TextStyle(
+                                            color: Colors.white70,
+                                            height: 1.35),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: OutlinedButton(
+                                              onPressed: () async {
+                                                final picked =
+                                                    await showDatePicker(
+                                                  context: context,
+                                                  initialDate: today,
+                                                  firstDate:
+                                                      DateTime(2018, 1, 1),
+                                                  lastDate: DateTime(
+                                                      today.year + 2, 12, 31),
+                                                  builder: (context, child) =>
+                                                      Theme(
+                                                    data: pickerTheme,
+                                                    child: child!,
+                                                  ),
+                                                );
+                                                if (picked == null) return;
+                                                setLocal(() => from = picked);
+                                              },
+                                              child: Text(
+                                                from == null
+                                                    ? '휴원 시작일 선택'
+                                                    : '시작: ${DateFormat('yyyy.MM.dd').format(from!)}',
+                                                style: const TextStyle(
+                                                    color: Colors.white70),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: OutlinedButton(
+                                              onPressed: () async {
+                                                final base = from ?? today;
+                                                final picked =
+                                                    await showDatePicker(
+                                                  context: context,
+                                                  initialDate: base,
+                                                  firstDate: base,
+                                                  lastDate: DateTime(
+                                                      today.year + 2, 12, 31),
+                                                  builder: (context, child) =>
+                                                      Theme(
+                                                    data: pickerTheme,
+                                                    child: child!,
+                                                  ),
+                                                );
+                                                if (picked == null) return;
+                                                setLocal(() => to = picked);
+                                              },
+                                              child: Text(
+                                                to == null
+                                                    ? '예상 등원일(선택)'
+                                                    : '등원: ${DateFormat('yyyy.MM.dd').format(to!)}',
+                                                style: const TextStyle(
+                                                    color: Colors.white70),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      TextField(
+                                        controller: noteController,
+                                        style: const TextStyle(
+                                            color: Colors.white),
+                                        decoration: const InputDecoration(
+                                          labelText: '메모(선택)',
+                                          labelStyle:
+                                              TextStyle(color: Colors.white70),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderSide: BorderSide(
+                                                color: Color(0xFF3A3F44)),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderSide: BorderSide(
+                                                color: Color(0xFF1976D2)),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(context).pop(false),
+                                    child: const Text('취소',
+                                        style:
+                                            TextStyle(color: Colors.white70)),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(context).pop(true),
+                                    child: const Text('휴원',
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                          if (confirmed != true) return;
+                          final start = from ?? today;
+                          try {
+                            await DataManager.instance.pauseStudent(
+                              studentId: student.id,
+                              pausedFromLocal: start,
+                              pausedToLocal: to,
+                              note: noteController.text.trim(),
+                            );
+                            if (!context.mounted) return;
+                            // ✅ 등원/휴원 처리 후 학생리스트 즉시 새로고침(상위 State에서 처리)
+                            await (onRefreshAfterPauseResume?.call() ??
+                                Future<void>.value());
+                            showAppSnackBar(context, '휴원 처리되었습니다.',
+                                useRoot: true);
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            showAppSnackBar(context, '휴원 처리 실패: $e',
+                                useRoot: true);
+                          }
                         },
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF9FB3B3),
@@ -1833,11 +2581,25 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
+                              horizontal: 14, vertical: 24),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700),
                         ),
-                        icon:
-                            const Icon(Icons.pause_circle_outline, size: 16),
-                        label: const Text('휴원'),
+                        icon: Icon(
+                          DataManager.instance
+                                      .getActivePauseForStudent(student.id) !=
+                                  null
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_circle_outline,
+                          size: 20,
+                        ),
+                        label: Text(
+                          DataManager.instance
+                                      .getActivePauseForStudent(student.id) !=
+                                  null
+                              ? '등원'
+                              : '휴원',
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1855,16 +2617,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                               content: Text(
                                 '${student.name} 학생을 퇴원(삭제) 처리하시겠습니까?\n\n'
                                 '퇴원 처리 시 학생 정보는 아카이브에 최대 1년간 보관됩니다.',
-                                style:
-                                    const TextStyle(color: Colors.white70),
+                                style: const TextStyle(color: Colors.white70),
                               ),
                               actions: [
                                 TextButton(
                                   onPressed: () =>
                                       Navigator.of(context).pop(false),
                                   child: const Text('취소',
-                                      style:
-                                          TextStyle(color: Colors.white70)),
+                                      style: TextStyle(color: Colors.white70)),
                                 ),
                                 TextButton(
                                   onPressed: () =>
@@ -1879,7 +2639,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           );
                           if (confirmed != true) return;
                           try {
-                            await DataManager.instance.deleteStudent(student.id);
+                            await DataManager.instance
+                                .deleteStudent(student.id);
                             showAppSnackBar(context, '퇴원 처리되었습니다.',
                                 useRoot: true);
                             onCloseDetails();
@@ -1904,9 +2665,11 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
+                              horizontal: 14, vertical: 24),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700),
                         ),
-                        icon: const Icon(Icons.logout_rounded, size: 16),
+                        icon: const Icon(Icons.logout_rounded, size: 20),
                         label: const Text('퇴원'),
                       ),
                     ),
@@ -1927,15 +2690,20 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   }
 
   StudentTimeBlock _earliestBlock(List<StudentTimeBlock> blocks) {
-    return blocks.reduce((value, element) => _timeKey(value) <= _timeKey(element) ? value : element);
+    return blocks.reduce((value, element) =>
+        _timeKey(value) <= _timeKey(element) ? value : element);
   }
 
   StudentTimeBlock _latestBlock(List<StudentTimeBlock> blocks) {
-    return blocks.reduce((value, element) => _timeKey(value, end: true) >= _timeKey(element, end: true) ? value : element);
+    return blocks.reduce((value, element) =>
+        _timeKey(value, end: true) >= _timeKey(element, end: true)
+            ? value
+            : element);
   }
 
   int _timeKey(StudentTimeBlock block, {bool end = false}) {
-    final int base = block.dayIndex * 1440 + block.startHour * 60 + block.startMinute;
+    final int base =
+        block.dayIndex * 1440 + block.startHour * 60 + block.startMinute;
     return end ? base + block.duration.inMinutes : base;
   }
 
@@ -1959,7 +2727,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   }) {
     final List<_MonthlyPaymentStatus> statuses = [];
     for (int offset = 2; offset >= 0; offset--) {
-      final DateTime month = DateTime(currentMonth.year, currentMonth.month - offset, 1);
+      final DateTime month =
+          DateTime(currentMonth.year, currentMonth.month - offset, 1);
       final status = _buildMonthlyPaymentStatus(
         month: month,
         registrationDate: registrationDate,
@@ -1977,13 +2746,15 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     required DateTime registrationDate,
     required String studentId,
   }) {
-    final DateTime monthEnd = DateTime(month.year, month.month, DateUtils.getDaysInMonth(month.year, month.month));
+    final DateTime monthEnd = DateTime(month.year, month.month,
+        DateUtils.getDaysInMonth(month.year, month.month));
     if (registrationDate.isAfter(monthEnd)) {
       return null;
     }
     final DateTime dueDate = _clampDueDate(month, registrationDate);
     final int cycle = _calculateCycleNumber(registrationDate, dueDate);
-    final PaymentRecord? record = DataManager.instance.getPaymentRecord(studentId, cycle);
+    final PaymentRecord? record =
+        DataManager.instance.getPaymentRecord(studentId, cycle);
     final DateTime effectiveDue = record?.dueDate ?? dueDate;
     final DateTime? paidDate = record?.paidDate;
     final String dueLabel = DateFormat('MM.dd').format(effectiveDue);
@@ -2011,14 +2782,17 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
 
   DateTime _clampDueDate(DateTime month, DateTime registrationDate) {
     final int lastDay = DateUtils.getDaysInMonth(month.year, month.month);
-    final int dueDay = registrationDate.day > lastDay ? lastDay : registrationDate.day;
+    final int dueDay =
+        registrationDate.day > lastDay ? lastDay : registrationDate.day;
     return DateTime(month.year, month.month, dueDay);
   }
 
   int _calculateCycleNumber(DateTime registrationDate, DateTime paymentDate) {
     final regMonth = DateTime(registrationDate.year, registrationDate.month);
     final payMonth = DateTime(paymentDate.year, paymentDate.month);
-    return (payMonth.year - regMonth.year) * 12 + (payMonth.month - regMonth.month) + 1;
+    return (payMonth.year - regMonth.year) * 12 +
+        (payMonth.month - regMonth.month) +
+        1;
   }
 }
 

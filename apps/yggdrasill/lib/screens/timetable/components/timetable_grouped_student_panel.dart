@@ -314,7 +314,18 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                         Wrap(
                           spacing: 8,
                           runSpacing: 10,
-                          children: gradeStudents.map<Widget>((s) {
+                          children: gradeStudents
+                              // ✅ 휴원 기간에는 시간표 위젯(셀/요일 선택 패널)에서 학생카드를 아예 숨김
+                              .where((s) {
+                                final DateTime? ref = refDateForActions ?? startTime;
+                                if (ref == null) return true;
+                                final day = DateTime(ref.year, ref.month, ref.day);
+                                return !DataManager.instance.isStudentPausedOn(
+                                  s.student.id,
+                                  day,
+                                );
+                              })
+                              .map<Widget>((s) {
                             final isSelected = selectedStudentIds.contains(s.student.id);
                             final isHighlighted = !isSelectMode &&
                                 (highlightedStudentId ?? '').isNotEmpty &&
@@ -607,6 +618,13 @@ class _DraggablePanelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ 휴원 기간에는 학생 카드 비활성화 + 드래그 금지
+    final refForPause =
+        refDateForActions ?? DateTime(startTime.year, startTime.month, startTime.day);
+    final bool isPausedHere =
+        DataManager.instance.isStudentPausedOn(student.student.id, refForPause);
+    final Widget disabledCard = Opacity(opacity: 0.45, child: card);
+
     final isSelected = selectedStudentIds.contains(student.student.id);
     final selectedStudents = allStudents.where((s) => selectedStudentIds.contains(s.student.id)).toList();
     final dragStudents = (isSelected && selectedStudents.length > 1)
@@ -631,6 +649,10 @@ class _DraggablePanelCard extends StatelessWidget {
     // 다중 이동 시에도 "드래그한 카드"가 맨 위로 오도록 재정렬
     feedbackStudents.removeWhere((s) => s.student.id == student.student.id);
     feedbackStudents.insert(0, student);
+
+    if (isPausedHere) {
+      return disabledCard;
+    }
 
     final core = LongPressDraggable<Map<String, dynamic>>(
       data: dragData,

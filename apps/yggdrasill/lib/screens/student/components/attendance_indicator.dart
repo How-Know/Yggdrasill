@@ -3,9 +3,10 @@ import '../../../models/attendance_record.dart';
 import '../../../models/student_payment_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/session_override.dart';
+import '../../../utils/attendance_judgement.dart';
 
 /// 달력에 출석 상태를 표시하는 인디케이터 컴포넌트
-/// 
+///
 /// 표시 규칙:
 /// 1. 정상 등하원: 초록색 밑줄 (Color(0xFF33A373))
 /// 2. 지각 등원: 주황색 밑줄 (Color(0xFFFB8C00))
@@ -14,6 +15,8 @@ class AttendanceIndicator extends StatelessWidget {
   static const Color _colorPresent = Color(0xFF33A373);
   static const Color _colorLate = Color(0xFFF2B45B);
   static const Color _colorAbsent = Color(0xFFE57373);
+  static const Color _colorPlanned = Color(0xFF3C4747); // ✅ 예정 수업(회색)
+  static const Color _colorEarlyLeave = Color(0xFF7B62D3); // 조퇴(퍼플)
 
   final String studentId;
   final DateTime date;
@@ -31,7 +34,7 @@ class AttendanceIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final attendanceRecords = _getAttendanceRecordsForDate();
-    
+
     if (attendanceRecords.isEmpty) {
       return const SizedBox.shrink(); // 출석 데이터가 없으면 표시하지 않음
     }
@@ -65,25 +68,31 @@ class AttendanceIndicator extends StatelessWidget {
     // 기본: 해당 날짜의 모든 출석 기록
     final dailyRecords = allRecords.where((record) {
       return record.studentId == studentId &&
-             record.classDateTime.isAfter(dateStart) &&
-             record.classDateTime.isBefore(dateEnd);
+          record.classDateTime.isAfter(dateStart) &&
+          record.classDateTime.isBefore(dateEnd);
     }).toList();
 
     // 밑줄은 "예정 수업" 기준으로만 표기: 추가수업(OverrideType.add)에 해당하는 출석 기록은 제외
     bool sameMinute(DateTime a, DateTime b) =>
-        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+        a.year == b.year &&
+        a.month == b.month &&
+        a.day == b.day &&
+        a.hour == b.hour &&
+        a.minute == b.minute;
 
-    final addOverrides = overrides.where((o) =>
-      o.studentId == studentId &&
-      o.overrideType == OverrideType.add &&
-      o.status != OverrideStatus.canceled &&
-      o.replacementClassDateTime != null &&
-      o.replacementClassDateTime!.isAfter(dateStart) &&
-      o.replacementClassDateTime!.isBefore(dateEnd)
-    ).toList();
+    final addOverrides = overrides
+        .where((o) =>
+            o.studentId == studentId &&
+            o.overrideType == OverrideType.add &&
+            o.status != OverrideStatus.canceled &&
+            o.replacementClassDateTime != null &&
+            o.replacementClassDateTime!.isAfter(dateStart) &&
+            o.replacementClassDateTime!.isBefore(dateEnd))
+        .toList();
 
     final filtered = dailyRecords.where((record) {
-      final isAddRecord = addOverrides.any((o) => sameMinute(o.replacementClassDateTime!, record.classDateTime));
+      final isAddRecord = addOverrides.any(
+          (o) => sameMinute(o.replacementClassDateTime!, record.classDateTime));
       return !isAddRecord; // 추가수업 기록은 제외 → 하단 밑줄은 순수 예정 수업만
     }).toList();
 
@@ -91,50 +100,56 @@ class AttendanceIndicator extends StatelessWidget {
   }
 
   /// 출석 기록을 기반으로 표시할 색상을 결정합니다
-  Future<Color?> _determineAttendanceColor(List<AttendanceRecord> records) async {
+  Future<Color?> _determineAttendanceColor(
+      List<AttendanceRecord> records) async {
     if (records.isEmpty) return null;
 
     // 학생의 지각 기준 시간을 가져옵니다
     final paymentInfo = await _getStudentPaymentInfo();
     final lateDurationMinutes = paymentInfo?.latenessThreshold ?? 10; // 기본 10분
 
-    // 하루 중 가장 심각한 상태를 우선적으로 표시
+    // ✅ 시간기록 다이얼로그와 동일 판정 로직으로 통일
+    final now = DateTime.now();
     bool hasAbsent = false;
     bool hasLate = false;
+    bool hasEarlyLeave = false;
     bool hasPresent = false;
+    bool hasPlanned = false;
 
     for (final record in records) {
-      if (!record.isPresent) {
-        // 무단 결석
-        hasAbsent = true;
-      } else if (record.arrivalTime != null) {
-        final classStart = record.classDateTime;
-        final arrival = record.arrivalTime!;
-        final lateThreshold = classStart.add(Duration(minutes: lateDurationMinutes));
-        
-        if (arrival.isAfter(lateThreshold)) {
-          // 지각
+      final result = judgeAttendanceResult(
+        record: record,
+        now: now,
+        latenessThresholdMinutes: lateDurationMinutes,
+      );
+      switch (result) {
+        case AttendanceResult.absent:
+          hasAbsent = true;
+          break;
+        case AttendanceResult.late:
           hasLate = true;
-        } else {
-          // 정상 출석
+          break;
+        case AttendanceResult.earlyLeave:
+          hasEarlyLeave = true;
+          break;
+        case AttendanceResult.completed:
+        case AttendanceResult.arrived:
+        case AttendanceResult.present:
           hasPresent = true;
-        }
-      } else {
-        // 출석했지만 등원 시간이 기록되지 않은 경우 (정상 출석으로 간주)
-        hasPresent = true;
+          break;
+        case AttendanceResult.planned:
+          hasPlanned = true;
+          break;
       }
     }
 
-    // 우선순위: 무단 결석 > 지각 > 정상 출석
-    if (hasAbsent) {
-      return _colorAbsent; // 무단 결석
-    } else if (hasLate) {
-      return _colorLate; // 지각
-    } else if (hasPresent) {
-      return _colorPresent; // 정상 출석
-    }
-
-    return null; // 표시할 상태 없음
+    // 우선순위: 결석 > 지각 > 조퇴 > 출석 > 예정
+    if (hasAbsent) return _colorAbsent;
+    if (hasLate) return _colorLate;
+    if (hasEarlyLeave) return _colorEarlyLeave;
+    if (hasPresent) return _colorPresent;
+    if (hasPlanned) return _colorPlanned;
+    return null;
   }
 
   /// 해당 학생의 결제 정보를 가져옵니다

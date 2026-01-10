@@ -16,6 +16,8 @@ import '../models/attendance_record.dart';
 import '../models/cycle_attendance_summary.dart';
 import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
+import '../models/student_pause_period.dart';
+import '../models/student_charge_point.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'runtime_flags.dart';
@@ -73,6 +75,8 @@ class DataManager {
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
+  List<StudentPausePeriod> _studentPausePeriods = [];
+  List<StudentChargePoint> _studentChargePoints = [];
 
   final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
@@ -81,6 +85,14 @@ class DataManager {
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
   final ValueNotifier<int> studentPaymentInfoRevision = ValueNotifier<int>(0);
+
+  // Pause periods / charge points (휴원/차감포인트)
+  final ValueNotifier<List<StudentPausePeriod>> studentPausePeriodsNotifier =
+      ValueNotifier<List<StudentPausePeriod>>([]);
+  final ValueNotifier<int> studentPausePeriodsRevision = ValueNotifier<int>(0);
+  final ValueNotifier<List<StudentChargePoint>> studentChargePointsNotifier =
+      ValueNotifier<List<StudentChargePoint>>([]);
+  final ValueNotifier<int> studentChargePointsRevision = ValueNotifier<int>(0);
   
   // Session Overrides (보강/예외)
   List<SessionOverride> _sessionOverrides = [];
@@ -102,6 +114,11 @@ class DataManager {
 
   AcademySettings get academySettings => _academySettings;
   PaymentType get paymentType => _paymentType;
+
+  List<StudentPausePeriod> get studentPausePeriods =>
+      List.unmodifiable(_studentPausePeriods);
+  List<StudentChargePoint> get studentChargePoints =>
+      List.unmodifiable(_studentChargePoints);
 
   set paymentType(PaymentType type) {
     _paymentType = type;
@@ -765,6 +782,7 @@ class DataManager {
         getPaymentRecords: () => _paymentRecords,
         getClasses: () => _classes,
         getSessionOverrides: () => _sessionOverrides,
+        getStudentPausePeriods: () => _studentPausePeriods,
         getAcademySettings: () => _academySettings,
         loadPaymentRecords: loadPaymentRecords,
         updateSessionOverrideRemote: updateSessionOverride,
@@ -2220,6 +2238,169 @@ class DataManager {
     }
   }
 
+  // =========================
+  // Pause periods / charge points
+  // =========================
+
+  static DateTime _dateOnlyStatic(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  StudentPausePeriod? getActivePauseForStudent(String studentId) {
+    final now = DateTime.now();
+    final today = _dateOnlyStatic(now);
+    final active = _studentPausePeriods
+        .where((p) => p.studentId == studentId && p.isActiveOn(today))
+        .toList()
+      ..sort((a, b) => b.pausedFrom.compareTo(a.pausedFrom));
+    return active.isNotEmpty ? active.first : null;
+  }
+
+  bool isStudentPausedOn(String studentId, DateTime dateLocal) {
+    final d = _dateOnlyStatic(dateLocal);
+    return _studentPausePeriods.any(
+        (p) => p.studentId == studentId && p.isActiveOn(d));
+  }
+
+  DateTime? getEffectiveNextDueDateTime(String studentId) {
+    // 가장 최근 cycle의 charge point 중 next_due_datetime이 있는 것을 우선 사용
+    final cps = _studentChargePoints
+        .where((c) => c.studentId == studentId && c.nextDueDateTime != null)
+        .toList()
+      ..sort((a, b) => b.cycle.compareTo(a.cycle));
+    return cps.isNotEmpty ? cps.first.nextDueDateTime : null;
+  }
+
+  Future<void> loadStudentPausePeriods() async {
+    if (!TagPresetService.preferSupabaseRead && !TagPresetService.dualWrite) {
+      _studentPausePeriods = [];
+      studentPausePeriodsNotifier.value = const [];
+      studentPausePeriodsRevision.value++;
+      return;
+    }
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('student_pause_periods')
+          .select('id,academy_id,student_id,paused_from,paused_to,note')
+          .eq('academy_id', academyId)
+          .order('paused_from', ascending: false)
+          .limit(2000);
+      final list = (rows is List) ? rows : <dynamic>[];
+      _studentPausePeriods = list
+          .map((m0) =>
+              StudentPausePeriod.fromMap(Map<String, dynamic>.from(m0 as Map)))
+          .toList();
+      studentPausePeriodsNotifier.value = List.unmodifiable(_studentPausePeriods);
+      studentPausePeriodsRevision.value++;
+    } catch (e, st) {
+      print('[PAUSE][load][WARN] $e\n$st');
+      _studentPausePeriods = [];
+      studentPausePeriodsNotifier.value = const [];
+      studentPausePeriodsRevision.value++;
+    }
+  }
+
+  Future<void> loadStudentChargePoints() async {
+    if (!TagPresetService.preferSupabaseRead && !TagPresetService.dualWrite) {
+      _studentChargePoints = [];
+      studentChargePointsNotifier.value = const [];
+      studentChargePointsRevision.value++;
+      return;
+    }
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('student_charge_points')
+          .select(
+              'id,academy_id,student_id,cycle,charge_point_occurrence_id,charge_point_datetime,next_due_datetime,computed_at')
+          .eq('academy_id', academyId)
+          .order('cycle', ascending: false)
+          .limit(4000);
+      final list = (rows is List) ? rows : <dynamic>[];
+      _studentChargePoints = list
+          .map((m0) =>
+              StudentChargePoint.fromMap(Map<String, dynamic>.from(m0 as Map)))
+          .toList();
+      studentChargePointsNotifier.value = List.unmodifiable(_studentChargePoints);
+      studentChargePointsRevision.value++;
+    } catch (e, st) {
+      print('[CHARGE][load][WARN] $e\n$st');
+      _studentChargePoints = [];
+      studentChargePointsNotifier.value = const [];
+      studentChargePointsRevision.value++;
+    }
+  }
+
+  Future<void> pauseStudent({
+    required String studentId,
+    required DateTime pausedFromLocal,
+    DateTime? pausedToLocal,
+    String note = '',
+  }) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    final from = _dateOnlyStatic(pausedFromLocal);
+    final to = pausedToLocal != null ? _dateOnlyStatic(pausedToLocal) : null;
+
+    await supa.rpc('pause_student', params: {
+      'p_academy_id': academyId,
+      'p_student_id': studentId,
+      'p_from': from.toIso8601String().split('T').first,
+      'p_to': to?.toIso8601String().split('T').first,
+      'p_note': note,
+    });
+    await loadStudentPausePeriods();
+
+    // 휴원 기간에는 예정수업이 없어야 하므로, 향후 planned를 정리한다(15일 범위 내 우선).
+    try {
+      await AttendanceService.instance.deletePlannedAttendanceForStudent(studentId, days: 15);
+    } catch (_) {}
+    // 차감포인트 재계산(서버)
+    try {
+      await supa.rpc('recompute_charge_points', params: {
+        'p_academy_id': academyId,
+        'p_student_id': studentId,
+      });
+      await loadStudentChargePoints();
+    } catch (_) {}
+  }
+
+  Future<void> resumeStudent({
+    required String studentId,
+    required DateTime resumeDateLocal,
+  }) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    // ✅ 의미: resumeDateLocal은 "등원일(수업 재개일)"이다.
+    // StudentPausePeriod는 pausedTo를 '포함(inclusive)'으로 판정하므로,
+    // 등원일 자체는 휴원에서 제외되도록 paused_to는 (등원일 - 1일)로 저장한다.
+    final resumeDay = _dateOnlyStatic(resumeDateLocal);
+    final to = resumeDay.subtract(const Duration(days: 1));
+    await supa.rpc('resume_student', params: {
+      'p_academy_id': academyId,
+      'p_student_id': studentId,
+      'p_to': to.toIso8601String().split('T').first,
+    });
+    await loadStudentPausePeriods();
+
+    // 등원 시 차감포인트 재계산
+    await supa.rpc('recompute_charge_points', params: {
+      'p_academy_id': academyId,
+      'p_student_id': studentId,
+    });
+    await loadStudentChargePoints();
+
+    // planned 재생성(휴원 구간은 AttendanceService에서 스킵하도록 별도 처리 예정)
+    try {
+      await _regeneratePlannedAttendanceForStudent(studentId: studentId, days: 15);
+    } catch (_) {}
+  }
+
   Future<List<OperatingHours>> getOperatingHours() async {
     if (_operatingHours.isNotEmpty) {
       return _operatingHours;
@@ -2730,6 +2911,8 @@ class DataManager {
     try { await loadPaymentRecords(); } catch (_) {}
     try { await AttendanceService.instance.loadLessonOccurrences(); } catch (_) {}
     try { await loadAttendanceRecords(); } catch (_) {}
+    try { await loadStudentPausePeriods(); } catch (_) {}
+    try { await loadStudentChargePoints(); } catch (_) {}
     try { await loadMemos(); } catch (_) {}
     try { await loadResourceFolders(); } catch (_) {}
     try { await loadResourceFiles(); } catch (_) {}

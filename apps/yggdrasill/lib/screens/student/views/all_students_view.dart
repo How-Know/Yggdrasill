@@ -1,36 +1,7 @@
-import 'package:flutter/material.dart';
-import '../../../models/student.dart';
-import '../../../widgets/student_card.dart';
-import '../components/education_level_group.dart';
-
-class AllStudentsView extends StatelessWidget {
-  final List<Student> students;
-  final Function(Student) onShowDetails;
-  final Function(Student) onDeleteStudent;
-
-  const AllStudentsView({
-    Key? key,
-    required this.students,
-    required this.onShowDetails,
-    required this.onDeleteStudent,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16.0),
-      itemCount: students.length,
-      itemBuilder: (context, index) {
-        final student = students[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 8.0),
-          child: StudentCard(
-            student: student,
-            onShowDetails: onShowDetails,
-            onDelete: onDeleteStudent,
-          ),
-        );
-      },
-    );
-  }
-} 
+// NOTE:
+// - 이 파일은 과거 구현의 잔재이며, 현재 앱은
+//   `screens/student/components/all_students_view.dart`의 `AllStudentsView`를 사용합니다.
+// - 신규 `StudentCard` 시그니처(StudentWithInfo 기반)와 맞지 않아 analyze 오류를 유발할 수 있어
+//   의도적으로 비워둡니다.
+//
+// (필요 시 추후 정리/삭제 대상)
