@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
@@ -22,6 +22,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../services/tenant_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'student_archives_screen.dart';
 
 enum SettingType {
   academy,
@@ -2313,6 +2314,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 32),
         _buildOperatingHoursSection(),
         const SizedBox(height: 40),
+        Center(
+          child: ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const StudentArchivesScreen()),
+              );
+            },
+            icon: const Icon(Icons.inventory_2_outlined, color: Colors.white),
+            label: const Text(
+              '학생 아카이브 보기',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1976D2),
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
         // 저장 버튼
         Stack(
           children: [

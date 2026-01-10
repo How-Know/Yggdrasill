@@ -2023,6 +2023,17 @@ class DataManager {
         });
       }
 
+      // 0) 퇴원(삭제) 전에 아카이브 스냅샷 생성 (Supabase RPC)
+      // - 데이터 보관 정책: 최소 1년
+      // - 클라이언트 max_rows 제한을 피하기 위해 서버에서 jsonb로 스냅샷 생성
+      await timed('archive_student RPC(스냅샷)', () async {
+        final archived = await supa.rpc('archive_student', params: {
+          'p_academy_id': academyId,
+          'p_student_id': id,
+        });
+        print('[DEBUG][deleteStudent][server-only] archive_student ok: archiveId=$archived');
+      });
+
       // ✅ 일부 환경/스키마에서는 학생 삭제가 보강/예외(session_overrides)를 자동 정리하지 못해 orphan이 남을 수 있음.
       // 학생 삭제 전에 session_overrides를 선삭제하여 "학생 삭제 후에도 보강기록이 남는" 문제를 방지한다.
       await timed('session_overrides 삭제(선)', () async {
@@ -2033,8 +2044,11 @@ class DataManager {
 
       // 1-shot 삭제 먼저 시도 (빠른 케이스는 여기서 끝)
       try {
-        await timed('students 삭제(1-shot)', () async {
-          await supa.from('students').delete().eq('id', id).eq('academy_id', academyId);
+        await timed('students 삭제 RPC(delete_student)', () async {
+          await supa.rpc('delete_student', params: {
+            'p_academy_id': academyId,
+            'p_student_id': id,
+          });
         });
       } catch (e) {
         if (isStatementTimeout(e)) {
@@ -2047,6 +2061,30 @@ class DataManager {
       await loadStudents();
       await loadStudentTimeBlocks();
       return;
+    }
+
+    // dualWrite 모드에서는 "로컬 삭제" 전에 반드시 서버 아카이브를 먼저 남긴다.
+    // (아카이브 실패 시 로컬에서도 삭제하지 않도록 보장)
+    if (TagPresetService.dualWrite) {
+      final supa = Supabase.instance.client;
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      try {
+        final archived = await supa.rpc('archive_student', params: {
+          'p_academy_id': academyId,
+          'p_student_id': id,
+        });
+        print('[DEBUG][deleteStudent][dualWrite] archive_student ok: archiveId=$archived');
+
+        await supa.rpc('delete_student', params: {
+          'p_academy_id': academyId,
+          'p_student_id': id,
+        });
+        print('[DEBUG][deleteStudent][dualWrite] delete_student ok: id=$id');
+      } catch (e, st) {
+        print('[ERROR][deleteStudent][dualWrite] archive/delete failed: $e\n$st');
+        rethrow;
+      }
     }
 
     // 학생의 모든 수업시간 블록도 함께 삭제
@@ -2064,18 +2102,21 @@ class DataManager {
     print('[DEBUG][deleteStudent] DB 삭제 완료: id=$id');
     // 학생의 예정 출석도 정리
     try {
-      final supa = Supabase.instance.client;
-      final academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-      // ✅ 보강/예외(SessionOverride)도 서버에서 함께 제거(세션 오버라이드는 Supabase에서 로드됨)
-      await supa.from('session_overrides').delete()
-        .eq('student_id', id)
-        .eq('academy_id', academyId);
-      await supa.from('attendance_records').delete()
-        .eq('student_id', id)
-        .eq('academy_id', academyId)
-        .eq('is_planned', true);
-      await AttendanceService.instance.loadAttendanceRecords();
-      print('[DEBUG][deleteStudent] planned attendance 삭제 완료: id=$id');
+      if (!TagPresetService.dualWrite) {
+        final supa = Supabase.instance.client;
+        final academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+
+        // ✅ 보강/예외(SessionOverride)도 서버에서 함께 제거(세션 오버라이드는 Supabase에서 로드됨)
+        await supa.from('session_overrides').delete()
+          .eq('student_id', id)
+          .eq('academy_id', academyId);
+        await supa.from('attendance_records').delete()
+          .eq('student_id', id)
+          .eq('academy_id', academyId)
+          .eq('is_planned', true);
+        await AttendanceService.instance.loadAttendanceRecords();
+        print('[DEBUG][deleteStudent] planned attendance 삭제 완료: id=$id');
+      }
     } catch (e) {
       print('[WARN][deleteStudent] planned attendance 삭제 실패: $e');
     }
@@ -2083,14 +2124,6 @@ class DataManager {
     print('[DEBUG][deleteStudent] loadStudents() 호출 완료');
     await loadStudentTimeBlocks();
     print('[DEBUG][deleteStudent] loadStudentTimeBlocks() 호출 완료');
-    if (TagPresetService.dualWrite) {
-      try {
-        final supa = Supabase.instance.client;
-        await supa.from('student_basic_info').delete().eq('student_id', id);
-        await supa.from('student_payment_info').delete().eq('student_id', id);
-        await supa.from('students').delete().eq('id', id);
-      } catch (e, st) { print('[SUPA][classes upsert(update)] $e\n$st'); }
-    }
   }
 
   // StudentBasicInfo만 업데이트하는 메소드

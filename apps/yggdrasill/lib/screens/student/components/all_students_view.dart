@@ -1814,10 +1814,30 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
+                              horizontal: 14, vertical: 12),
                         ),
                         icon: const Icon(Icons.edit_outlined, size: 16),
                         label: const Text('수정'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          showAppSnackBar(context, '휴원 기능은 준비중입니다.',
+                              useRoot: true);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF9FB3B3),
+                          side: const BorderSide(color: Color(0xFF4D5A5A)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                        ),
+                        icon:
+                            const Icon(Icons.pause_circle_outline, size: 16),
+                        label: const Text('휴원'),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1833,7 +1853,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                               title: const Text('퇴원',
                                   style: TextStyle(color: Colors.white)),
                               content: Text(
-                                '${student.name} 학생을 퇴원(삭제) 처리하시겠습니까?',
+                                '${student.name} 학생을 퇴원(삭제) 처리하시겠습니까?\n\n'
+                                '퇴원 처리 시 학생 정보는 아카이브에 최대 1년간 보관됩니다.',
                                 style:
                                     const TextStyle(color: Colors.white70),
                               ),
@@ -1863,8 +1884,18 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                                 useRoot: true);
                             onCloseDetails();
                           } catch (e) {
-                            showAppSnackBar(context, '퇴원 처리 실패: $e',
-                                useRoot: true);
+                            final s = e.toString();
+                            if (s.contains('archive_student') ||
+                                s.contains('student_archives')) {
+                              showAppSnackBar(
+                                context,
+                                '아카이브 생성 실패로 퇴원을 중단했습니다. (서버 마이그레이션 적용 필요)\n$s',
+                                useRoot: true,
+                              );
+                            } else {
+                              showAppSnackBar(context, '퇴원 처리 실패: $e',
+                                  useRoot: true);
+                            }
                           }
                         },
                         style: OutlinedButton.styleFrom(
@@ -1873,30 +1904,10 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
+                              horizontal: 14, vertical: 12),
                         ),
                         icon: const Icon(Icons.logout_rounded, size: 16),
                         label: const Text('퇴원'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          showAppSnackBar(context, '휴원 기능은 준비중입니다.',
-                              useRoot: true);
-                        },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF9FB3B3),
-                          side: const BorderSide(color: Color(0xFF4D5A5A)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                        ),
-                        icon:
-                            const Icon(Icons.pause_circle_outline, size: 16),
-                        label: const Text('휴원'),
                       ),
                     ),
                   ],

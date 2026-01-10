@@ -97,63 +97,6 @@ class StudentCard extends StatelessWidget {
     }
   }
 
-  void _showMenu(BuildContext context) {
-    final RenderBox button = context.findRenderObject() as RenderBox;
-    final RenderBox overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
-    final RelativeRect position = RelativeRect.fromRect(
-      Rect.fromPoints(
-        button.localToGlobal(Offset(button.size.width - 40, 0), ancestor: overlay),
-        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
-      ),
-      Offset.zero & overlay.size,
-    );
-
-    showMenu(
-      context: context,
-      color: const Color(0xFF2A2A2A),
-      position: position,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      items: [
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.edit_outlined, color: Colors.white70),
-            title: const Text(
-              '수정',
-              style: TextStyle(color: Colors.white),
-            ),
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            onTap: () async {
-              print('[DEBUG][StudentCard] 수정 메뉴 탭');
-              Navigator.of(context).pop();
-              await Future.delayed(const Duration(milliseconds: 0));
-              print('[DEBUG][StudentCard] 수정 다이얼로그 호출 직전');
-              _handleEdit(context);
-            },
-          ),
-        ),
-        PopupMenuItem(
-          child: ListTile(
-            leading: const Icon(Icons.delete_outline, color: Colors.red),
-            title: const Text(
-              '삭제',
-              style: TextStyle(color: Colors.red),
-            ),
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            onTap: () async {
-              print('[DEBUG][StudentCard] 삭제 메뉴 탭');
-              Navigator.of(context).pop();
-              await Future.delayed(const Duration(milliseconds: 0));
-              print('[DEBUG][StudentCard] 삭제 다이얼로그 호출 직전');
-              _handleDelete(context);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final student = studentWithInfo.student;
@@ -208,7 +151,6 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
 class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxDelay> {
   bool _showRealCheckbox = false;
   bool _prevShowCheckbox = false;
-  Offset? _tapDownPosition;
 
   @override
   void didUpdateWidget(covariant _StudentCardWithCheckboxDelay oldWidget) {
@@ -361,108 +303,6 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
                 widget.onOpenStudentPage!(widget.studentWithInfo);
               }
             },
-      onSecondaryTapUp: (details) async {
-        if (widget.disableTapInteractions) return;
-        final s = widget.studentWithInfo.student;
-        print('[DEBUG][StudentCard] onSecondaryTapUp(우클릭) fired: id=' + s.id + ', name=' + s.name + ', pos=' + details.globalPosition.toString());
-        final overlayBox = Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
-        if (overlayBox == null) return;
-        final pos = details.globalPosition;
-        final position = RelativeRect.fromLTRB(
-          pos.dx,
-          pos.dy,
-          overlayBox.size.width - pos.dx,
-          overlayBox.size.height - pos.dy,
-        );
-        final selected = await showMenu<String>(
-          context: context,
-          color: const Color(0xFF2A2A2A), // 학생 추가 버튼 드롭다운 톤
-          position: position,
-          constraints: const BoxConstraints(minWidth: 132), // 절반 너비로 축소
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: const BorderSide(color: Color(0xFF3A3F44)),
-          ),
-          elevation: 10,
-          items: const [
-            PopupMenuItem(
-              value: 'details',
-              child: ListTile(
-                leading: Icon(Icons.info_outline, color: Colors.white70),
-                title: Text('상세보기', style: TextStyle(color: Colors.white)),
-              ),
-            ),
-            PopupMenuItem(
-              value: 'edit',
-              child: ListTile(
-                leading: Icon(Icons.edit_outlined, color: Colors.white70),
-                title: Text('수정', style: TextStyle(color: Colors.white)),
-              ),
-            ),
-            PopupMenuItem(
-              value: 'delete',
-              child: ListTile(
-                leading: Icon(Icons.delete_outline, color: Colors.red),
-                title: Text('삭제', style: TextStyle(color: Colors.red)),
-              ),
-            ),
-          ],
-        );
-        print('[DEBUG][StudentCard] context menu selected=' + (selected ?? 'null') + ', id=' + s.id + ');');
-        switch (selected) {
-          case 'details':
-            if (widget.onOpenStudentPage != null) {
-              widget.onOpenStudentPage!(widget.studentWithInfo);
-            } else {
-              Navigator.of(context).push(
-                DarkPanelRoute(
-                  child: StudentCourseDetailScreen(studentWithInfo: widget.studentWithInfo),
-                ),
-              );
-            }
-            break;
-          case 'edit':
-            if (widget.onUpdate != null) {
-              widget.onUpdate!(widget.studentWithInfo);
-            } else {
-              final dialogContext = rootNavigatorKey.currentContext ?? context;
-              WidgetsBinding.instance.addPostFrameCallback((_) async {
-                try {
-                  await showDialog(
-                    context: dialogContext,
-                    builder: (context) => StudentRegistrationDialog(
-                      student: widget.studentWithInfo.student,
-                      onSave: (updatedStudent, basicInfo) async {
-                        await DataManager.instance.updateStudent(updatedStudent, basicInfo);
-                        Navigator.of(context).pop();
-                      },
-                      groups: DataManager.instance.groups,
-                    ),
-                  );
-                } catch (e, st) {
-                  print('[ERROR][StudentCard] edit dialog 예외: ' + e.toString() + '\n' + st.toString());
-                }
-              });
-            }
-            break;
-          case 'delete':
-            if (widget.onDelete != null) {
-              widget.onDelete!(widget.studentWithInfo);
-            } else {
-              final dialogContext = rootNavigatorKey.currentContext ?? context;
-              WidgetsBinding.instance.addPostFrameCallback((_) async {
-                try {
-                  await _handleDelete(dialogContext);
-                } catch (e, st) {
-                  print('[ERROR][StudentCard] delete dialog 예외: ' + e.toString() + '\n' + st.toString());
-                }
-              });
-            }
-            break;
-          default:
-            break;
-        }
-      },
       child: cardCoreInner,
     ),
     );
