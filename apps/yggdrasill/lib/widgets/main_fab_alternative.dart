@@ -142,11 +142,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     slideAnimation: _slideAnimation2,
                     onTap: () {
                       // ✅ 즉시 드롭다운 닫기(다이얼로그가 열려있는 동안에도 FAB 메뉴가 남지 않게)
-                      setState(() {
-                        _isFabExpanded = false;
-                        _fabController.reverse();
-                        _removeMenuOverlay();
-                      });
+                      _collapseFabMenu();
                       showDialog(
                         context: context,
                         barrierDismissible: true,
@@ -159,15 +155,13 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     icon: Icons.credit_card,
                     slideAnimation: _slideAnimation1,
                     onTap: () {
+                      // ✅ 수강료 결제 관리 다이얼로그를 열면 드롭다운을 즉시 접는다
+                      _collapseFabMenu();
                       showDialog(
                         context: context,
                         builder: (context) => PaymentManagementDialog(
                           onClose: () {
-                            setState(() {
-                              _isFabExpanded = false;
-                              _fabController.reverse();
-                              _removeMenuOverlay();
-                            });
+                            _collapseFabMenu();
                           },
                         ),
                       );
@@ -208,6 +202,15 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
       _menuOverlay!.remove();
     }
     _menuOverlay = null;
+  }
+
+  void _collapseFabMenu() {
+    if (!mounted) return;
+    setState(() {
+      _isFabExpanded = false;
+      _fabController.reverse();
+      _removeMenuOverlay();
+    });
   }
 
   Widget _buildMenuButton({
@@ -324,13 +327,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
 
   Future<void> _openMemoAddDialog(BuildContext context) async {
     // 메뉴는 즉시 접고 다이얼로그를 띄운다(레이어 겹침/오작동 방지)
-    if (mounted) {
-      setState(() {
-        _isFabExpanded = false;
-        _fabController.reverse();
-        _removeMenuOverlay();
-      });
-    }
+    _collapseFabMenu();
 
     final String? text = await showDialog<String>(
       context: context,

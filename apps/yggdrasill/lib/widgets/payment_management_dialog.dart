@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../models/attendance_record.dart';
+import '../models/student_payment_info.dart';
 import '../models/student.dart';
 import '../models/payment_record.dart';
+import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
+import '../utils/attendance_judgement.dart';
 
 const Color _pmBg = Color(0xFF0B1112);
 const Color _pmPanelBg = Color(0xFF10171A);
@@ -15,12 +20,16 @@ const Color _pmDanger = Color(0xFFF04747);
 class _PaymentItem {
   final StudentWithInfo studentWithInfo;
   final DateTime dueDate; // date-only (local)
+  final DateTime prevDueDate; // date-only (local)
+  final DateTime nextDueDate; // date-only (local)
   final int cycle;
   final DateTime? paidDate; // date-only (local)
 
   const _PaymentItem({
     required this.studentWithInfo,
     required this.dueDate,
+    required this.prevDueDate,
+    required this.nextDueDate,
     required this.cycle,
     required this.paidDate,
   });
@@ -188,10 +197,14 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
         if (cycle < 1) continue;
         final due = resolveDueDateForCycle(cycle);
         if (due.isBefore(start) || due.isAfter(end)) continue;
+        final prevDue = cycle <= 1 ? reg : resolveDueDateForCycle(cycle - 1);
+        final nextDue = resolveDueDateForCycle(cycle + 1);
         final rec = byCycle[cycle];
         items.add(_PaymentItem(
           studentWithInfo: studentWithInfo,
           dueDate: due,
+          prevDueDate: prevDue,
+          nextDueDate: nextDue,
           cycle: cycle,
           paidDate: rec?.paidDate == null ? null : _dateOnly(rec!.paidDate!),
         ));
@@ -254,6 +267,8 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     return _PaymentStudentCard(
       studentWithInfo: item.studentWithInfo,
       paymentDate: item.dueDate,
+      prevDueDate: item.prevDueDate,
+      nextDueDate: item.nextDueDate,
       cycle: item.cycle,
       isOverdue: isUnpaid,
       onClose: widget.onClose,
@@ -675,6 +690,8 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
 class _PaymentStudentCard extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
   final DateTime paymentDate;
+  final DateTime prevDueDate;
+  final DateTime nextDueDate;
   final int cycle;
   final bool isOverdue;
   final VoidCallback? onClose;
@@ -682,6 +699,8 @@ class _PaymentStudentCard extends StatefulWidget {
   const _PaymentStudentCard({
     required this.studentWithInfo,
     required this.paymentDate,
+    required this.prevDueDate,
+    required this.nextDueDate,
     required this.cycle,
     required this.isOverdue,
     this.onClose,
@@ -783,46 +802,327 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
 
   void _handlePaymentTap(BuildContext context) async {
     if (_processing) return;
-    final due = widget.paymentDate;
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(due.year - 1, 1, 1),
-      lastDate: DateTime(due.year + 2, 12, 31),
-      builder: (context, child) {
-        return Theme(
-          data: ThemeData.dark().copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF1B6B63),
-              onPrimary: Colors.white,
-              surface: Color(0xFF151C21),
-              onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF151C21),
-          ),
-          child: child!,
-        );
-      },
-    );
-    if (picked == null) return;
-
-    setState(() => _processing = true);
     try {
-      await DataManager.instance.recordPayment(
-        widget.studentWithInfo.student.id,
-        widget.cycle,
-        picked,
-      );
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${widget.studentWithInfo.student.name} 학생의 수강료 납부를 기록했습니다.'),
-          backgroundColor: _pmAccent,
-          behavior: SnackBarBehavior.floating,
+      setState(() => _processing = true);
+      await showDialog<bool>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) => _PaymentRecordAndScheduleDialog(
+          studentWithInfo: widget.studentWithInfo,
+          cycle: widget.cycle,
+          dueDate: widget.paymentDate,
+          prevDueDate: widget.prevDueDate,
+          nextDueDate: widget.nextDueDate,
+          isOverdue: widget.isOverdue,
         ),
       );
-    } catch (e) {
-      if (context.mounted) {
+    } finally {
+      if (mounted) setState(() => _processing = false);
+    }
+  }
+
+  // (unused) 과거 빠른 기록 기능 자리: 현재는 상세 다이얼로그에서 처리한다.
+}
+
+class _PaymentRecordAndScheduleDialog extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+  final int cycle;
+  final DateTime prevDueDate; // date-only
+  final DateTime dueDate; // date-only
+  final DateTime nextDueDate; // date-only
+  final bool isOverdue;
+
+  const _PaymentRecordAndScheduleDialog({
+    required this.studentWithInfo,
+    required this.cycle,
+    required this.prevDueDate,
+    required this.dueDate,
+    required this.nextDueDate,
+    required this.isOverdue,
+  });
+
+  @override
+  State<_PaymentRecordAndScheduleDialog> createState() =>
+      _PaymentRecordAndScheduleDialogState();
+}
+
+class _PaymentRecordAndScheduleDialogState
+    extends State<_PaymentRecordAndScheduleDialog>
+    with SingleTickerProviderStateMixin {
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  late DateTime _selectedPaidDate; // date-only
+  bool _saving = false;
+  bool _prevExpanded = false;
+  bool _nextExpanded = false;
+  int _latenessThresholdMinutes = 10;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPaidDate = _dateOnly(DateTime.now());
+    _loadLatenessThreshold();
+  }
+
+  Future<void> _loadLatenessThreshold() async {
+    try {
+      final StudentPaymentInfo? info = await DataManager.instance
+          .getStudentPaymentInfo(widget.studentWithInfo.student.id);
+      if (!mounted) return;
+      setState(() {
+        _latenessThresholdMinutes = info?.latenessThreshold ?? 10;
+      });
+    } catch (_) {}
+  }
+
+  List<StudentTimeBlock> _activeBlocksAtDate({
+    required String studentId,
+    required DateTime anchorDate, // date-only
+  }) {
+    final a = _dateOnly(anchorDate);
+    return DataManager.instance.studentTimeBlocks.where((b) {
+      if (b.studentId != studentId) return false;
+      final s = _dateOnly(b.startDate);
+      final e = b.endDate == null ? null : _dateOnly(b.endDate!);
+      final okStart = !a.isBefore(s);
+      final okEnd = e == null ? true : !a.isAfter(e);
+      return okStart && okEnd;
+    }).toList();
+  }
+
+  List<AttendanceRecord> _buildPlannedSessionsFromBlocks({
+    required String studentId,
+    required DateTime fromInclusive, // date-only
+    required DateTime toExclusive, // date-only
+    required List<StudentTimeBlock> activeBlocks,
+  }) {
+    final start = _dateOnly(fromInclusive);
+    final end = _dateOnly(toExclusive);
+    if (!start.isBefore(end)) return const [];
+
+    final now = DateTime.now();
+    final createdAt = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+
+    final byClassId = <String, String>{
+      for (final c in DataManager.instance.classes) c.id: c.name,
+    };
+
+    // ✅ 같은 날짜에 같은 set_id는 "같은 수업 1회"로 집계(블록 여러 개여도 1회)
+    // - 시작: 가장 빠른 start
+    // - 종료: 가장 늦은 end
+    // - 이름/타입: 가능한 sessionTypeId 기반
+    final Map<String, ({
+      DateTime start,
+      DateTime end,
+      String? sessionTypeId,
+      String? setId,
+      String className,
+    })> agg = {};
+
+    for (DateTime day = start;
+        day.isBefore(end);
+        day = day.add(const Duration(days: 1))) {
+      final dayIndex = day.weekday - 1; // 0:월~6:일
+      for (final b in activeBlocks) {
+        if (b.dayIndex != dayIndex) continue;
+        final classStart =
+            DateTime(day.year, day.month, day.day, b.startHour, b.startMinute);
+        final classEnd = classStart.add(b.duration);
+        final className =
+            (b.sessionTypeId != null && byClassId[b.sessionTypeId] != null)
+                ? byClassId[b.sessionTypeId!]!
+                : '수업';
+        final setId = (b.setId ?? '').trim();
+        final key = '${day.year}-${day.month}-${day.day}|$setId';
+        final prev = agg[key];
+        if (prev == null) {
+          agg[key] = (
+            start: classStart,
+            end: classEnd,
+            sessionTypeId: b.sessionTypeId,
+            setId: b.setId,
+            className: className,
+          );
+        } else {
+          final nextStart = classStart.isBefore(prev.start) ? classStart : prev.start;
+          final nextEnd = classEnd.isAfter(prev.end) ? classEnd : prev.end;
+          final nextType = prev.sessionTypeId ?? b.sessionTypeId;
+          final nextName = (prev.className.trim().isNotEmpty) ? prev.className : className;
+          agg[key] = (
+            start: nextStart,
+            end: nextEnd,
+            sessionTypeId: nextType,
+            setId: prev.setId ?? b.setId,
+            className: nextName,
+          );
+        }
+      }
+    }
+
+    final out = <AttendanceRecord>[];
+    for (final v in agg.values) {
+      out.add(
+        AttendanceRecord(
+          id: null,
+          studentId: studentId,
+          occurrenceId: null,
+          classDateTime: v.start,
+          classEndTime: v.end,
+          className: v.className,
+          isPresent: false,
+          arrivalTime: null,
+          departureTime: null,
+          notes: null,
+          sessionTypeId: v.sessionTypeId,
+          setId: v.setId,
+          snapshotId: null,
+          batchSessionId: null,
+          cycle: widget.cycle,
+          sessionOrder: null,
+          isPlanned: true,
+          createdAt: createdAt,
+          updatedAt: createdAt,
+          version: 1,
+        ),
+      );
+    }
+    out.sort((a, b) {
+      final cmp = a.classDateTime.compareTo(b.classDateTime);
+      if (cmp != 0) return cmp;
+      return (a.setId ?? '').compareTo(b.setId ?? '');
+    });
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const bg = _pmBg;
+    const panel = _pmPanelBg;
+    const cardBg = _pmCardBg;
+    const border = _pmBorder;
+    const text = _pmText;
+    const sub = _pmTextSub;
+
+    final student = widget.studentWithInfo.student;
+    final now = DateTime.now();
+
+    final DateFormat fmtRange = DateFormat('yyyy.MM.dd', 'ko_KR');
+    final DateFormat fmtItem = DateFormat('MM.dd(E) HH:mm', 'ko_KR');
+
+    bool inRange(DateTime dt, DateTime startInclusive, DateTime endExclusive) {
+      final s = DateTime(startInclusive.year, startInclusive.month,
+          startInclusive.day);
+      final e =
+          DateTime(endExclusive.year, endExclusive.month, endExclusive.day);
+      return !dt.isBefore(s) && dt.isBefore(e);
+    }
+
+    AttendanceResult resultFor(AttendanceRecord r) {
+      return judgeAttendanceResult(
+        record: r,
+        now: now,
+        latenessThresholdMinutes: _latenessThresholdMinutes,
+      );
+    }
+
+    bool isActual(AttendanceResult r) {
+      switch (r) {
+        case AttendanceResult.planned:
+        case AttendanceResult.absent:
+          return false;
+        case AttendanceResult.earlyLeave:
+        case AttendanceResult.late:
+        case AttendanceResult.completed:
+        case AttendanceResult.arrived:
+        case AttendanceResult.present:
+          return true;
+      }
+    }
+
+    final all = List<AttendanceRecord>.from(
+      DataManager.instance.getAttendanceRecordsForStudent(student.id),
+    )..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+    final prevRecords = all
+        .where((r) =>
+            inRange(r.classDateTime, widget.prevDueDate, widget.dueDate))
+        .toList()
+      ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+    // ✅ "이번 사이클 예정 수업 일정"은 실제 출석(예정) 레코드가 아니라
+    // 수강등록 예정일(dueDate)을 기준으로 활성화된 student_time_blocks로 다음 예정일 전까지 계산한다.
+    final activeBlocksAtDue = _activeBlocksAtDate(
+      studentId: student.id,
+      anchorDate: widget.dueDate,
+    );
+    final nextPlannedSessions = _buildPlannedSessionsFromBlocks(
+      studentId: student.id,
+      fromInclusive: widget.dueDate,
+      toExclusive: widget.nextDueDate,
+      activeBlocks: activeBlocksAtDue,
+    );
+
+    final dueLabel = '${widget.dueDate.month}/${widget.dueDate.day}';
+
+    final List<DateTime> dropdownDates = () {
+      final base = _dateOnly(DateTime.now());
+      final set = <DateTime>{
+        base,
+        _selectedPaidDate,
+        _dateOnly(widget.dueDate),
+      };
+      for (int i = 1; i <= 13; i++) {
+        set.add(_dateOnly(base.subtract(Duration(days: i))));
+      }
+      final list = set.toList()..sort((a, b) => b.compareTo(a));
+      return list;
+    }();
+
+    Future<void> pickFromCalendar() async {
+      final DateTime? picked = await showDatePicker(
+        context: context,
+        initialDate: _selectedPaidDate,
+        firstDate: DateTime(widget.dueDate.year - 1, 1, 1),
+        lastDate: DateTime(widget.dueDate.year + 2, 12, 31),
+        locale: const Locale('ko', 'KR'),
+        builder: (context, child) => Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: _pmAccent,
+              onPrimary: Colors.white,
+              surface: _pmBg,
+              onSurface: _pmText,
+            ),
+            dialogBackgroundColor: _pmBg,
+          ),
+          child: child!,
+        ),
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+      setState(() => _selectedPaidDate = _dateOnly(picked));
+    }
+
+    Future<void> save() async {
+      if (_saving) return;
+      setState(() => _saving = true);
+      try {
+        await DataManager.instance.recordPayment(
+          student.id,
+          widget.cycle,
+          _selectedPaidDate,
+        );
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${student.name} 학생의 수강료 납부를 기록했습니다.'),
+            backgroundColor: _pmAccent,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.of(context).pop(true);
+      } catch (e) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('수강료 납부 기록 실패: $e'),
@@ -830,18 +1130,752 @@ class _PaymentStudentCardState extends State<_PaymentStudentCard> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      } finally {
+        if (mounted) setState(() => _saving = false);
       }
-    } finally {
-      if (mounted) setState(() => _processing = false);
     }
-  }
 
-  Future<void> _processPayment() async {
-    final now = DateTime.now();
-    await DataManager.instance.recordPayment(
-      widget.studentWithInfo.student.id,
-      widget.cycle,
-      now,
+    Widget panelHeader({
+      required String title,
+      required String range,
+    }) {
+      return Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900)),
+                const SizedBox(height: 2),
+                Text(range,
+                    style: const TextStyle(
+                        color: sub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget recordTile(AttendanceRecord r) {
+      final res = resultFor(r);
+      final status = res.label;
+      final color = res.badgeColor;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border.withOpacity(0.9)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    fmtItem.format(r.classDateTime),
+                    style: const TextStyle(
+                        color: text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    r.className,
+                    style: const TextStyle(
+                        color: sub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: color.withOpacity(0.35)),
+              ),
+              child: Text(
+                status,
+                style: TextStyle(
+                    color: color, fontSize: 12, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget summaryLine({
+      required int planned,
+      required int actual,
+    }) {
+      Widget chip(String label, String value, Color color) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withOpacity(0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      color: sub, fontSize: 12, fontWeight: FontWeight.w900)),
+              const SizedBox(width: 8),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 12, fontWeight: FontWeight.w900)),
+            ],
+          ),
+        );
+      }
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              chip('계획', '${planned}회', const Color(0xFF5D7DFF)),
+              chip('출석', '${actual}회', _pmAccent),
+            ],
+          ),
+        ],
+      );
+    }
+
+    int plannedCountFrom(List<AttendanceRecord> recs) => recs.length;
+    int actualCountFrom(List<AttendanceRecord> recs) => recs
+        .where((r) => isActual(resultFor(r)))
+        .length;
+
+    Map<String, ({int planned, int actual})> byClassSummary(
+      List<AttendanceRecord> recs, {
+      required bool computeActual,
+    }) {
+      final map = <String, ({int planned, int actual})>{};
+      for (final r in recs) {
+        final name = (r.className.trim().isEmpty) ? '수업' : r.className.trim();
+        final prev = map[name] ?? (planned: 0, actual: 0);
+        final nextPlanned = prev.planned + 1;
+        final nextActual = computeActual && isActual(resultFor(r))
+            ? (prev.actual + 1)
+            : prev.actual;
+        map[name] = (planned: nextPlanned, actual: nextActual);
+      }
+      return map;
+    }
+
+    List<MapEntry<String, ({int planned, int actual})>> sortSummary(
+        Map<String, ({int planned, int actual})> m) {
+      final list = m.entries.toList();
+      list.sort((a, b) {
+        final cmp = b.value.planned.compareTo(a.value.planned);
+        if (cmp != 0) return cmp;
+        return a.key.compareTo(b.key);
+      });
+      return list;
+    }
+
+    Widget perClassSummary(
+      Map<String, ({int planned, int actual})> map, {
+      required bool showActual,
+    }) {
+      final entries = sortSummary(map);
+      if (entries.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 10),
+          ...entries.map((e) {
+            final name = e.key;
+            final planned = e.value.planned;
+            final actual = e.value.actual;
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      name,
+                      style: const TextStyle(
+                          color: _pmText,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  RichText(
+                    text: TextSpan(
+                      style: const TextStyle(
+                        color: _pmTextSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      children: [
+                        const TextSpan(text: '계획 '),
+                        TextSpan(
+                          text: '${planned}회',
+                          style: const TextStyle(
+                            color: Color(0xFFB9C6FF),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        if (showActual) ...[
+                          const TextSpan(text: '  /  출석 '),
+                          TextSpan(
+                            text: '${actual}회',
+                            style: const TextStyle(
+                              color: _pmAccent,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      );
+    }
+
+    final prevPlanned = plannedCountFrom(prevRecords);
+    final prevActual = actualCountFrom(prevRecords);
+    final nextPlanned = plannedCountFrom(nextPlannedSessions);
+    final nextActual = 0;
+
+    final prevByClass = byClassSummary(prevRecords, computeActual: true);
+    final nextByClass = byClassSummary(nextPlannedSessions, computeActual: false);
+
+    final bool anyExpanded = _prevExpanded || _nextExpanded;
+    final double dialogWidth = 430;
+    final double dialogMaxHeight = 760;
+
+    Widget buildPrevPanel({required bool expandedMode}) {
+      final toggleLabel = _prevExpanded ? '접기' : '자세히';
+      return Container(
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: border),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: expandedMode ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: panelHeader(
+                    title: '이전 수업 일정 기록',
+                    range:
+                        '${fmtRange.format(widget.prevDueDate)} ~ ${fmtRange.format(widget.dueDate)}',
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _prevExpanded = !_prevExpanded),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white.withOpacity(0.78),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    minimumSize: const Size(0, 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    textStyle:
+                        const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                  child: Text(toggleLabel),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (expandedMode && _prevExpanded) ...[
+              const Divider(height: 1, color: Color(0x22FFFFFF)),
+              const SizedBox(height: 12),
+            ],
+            if (!expandedMode || !_prevExpanded)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  summaryLine(
+                planned: prevPlanned,
+                actual: prevActual,
+                  ),
+                  perClassSummary(prevByClass, showActual: true),
+                ],
+              )
+            else
+              Expanded(
+                child: prevRecords.isEmpty
+                    ? const Center(
+                        child: Text('기록이 없습니다.',
+                            style:
+                                TextStyle(color: Colors.white24, fontSize: 13)),
+                      )
+                    : Scrollbar(
+                        thumbVisibility: true,
+                        child: ListView.separated(
+                          itemCount: prevRecords.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, i) =>
+                              recordTile(prevRecords[i]),
+                        ),
+                      ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    Widget buildNextPanel({required bool expandedMode}) {
+      final toggleLabel = _nextExpanded ? '접기' : '자세히';
+      return Container(
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: border),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: expandedMode ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: panelHeader(
+                    title: '이번 사이클 예정 수업 일정',
+                    range:
+                        '${fmtRange.format(widget.dueDate)} ~ ${fmtRange.format(widget.nextDueDate)}',
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _nextExpanded = !_nextExpanded),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white.withOpacity(0.78),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    minimumSize: const Size(0, 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    textStyle:
+                        const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                  child: Text(toggleLabel),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (expandedMode && _nextExpanded) ...[
+              const Divider(height: 1, color: Color(0x22FFFFFF)),
+              const SizedBox(height: 12),
+            ],
+            if (!expandedMode || !_nextExpanded)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  summaryLine(
+                planned: nextPlanned,
+                actual: nextActual,
+                  ),
+                  perClassSummary(nextByClass, showActual: false),
+                ],
+              )
+            else
+              Expanded(
+                child: nextPlannedSessions.isEmpty
+                    ? const Center(
+                        child: Text('예정 수업이 없습니다.',
+                            style:
+                                TextStyle(color: Colors.white24, fontSize: 13)),
+                      )
+                    : Scrollbar(
+                        thumbVisibility: true,
+                        child: ListView.separated(
+                          itemCount: nextPlannedSessions.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, i) =>
+                              recordTile(nextPlannedSessions[i]),
+                        ),
+                      ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Dialog(
+      backgroundColor: bg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(24),
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+        alignment: Alignment.topCenter,
+        child: anyExpanded
+            ? SizedBox(
+                width: dialogWidth,
+                height: dialogMaxHeight,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        height: 48,
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              margin: const EdgeInsets.only(right: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: IconButton(
+                                tooltip: '닫기',
+                                icon: const Icon(Icons.arrow_back,
+                                    color: Colors.white70, size: 20),
+                                padding: EdgeInsets.zero,
+                                onPressed: _saving
+                                    ? null
+                                    : () => Navigator.of(context).pop(),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '${student.name} · ${widget.cycle}회차 · 예정 $dueLabel',
+                                style: const TextStyle(
+                                    color: text,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Flexible(
+                              flex: (_prevExpanded && !_nextExpanded) ? 3 : 1,
+                              fit: FlexFit.tight,
+                              child: buildPrevPanel(expandedMode: true),
+                            ),
+                            const SizedBox(height: 14),
+                            Flexible(
+                              flex: (_nextExpanded && !_prevExpanded) ? 3 : 1,
+                              fit: FlexFit.tight,
+                              child: buildNextPanel(expandedMode: true),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: panel,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: border),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        child: Column(
+                          children: [
+                            const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text('납부일',
+                                  style: TextStyle(
+                                      color: sub,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w900)),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      color: cardBg,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                          color: border.withOpacity(0.9)),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<DateTime>(
+                                        value: _selectedPaidDate,
+                                        isExpanded: true,
+                                        dropdownColor: bg,
+                                        iconEnabledColor: sub,
+                                        items: dropdownDates
+                                            .map((d) => DropdownMenuItem<DateTime>(
+                                                  value: d,
+                                                  child: Text(
+                                                    fmtRange.format(d),
+                                                    style: const TextStyle(
+                                                        color: text,
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w800),
+                                                  ),
+                                                ))
+                                            .toList(),
+                                        onChanged: _saving
+                                            ? null
+                                            : (v) {
+                                                if (v == null) return;
+                                                setState(() =>
+                                                    _selectedPaidDate = v);
+                                              },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  tooltip: '달력',
+                                  onPressed: _saving ? null : pickFromCalendar,
+                                  icon: const Icon(Icons.calendar_month,
+                                      color: sub, size: 22),
+                                ),
+                                const SizedBox(width: 6),
+                                FilledButton(
+                                  onPressed: _saving ? null : save,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: _pmAccent,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                  ),
+                                  child: _saving
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white),
+                                        )
+                                      : const Text(
+                                          '납부',
+                                          style: TextStyle(
+                                              fontWeight: FontWeight.w900),
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 48,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: IconButton(
+                          tooltip: '닫기',
+                          icon: const Icon(Icons.arrow_back,
+                              color: Colors.white70, size: 20),
+                          padding: EdgeInsets.zero,
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '${student.name} · ${widget.cycle}회차 · 예정 $dueLabel',
+                          style: const TextStyle(
+                              color: text,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (!anyExpanded) ...[
+                  buildPrevPanel(expandedMode: false),
+                  const SizedBox(height: 12),
+                  buildNextPanel(expandedMode: false),
+                ] else
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Flexible(
+                          flex: (_prevExpanded && !_nextExpanded) ? 3 : 1,
+                          fit: FlexFit.tight,
+                          child: buildPrevPanel(expandedMode: true),
+                        ),
+                        const SizedBox(height: 14),
+                        Flexible(
+                          flex: (_nextExpanded && !_prevExpanded) ? 3 : 1,
+                          fit: FlexFit.tight,
+                          child: buildNextPanel(expandedMode: true),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                Container(
+                  decoration: BoxDecoration(
+                    color: panel,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: border),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Column(
+                    children: [
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('납부일',
+                            style: TextStyle(
+                                color: sub,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900)),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              decoration: BoxDecoration(
+                                color: cardBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border:
+                                    Border.all(color: border.withOpacity(0.9)),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<DateTime>(
+                                  value: _selectedPaidDate,
+                                  isExpanded: true,
+                                  dropdownColor: bg,
+                                  iconEnabledColor: sub,
+                                  items: dropdownDates
+                                      .map((d) => DropdownMenuItem<DateTime>(
+                                            value: d,
+                                            child: Text(
+                                              fmtRange.format(d),
+                                              style: const TextStyle(
+                                                  color: text,
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w800),
+                                            ),
+                                          ))
+                                      .toList(),
+                                  onChanged: _saving
+                                      ? null
+                                      : (v) {
+                                          if (v == null) return;
+                                          setState(() => _selectedPaidDate = v);
+                                        },
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: '달력',
+                            onPressed: _saving ? null : pickFromCalendar,
+                            icon: const Icon(Icons.calendar_month,
+                                color: sub, size: 22),
+                          ),
+                          const SizedBox(width: 6),
+                          FilledButton(
+                            onPressed: _saving ? null : save,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _pmAccent,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: _saving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Text(
+                                    '납부',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w900),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
