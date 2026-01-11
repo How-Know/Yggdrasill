@@ -1,10 +1,16 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/group_info.dart';
 import '../services/data_manager.dart';
 import '../models/class_info.dart';
 import 'custom_form_dropdown.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+
+// ✅ 성능: Windows 환경에서 과도한 print는 UI 지연을 유발할 수 있어 기본 OFF.
+// 필요할 때만 실행 옵션으로 켜서 사용:
+// flutter run ... --dart-define=YG_STUDENT_SEARCH_DEBUG=true
+const bool _kStudentSearchDebug =
+    bool.fromEnvironment('YG_STUDENT_SEARCH_DEBUG', defaultValue: false);
 
 class StudentSearchDialog extends StatefulWidget {
   final Set<String> excludedStudentIds;
@@ -47,17 +53,23 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
   List<StudentWithInfo> getSelfStudyEligibleStudents() {
     final eligible = DataManager.instance.students.where((s) {
       final setCount = DataManager.instance.getStudentLessonSetCount(s.student.id);
-      print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${s.student.name}, setCount=$setCount');
+      if (_kStudentSearchDebug) {
+        print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${s.student.name}, setCount=$setCount');
+      }
       return setCount > 0; // 수업이 하나 이상 등록된 학생만
     }).toList();
-    print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    if (_kStudentSearchDebug) {
+      print('[DEBUG][StudentSearchDialog] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    }
     return eligible;
   }
 
   void _refreshStudentList() {
     if (widget.isSelfStudyMode) {
       _students = DataManager.instance.getSelfStudyEligibleStudents();
-      print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
+      if (_kStudentSearchDebug) {
+        print('[DEBUG][StudentSearchDialog] 자습 등록 가능 학생: ' + _students.map((s) => s.student.name).toList().toString());
+      }
     } else {
       // 추천 기준 통일: 수업시간블록이 없는 학생
       _students = DataManager.instance.getLessonEligibleStudents();
@@ -149,7 +161,9 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
             block.studentId == studentId &&
             _isActive(block.startDate, block.endDate, refDate))
         .toList();
-    print('[DEBUG] 학생 $studentId의 활성 시간블록(${refDate.toIso8601String().split("T").first} 기준): ${allTimeBlocks.length}개');
+    if (_kStudentSearchDebug) {
+      print('[DEBUG] 학생 $studentId의 활성 시간블록(${refDate.toIso8601String().split("T").first} 기준): ${allTimeBlocks.length}개');
+    }
     
     if (allTimeBlocks.isEmpty) {
       return const SizedBox.shrink();
@@ -164,14 +178,18 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
         classSetIds[sessionTypeId] = <String?>{};
       }
       classSetIds[sessionTypeId]!.add(block.setId);
-      print('[DEBUG] 블록 sessionTypeId: ${block.sessionTypeId} -> $sessionTypeId, setId: ${block.setId}');
+      if (_kStudentSearchDebug) {
+        print('[DEBUG] 블록 sessionTypeId: ${block.sessionTypeId} -> $sessionTypeId, setId: ${block.setId}');
+      }
     }
     
     // 각 수업별 고유한 setId 개수 계산
     final Map<String, int> classCounts = {};
     for (final entry in classSetIds.entries) {
       classCounts[entry.key] = entry.value.length;
-      print('[DEBUG] 수업 ${entry.key}: ${entry.value.length}개 세트 (setIds: ${entry.value})');
+      if (_kStudentSearchDebug) {
+        print('[DEBUG] 수업 ${entry.key}: ${entry.value.length}개 세트 (setIds: ${entry.value})');
+      }
     }
     
     return Align(
@@ -230,7 +248,9 @@ class _StudentSearchDialogState extends State<StudentSearchDialog> {
       itemLabelBuilder: _labelFor,
       onChanged: (v) {
         setState(() => _selectedClassId = v.isEmpty ? null : v);
-        print('[DEBUG][StudentSearchDialog] dropdown changed -> $_selectedClassId');
+        if (_kStudentSearchDebug) {
+          print('[DEBUG][StudentSearchDialog] dropdown changed -> $_selectedClassId');
+        }
       },
     );
   }

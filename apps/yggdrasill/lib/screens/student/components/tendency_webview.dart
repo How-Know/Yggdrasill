@@ -10,6 +10,7 @@ import 'package:webview_windows/webview_windows.dart';
 import '../../../models/education_level.dart';
 import '../../../models/student.dart';
 import '../../../models/student_payment_info.dart';
+import '../../../services/app_config.dart';
 import '../../../services/data_manager.dart';
 import '../../../services/tag_preset_service.dart';
 import '../../../widgets/app_snackbar.dart';
@@ -43,6 +44,16 @@ class _TendencyWebViewState extends State<TendencyWebView> {
 
   Future<void> _init() async {
     await _controller.initialize();
+
+    // ✅ 앱 안에서는 .env 없이도 설문이 항상 동작하도록 Supabase 설정을 WebView에 주입한다.
+    // Survey web은 window.__YGG_SUPABASE_URL / window.__YGG_SUPABASE_ANON_KEY 를 우선 사용한다.
+    try {
+      await _controller.addScriptToExecuteOnDocumentCreated(
+        "try { window.__YGG_SUPABASE_URL = ${jsonEncode(kDefaultSupabaseUrl)}; window.__YGG_SUPABASE_ANON_KEY = ${jsonEncode(kDefaultSupabaseAnonKey)}; } catch(e) {}",
+      );
+    } catch (_) {
+      // ignore
+    }
     _webMessageSub?.cancel();
     _webMessageSub = _controller.webMessage.listen(
       (message) async {
@@ -93,7 +104,8 @@ class _TendencyWebViewState extends State<TendencyWebView> {
       _initialized = true;
     });
     final sid = widget.studentId ?? '';
-    final url = Uri.parse('$base/take?theme=dark&sid=$sid').toString();
+    // ✅ 앱에서도 첫 진입은 Landing(기존학생/신규학생 2버튼)으로 통일
+    final url = Uri.parse('$base/?theme=dark&sid=$sid').toString();
     await _controller.loadUrl(url);
   }
 
@@ -162,9 +174,71 @@ class _TendencyWebViewState extends State<TendencyWebView> {
     }
     if (msg is! Map) return;
     final type = msg['type'];
-    if (type != 'new_student_submit') return;
     final requestId = (msg['requestId'] ?? '').toString();
     if (requestId.trim().isEmpty) return;
+
+    // ✅ 기존학생 리스트 요청
+    if (type == 'existing_students_request') {
+      try {
+        final students = DataManager.instance.students;
+        String levelToStr(EducationLevel lv) {
+          switch (lv) {
+            case EducationLevel.elementary:
+              return 'elementary';
+            case EducationLevel.middle:
+              return 'middle';
+            case EducationLevel.high:
+              return 'high';
+          }
+        }
+
+        String gradeToStr(Student s) {
+          if (s.educationLevel == EducationLevel.high && s.grade == 4) return 'N수';
+          return s.grade.toString();
+        }
+
+        final list = students.map((si) {
+          final s = si.student;
+          return {
+            'id': s.id,
+            'name': s.name,
+            'school': s.school,
+            'level': levelToStr(s.educationLevel),
+            'grade': gradeToStr(s),
+          };
+        }).toList();
+
+        final payload = jsonEncode({
+          'type': 'existing_students_result',
+          'requestId': requestId,
+          'ok': true,
+          'students': list,
+        });
+        // WebMessage(가능하면) + CustomEvent(항상)
+        try {
+          await _controller.postWebMessage(payload);
+        } catch (_) {}
+        await _controller.executeScript(
+          "try { window.dispatchEvent(new CustomEvent('ygg_result', { detail: JSON.parse(${jsonEncode(payload)}) })); } catch(e) {}",
+        );
+      } catch (e) {
+        final payload = jsonEncode({
+          'type': 'existing_students_result',
+          'requestId': requestId,
+          'ok': false,
+          'error': e.toString(),
+        });
+        try {
+          await _controller.postWebMessage(payload);
+        } catch (_) {}
+        await _controller.executeScript(
+          "try { window.dispatchEvent(new CustomEvent('ygg_result', { detail: JSON.parse(${jsonEncode(payload)}) })); } catch(e) {}",
+        );
+      }
+      return;
+    }
+
+    if (type != 'new_student_submit') return;
 
     // ✅ 여기까지 왔으면 "메시지 수신 자체"는 성공
     print('[TendencyWebView][new_student_submit] requestId=$requestId');

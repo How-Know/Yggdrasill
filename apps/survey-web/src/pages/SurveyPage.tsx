@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { getSupabaseConfig, supabase } from '../lib/supabaseClient';
 import { tokens } from '../theme';
 
 type TraitQuestion = {
@@ -29,6 +29,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [textValue, setTextValue] = useState('');
   const [answers, setAnswers] = useState<Record<string, number | string>>({});
   const [responseId, setResponseId] = useState<string | null>(null);
+  const [participantId, setParticipantId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitted, setSubmitted] = useState(false);
@@ -38,16 +39,42 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [maxVisitedIndex, setMaxVisitedIndex] = useState(0);
   const [needAnswerOpen, setNeedAnswerOpen] = useState(false);
   const clientId = getClientId();
+  const [reloadKey, setReloadKey] = useState(0);
+  const sbCfg = getSupabaseConfig();
+  const hasSupabaseEnv = sbCfg.ok;
+  const participantInfo = useMemo(() => {
+    const q = new URLSearchParams(window.location.search);
+    return {
+      sid: (q.get('sid') ?? '').trim(),
+      name: (q.get('name') ?? '').trim(),
+      school: (q.get('school') ?? '').trim(),
+      level: (q.get('level') ?? '').trim() as any,
+      grade: (q.get('grade') ?? '').trim(),
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
+      if (!hasSupabaseEnv) {
+        setQuestions([]);
+        setIdx(0);
+        setScaleValue(null);
+        setTextValue('');
+        setMaxVisitedIndex(0);
+        setToast(`설문 서버 설정이 없어 문항을 불러올 수 없습니다. (source=${sbCfg.source})`);
+        setLoading(false);
+        return;
+      }
       const { data, error } = await supabase
         .from('questions')
         .select('id, trait, text, type, min_score, max_score, image_url')
         .eq('is_active', true)
         .order('created_at', { ascending: true });
-      if (error) console.error(error);
+      if (error) {
+        console.error(error);
+        setToast('설문 문항을 불러오지 못했습니다.');
+      }
       const list = (data || []).map((r: any) => ({
         id: r.id, trait: r.trait, text: r.text, type: r.type,
         min: r.min_score, max: r.max_score, image_url: r.image_url
@@ -56,7 +83,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       setIdx(0); setScaleValue(null); setTextValue(''); setMaxVisitedIndex(0);
       setLoading(false);
     })();
-  }, [slug]);
+  }, [slug, reloadKey, hasSupabaseEnv]);
 
   useEffect(() => {
     const q = questions[idx];
@@ -75,24 +102,51 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
   const current = questions[idx];
 
+  async function ensureParticipantId(): Promise<string | null> {
+    if (participantId) return participantId;
+    const cached = sessionStorage.getItem('trait_participant_id');
+    if (cached) { setParticipantId(cached); return cached; }
+    // 참여자 정보가 없으면 최소 이름은 만들어준다(테이블 not null)
+    const name = participantInfo.name || '기존학생';
+    const { data: surveyRow, error: se } = await supabase
+      .from('surveys')
+      .select('id')
+      .eq('slug', slug)
+      .limit(1)
+      .maybeSingle();
+    if (se || !surveyRow?.id) { setToast('설문 설정을 불러오지 못했습니다.'); return null; }
+    const { data: p, error: pe } = await supabase
+      .from('survey_participants')
+      .insert({
+        survey_id: surveyRow.id,
+        client_id: clientId,
+        name,
+        school: participantInfo.school || null,
+        grade: participantInfo.grade || null,
+        level: (participantInfo.level === 'elementary' || participantInfo.level === 'middle' || participantInfo.level === 'high')
+          ? participantInfo.level
+          : null,
+      })
+      .select('id')
+      .single();
+    if (pe || !(p as any)?.id) { setToast('참여자 정보를 저장하지 못했습니다.'); return null; }
+    const pid = (p as any).id as string;
+    sessionStorage.setItem('trait_participant_id', pid);
+    setParticipantId(pid);
+    return pid;
+  }
+
   async function ensureResponseId(): Promise<string | null> {
     if (responseId) return responseId;
     let rid = sessionStorage.getItem('trait_response_id');
     if (rid) { setResponseId(rid); return rid; }
-    // 최근 참가자(같은 client_id)를 찾아 연결
-    let participantId: string | null = null;
-    try {
-      const { data: parts } = await supabase
-        .from('survey_participants')
-        .select('id, created_at')
-        .eq('client_id', clientId)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      if (parts && Array.isArray(parts) && parts.length) participantId = (parts[0] as any).id as string;
-    } catch {}
+    // ✅ 기존학생/신규학생 플로우: 설문 시작 전 participant를 먼저 생성
+    // (anon은 select가 막혀있어 "조회 후 재사용" 불가)
+    const pid = await ensureParticipantId();
+    if (!pid) return null;
     const { data: r, error: re } = await supabase
       .from('question_responses')
-      .insert({ client_id: clientId, user_agent: navigator.userAgent, participant_id: participantId })
+      .insert({ client_id: clientId, user_agent: navigator.userAgent, participant_id: pid })
       .select('id')
       .single();
     if (re) { setToast('오류가 발생했습니다.'); return null; }
@@ -142,12 +196,52 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     </div>
   );
 
+  if (!current) {
+    return (
+      <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+        <div
+          style={{
+            background: tokens.panel,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: 14,
+            padding: 18,
+          }}
+        >
+          <div style={{ color: tokens.text, fontWeight: 900, fontSize: 18 }}>설문을 시작할 수 없습니다</div>
+          <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.45 }}>
+            {hasSupabaseEnv
+              ? '활성화된 설문 문항이 없거나(questions.is_active), 문항 로딩에 실패했습니다.'
+              : 'Supabase 환경변수(VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY)가 설정되지 않았습니다.'}
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+            <button
+              type="button"
+              onClick={() => setReloadKey((v) => v + 1)}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '10px 16px',
+                borderRadius: 10,
+                cursor: 'pointer',
+                fontWeight: 900,
+              }}
+            >
+              다시 시도
+            </button>
+          </div>
+        </div>
+        {toast && <div style={{ marginTop: 12, fontSize: 13, color: tokens.accent }}>{toast}</div>}
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
       {current && (
         <div>
           <div style={{ color: tokens.textFaint, marginBottom: 8 }}>{idx + 1} / {questions.length} · {current.trait}</div>
-          <div style={{ fontSize: 22, marginBottom: 18 }}>{current.text}</div>
+          <div style={{ fontSize: 22, marginBottom: 18, color: tokens.text }}>{current.text}</div>
           {current.image_url && (
             <div style={{ marginBottom: 16 }}>
               {!imgLoaded && (
@@ -156,10 +250,27 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               <img loading="lazy" src={imgSrc || undefined} alt="question" onLoad={()=>setImgLoaded(true)} onError={async()=>{
                    try {
                      const url = current.image_url as string;
-                     const m = /\/storage\/v1\/object\/public\/(\w+)\/(.+)$/i.exec(url);
+                     // bucket 이름에 하이픈(-)이 들어갈 수 있어 \w+ 대신 [^/]+ 사용
+                     let bucket = '';
+                     let path = '';
+                     const m = /\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/i.exec(url);
                      if (m) {
-                       const bucket = m[1];
-                       const path = decodeURIComponent(m[2]);
+                       bucket = m[1];
+                       path = decodeURIComponent(m[2]);
+                     } else {
+                       // fallback: URL 파싱으로 public bucket/path 추출
+                       const marker = '/storage/v1/object/public/';
+                       const idx = url.indexOf(marker);
+                       if (idx >= 0) {
+                         const rest = url.substring(idx + marker.length);
+                         const slash = rest.indexOf('/');
+                         if (slash > 0) {
+                           bucket = rest.substring(0, slash);
+                           path = decodeURIComponent(rest.substring(slash + 1));
+                         }
+                       }
+                     }
+                     if (bucket && path) {
                        const { data: s } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
                        if ((s as any)?.signedUrl) {
                          setImgSrc((s as any).signedUrl as string);
@@ -172,20 +283,33 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                    } catch {}
                    setImgLoaded(true);
                  }}
-                   style={{ maxWidth:'100%', borderRadius: 8, border:`1px solid ${tokens.border}`, opacity: imgLoaded ? 1 : 0, transition:'opacity 150ms' }} />
+                   style={{
+                     display: 'block',
+                     width: '100%',
+                     maxWidth: '100%',
+                     maxHeight: 320,
+                     objectFit: 'contain',
+                     borderRadius: 8,
+                     border: `1px solid ${tokens.border}`,
+                     opacity: imgLoaded ? 1 : 0,
+                     transition: 'opacity 150ms',
+                   }} />
             </div>
           )}
           {current.type === 'scale' ? (
             <div style={{ margin:`${current.image_url ? 30 : 48}px 0 24px` }}>
               {(() => {
+                const isNarrow = window.innerWidth < 720;
                 const min = current.min ?? 1;
                 const max = current.max ?? 10;
                 const count = Math.max(1, (max - min + 1));
-                const btnW = 48; const gap = 12;
+                const btnW = isNarrow ? 40 : 48;
+                const gap = isNarrow ? 8 : 12;
                 const containerWidth = count * btnW + (count - 1) * gap;
                 const centerIdx = (min === 1 && max === 10) ? 5 : Math.ceil(count / 2);
                 return (
-                  <div style={{ width: `${containerWidth}px`, margin: '0 auto' }}>
+                  <div style={{ maxWidth: '100%', overflowX: 'auto' }}>
+                    <div style={{ width: `${containerWidth}px`, maxWidth: '100%', margin: '0 auto' }}>
                     <div style={{ display:'grid', gridTemplateColumns:`repeat(${count}, ${btnW}px)`, columnGap:gap, color:tokens.textFaint, fontSize:13, marginBottom:8 }}>
                       <div style={{ gridColumn:'1', justifySelf:'start', whiteSpace:'nowrap' }}>전혀 그렇지 않다</div>
                       <div style={{ gridColumn:String(centerIdx), justifySelf:'center', whiteSpace:'nowrap' }}>보통이다</div>
@@ -200,6 +324,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                             style={{ width:btnW, height:btnW, borderRadius:10, border:`1px solid ${tokens.border}`, background:on?tokens.accent:tokens.field, color:'#fff', cursor:'pointer', fontSize:16 }}>{v}</button>
                         );
                       })}
+                    </div>
                     </div>
                   </div>
                 );
@@ -257,7 +382,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
             <div style={{ color:tokens.textFaint, marginBottom:16 }}>제출 후에는 답변을 수정할 수 없습니다. 제출하시겠습니까?</div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
-              <button onClick={async()=>{ const ok = await saveCurrentAnswer(); if (!ok) return; setSubmitted(true); setToast('제출이 완료되었습니다. 감사합니다!'); sessionStorage.removeItem('trait_response_id'); setConfirmOpen(false); }}
+              <button onClick={async()=>{ const ok = await saveCurrentAnswer(); if (!ok) return; setSubmitted(true); setToast('제출이 완료되었습니다. 감사합니다!'); sessionStorage.removeItem('trait_response_id'); sessionStorage.removeItem('trait_participant_id'); setConfirmOpen(false); }}
                 style={{ background:tokens.accent, color:'#fff', border:'none', padding:'10px 20px', borderRadius:10, cursor:'pointer', fontWeight:800 }}>제출</button>
             </div>
           </div>

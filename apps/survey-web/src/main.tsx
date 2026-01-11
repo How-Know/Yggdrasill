@@ -1,12 +1,23 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import './global.css';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import SurveyPage from './pages/SurveyPage';
-import ResultsPage from './pages/ResultsPage';
 import { tokens } from './theme';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';
+
+type ExistingStudent = {
+  id: string;
+  name: string;
+  school?: string;
+  level?: EducationLevel;
+  grade?: string;
+};
+
+// ✅ Supabase env 미설정 시에도 첫 화면(Landing)이 안 죽게,
+// 설문/결과 페이지는 필요할 때만 로드(lazy import)한다.
+const SurveyPage = React.lazy(() => import('./pages/SurveyPage'));
+const ResultsPage = React.lazy(() => import('./pages/ResultsPage'));
 
 function sendToAppViaHash(message: unknown): boolean {
   try {
@@ -279,7 +290,13 @@ function useQuery() {
   return useMemo(() => new URLSearchParams(window.location.search), []);
 }
 
-function Landing({ onPickNew }: { onPickNew: () => void }) {
+function Landing({
+  onPickNew,
+  onPickExisting,
+}: {
+  onPickNew: () => void;
+  onPickExisting: () => void;
+}) {
   const card: React.CSSProperties = {
     flex: 1,
     minHeight: 240,
@@ -302,12 +319,12 @@ function Landing({ onPickNew }: { onPickNew: () => void }) {
       <div style={{ display: 'flex', gap: 18, marginTop: 18 }}>
       <div
         data-testid="btn-existing"
-        onClick={() => alert('기존학생: 추후 연동 예정')}
+        onClick={onPickExisting}
         onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
         onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panel)}
         style={card}
       >
-        <span style={label}>기존학생 (준비 중)</span>
+        <span style={label}>기존학생</span>
       </div>
       <div
         data-testid="btn-new"
@@ -326,7 +343,7 @@ function Landing({ onPickNew }: { onPickNew: () => void }) {
 function NewStudentForm({
   onRegistered,
 }: {
-  onRegistered?: (studentId?: string) => void;
+  onRegistered?: (student?: { id: string; name: string; school: string; level: EducationLevel; grade: string }) => void;
 }) {
   const q = useQuery();
   const [page, setPage] = useState<'basic' | 'details'>('basic');
@@ -404,7 +421,18 @@ function NewStudentForm({
         setError(null);
         setOk('등록 완료');
         try {
-          onRegistered?.(msg.studentId ? String(msg.studentId) : undefined);
+          const id = msg.studentId ? String(msg.studentId) : '';
+          if (id) {
+            onRegistered?.({
+              id,
+              name: name.trim(),
+              school: school.trim(),
+              level,
+              grade,
+            });
+          } else {
+            onRegistered?.();
+          }
         } catch {
           // ignore
         }
@@ -713,24 +741,179 @@ function useRoute() {
   return { path, navigate };
 }
 
+function ExistingStudentPicker({
+  open,
+  loading,
+  error,
+  students,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  loading: boolean;
+  error: string | null;
+  students: ExistingStudent[];
+  onClose: () => void;
+  onPick: (s: ExistingStudent) => void;
+}) {
+  const [q, setQ] = useState('');
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return students;
+    return students.filter((s) => {
+      const hay = `${s.name} ${(s.school ?? '')} ${(s.grade ?? '')}`.toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [q, students]);
+
+  if (!open) return null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.52)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: 'min(720px, 92vw)', maxHeight: '80vh', overflow: 'hidden', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 14 }}>
+        <div style={{ padding: 16, borderBottom: `1px solid ${tokens.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ fontWeight: 900, color: tokens.text, fontSize: 16 }}>기존학생 선택</div>
+          <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${tokens.border}`, color: tokens.textFaint, borderRadius: 10, padding: '8px 12px', cursor: 'pointer' }}>닫기</button>
+        </div>
+        <div style={{ padding: 16 }}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="이름/학교/학년 검색"
+            style={{
+              width: '100%',
+              height: 44,
+              background: tokens.field,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: 10,
+              padding: '10px 12px',
+              color: tokens.text,
+              fontSize: 16,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ marginTop: 12, color: tokens.textFaint, fontSize: 13 }}>
+            {loading ? '불러오는 중...' : error ? error : `${filtered.length}명`}
+          </div>
+        </div>
+        <div style={{ maxHeight: '55vh', overflowY: 'auto', borderTop: `1px solid ${tokens.border}` }}>
+          {filtered.map((s) => (
+            <div
+              key={s.id}
+              onClick={() => onPick(s)}
+              style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: `1px solid ${tokens.border}` }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
+            >
+              <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
+              <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
+                {(s.school ?? '-') + ' · ' + (s.level ?? '-') + ' ' + (s.grade ?? '-')}
+              </div>
+            </div>
+          ))}
+          {!loading && !error && filtered.length === 0 && (
+            <div style={{ padding: 16, color: tokens.textFaint }}>검색 결과가 없습니다.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const { path, navigate } = useRoute();
   const pathname = (path.split('?')[0] || '/');
+  const isInWebViewHost = !!((window as any)?.chrome?.webview);
+  const [existingOpen, setExistingOpen] = useState(false);
+  const [existingLoading, setExistingLoading] = useState(false);
+  const [existingError, setExistingError] = useState<string | null>(null);
+  const [existingStudents, setExistingStudents] = useState<ExistingStudent[]>([]);
+  const [existingReqId, setExistingReqId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeYggEvents((msg) => {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type !== 'existing_students_result') return;
+      if (!existingReqId || msg.requestId !== existingReqId) return;
+      setExistingLoading(false);
+      setExistingReqId(null);
+      if (msg.ok) {
+        setExistingError(null);
+        setExistingStudents(Array.isArray(msg.students) ? (msg.students as ExistingStudent[]) : []);
+      } else {
+        setExistingError(msg.error ? String(msg.error) : '학생 목록을 불러오지 못했습니다.');
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, [existingReqId]);
+
+  function requestExistingStudents() {
+    if (!isInWebViewHost) {
+      alert('브라우저에서는 기존학생 연동이 준비 중입니다.');
+      return;
+    }
+    const reqId = `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    setExistingReqId(reqId);
+    setExistingLoading(true);
+    setExistingError(null);
+    setExistingStudents([]);
+    setExistingOpen(true);
+    const sent = sendToAppViaHash({ type: 'existing_students_request', requestId: reqId }) ||
+      postToHost({ type: 'existing_students_request', requestId: reqId });
+    if (!sent) {
+      setExistingLoading(false);
+      setExistingReqId(null);
+      setExistingError('앱과 통신할 수 없습니다.');
+    }
+  }
+
+  function goSurveyWithStudent(s: ExistingStudent) {
+    const qs = new URLSearchParams();
+    qs.set('sid', s.id);
+    if (s.name) qs.set('name', s.name);
+    if (s.school) qs.set('school', s.school);
+    if (s.level) qs.set('level', s.level);
+    if (s.grade) qs.set('grade', s.grade);
+    navigate(`/survey?${qs.toString()}`);
+  }
   return (
     <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, boxSizing: 'border-box' }}>
       {pathname.startsWith('/results') ? (
-        <ResultsPage />
+        <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
+          <ResultsPage />
+        </Suspense>
       ) : pathname.startsWith('/survey') ? (
-        <SurveyPage />
+        <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
+          <SurveyPage />
+        </Suspense>
       ) : pathname.startsWith('/take') ? (
         <NewStudentForm
-          onRegistered={(studentId) => {
-            const sid = studentId ? encodeURIComponent(studentId) : '';
-            navigate(`/survey${sid ? `?sid=${sid}` : ''}`);
+          onRegistered={(s) => {
+            if (!s?.id) return;
+            const qs = new URLSearchParams();
+            qs.set('sid', s.id);
+            qs.set('name', s.name);
+            qs.set('school', s.school);
+            qs.set('level', s.level);
+            qs.set('grade', s.grade);
+            navigate(`/survey?${qs.toString()}`);
           }}
         />
       ) : (
-        <Landing onPickNew={() => navigate('/take')} />
+        <>
+          <Landing
+            onPickNew={() => navigate('/take')}
+            onPickExisting={requestExistingStudents}
+          />
+          <ExistingStudentPicker
+            open={existingOpen}
+            loading={existingLoading}
+            error={existingError}
+            students={existingStudents}
+            onClose={() => setExistingOpen(false)}
+            onPick={(s) => { setExistingOpen(false); goSurveyWithStudent(s); }}
+          />
+        </>
       )}
     </div>
   );
