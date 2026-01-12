@@ -131,19 +131,74 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     })();
   }, [slug, reloadKey, hasSupabaseEnv]);
 
+  async function onSaveAndExit() {
+    // 현재 문항에 응답이 있으면 저장 후 종료
+    if (isAnswered) await saveCurrentAnswer();
+    try {
+      const u = new URL(window.location.href);
+      u.pathname = '/';
+      // sid/theme는 유지 (앱에서 재진입 용이)
+      const qs = new URLSearchParams(u.search);
+      if (participantInfo.sid) qs.set('sid', participantInfo.sid);
+      if (qs.get('theme') == null) qs.set('theme', 'dark');
+      u.search = `?${qs.toString()}`;
+      window.location.href = u.toString();
+    } catch {
+      window.location.href = '/';
+    }
+  }
+
+  // ✅ 앱(WebView) 플로우: 학생(sid=uuid) 기준으로 진행상태를 불러와 이어하기
+  useEffect(() => {
+    (async () => {
+      if (!hasSupabaseEnv) return;
+      const sid = participantInfo.sid;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
+      if (!isUuid) return;
+
+      try {
+        // ✅ participant row가 없으면 먼저 생성(또는 캐시 사용)
+        const pid = await ensureParticipantId();
+        if (!pid) return;
+
+        // response를 항상 동일하게(1명=1응답) 가져와서 답변을 불러온다.
+        const { data: rid, error: re } = await supabase.rpc('get_or_create_trait_response', {
+          p_participant_id: pid,
+          p_client_id: clientId,
+          p_user_agent: navigator.userAgent,
+        } as any);
+        if (re || !rid) {
+          console.error(re);
+          return;
+        }
+        const rId = String(rid);
+        setResponseId(rId);
+
+        const { data: rows, error: ae } = await supabase.rpc('list_trait_answers', { p_response_id: rId } as any);
+        if (ae) {
+          console.error(ae);
+          return;
+        }
+        const map: Record<string, number | string> = {};
+        for (const row of (rows as any[] | null) ?? []) {
+          const qid = String(row.question_id);
+          if (row.answer_number != null) map[qid] = Number(row.answer_number);
+          else if (row.answer_text != null) map[qid] = String(row.answer_text);
+        }
+        setAnswers(map);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSupabaseEnv, participantInfo.sid, slug]);
+
   useEffect(() => {
     const q = questions[idx];
     if (!q) return;
     setImgLoaded(false);
     setImgErr(null);
-    const resolved = resolveImageUrl(q.image_url);
-    setImgSrc(resolved);
-    // ✅ 디버그: WebView에서도 "왜 이미지가 안 뜨는지" 즉시 확인
-    if ((q.image_url ?? '').trim().length > 0) {
-      // eslint-disable-next-line no-console
-      console.debug('[SURVEY][IMG]', { raw: q.image_url, resolved });
-      if (!resolved) setImgErr('image_url은 있는데 src로 해석하지 못했습니다');
-    }
+    setImgSrc(resolveImageUrl(q.image_url));
     const prev = answers[q.id];
     if (q.type === 'scale') {
       setScaleValue(typeof prev === 'number' ? (prev as number) : null);
@@ -158,9 +213,13 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
   async function ensureParticipantId(): Promise<string | null> {
     if (participantId) return participantId;
-    const cached = sessionStorage.getItem('trait_participant_id');
+    // ✅ 앱(WebView)에서는 sid(학생 uuid)를 참여자 id로 사용해 재진입 시 이어하기 가능
+    const sid = participantInfo.sid;
+    const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
+    const cacheKey = sidIsUuid ? `trait_participant_id:${slug}:${sid}` : `trait_participant_id:${slug}`;
+    const cached = sessionStorage.getItem(cacheKey);
     if (cached) { setParticipantId(cached); return cached; }
-    const pid = newUuid();
+    const pid = sidIsUuid ? sid : newUuid();
     // 참여자 정보가 없으면 최소 이름은 만들어준다(테이블 not null)
     const name = participantInfo.name || '기존학생';
     const { data: surveyRow, error: se } = await supabase
@@ -186,25 +245,31 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     // ⚠️ RLS 상 "공개 설문 참여자"는 insert만 허용되고 select는 막혀있다.
     // 그래서 insert 후 .select()로 id를 받으려 하면 실패한다 → 클라이언트에서 UUID를 생성해 사용.
     if (pe) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe.message || 'unknown'})`); return null; }
-    sessionStorage.setItem('trait_participant_id', pid);
+    sessionStorage.setItem(cacheKey, pid);
     setParticipantId(pid);
     return pid;
   }
 
   async function ensureResponseId(): Promise<string | null> {
     if (responseId) return responseId;
-    let rid = sessionStorage.getItem('trait_response_id');
+    const sid = participantInfo.sid;
+    const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
+    const cacheKey = sidIsUuid ? `trait_response_id:${slug}:${sid}` : `trait_response_id:${slug}`;
+    let rid = sessionStorage.getItem(cacheKey);
     if (rid) { setResponseId(rid); return rid; }
     // ✅ 기존학생/신규학생 플로우: 설문 시작 전 participant를 먼저 생성
     // (anon은 select가 막혀있어 "조회 후 재사용" 불가)
     const pid = await ensureParticipantId();
     if (!pid) return null;
-    rid = newUuid();
-    const { error: re } = await supabase
-      .from('question_responses')
-      .insert({ id: rid, client_id: clientId, user_agent: navigator.userAgent, participant_id: pid }, { returning: 'minimal' as any });
-    if (re) { console.error(re); setToast(`오류가 발생했습니다. (${re.message || 'unknown'})`); return null; }
-    sessionStorage.setItem('trait_response_id', rid as string); setResponseId(rid);
+    // ✅ 1명=1응답 형태로 이어하기 위해 RPC로 response를 생성/조회한다.
+    const { data: rpcRid, error: re } = await supabase.rpc('get_or_create_trait_response', {
+      p_participant_id: pid,
+      p_client_id: clientId,
+      p_user_agent: navigator.userAgent,
+    } as any);
+    if (re || !rpcRid) { console.error(re); setToast(`오류가 발생했습니다. (${re?.message || 'unknown'})`); return null; }
+    rid = String(rpcRid);
+    sessionStorage.setItem(cacheKey, rid); setResponseId(rid);
     return rid;
   }
 
@@ -261,6 +326,16 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     if (idx > 0) setIdx(idx - 1);
   }
 
+  // answers가 로드된 뒤, 첫 미응답 문항으로 자동 이동(이어하기)
+  useEffect(() => {
+    if (!questions.length) return;
+    const firstUnanswered = questions.findIndex((q) => answers[q.id] == null || (typeof answers[q.id] === 'string' && String(answers[q.id]).trim() === ''));
+    const nextIdx = firstUnanswered >= 0 ? firstUnanswered : Math.max(0, questions.length - 1);
+    if (idx !== nextIdx) setIdx(nextIdx);
+    setMaxVisitedIndex((m) => Math.max(m, nextIdx));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, answers]);
+
   if (loading) return <p style={{ color: tokens.textDim }}>불러오는 중...</p>;
   if (submitted) return (
     <div style={{ minHeight:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
@@ -312,9 +387,18 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
       {current && (
         <div>
-          <div style={{ color: tokens.textFaint, marginBottom: 8 }}>{idx + 1} / {questions.length} · {current.trait}</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom: 8 }}>
+            <div style={{ color: tokens.textFaint }}>{idx + 1} / {questions.length} · {current.trait}</div>
+            <button
+              type="button"
+              onClick={onSaveAndExit}
+              style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'8px 12px', borderRadius:10, cursor:'pointer', fontWeight:800, whiteSpace:'nowrap' }}
+            >
+              저장 후 종료
+            </button>
+          </div>
           <div style={{ fontSize: 22, marginBottom: 18, color: tokens.text }}>{current.text}</div>
-          {((current.image_url ?? '').trim().length > 0 || imgErr) && (
+          {imgSrc && (
             <div style={{ marginBottom: 16 }}>
               {!imgLoaded && (
                 <div style={{ width:'100%', height:220, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:8 }} />
@@ -327,7 +411,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                    onError={async()=>{
                    try {
                      const url = imgSrc as string;
-                     setImgErr('이미지 로드 실패');
+                     setImgErr('이미지를 불러오지 못했습니다.');
                      // bucket 이름에 하이픈(-)이 들어갈 수 있어 \w+ 대신 [^/]+ 사용
                      let bucket = '';
                      let path = '';
@@ -372,11 +456,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                      opacity: imgLoaded ? 1 : 0,
                      transition: 'opacity 150ms',
                    }} />
-              <div style={{ marginTop: 8, color: tokens.textFaint, fontSize: 12, wordBreak: 'break-all' }}>
-                {imgErr ? `${imgErr} · ` : ''}
-                raw: {(current.image_url ?? '').trim() || '(empty)'}<br />
-                src: {imgSrc || '(null)'}
-              </div>
+              {imgErr && (
+                <div style={{ marginTop: 8, color: tokens.textFaint, fontSize: 12 }}>
+                  {imgErr}
+                </div>
+              )}
             </div>
           )}
           {current.type === 'scale' ? (
