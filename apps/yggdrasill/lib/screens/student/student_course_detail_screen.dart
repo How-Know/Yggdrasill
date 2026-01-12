@@ -109,6 +109,10 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   record.copyWith(
                     arrivalTime: newArrival,
                     departureTime: newDeparture,
+                    // 시간 기록이 생기면 출석으로 간주하는 것이 UI/판정 로직과 일치한다.
+                    isPresent: (newArrival != null || newDeparture != null)
+                        ? true
+                        : record.isPresent,
                     updatedAt: DateTime.now(),
                   ),
                 );

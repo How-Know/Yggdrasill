@@ -85,8 +85,12 @@ AttendanceResult judgeAttendanceResult({
     return d.isBefore(today) ? AttendanceResult.absent : AttendanceResult.planned;
   }
 
-  // 2) 명시적 결석
-  if (!record.isPresent) {
+  // 2) 결석 판정(정합성 보강)
+  // - legacy/동기화/일부 UI 경로에서 arrival/departure는 존재하지만 isPresent=false로 남는 경우가 있어
+  //   시간 기록이 있으면 "출석"으로 간주한다.
+  final bool effectivePresent =
+      record.isPresent || record.arrivalTime != null || record.departureTime != null;
+  if (!effectivePresent) {
     return AttendanceResult.absent;
   }
 

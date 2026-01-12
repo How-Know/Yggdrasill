@@ -22,6 +22,51 @@ function getClientId(): string {
   return id;
 }
 
+function newUuid(): string {
+  return (window.crypto?.randomUUID?.() || `u_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+}
+
+function resolveImageUrl(raw: string | null | undefined): string | null {
+  const v = (raw ?? '').trim();
+  if (!v) return null;
+  if (/^https?:\/\//i.test(v)) {
+    // ✅ 관리자 화면에서 로컬 supabase(예: localhost)로 생성된 URL이 저장된 경우,
+    // 앱(WebView)에서는 원격 supabase로 치환해서 사용한다.
+    try {
+      const u = new URL(v);
+      const isLocalHost = (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+      if (isLocalHost && u.pathname.startsWith('/storage/v1/')) {
+        const cfg = getSupabaseConfig();
+        if (cfg.ok) {
+          const base = cfg.url.replace(/\/$/, '');
+          return `${base}${u.pathname}${u.search}${u.hash}`;
+        }
+      }
+    } catch {}
+    return v;
+  }
+
+  const cfg = getSupabaseConfig();
+  const base = cfg.ok ? cfg.url.replace(/\/$/, '') : '';
+  if (base) {
+    // common: "/storage/v1/object/public/<bucket>/<path>"
+    if (v.startsWith('/storage/v1/')) return `${base}${v}`;
+    if (v.startsWith('storage/v1/')) return `${base}/${v}`;
+    if (v.startsWith('/')) return `${base}${v}`;
+  }
+
+  // common: "<bucket>/<path>" or just "<path>" (assume survey bucket)
+  const parts = v.split('/').filter(Boolean);
+  if (parts.length >= 2) {
+    const bucket = parts[0];
+    const path = parts.slice(1).join('/');
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    return data.publicUrl || v;
+  }
+  const { data } = supabase.storage.from('survey').getPublicUrl(v);
+  return data.publicUrl || v;
+}
+
 export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [questions, setQuestions] = useState<TraitQuestion[]>([]);
   const [idx, setIdx] = useState(0);
@@ -36,6 +81,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [toast, setToast] = useState<string | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [imgErr, setImgErr] = useState<string | null>(null);
   const [maxVisitedIndex, setMaxVisitedIndex] = useState(0);
   const [needAnswerOpen, setNeedAnswerOpen] = useState(false);
   const clientId = getClientId();
@@ -89,7 +135,15 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     const q = questions[idx];
     if (!q) return;
     setImgLoaded(false);
-    setImgSrc(q.image_url || null);
+    setImgErr(null);
+    const resolved = resolveImageUrl(q.image_url);
+    setImgSrc(resolved);
+    // ✅ 디버그: WebView에서도 "왜 이미지가 안 뜨는지" 즉시 확인
+    if ((q.image_url ?? '').trim().length > 0) {
+      // eslint-disable-next-line no-console
+      console.debug('[SURVEY][IMG]', { raw: q.image_url, resolved });
+      if (!resolved) setImgErr('image_url은 있는데 src로 해석하지 못했습니다');
+    }
     const prev = answers[q.id];
     if (q.type === 'scale') {
       setScaleValue(typeof prev === 'number' ? (prev as number) : null);
@@ -106,6 +160,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     if (participantId) return participantId;
     const cached = sessionStorage.getItem('trait_participant_id');
     if (cached) { setParticipantId(cached); return cached; }
+    const pid = newUuid();
     // 참여자 정보가 없으면 최소 이름은 만들어준다(테이블 not null)
     const name = participantInfo.name || '기존학생';
     const { data: surveyRow, error: se } = await supabase
@@ -115,9 +170,10 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       .limit(1)
       .maybeSingle();
     if (se || !surveyRow?.id) { setToast('설문 설정을 불러오지 못했습니다.'); return null; }
-    const { data: p, error: pe } = await supabase
+    const { error: pe } = await supabase
       .from('survey_participants')
       .insert({
+        id: pid,
         survey_id: surveyRow.id,
         client_id: clientId,
         name,
@@ -126,11 +182,10 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         level: (participantInfo.level === 'elementary' || participantInfo.level === 'middle' || participantInfo.level === 'high')
           ? participantInfo.level
           : null,
-      })
-      .select('id')
-      .single();
-    if (pe || !(p as any)?.id) { setToast('참여자 정보를 저장하지 못했습니다.'); return null; }
-    const pid = (p as any).id as string;
+      }, { returning: 'minimal' as any });
+    // ⚠️ RLS 상 "공개 설문 참여자"는 insert만 허용되고 select는 막혀있다.
+    // 그래서 insert 후 .select()로 id를 받으려 하면 실패한다 → 클라이언트에서 UUID를 생성해 사용.
+    if (pe) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe.message || 'unknown'})`); return null; }
     sessionStorage.setItem('trait_participant_id', pid);
     setParticipantId(pid);
     return pid;
@@ -144,13 +199,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     // (anon은 select가 막혀있어 "조회 후 재사용" 불가)
     const pid = await ensureParticipantId();
     if (!pid) return null;
-    const { data: r, error: re } = await supabase
+    rid = newUuid();
+    const { error: re } = await supabase
       .from('question_responses')
-      .insert({ client_id: clientId, user_agent: navigator.userAgent, participant_id: pid })
-      .select('id')
-      .single();
-    if (re) { setToast('오류가 발생했습니다.'); return null; }
-    rid = (r as any).id; sessionStorage.setItem('trait_response_id', rid as string); setResponseId(rid);
+      .insert({ id: rid, client_id: clientId, user_agent: navigator.userAgent, participant_id: pid }, { returning: 'minimal' as any });
+    if (re) { console.error(re); setToast(`오류가 발생했습니다. (${re.message || 'unknown'})`); return null; }
+    sessionStorage.setItem('trait_response_id', rid as string); setResponseId(rid);
     return rid;
   }
 
@@ -158,13 +212,31 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     if (!current) return false;
     const rid = await ensureResponseId();
     if (!rid) return false;
-    const payload: any = { response_id: rid, question_id: current.id };
-    if (current.type === 'scale') payload.answer_number = scaleValue;
-    else payload.answer_text = textValue;
-    const { error } = await supabase
-      .from('question_answers')
-      .upsert(payload, { onConflict: 'response_id,question_id' });
-    if (error) { setToast('답변 저장 중 오류'); return false; }
+    const answerNumber = current.type === 'scale' ? scaleValue : null;
+    const answerText = current.type === 'text' ? textValue : null;
+
+    // ✅ 1순위: RPC(SECURITY DEFINER)로 저장 → RLS/returning 문제를 근본적으로 회피
+    const { error: rpcErr } = await supabase.rpc('save_question_answer', {
+      p_response_id: rid,
+      p_question_id: current.id,
+      p_answer_number: answerNumber,
+      p_answer_text: answerText,
+    } as any);
+    if (rpcErr) {
+      // fallback: upsert (DB에 RPC 미적용 상태 대비)
+      console.error('[save_question_answer][rpc]', rpcErr);
+      const payload: any = { response_id: rid, question_id: current.id };
+      if (current.type === 'scale') payload.answer_number = scaleValue;
+      else payload.answer_text = textValue;
+      const { error } = await supabase
+        .from('question_answers')
+        .upsert(payload, { onConflict: 'response_id,question_id', returning: 'minimal' as any });
+      if (error) {
+        console.error('[question_answers][upsert]', error);
+        setToast(`답변 저장 중 오류: ${error.message || 'unknown'}`);
+        return false;
+      }
+    }
     setAnswers((m) => ({ ...m, [current.id]: current.type === 'scale' ? (scaleValue as number) : textValue }));
     return true;
   }
@@ -242,14 +314,20 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         <div>
           <div style={{ color: tokens.textFaint, marginBottom: 8 }}>{idx + 1} / {questions.length} · {current.trait}</div>
           <div style={{ fontSize: 22, marginBottom: 18, color: tokens.text }}>{current.text}</div>
-          {current.image_url && (
+          {((current.image_url ?? '').trim().length > 0 || imgErr) && (
             <div style={{ marginBottom: 16 }}>
               {!imgLoaded && (
                 <div style={{ width:'100%', height:220, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:8 }} />
               )}
-              <img loading="lazy" src={imgSrc || undefined} alt="question" onLoad={()=>setImgLoaded(true)} onError={async()=>{
+              <img
+                   loading="lazy"
+                   src={imgSrc || undefined}
+                   alt="question"
+                   onLoad={()=>{ setImgLoaded(true); setImgErr(null); }}
+                   onError={async()=>{
                    try {
-                     const url = current.image_url as string;
+                     const url = imgSrc as string;
+                     setImgErr('이미지 로드 실패');
                      // bucket 이름에 하이픈(-)이 들어갈 수 있어 \w+ 대신 [^/]+ 사용
                      let bucket = '';
                      let path = '';
@@ -294,6 +372,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                      opacity: imgLoaded ? 1 : 0,
                      transition: 'opacity 150ms',
                    }} />
+              <div style={{ marginTop: 8, color: tokens.textFaint, fontSize: 12, wordBreak: 'break-all' }}>
+                {imgErr ? `${imgErr} · ` : ''}
+                raw: {(current.image_url ?? '').trim() || '(empty)'}<br />
+                src: {imgSrc || '(null)'}
+              </div>
             </div>
           )}
           {current.type === 'scale' ? (

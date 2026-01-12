@@ -1451,7 +1451,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             } else if (status == 'attended') {
               final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
               if (existing != null) {
-                final updated = existing.copyWith(departureTime: now);
+                // departureTime이 기록되면 출석으로 간주(isPresent=true)하여
+                // arrival/departure는 있는데 isPresent=false로 남는 비정합을 방지한다.
+                final updated = existing.copyWith(
+                  departureTime: now,
+                  isPresent: true,
+                );
                 try {
                   await DataManager.instance.updateAttendanceRecord(updated);
                 } catch (e) {

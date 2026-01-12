@@ -248,6 +248,8 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         final updated = rec.copyWith(
                           departureTime: now,
                           classEndTime: now,
+                          // 정합성 보강: 하원 시간이 기록되면 출석으로 간주
+                          isPresent: true,
                         );
                         await DataManager.instance
                             .updateAttendanceRecord(updated);

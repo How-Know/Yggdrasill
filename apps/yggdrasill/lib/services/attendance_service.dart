@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/attendance_record.dart';
@@ -1596,6 +1597,8 @@ class AttendanceService {
             await TenantService.instance.ensureActiveAcademy();
     final supa = Supabase.instance.client;
     final classDtUtc = _utcMinute(record.classDateTime);
+    final bool effectivePresent =
+        record.isPresent || record.arrivalTime != null || record.departureTime != null;
     final row = {
       'id': record.id,
       'academy_id': academyId,
@@ -1605,7 +1608,8 @@ class AttendanceService {
       'class_date_time': classDtUtc.toIso8601String(),
       'class_end_time': record.classEndTime.toUtc().toIso8601String(),
       'class_name': record.className,
-      'is_present': record.isPresent,
+      // 정합성: 시간 기록이 있으면 출석으로 저장
+      'is_present': effectivePresent,
       'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
       'departure_time': record.departureTime?.toUtc().toIso8601String(),
       'notes': record.notes,
@@ -1766,13 +1770,16 @@ class AttendanceService {
   Future<void> updateAttendanceRecord(AttendanceRecord record) async {
     final supa = Supabase.instance.client;
     if (record.id != null) {
+      final bool effectivePresent =
+          record.isPresent || record.arrivalTime != null || record.departureTime != null;
       final row = {
         'student_id': record.studentId,
         'occurrence_id': record.occurrenceId,
         'class_date_time': _utcMinute(record.classDateTime).toIso8601String(),
         'class_end_time': record.classEndTime.toUtc().toIso8601String(),
         'class_name': record.className,
-        'is_present': record.isPresent,
+        // 정합성: 시간 기록이 있으면 출석으로 저장
+        'is_present': effectivePresent,
         'arrival_time': record.arrivalTime?.toUtc().toIso8601String(),
         'departure_time': record.departureTime?.toUtc().toIso8601String(),
         'notes': record.notes,
@@ -1844,6 +1851,76 @@ class AttendanceService {
 
   List<AttendanceRecord> getAttendanceRecordsForStudent(String studentId) {
     return _attendanceRecords.where((r) => r.studentId == studentId).toList();
+  }
+
+  /// (데이터 정합성 백필) 등/하원 시간이 기록되어 있는데 `is_present=false`로 남아있는 행을
+  /// `is_present=true`로 보정한다.
+  ///
+  /// - 증상: 결제/요약 UI 등에서 `isPresent` 기반으로 결석으로 표시될 수 있음
+  /// - 원인: 일부 업데이트 경로에서 arrival/departure만 저장하고 isPresent를 올리지 않음(legacy/충돌/동기화 등)
+  ///
+  /// 안전장치:
+  /// - academy 단위로 1회만 수행(SharedPreferences 플래그)
+  Future<int> backfillIsPresentFromTimesOnce({bool force = false}) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'backfill_is_present_from_times_v1:$academyId';
+    if (!force && (prefs.getBool(key) ?? false)) {
+      return 0;
+    }
+
+    final supa = Supabase.instance.client;
+    int totalUpdated = 0;
+    final nowUtc = DateTime.now().toUtc().toIso8601String();
+
+    // PostgREST에서 OR 조건은 `.or()`로 처리한다.
+    // 반복/청크 방식: id를 제한(limit)해서 가져오고, 그 id들만 update한다.
+    while (true) {
+      final rows = await supa
+          .from('attendance_records')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('is_present', false)
+          .or('arrival_time.not.is.null,departure_time.not.is.null')
+          .limit(500);
+
+      final list = (rows is List)
+          ? rows.cast<Map<String, dynamic>>()
+          : const <Map<String, dynamic>>[];
+      if (list.isEmpty) break;
+
+      final ids = <String>[];
+      for (final r in list) {
+        final id = (r['id'] as String?) ?? '';
+        if (id.isNotEmpty) ids.add(id);
+      }
+      if (ids.isEmpty) break;
+
+      await supa
+          .from('attendance_records')
+          .update({'is_present': true, 'updated_at': nowUtc})
+          .eq('academy_id', academyId)
+          .inFilter('id', ids);
+
+      // 메모리(캐시)도 함께 보정해서 UI 즉시 반영
+      for (final id in ids) {
+        final idx = _attendanceRecords.indexWhere((x) => x.id == id);
+        if (idx == -1) continue;
+        final cur = _attendanceRecords[idx];
+        if (cur.isPresent) continue;
+        _attendanceRecords[idx] = cur.copyWith(
+          isPresent: true,
+          updatedAt: DateTime.now(),
+        );
+      }
+
+      totalUpdated += ids.length;
+      attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+    }
+
+    await prefs.setBool(key, true);
+    return totalUpdated;
   }
 
   Future<Map<String, String>> _createBatchSessionsForPlanned({

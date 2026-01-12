@@ -14,6 +14,14 @@ type ExistingStudent = {
   grade?: string;
 };
 
+function levelLabel(level?: string): string {
+  if (!level) return '-';
+  if (level === 'elementary') return '초등';
+  if (level === 'middle') return '중등';
+  if (level === 'high') return '고등';
+  return level; // fallback
+}
+
 // ✅ Supabase env 미설정 시에도 첫 화면(Landing)이 안 죽게,
 // 설문/결과 페이지는 필요할 때만 로드(lazy import)한다.
 const SurveyPage = React.lazy(() => import('./pages/SurveyPage'));
@@ -342,8 +350,10 @@ function Landing({
 
 function NewStudentForm({
   onRegistered,
+  onBack,
 }: {
   onRegistered?: (student?: { id: string; name: string; school: string; level: EducationLevel; grade: string }) => void;
+  onBack?: () => void;
 }) {
   const q = useQuery();
   const [page, setPage] = useState<'basic' | 'details'>('basic');
@@ -475,8 +485,10 @@ function NewStudentForm({
     return null;
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function submitNewStudent() {
+    // ✅ 2/2(추가정보) 단계에서 "시작" 버튼을 눌렀을 때만 전송한다.
+    // (1/2 → 2/2 전환 시점에 의도치 않게 전송/설문 시작되는 현상 방지)
+    if (page !== 'details') return;
     setError(null); setOk(null);
     const err = validate();
     if (err) { setError(err); return; }
@@ -528,7 +540,17 @@ function NewStudentForm({
 
   return (
     <form
-      onSubmit={onSubmit}
+      onSubmit={(e) => {
+        // ✅ submit 이벤트로는 절대 전송하지 않는다. (Enter/암묵적 submit 방지)
+        e.preventDefault();
+      }}
+      onKeyDown={(e) => {
+        // ✅ Enter 키로 인한 "자동 제출" 방지 (특히 2/2에서 입력 중 Enter → submit 되는 문제)
+        const t = e.target as HTMLElement | null;
+        if (e.key === 'Enter' && t?.tagName === 'INPUT') {
+          e.preventDefault();
+        }
+      }}
       style={{
         width: isNarrow ? '40vw' : '40vw',
         maxWidth: 1100,
@@ -542,14 +564,13 @@ function NewStudentForm({
         overflow: 'visible',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>신규학생 등록</div>
           <div style={{ marginTop: 4, color: tokens.textFaint, fontSize: 13 }}>
             {page === 'basic' ? '1/2 · 필수 정보와 연락처를 입력해 주세요.' : '2/2 · 추가 정보를 입력해 주세요.'}
           </div>
         </div>
-        {/* 2페이지 상단 뒤로 버튼 제거(하단 버튼만 유지) */}
       </div>
 
       <div style={{ height: 1, background: tokens.border, margin: '14px 0 10px' }} />
@@ -682,18 +703,28 @@ function NewStudentForm({
       {ok && <div style={{ color: '#7ED957', marginTop: 12, fontSize: 13 }} data-testid="toast-success">{ok}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 32, justifyContent: 'flex-end' }}>
         {page === 'basic' ? (
-          <button
-            type="button"
-            onClick={() => {
-              setError(null); setOk(null);
-              const err = validateBasic();
-              if (err) { setError(err); return; }
-              setPage('details');
-            }}
-            style={{ background: tokens.accent, color: '#fff', border: 'none', padding: '12px 18px', borderRadius: 10, fontWeight: 900, cursor: 'pointer' }}
-          >
-            다음
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={onBack}
+              style={{ background: 'transparent', color: tokens.textDim, border: `1px solid ${tokens.border}`, padding: '12px 18px', borderRadius: 10, fontWeight: 900, cursor: 'pointer' }}
+            >
+              뒤로
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                setError(null); setOk(null);
+                const err = validateBasic();
+                if (err) { setError(err); return; }
+                setPage('details');
+              }}
+              style={{ background: tokens.accent, color: '#fff', border: 'none', padding: '12px 18px', borderRadius: 10, fontWeight: 900, cursor: 'pointer' }}
+            >
+              다음
+            </button>
+          </>
         ) : (
           <>
             <button
@@ -705,7 +736,8 @@ function NewStudentForm({
             </button>
             <button
               data-testid="btn-submit"
-              type="submit"
+              type="button"
+              onClick={() => submitNewStudent()}
               disabled={submitting}
               style={{
                 background: tokens.accent,
@@ -718,7 +750,7 @@ function NewStudentForm({
                 opacity: submitting ? 0.6 : 1,
               }}
             >
-              {submitting ? '전송 중...' : '제출'}
+              {submitting ? '시작 중...' : '시작'}
             </button>
           </>
         )}
@@ -741,22 +773,32 @@ function useRoute() {
   return { path, navigate };
 }
 
-function ExistingStudentPicker({
-  open,
+function ExistingStudentsPage({
+  isInWebViewHost,
   loading,
   error,
   students,
-  onClose,
+  onBack,
+  onRequest,
   onPick,
 }: {
-  open: boolean;
+  isInWebViewHost: boolean;
   loading: boolean;
   error: string | null;
   students: ExistingStudent[];
-  onClose: () => void;
+  onBack: () => void;
+  onRequest: () => void;
   onPick: (s: ExistingStudent) => void;
 }) {
   const [q, setQ] = useState('');
+
+  useEffect(() => {
+    // 페이지 진입 시 자동 로드
+    if (isInWebViewHost && students.length === 0 && !loading && !error) {
+      onRequest();
+    }
+  }, [isInWebViewHost]);
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return students;
@@ -766,15 +808,27 @@ function ExistingStudentPicker({
     });
   }, [q, students]);
 
-  if (!open) return null;
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.52)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: 'min(720px, 92vw)', maxHeight: '80vh', overflow: 'hidden', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 14 }}>
-        <div style={{ padding: 16, borderBottom: `1px solid ${tokens.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <div style={{ fontWeight: 900, color: tokens.text, fontSize: 16 }}>기존학생 선택</div>
-          <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${tokens.border}`, color: tokens.textFaint, borderRadius: 10, padding: '8px 12px', cursor: 'pointer' }}>닫기</button>
+    <div style={{ maxWidth: 900, margin: '32px auto 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>기존학생 선택</div>
+          <div style={{ marginTop: 4, color: tokens.textFaint, fontSize: 13 }}>학생을 선택하면 설문이 바로 시작됩니다.</div>
         </div>
-        <div style={{ padding: 16 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onBack} style={{ background: 'transparent', border: `1px solid ${tokens.border}`, color: tokens.textDim, borderRadius: 10, padding: '10px 14px', cursor: 'pointer', fontWeight: 900 }}>뒤로</button>
+          <button onClick={onRequest} style={{ background: tokens.accent, border: 'none', color: '#fff', borderRadius: 10, padding: '10px 14px', cursor: 'pointer', fontWeight: 900 }}>새로고침</button>
+        </div>
+      </div>
+
+      <div style={{ height: 1, background: tokens.border, margin: '14px 0 14px' }} />
+
+      {!isInWebViewHost ? (
+        <div style={{ padding: 16, background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 12, color: tokens.textFaint }}>
+          브라우저에서는 기존학생 연동이 준비 중입니다. (앱에서만 사용)
+        </div>
+      ) : (
+        <>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -792,30 +846,32 @@ function ExistingStudentPicker({
               boxSizing: 'border-box',
             }}
           />
+
           <div style={{ marginTop: 12, color: tokens.textFaint, fontSize: 13 }}>
             {loading ? '불러오는 중...' : error ? error : `${filtered.length}명`}
           </div>
-        </div>
-        <div style={{ maxHeight: '55vh', overflowY: 'auto', borderTop: `1px solid ${tokens.border}` }}>
-          {filtered.map((s) => (
-            <div
-              key={s.id}
-              onClick={() => onPick(s)}
-              style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: `1px solid ${tokens.border}` }}
-              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
-              onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
-            >
-              <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
-              <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
-                {(s.school ?? '-') + ' · ' + (s.level ?? '-') + ' ' + (s.grade ?? '-')}
+
+          <div style={{ marginTop: 12, border: `1px solid ${tokens.border}`, borderRadius: 12, overflow: 'hidden' }}>
+            {filtered.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => onPick(s)}
+                style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: `1px solid ${tokens.border}`, background: 'transparent' }}
+                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
+                onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
+              >
+                <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
+                <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
+                  {(s.school ?? '-') + ' · ' + levelLabel(s.level) + ' ' + (s.grade ?? '-')}
+                </div>
               </div>
-            </div>
-          ))}
-          {!loading && !error && filtered.length === 0 && (
-            <div style={{ padding: 16, color: tokens.textFaint }}>검색 결과가 없습니다.</div>
-          )}
-        </div>
-      </div>
+            ))}
+            {!loading && !error && filtered.length === 0 && (
+              <div style={{ padding: 16, color: tokens.textFaint }}>검색 결과가 없습니다.</div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -824,7 +880,6 @@ function App() {
   const { path, navigate } = useRoute();
   const pathname = (path.split('?')[0] || '/');
   const isInWebViewHost = !!((window as any)?.chrome?.webview);
-  const [existingOpen, setExistingOpen] = useState(false);
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | null>(null);
   const [existingStudents, setExistingStudents] = useState<ExistingStudent[]>([]);
@@ -857,7 +912,6 @@ function App() {
     setExistingLoading(true);
     setExistingError(null);
     setExistingStudents([]);
-    setExistingOpen(true);
     const sent = sendToAppViaHash({ type: 'existing_students_request', requestId: reqId }) ||
       postToHost({ type: 'existing_students_request', requestId: reqId });
     if (!sent) {
@@ -886,6 +940,16 @@ function App() {
         <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
           <SurveyPage />
         </Suspense>
+      ) : pathname.startsWith('/existing') ? (
+        <ExistingStudentsPage
+          isInWebViewHost={isInWebViewHost}
+          loading={existingLoading}
+          error={existingError}
+          students={existingStudents}
+          onBack={() => navigate('/')}
+          onRequest={requestExistingStudents}
+          onPick={(s) => goSurveyWithStudent(s)}
+        />
       ) : pathname.startsWith('/take') ? (
         <NewStudentForm
           onRegistered={(s) => {
@@ -898,22 +962,13 @@ function App() {
             qs.set('grade', s.grade);
             navigate(`/survey?${qs.toString()}`);
           }}
+          onBack={() => navigate('/')}
         />
       ) : (
-        <>
-          <Landing
-            onPickNew={() => navigate('/take')}
-            onPickExisting={requestExistingStudents}
-          />
-          <ExistingStudentPicker
-            open={existingOpen}
-            loading={existingLoading}
-            error={existingError}
-            students={existingStudents}
-            onClose={() => setExistingOpen(false)}
-            onPick={(s) => { setExistingOpen(false); goSurveyWithStudent(s); }}
-          />
-        </>
+        <Landing
+          onPickNew={() => navigate('/take')}
+          onPickExisting={() => navigate('/existing')}
+        />
       )}
     </div>
   );

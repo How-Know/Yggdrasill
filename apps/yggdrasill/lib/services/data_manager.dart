@@ -825,6 +825,8 @@ class DataManager {
       // 로그인/테넌트 보장 후 일괄 로딩
       try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
       await reloadAllData();
+      // ✅ 데이터 정합성 백필(1회): 등/하원 시간이 있으나 is_present=false인 행 보정
+      try { await AttendanceService.instance.backfillIsPresentFromTimesOnce(); } catch (_) {}
       await _subscribeSessionOverridesRealtime();
       await _subscribeStudentTimeBlocksRealtime();
       await _subscribeStudentsInvalidation();

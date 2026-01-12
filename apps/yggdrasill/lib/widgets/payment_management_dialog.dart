@@ -543,7 +543,6 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   Widget _buildPanel({
     required String title,
     required String subtitle,
-    required IconData icon,
     required Color iconColor,
     required List<_PaymentItem> items,
     required bool isUnpaid,
@@ -561,17 +560,6 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
         children: [
           Row(
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: iconColor.withOpacity(0.35)),
-                ),
-                child: Icon(icon, color: iconColor, size: 18),
-              ),
-              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -656,7 +644,6 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                       child: _buildPanel(
                         title: '예정일 지남',
                         subtitle: '카드를 클릭하면 납부 기록이 저장됩니다',
-                        icon: Icons.error_outline_rounded,
                         iconColor: _pmDanger,
                         items: _unpaidStudents,
                         isUnpaid: true,
@@ -668,7 +655,6 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                       child: _buildPanel(
                         title: '결제 예정',
                         subtitle: '예정일 전 미결제 학생 목록입니다',
-                        icon: Icons.schedule_rounded,
                         iconColor: const Color(0xFF1976D2),
                         items: _upcomingStudents,
                         isUnpaid: false,
@@ -856,6 +842,8 @@ class _PaymentRecordAndScheduleDialogState
   bool _prevExpanded = false;
   bool _nextExpanded = false;
   int _latenessThresholdMinutes = 10;
+  // ✅ 핫리로드 안전성: late initState 초기화 대신 즉시 초기화
+  final ScrollController _contentScrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -894,7 +882,7 @@ class _PaymentRecordAndScheduleDialogState
     required String studentId,
     required DateTime fromInclusive, // date-only
     required DateTime toExclusive, // date-only
-    required List<StudentTimeBlock> activeBlocks,
+    required List<StudentTimeBlock> blocks,
   }) {
     final start = _dateOnly(fromInclusive);
     final end = _dateOnly(toExclusive);
@@ -919,12 +907,23 @@ class _PaymentRecordAndScheduleDialogState
       String className,
     })> agg = {};
 
+    bool blockActiveOnDate(StudentTimeBlock b, DateTime dayDateOnly) {
+      final d = _dateOnly(dayDateOnly);
+      final s = _dateOnly(b.startDate);
+      final e = b.endDate == null ? null : _dateOnly(b.endDate!);
+      if (d.isBefore(s)) return false;
+      if (e != null && d.isAfter(e)) return false;
+      return true;
+    }
+
     for (DateTime day = start;
         day.isBefore(end);
         day = day.add(const Duration(days: 1))) {
       final dayIndex = day.weekday - 1; // 0:월~6:일
-      for (final b in activeBlocks) {
+      for (final b in blocks) {
         if (b.dayIndex != dayIndex) continue;
+        // ✅ 해결 A: cycle 구간과 블록 적용기간이 "겹치는" 경우만 포함
+        if (!blockActiveOnDate(b, day)) continue;
         final classStart =
             DateTime(day.year, day.month, day.day, b.startHour, b.startMinute);
         final classEnd = classStart.add(b.duration);
@@ -933,7 +932,11 @@ class _PaymentRecordAndScheduleDialogState
                 ? byClassId[b.sessionTypeId!]!
                 : '수업';
         final setId = (b.setId ?? '').trim();
-        final key = '${day.year}-${day.month}-${day.day}|$setId';
+        // set_id가 비어있으면 서로 다른 수업이 한 덩어리로 합쳐질 수 있어 fallback 키를 더 섬세하게 구성
+        final keySet = setId.isNotEmpty
+            ? setId
+            : 'noSet|${(b.sessionTypeId ?? '').trim()}|${b.startHour}:${b.startMinute}';
+        final key = '${day.year}-${day.month}-${day.day}|$keySet';
         final prev = agg[key];
         if (prev == null) {
           agg[key] = (
@@ -995,6 +998,12 @@ class _PaymentRecordAndScheduleDialogState
   }
 
   @override
+  void dispose() {
+    _contentScrollCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     const bg = _pmBg;
     const panel = _pmPanelBg;
@@ -1015,6 +1024,17 @@ class _PaymentRecordAndScheduleDialogState
       final e =
           DateTime(endExclusive.year, endExclusive.month, endExclusive.day);
       return !dt.isBefore(s) && dt.isBefore(e);
+    }
+
+    bool isPurePlanned(AttendanceRecord r) {
+      return r.isPlanned == true &&
+          !r.isPresent &&
+          r.arrivalTime == null &&
+          r.departureTime == null;
+    }
+
+    bool sameDay(DateTime a, DateTime b) {
+      return a.year == b.year && a.month == b.month && a.day == b.day;
     }
 
     AttendanceResult resultFor(AttendanceRecord r) {
@@ -1049,18 +1069,73 @@ class _PaymentRecordAndScheduleDialogState
         .toList()
       ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
 
-    // ✅ "이번 사이클 예정 수업 일정"은 실제 출석(예정) 레코드가 아니라
-    // 수강등록 예정일(dueDate)을 기준으로 활성화된 student_time_blocks로 다음 예정일 전까지 계산한다.
-    final activeBlocksAtDue = _activeBlocksAtDate(
-      studentId: student.id,
-      anchorDate: widget.dueDate,
-    );
+    // ✅ 이번 사이클 내 실제 출석/결석 기록:
+    // - 첫 등록 + 미납(현재 사이클 진행 중)인 학생은 "이전 구간" 기록이 0일 수 있다.
+    // - 그 경우에도 이번 사이클 구간(dueDate~nextDueDate)의 실제 기록은 존재할 수 있는데,
+    //   planned(예정)만 보여주면 과거 날짜가 전부 '결석'처럼 보인다.
+    // - 따라서 이번 사이클 패널은 planned + actual을 병합해서 보여준다.
+    final nextActualRecords = all
+        .where((r) =>
+            inRange(r.classDateTime, widget.dueDate, widget.nextDueDate) &&
+            !isPurePlanned(r))
+        .toList()
+      ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+
+    // ✅ 해결 A: "이번 사이클 예정 수업 일정"은 cycle 구간 [dueDate, nextDueDate)와
+    // student_time_blocks의 적용기간(start_date~end_date)이 "겹치는" 블록을 포함해 날짜별로 계산한다.
+    final blocksForStudent = DataManager.instance.studentTimeBlocks
+        .where((b) => b.studentId == student.id)
+        .toList();
     final nextPlannedSessions = _buildPlannedSessionsFromBlocks(
       studentId: student.id,
       fromInclusive: widget.dueDate,
       toExclusive: widget.nextDueDate,
-      activeBlocks: activeBlocksAtDue,
+      blocks: blocksForStudent,
     );
+
+    // ✅ planned(예정) + actual(실기록) 병합(동일 날짜 + 동일 setId면 actual 우선)
+    // - setId가 없는 경우는 안전하게 병합하지 않고 둘 다 표시(오탐/누락 방지)
+    final List<AttendanceRecord> mergedNextSessions = () {
+      final out = <AttendanceRecord>[];
+      final usedActual = <int>{}; // index of nextActualRecords
+
+      for (final p in nextPlannedSessions) {
+        final psid = (p.setId ?? '').trim();
+        if (psid.isEmpty) {
+          out.add(p);
+          continue;
+        }
+
+        int matchIdx = -1;
+        for (int i = 0; i < nextActualRecords.length; i++) {
+          if (usedActual.contains(i)) continue;
+          final a = nextActualRecords[i];
+          if ((a.setId ?? '').trim() != psid) continue;
+          if (!sameDay(a.classDateTime, p.classDateTime)) continue;
+          matchIdx = i;
+          break;
+        }
+
+        if (matchIdx != -1) {
+          usedActual.add(matchIdx);
+          out.add(nextActualRecords[matchIdx]);
+        } else {
+          out.add(p);
+        }
+      }
+
+      for (int i = 0; i < nextActualRecords.length; i++) {
+        if (usedActual.contains(i)) continue;
+        out.add(nextActualRecords[i]);
+      }
+
+      out.sort((a, b) {
+        final cmp = a.classDateTime.compareTo(b.classDateTime);
+        if (cmp != 0) return cmp;
+        return (a.setId ?? '').compareTo(b.setId ?? '');
+      });
+      return out;
+    }();
 
     final dueLabel = '${widget.dueDate.month}/${widget.dueDate.day}';
 
@@ -1370,16 +1445,116 @@ class _PaymentRecordAndScheduleDialogState
     final prevPlanned = plannedCountFrom(prevRecords);
     final prevActual = actualCountFrom(prevRecords);
     final nextPlanned = plannedCountFrom(nextPlannedSessions);
-    final nextActual = 0;
+    final nextActual = actualCountFrom(mergedNextSessions);
 
     final prevByClass = byClassSummary(prevRecords, computeActual: true);
-    final nextByClass = byClassSummary(nextPlannedSessions, computeActual: false);
+    final nextByClass = byClassSummary(mergedNextSessions, computeActual: true);
 
+    // ✅ 요청: 결제 다이얼로그 너비 +10%
+    final double dialogWidth = 473; // 430 * 1.1
+    // ✅ 아코디언 UX:
+    // - 기본(접힘): 콘텐츠 높이만큼만 랩(불필요한 여백 제거)
+    // - 펼침: 최대 높이까지만 키우고, 가운데(요약/상세)만 스크롤
     final bool anyExpanded = _prevExpanded || _nextExpanded;
-    final double dialogWidth = 430;
-    final double dialogMaxHeight = 760;
+    final double maxDialogHeight = MediaQuery.sizeOf(context).height * 0.90;
+    final double expandedHeight =
+        (maxDialogHeight < 920) ? maxDialogHeight : 920;
 
-    Widget buildPrevPanel({required bool expandedMode}) {
+    Widget paymentPanel() {
+      return Container(
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: border),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Column(
+          children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('납부일',
+                  style: TextStyle(
+                      color: sub,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900)),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: border.withOpacity(0.9)),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<DateTime>(
+                        value: _selectedPaidDate,
+                        isExpanded: true,
+                        dropdownColor: bg,
+                        iconEnabledColor: sub,
+                        items: dropdownDates
+                            .map((d) => DropdownMenuItem<DateTime>(
+                                  value: d,
+                                  child: Text(
+                                    fmtRange.format(d),
+                                    style: const TextStyle(
+                                        color: text,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800),
+                                  ),
+                                ))
+                            .toList(),
+                        onChanged: _saving
+                            ? null
+                            : (v) {
+                                if (v == null) return;
+                                setState(() => _selectedPaidDate = v);
+                              },
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '달력',
+                  onPressed: _saving ? null : pickFromCalendar,
+                  icon:
+                      const Icon(Icons.calendar_month, color: sub, size: 22),
+                ),
+                const SizedBox(width: 6),
+                FilledButton(
+                  onPressed: _saving ? null : save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _pmAccent,
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text(
+                          '납부',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget buildPrevAccordion() {
       final toggleLabel = _prevExpanded ? '접기' : '자세히';
       return Container(
         decoration: BoxDecoration(
@@ -1390,7 +1565,7 @@ class _PaymentRecordAndScheduleDialogState
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: expandedMode ? MainAxisSize.max : MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
@@ -1417,47 +1592,47 @@ class _PaymentRecordAndScheduleDialogState
               ],
             ),
             const SizedBox(height: 12),
-            if (expandedMode && _prevExpanded) ...[
-              const Divider(height: 1, color: Color(0x22FFFFFF)),
-              const SizedBox(height: 12),
-            ],
-            if (!expandedMode || !_prevExpanded)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  summaryLine(
-                planned: prevPlanned,
-                actual: prevActual,
-                  ),
-                  perClassSummary(prevByClass, showActual: true),
-                ],
-              )
-            else
-              Expanded(
-                child: prevRecords.isEmpty
-                    ? const Center(
-                        child: Text('기록이 없습니다.',
-                            style:
-                                TextStyle(color: Colors.white24, fontSize: 13)),
-                      )
-                    : Scrollbar(
-                        thumbVisibility: true,
-                        child: ListView.separated(
-                          itemCount: prevRecords.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, i) =>
-                              recordTile(prevRecords[i]),
-                        ),
-                      ),
-              ),
+            summaryLine(
+              planned: prevPlanned,
+              actual: prevActual,
+            ),
+            perClassSummary(prevByClass, showActual: true),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              alignment: Alignment.topCenter,
+              child: !_prevExpanded
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: prevRecords.isEmpty
+                          ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(vertical: 14),
+                                child: Text(
+                                  '기록이 없습니다.',
+                                  style: TextStyle(
+                                      color: Colors.white24, fontSize: 13),
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: prevRecords.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, i) =>
+                                  recordTile(prevRecords[i]),
+                            ),
+                    ),
+            ),
           ],
         ),
       );
     }
 
-    Widget buildNextPanel({required bool expandedMode}) {
+    Widget buildNextAccordion() {
       final toggleLabel = _nextExpanded ? '접기' : '자세히';
       return Container(
         decoration: BoxDecoration(
@@ -1468,7 +1643,7 @@ class _PaymentRecordAndScheduleDialogState
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: expandedMode ? MainAxisSize.max : MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
@@ -1495,384 +1670,143 @@ class _PaymentRecordAndScheduleDialogState
               ],
             ),
             const SizedBox(height: 12),
-            if (expandedMode && _nextExpanded) ...[
-              const Divider(height: 1, color: Color(0x22FFFFFF)),
-              const SizedBox(height: 12),
-            ],
-            if (!expandedMode || !_nextExpanded)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  summaryLine(
-                planned: nextPlanned,
-                actual: nextActual,
-                  ),
-                  perClassSummary(nextByClass, showActual: false),
-                ],
-              )
-            else
-              Expanded(
-                child: nextPlannedSessions.isEmpty
-                    ? const Center(
-                        child: Text('예정 수업이 없습니다.',
-                            style:
-                                TextStyle(color: Colors.white24, fontSize: 13)),
-                      )
-                    : Scrollbar(
-                        thumbVisibility: true,
-                        child: ListView.separated(
-                          itemCount: nextPlannedSessions.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, i) =>
-                              recordTile(nextPlannedSessions[i]),
-                        ),
-                      ),
-              ),
+            summaryLine(
+              planned: nextPlanned,
+              actual: nextActual,
+            ),
+            perClassSummary(nextByClass, showActual: true),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              alignment: Alignment.topCenter,
+              child: !_nextExpanded
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: mergedNextSessions.isEmpty
+                          ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(vertical: 14),
+                                child: Text(
+                                  '예정 수업이 없습니다.',
+                                  style: TextStyle(
+                                      color: Colors.white24, fontSize: 13),
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: mergedNextSessions.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, i) =>
+                                  recordTile(mergedNextSessions[i]),
+                            ),
+                    ),
+            ),
           ],
         ),
       );
     }
 
+    Widget header() {
+      return SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              margin: const EdgeInsets.only(right: 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: IconButton(
+                tooltip: '닫기',
+                icon: const Icon(Icons.arrow_back,
+                    color: Colors.white70, size: 20),
+                padding: EdgeInsets.zero,
+                onPressed:
+                    _saving ? null : () => Navigator.of(context).pop(),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                '${student.name} · ${widget.cycle}회차 · 예정 $dueLabel',
+                style: const TextStyle(
+                    color: text, fontSize: 18, fontWeight: FontWeight.w900),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 접힘(요약) 모드: 콘텐츠 높이만큼만 랩
+    if (!anyExpanded) {
+      return Dialog(
+        backgroundColor: bg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        insetPadding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: dialogWidth),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                header(),
+                const SizedBox(height: 10),
+                buildPrevAccordion(),
+                const SizedBox(height: 14),
+                buildNextAccordion(),
+                const SizedBox(height: 14),
+                paymentPanel(),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 펼침 모드: 높이 제한 + 가운데만 스크롤(납부 버튼 항상 노출)
     return Dialog(
       backgroundColor: bg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       insetPadding: const EdgeInsets.all(24),
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInOut,
-        alignment: Alignment.topCenter,
-        child: anyExpanded
-            ? SizedBox(
-                width: dialogWidth,
-                height: dialogMaxHeight,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: SizedBox(
+        width: dialogWidth,
+        height: expandedHeight,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header(),
+              const SizedBox(height: 10),
+              Expanded(
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  controller: _contentScrollCtrl,
+                  child: ListView(
+                    controller: _contentScrollCtrl,
+                    padding: EdgeInsets.zero,
                     children: [
-                      SizedBox(
-                        height: 48,
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              margin: const EdgeInsets.only(right: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.05),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: IconButton(
-                                tooltip: '닫기',
-                                icon: const Icon(Icons.arrow_back,
-                                    color: Colors.white70, size: 20),
-                                padding: EdgeInsets.zero,
-                                onPressed: _saving
-                                    ? null
-                                    : () => Navigator.of(context).pop(),
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                '${student.name} · ${widget.cycle}회차 · 예정 $dueLabel',
-                                style: const TextStyle(
-                                    color: text,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w900),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Flexible(
-                              flex: (_prevExpanded && !_nextExpanded) ? 3 : 1,
-                              fit: FlexFit.tight,
-                              child: buildPrevPanel(expandedMode: true),
-                            ),
-                            const SizedBox(height: 14),
-                            Flexible(
-                              flex: (_nextExpanded && !_prevExpanded) ? 3 : 1,
-                              fit: FlexFit.tight,
-                              child: buildNextPanel(expandedMode: true),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: panel,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: border),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
-                        child: Column(
-                          children: [
-                            const Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text('납부일',
-                                  style: TextStyle(
-                                      color: sub,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w900)),
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12),
-                                    decoration: BoxDecoration(
-                                      color: cardBg,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                          color: border.withOpacity(0.9)),
-                                    ),
-                                    child: DropdownButtonHideUnderline(
-                                      child: DropdownButton<DateTime>(
-                                        value: _selectedPaidDate,
-                                        isExpanded: true,
-                                        dropdownColor: bg,
-                                        iconEnabledColor: sub,
-                                        items: dropdownDates
-                                            .map((d) => DropdownMenuItem<DateTime>(
-                                                  value: d,
-                                                  child: Text(
-                                                    fmtRange.format(d),
-                                                    style: const TextStyle(
-                                                        color: text,
-                                                        fontSize: 14,
-                                                        fontWeight:
-                                                            FontWeight.w800),
-                                                  ),
-                                                ))
-                                            .toList(),
-                                        onChanged: _saving
-                                            ? null
-                                            : (v) {
-                                                if (v == null) return;
-                                                setState(() =>
-                                                    _selectedPaidDate = v);
-                                              },
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                IconButton(
-                                  tooltip: '달력',
-                                  onPressed: _saving ? null : pickFromCalendar,
-                                  icon: const Icon(Icons.calendar_month,
-                                      color: sub, size: 22),
-                                ),
-                                const SizedBox(width: 6),
-                                FilledButton(
-                                  onPressed: _saving ? null : save,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: _pmAccent,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 14, vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(12)),
-                                  ),
-                                  child: _saving
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white),
-                                        )
-                                      : const Text(
-                                          '납부',
-                                          style: TextStyle(
-                                              fontWeight: FontWeight.w900),
-                                        ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
+                      buildPrevAccordion(),
+                      const SizedBox(height: 14),
+                      buildNextAccordion(),
                     ],
                   ),
                 ),
-              )
-            : ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 430),
-                child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  height: 48,
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        margin: const EdgeInsets.only(right: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: IconButton(
-                          tooltip: '닫기',
-                          icon: const Icon(Icons.arrow_back,
-                              color: Colors.white70, size: 20),
-                          padding: EdgeInsets.zero,
-                          onPressed: _saving
-                              ? null
-                              : () => Navigator.of(context).pop(),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          '${student.name} · ${widget.cycle}회차 · 예정 $dueLabel',
-                          style: const TextStyle(
-                              color: text,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (!anyExpanded) ...[
-                  buildPrevPanel(expandedMode: false),
-                  const SizedBox(height: 12),
-                  buildNextPanel(expandedMode: false),
-                ] else
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Flexible(
-                          flex: (_prevExpanded && !_nextExpanded) ? 3 : 1,
-                          fit: FlexFit.tight,
-                          child: buildPrevPanel(expandedMode: true),
-                        ),
-                        const SizedBox(height: 14),
-                        Flexible(
-                          flex: (_nextExpanded && !_prevExpanded) ? 3 : 1,
-                          fit: FlexFit.tight,
-                          child: buildNextPanel(expandedMode: true),
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 12),
-                Container(
-                  decoration: BoxDecoration(
-                    color: panel,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: border),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  child: Column(
-                    children: [
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('납부일',
-                            style: TextStyle(
-                                color: sub,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900)),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
-                              decoration: BoxDecoration(
-                                color: cardBg,
-                                borderRadius: BorderRadius.circular(12),
-                                border:
-                                    Border.all(color: border.withOpacity(0.9)),
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<DateTime>(
-                                  value: _selectedPaidDate,
-                                  isExpanded: true,
-                                  dropdownColor: bg,
-                                  iconEnabledColor: sub,
-                                  items: dropdownDates
-                                      .map((d) => DropdownMenuItem<DateTime>(
-                                            value: d,
-                                            child: Text(
-                                              fmtRange.format(d),
-                                              style: const TextStyle(
-                                                  color: text,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w800),
-                                            ),
-                                          ))
-                                      .toList(),
-                                  onChanged: _saving
-                                      ? null
-                                      : (v) {
-                                          if (v == null) return;
-                                          setState(() => _selectedPaidDate = v);
-                                        },
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: '달력',
-                            onPressed: _saving ? null : pickFromCalendar,
-                            icon: const Icon(Icons.calendar_month,
-                                color: sub, size: 22),
-                          ),
-                          const SizedBox(width: 6),
-                          FilledButton(
-                            onPressed: _saving ? null : save,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _pmAccent,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                            ),
-                            child: _saving
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white),
-                                  )
-                                : const Text(
-                                    '납부',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.w900),
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 14),
+              paymentPanel(),
+            ],
           ),
         ),
       ),
