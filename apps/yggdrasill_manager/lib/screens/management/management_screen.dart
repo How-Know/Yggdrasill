@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ManagementScreen extends StatefulWidget {
   const ManagementScreen({super.key});
@@ -13,16 +16,78 @@ class _ManagementScreenState extends State<ManagementScreen> {
   bool _isLoadingApiKey = false;
   bool _isSavingApiKey = false;
 
+  static const _kPrefKeyBaseUrl = 'survey_base_url';
+  final _surveyBaseUrlController = TextEditingController();
+  bool _isLoadingSurveyBaseUrl = false;
+  String? _surveyMsg;
+
   @override
   void initState() {
     super.initState();
     _loadOpenAiApiKey();
+    _loadSurveyBaseUrl();
   }
 
   @override
   void dispose() {
     _openaiApiKeyController.dispose();
+    _surveyBaseUrlController.dispose();
     super.dispose();
+  }
+
+  String _normalizeBaseUrl(String raw) {
+    var v = raw.trim();
+    if (v.isEmpty) v = 'http://localhost:5173';
+    if (!v.startsWith('http://') && !v.startsWith('https://')) {
+      v = 'http://$v';
+    }
+    v = v.replaceAll(RegExp(r'\/+$'), '');
+    return v;
+  }
+
+  Future<void> _loadSurveyBaseUrl() async {
+    setState(() => _isLoadingSurveyBaseUrl = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final base = (prefs.getString(_kPrefKeyBaseUrl) ?? 'http://localhost:5173').trim();
+      _surveyBaseUrlController.text = base;
+    } catch (e) {
+      debugPrint('survey_base_url 로드 실패: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingSurveyBaseUrl = false);
+    }
+  }
+
+  Future<void> _saveSurveyBaseUrl() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final base = _normalizeBaseUrl(_surveyBaseUrlController.text);
+      await prefs.setString(_kPrefKeyBaseUrl, base);
+      if (!mounted) return;
+      setState(() => _surveyMsg = '저장되었습니다: $base');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _surveyMsg = '저장 실패: $e');
+    }
+  }
+
+  Future<void> _openExternal(String url) async {
+    try {
+      if (Platform.isWindows) {
+        await Process.run('cmd', ['/c', 'start', '', url]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [url]);
+      } else if (Platform.isLinux) {
+        await Process.run('xdg-open', [url]);
+      } else {
+        throw Exception('지원하지 않는 플랫폼입니다.');
+      }
+      if (!mounted) return;
+      setState(() => _surveyMsg = null);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _surveyMsg = '열기 실패: $e');
+    }
   }
 
   Future<void> _loadOpenAiApiKey() async {
@@ -111,7 +176,7 @@ class _ManagementScreenState extends State<ManagementScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            '관리',
+            '설정',
             style: TextStyle(
               color: Colors.white,
               fontSize: 24,
@@ -120,7 +185,7 @@ class _ManagementScreenState extends State<ManagementScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            '학원 및 소유자 관리',
+            '학원 및 소유자 관리 / 성향조사 웹 설정',
             style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 14),
           ),
           const SizedBox(height: 24),
@@ -132,6 +197,116 @@ class _ManagementScreenState extends State<ManagementScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // 성향조사 웹 설정
+                      Container(
+                        padding: const EdgeInsets.all(28),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF18181A),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFF2A2A2A)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              '성향조사 웹',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              '설문/문항 관리자 페이지 주소를 설정합니다.',
+                              style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 13),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _surveyBaseUrlController,
+                                    enabled: !_isLoadingSurveyBaseUrl,
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: InputDecoration(
+                                      labelText: '설문 웹 Base URL',
+                                      labelStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
+                                      hintText: '예: http://localhost:5173',
+                                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.35)),
+                                      filled: true,
+                                      fillColor: const Color(0xFF1F1F1F),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: const BorderSide(color: Color(0xFF2A2A2A)),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: const BorderSide(color: Color(0xFF2A2A2A)),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: BorderSide(color: const Color(0xFF64B5F6).withOpacity(0.7)),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                ElevatedButton(
+                                  onPressed: _isLoadingSurveyBaseUrl ? null : _saveSurveyBaseUrl,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1976D2),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w800)),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            Builder(builder: (context) {
+                              final base = _normalizeBaseUrl(_surveyBaseUrlController.text);
+                              final adminUrl = '$base/admin.html';
+                              final surveyUrl = '$base/';
+                              return Wrap(
+                                spacing: 12,
+                                runSpacing: 12,
+                                children: [
+                                  ElevatedButton.icon(
+                                    onPressed: () => _openExternal(adminUrl),
+                                    icon: const Icon(Icons.admin_panel_settings_outlined),
+                                    label: const Text('관리자 페이지 열기', style: TextStyle(fontWeight: FontWeight.w800)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF2A2A2A),
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _openExternal(surveyUrl),
+                                    icon: const Icon(Icons.open_in_new),
+                                    label: const Text('설문 페이지 열기', style: TextStyle(fontWeight: FontWeight.w800)),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      side: const BorderSide(color: Color(0xFF2A2A2A)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }),
+                            if (_surveyMsg != null) ...[
+                              const SizedBox(height: 10),
+                              Text(_surveyMsg!, style: const TextStyle(color: Color(0xFF64B5F6), fontSize: 13)),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
                       // 소유자 목록
                       Container(
                         padding: const EdgeInsets.all(28),

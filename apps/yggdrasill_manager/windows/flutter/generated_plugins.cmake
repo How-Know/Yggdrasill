@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   screen_retriever
   url_launcher_windows
+  webview_windows
   window_manager
 )
 

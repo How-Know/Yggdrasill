@@ -7,6 +7,7 @@ import 'screens/curriculum/curriculum_screen.dart';
 import 'screens/arithmetic/arithmetic_screen.dart';
 import 'screens/skill/skill_screen.dart';
 import 'screens/problem_bank/problem_bank_screen.dart';
+import 'screens/trait_survey/trait_survey_screen.dart';
 import 'screens/management/management_screen.dart';
 import 'widgets/app_navigation_bar.dart';
 
@@ -80,7 +81,7 @@ class YggdrasillManagerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1976D2),
+          seedColor: const Color(0xFF33A373),
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
@@ -158,6 +159,7 @@ class _MainScreenState extends State<MainScreen> {
     ArithmeticScreen(),
     SkillScreen(),
     ProblemBankScreen(),
+    TraitSurveyScreen(),
     ManagementScreen(),
   ];
 
@@ -175,41 +177,15 @@ class _MainScreenState extends State<MainScreen> {
                 _selectedIndex = index;
               });
             },
+            onLogout: () async {
+              await AuthService.signOut();
+            },
           ),
           
           // 메인 콘텐츠
           Expanded(
             child: Column(
               children: [
-                // 상단 바 (로그아웃 버튼)
-                Container(
-                  height: 60,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF18181A),
-                    border: Border(
-                      bottom: BorderSide(color: Color(0xFF2A2A2A), width: 1),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(right: 16),
-                        child: TextButton.icon(
-                          onPressed: () async {
-                            await AuthService.signOut();
-                          },
-                          icon: const Icon(Icons.logout, size: 18),
-                          label: const Text('로그아웃'),
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white70,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                
                 // 콘텐츠 영역
                 Expanded(
                   child: _screens[_selectedIndex],

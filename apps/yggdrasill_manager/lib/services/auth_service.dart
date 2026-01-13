@@ -8,6 +8,10 @@ class AuthService {
   static String _adminEmails = '';
   
   static final SupabaseClient supabase = Supabase.instance.client;
+
+  // WebView(성향조사 관리자) 주입용
+  static String get supabaseUrl => _supabaseUrl;
+  static String get supabaseAnonKey => _supabaseAnonKey;
   
   // 관리자 이메일 목록
   static List<String> getAllowedAdmins() {

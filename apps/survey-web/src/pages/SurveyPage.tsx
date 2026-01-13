@@ -220,31 +220,18 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     const cached = sessionStorage.getItem(cacheKey);
     if (cached) { setParticipantId(cached); return cached; }
     const pid = sidIsUuid ? sid : newUuid();
-    // 참여자 정보가 없으면 최소 이름은 만들어준다(테이블 not null)
-    const name = participantInfo.name || '기존학생';
-    const { data: surveyRow, error: se } = await supabase
-      .from('surveys')
-      .select('id')
-      .eq('slug', slug)
-      .limit(1)
-      .maybeSingle();
-    if (se || !surveyRow?.id) { setToast('설문 설정을 불러오지 못했습니다.'); return null; }
-    const { error: pe } = await supabase
-      .from('survey_participants')
-      .insert({
-        id: pid,
-        survey_id: surveyRow.id,
-        client_id: clientId,
-        name,
-        school: participantInfo.school || null,
-        grade: participantInfo.grade || null,
-        level: (participantInfo.level === 'elementary' || participantInfo.level === 'middle' || participantInfo.level === 'high')
-          ? participantInfo.level
-          : null,
-      }, { returning: 'minimal' as any });
-    // ⚠️ RLS 상 "공개 설문 참여자"는 insert만 허용되고 select는 막혀있다.
-    // 그래서 insert 후 .select()로 id를 받으려 하면 실패한다 → 클라이언트에서 UUID를 생성해 사용.
-    if (pe) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe.message || 'unknown'})`); return null; }
+    // ✅ 권장: get_or_create RPC(SECURITY DEFINER)로 participant를 보장한다.
+    // - 기존학생 재진입 시 PK 중복으로 실패하는 문제 해결
+    const { data: out, error: pe } = await supabase.rpc('get_or_create_trait_participant', {
+      p_participant_id: pid,
+      p_survey_slug: slug,
+      p_client_id: clientId,
+      p_name: participantInfo.name || null,
+      p_school: participantInfo.school || null,
+      p_level: participantInfo.level || null,
+      p_grade: participantInfo.grade || null,
+    } as any);
+    if (pe || !out) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe?.message || 'unknown'})`); return null; }
     sessionStorage.setItem(cacheKey, pid);
     setParticipantId(pid);
     return pid;
@@ -400,11 +387,27 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
           <div style={{ fontSize: 22, marginBottom: 18, color: tokens.text }}>{current.text}</div>
           {imgSrc && (
             <div style={{ marginBottom: 16 }}>
-              {!imgLoaded && (
-                <div style={{ width:'100%', height:220, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:8 }} />
-              )}
+              {/* ✅ WebView2에서 lazy 이미지가 첫 진입에 로딩 트리거가 늦는 케이스가 있어
+                  eager 로딩 + "이미지 숨김(opacity 0)" 제거로 안정화 */}
+              <div style={{ position: 'relative' }}>
+                {!imgLoaded && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: 220,
+                      background: tokens.field,
+                      border: `1px solid ${tokens.border}`,
+                      borderRadius: 8,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                )}
               <img
-                   loading="lazy"
+                   key={imgSrc}
+                   loading="eager"
+                   decoding="async"
                    src={imgSrc || undefined}
                    alt="question"
                    onLoad={()=>{ setImgLoaded(true); setImgErr(null); }}
@@ -453,9 +456,10 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                      objectFit: 'contain',
                      borderRadius: 8,
                      border: `1px solid ${tokens.border}`,
-                     opacity: imgLoaded ? 1 : 0,
-                     transition: 'opacity 150ms',
+                     transition: 'filter 150ms',
+                     filter: imgLoaded ? 'none' : 'brightness(0.98)',
                    }} />
+              </div>
               {imgErr && (
                 <div style={{ marginTop: 8, color: tokens.textFaint, fontSize: 12 }}>
                   {imgErr}

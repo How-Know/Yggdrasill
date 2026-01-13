@@ -20,12 +20,31 @@ import '../../../widgets/makeup_quick_dialog.dart';
 class StudentTimeInfoDialog extends StatefulWidget {
   final StudentWithInfo student;
 
+  // 디버그 플래그: 더블클릭 시간기록 다이얼로그에서 "미래 블록이 활성으로 보임" 원인 추적용
+  // 사용 예)
+  // flutter run -d windows --dart-define=YG_STUDENT_TIME_INFO_DEBUG=true
+  static const bool _kDebug =
+      bool.fromEnvironment('YG_STUDENT_TIME_INFO_DEBUG', defaultValue: false);
+
   const StudentTimeInfoDialog({
     super.key,
     required this.student,
   });
 
   static Future<void> show(BuildContext context, StudentWithInfo student) async {
+    if (_kDebug) {
+      final today = DateTime.now();
+      final blocks = DataManager.instance.studentTimeBlocks
+          .where((b) => b.studentId == student.student.id)
+          .toList();
+      final sample = blocks
+          .take(12)
+          .map((b) =>
+              '${b.id} day=${b.dayIndex} t=${b.startHour}:${b.startMinute.toString().padLeft(2, '0')} sd=${DateTime(b.startDate.year, b.startDate.month, b.startDate.day).toIso8601String().split("T").first} ed=${b.endDate == null ? 'null' : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day).toIso8601String().split("T").first} created=${b.createdAt.toIso8601String()}')
+          .toList();
+      print(
+          '[StudentTimeInfo][open] student=${student.student.id} name=${student.student.name} today=${DateTime(today.year, today.month, today.day).toIso8601String().split("T").first} blocks=${blocks.length} sample=$sample');
+    }
     await showDialog<void>(
       context: context,
       useRootNavigator: true,

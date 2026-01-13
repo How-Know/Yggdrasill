@@ -103,6 +103,11 @@ class TimetableContentView extends StatefulWidget {
 }
 
 class TimetableContentViewState extends State<TimetableContentView> {
+  // 디버그 플래그: 셀 선택 학생리스트에서 "미래 블록이 활성으로 잡힘" 원인 추적용
+  // 사용 예)
+  // flutter run -d windows --dart-define=YG_TT_CELL_DEBUG=true
+  static const bool _kCellDebug =
+      bool.fromEnvironment('YG_TT_CELL_DEBUG', defaultValue: false);
   // 메모 오버레이가 사용할 전역 키 등을 두려면 이곳에 배치 가능 (현재 오버레이는 TimetableScreen에서 처리)
   // === 우측 학생 패널(셀/요일/검색) 헤더 위치 통일용 상수 ===
   // - 헤더가 "컨트롤(등록/검색) 바로 아래"에서 시작할 때의 여백(=세 패널 공통 기준)
@@ -1724,6 +1729,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                   cellYmd.year,
                                                   cellYmd.month,
                                                   cellYmd.day);
+                                              if (_kCellDebug) {
+                                                final sd = widget.selectedDayDate;
+                                                final sst = widget.selectedCellStartTime;
+                                                print(
+                                                    '[TT][cell] viewDate=${widget.viewDate.toIso8601String().split("T").first} weekStart=${weekStart.toIso8601String().split("T").first} selDayIdx=$selDayIdx cellYmd=${refDate.toIso8601String().split("T").first} selectedDayDate=${sd == null ? 'null' : sd.toIso8601String().split("T").first} selectedCellStartTime=${sst == null ? 'null' : sst.toIso8601String()}');
+                                              }
                                               // ✅ 셀 클릭 시에는 "현재 보고 있는 주"에 겹치는 블록만 사용(week-cache)
                                               // 전체 히스토리(비활성 포함)를 매번 스캔하면 클릭마다 1s+ 지연이 생길 수 있다.
                                               final allBlocks = DataManager
@@ -1759,6 +1770,38 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                               final activeBlocks = blocks
                                                   .where(_isActive)
                                                   .toList();
+                                              if (_kCellDebug) {
+                                                // 셀 슬롯에 걸린 "전체 blocks"를 active 여부와 함께 출력
+                                                // - 이 로그 하나로 "미래 블록이 왜 active로 들어왔는지"가 바로 드러남
+                                                final allDetails = blocks
+                                                    .take(30)
+                                                    .map((b) {
+                                                      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+                                                      final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+                                                      final isActive = !sd.isAfter(refDate) && (ed == null || !ed.isBefore(refDate));
+                                                      return '${b.id} sid=${b.studentId} set=${b.setId ?? ''} sd=${sd.toIso8601String().split("T").first} ed=${ed == null ? 'null' : ed.toIso8601String().split("T").first} active=$isActive created=${b.createdAt.toIso8601String()}';
+                                                    })
+                                                    .toList();
+
+                                                // "활성"으로 잡힌 블록들의 start/end를 출력 (미래 startDate가 섞이는지 확인용)
+                                                final details = activeBlocks
+                                                    .take(20)
+                                                    .map((b) =>
+                                                        '${b.id} sid=${b.studentId} set=${b.setId ?? ''} sd=${b.startDate.toIso8601String().split("T").first} ed=${b.endDate == null ? 'null' : b.endDate!.toIso8601String().split("T").first} created=${b.createdAt.toIso8601String()}')
+                                                    .toList();
+                                                final futureLike = activeBlocks
+                                                    .where((b) => DateTime(
+                                                            b.startDate.year,
+                                                            b.startDate.month,
+                                                            b.startDate.day)
+                                                        .isAfter(refDate))
+                                                    .take(5)
+                                                    .map((b) =>
+                                                        '${b.id} sid=${b.studentId} sd=${b.startDate.toIso8601String().split("T").first}')
+                                                    .toList();
+                                                print(
+                                                    '[TT][cell] blocks=${blocks.length} active=${activeBlocks.length} all=$allDetails activeSample=$details futureStartInActive=$futureLike');
+                                              }
                                               // 학생별(선택 dayIdx) 블록 인덱스: sessionOverride의 setId 추정용
                                               final Map<String,
                                                       List<StudentTimeBlock>>

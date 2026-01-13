@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 
+const Color kNavAccent = Color(0xFF33A373); // Yggdrasill 시그니처 초록
+
 class AppNavigationBar extends StatelessWidget {
   final int selectedIndex;
   final Function(int) onDestinationSelected;
+  final VoidCallback onLogout;
 
   const AppNavigationBar({
     super.key,
     required this.selectedIndex,
     required this.onDestinationSelected,
+    required this.onLogout,
   });
 
   @override
@@ -81,12 +85,61 @@ class AppNavigationBar extends StatelessWidget {
                   onTap: () => onDestinationSelected(3),
                 ),
                 _NavigationItem(
-                  icon: Icons.settings_outlined,
-                  label: '관리',
+                  icon: Icons.psychology_outlined,
+                  label: '성향조사',
                   isSelected: selectedIndex == 4,
                   onTap: () => onDestinationSelected(4),
                 ),
+                _NavigationItem(
+                  icon: Icons.settings_outlined,
+                  label: '설정',
+                  isSelected: selectedIndex == 5,
+                  onTap: () => onDestinationSelected(5),
+                ),
               ],
+            ),
+          ),
+
+          const Divider(color: Color(0xFF2A2A2A), height: 1),
+
+          // 로그아웃 (최하단 고정)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onLogout,
+                borderRadius: BorderRadius.circular(10),
+                splashColor: Colors.transparent,
+                highlightColor: Colors.white.withOpacity(0.06),
+                child: Container(
+                  height: 52,
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1F1F1F),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF2A2A2A), width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.logout,
+                        size: 24,
+                        color: Colors.white.withOpacity(0.7),
+                      ),
+                      const SizedBox(width: 14),
+                      Text(
+                        '로그아웃',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.7),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ],
@@ -118,16 +171,16 @@ class _NavigationItem extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(10),
           splashColor: Colors.transparent, // 흰색 깜빡임 제거
-          highlightColor: const Color(0xFF1976D2).withOpacity(0.1), // 하이라이트 색상만 유지
+          highlightColor: kNavAccent.withOpacity(0.12), // 하이라이트 색상만 유지
           child: Container(
             // 고정 높이로 위치 이동 방지
             height: 52,
             padding: const EdgeInsets.symmetric(horizontal: 18),
             decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFF1976D2).withOpacity(0.15) : Colors.transparent,
+              color: isSelected ? kNavAccent.withOpacity(0.16) : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
               border: isSelected
-                  ? Border.all(color: const Color(0xFF1976D2).withOpacity(0.3), width: 1)
+                  ? Border.all(color: kNavAccent.withOpacity(0.28), width: 1)
                   : null,
             ),
             child: Row(
@@ -135,13 +188,13 @@ class _NavigationItem extends StatelessWidget {
                 Icon(
                   icon,
                   size: 24, // 아이콘 크기 증가
-                  color: isSelected ? const Color(0xFF64B5F6) : Colors.white.withOpacity(0.7),
+                  color: isSelected ? kNavAccent : Colors.white.withOpacity(0.7),
                 ),
                 const SizedBox(width: 14),
                 Text(
                   label,
                   style: TextStyle(
-                    color: isSelected ? const Color(0xFF64B5F6) : Colors.white.withOpacity(0.7),
+                    color: isSelected ? kNavAccent : Colors.white.withOpacity(0.7),
                     fontSize: 16, // 폰트 크기 증가
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),

@@ -65,6 +65,20 @@ class ScheduleLockedByMakeupException implements Exception {
 }
 
 class DataManager {
+  // 디버그 플래그: 시간표/학생리스트에서 "미래 블록이 활성으로 잡힘" 원인 추적용
+  // 사용 예)
+  // flutter run -d windows --dart-define=YG_STB_DEBUG=true
+  static const bool _kStbDebug =
+      bool.fromEnvironment('YG_STB_DEBUG', defaultValue: false);
+  // 특정 학생/슬롯(요일+시각)만 추적하기 위한 옵션
+  // 사용 예)
+  // flutter run -d windows --dart-define=YG_STB_DEBUG=true --dart-define=YG_STB_TRACE_STUDENT=<studentId>
+  // flutter run -d windows --dart-define=YG_STB_DEBUG=true --dart-define=YG_STB_TRACE_SLOT=1-16:30
+  // (slot 포맷: dayIdx-hour:minute, dayIdx는 0=월)
+  static const String _kStbTraceStudentId =
+      String.fromEnvironment('YG_STB_TRACE_STUDENT', defaultValue: '');
+  static const String _kStbTraceSlot =
+      String.fromEnvironment('YG_STB_TRACE_SLOT', defaultValue: '');
   static final DataManager instance = DataManager._internal();
   DataManager._internal();
 
@@ -2512,17 +2526,106 @@ class DataManager {
         _studentTimeBlocks = out;
         _publishStudentTimeBlocks();
         // debug log trimmed: keep minimal noise
-        print('[STB][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
+        if (_kStbDebug) {
+          final today = _todayDateOnly();
+          final futureBlocks = _studentTimeBlocks.where((b) {
+            final sd = _dateOnly(b.startDate);
+            return sd.isAfter(today);
+          }).toList()
+            ..sort((a, b) => _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate)));
+
+          DateTime? minSd;
+          DateTime? maxSd;
+          for (final b in _studentTimeBlocks) {
+            final sd = _dateOnly(b.startDate);
+            minSd = (minSd == null || sd.isBefore(minSd!)) ? sd : minSd;
+            maxSd = (maxSd == null || sd.isAfter(maxSd!)) ? sd : maxSd;
+          }
+
+          final sample = _studentTimeBlocks
+              .take(5)
+              .map((b) =>
+                  '${b.id} sid=${b.studentId} day=${b.dayIndex} t=${b.startHour}:${b.startMinute.toString().padLeft(2, '0')} sd=${_ymd(_dateOnly(b.startDate))} ed=${b.endDate == null ? 'null' : _ymd(_dateOnly(b.endDate!))} created=${b.createdAt.toIso8601String()}')
+              .toList();
+          print(
+              '[STB][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds} '
+              'sdRange=${minSd == null ? 'n/a' : _ymd(minSd!)}..${maxSd == null ? 'n/a' : _ymd(maxSd!)} '
+              'futureCount=${futureBlocks.length} futureSample=${futureBlocks.take(8).map((b)=>'${b.id} sd=${_ymd(_dateOnly(b.startDate))} sid=${b.studentId}').toList()} '
+              'sample=$sample');
+
+          // ===== optional targeted trace =====
+          if (_kStbTraceStudentId.trim().isNotEmpty ||
+              _kStbTraceSlot.trim().isNotEmpty) {
+            int? tDay;
+            int? tHour;
+            int? tMin;
+            final slot = _kStbTraceSlot.trim();
+            if (slot.isNotEmpty) {
+              try {
+                final parts = slot.split('-');
+                if (parts.length == 2) {
+                  tDay = int.tryParse(parts[0]);
+                  final hm = parts[1].split(':');
+                  if (hm.length == 2) {
+                    tHour = int.tryParse(hm[0]);
+                    tMin = int.tryParse(hm[1]);
+                  }
+                }
+              } catch (_) {}
+            }
+            final sid = _kStbTraceStudentId.trim();
+            final traced = _studentTimeBlocks.where((b) {
+              if (sid.isNotEmpty && b.studentId != sid) return false;
+              if (tDay != null && b.dayIndex != tDay) return false;
+              if (tHour != null && b.startHour != tHour) return false;
+              if (tMin != null && b.startMinute != tMin) return false;
+              return true;
+            }).toList()
+              ..sort((a, b) {
+                final cSd = _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate));
+                if (cSd != 0) return cSd;
+                final aEd = a.endDate == null ? DateTime(9999, 1, 1) : _dateOnly(a.endDate!);
+                final bEd = b.endDate == null ? DateTime(9999, 1, 1) : _dateOnly(b.endDate!);
+                final cEd = aEd.compareTo(bEd);
+                if (cEd != 0) return cEd;
+                return a.createdAt.compareTo(b.createdAt);
+              });
+            if (traced.isEmpty) {
+              print('[STB][trace] student="$sid" slot="$slot" -> no blocks found');
+            } else {
+              final lines = traced.take(60).map((b) {
+                final sd = _ymd(_dateOnly(b.startDate));
+                final ed = b.endDate == null ? 'null' : _ymd(_dateOnly(b.endDate!));
+                return '${b.id} sid=${b.studentId} day=${b.dayIndex} t=${b.startHour}:${b.startMinute.toString().padLeft(2, '0')} sd=$sd ed=$ed set=${b.setId ?? ''} created=${b.createdAt.toIso8601String()}';
+              }).toList();
+              print('[STB][trace] student="$sid" slot="$slot" count=${traced.length} items=$lines');
+            }
+          }
+        } else {
+          print(
+              '[STB][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
+        }
         return;
       } catch (e) {
-        print('[DEBUG] student_time_blocks Supabase 로드 실패, 로컬로 폴백: $e');
+        print('[STB][load][fallback] supabase failed -> local err=$e');
       }
     }
 
     final rawBlocks = await AcademyDbService.instance.getStudentTimeBlocks();
     _studentTimeBlocks = rawBlocks;
     _publishStudentTimeBlocks();
-    print('[STB][load] source=local count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
+    if (_kStbDebug) {
+      final sample = _studentTimeBlocks
+          .take(5)
+          .map((b) =>
+              '${b.id} sid=${b.studentId} day=${b.dayIndex} t=${b.startHour}:${b.startMinute.toString().padLeft(2, '0')} sd=${_ymd(_dateOnly(b.startDate))} ed=${b.endDate == null ? 'null' : _ymd(_dateOnly(b.endDate!))} created=${b.createdAt.toIso8601String()}')
+          .toList();
+      print(
+          '[STB][load] source=local count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds} sample=$sample');
+    } else {
+      print(
+          '[STB][load] source=local count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds}');
+    }
   }
 
   Future<void> saveStudentTimeBlocks() async {

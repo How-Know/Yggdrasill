@@ -23,6 +23,11 @@ class CustomNavigationRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Row 안에서는 가로 제약이 무한대(Infinity)로 들어올 수 있어서,
+    // 하단 영역에서 width: double.infinity 를 쓰면 레이아웃이 깨질 수 있다.
+    // (navigationRailTheme.minWidth와 동일한 폭으로 고정)
+    final double railWidth =
+        NavigationRailTheme.of(context).minWidth ?? 84.0;
     return Column(
       children: [
         Expanded(
@@ -144,9 +149,20 @@ class CustomNavigationRail extends StatelessWidget {
             ],
           ),
         ),
-        AccountButton(
-          padding: const EdgeInsets.only(bottom: 16.0),
-          radius: 20,
+        // 하단 계정(로그인) 버튼 영역 배경을 상단 네비게이션 바와 동일하게 맞춤
+        // - 네비게이션바(레일) 배경색과 동일하게 맞춤: 0xFF0B1112
+        SizedBox(
+          width: railWidth,
+          child: ColoredBox(
+            color: _navBackgroundColor,
+            child: Align(
+              alignment: Alignment.center,
+              child: AccountButton(
+                padding: const EdgeInsets.only(bottom: 16.0, top: 8.0),
+                radius: 20,
+              ),
+            ),
+          ),
         ),
       ],
     );

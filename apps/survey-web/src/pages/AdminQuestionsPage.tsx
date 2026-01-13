@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabaseClient';
+import * as XLSX from 'xlsx';
 
 const tokens = {
   // ✅ 앱(학생 탭) 배경색과 통일 (Flutter: 0xFF0B1112)
@@ -350,6 +351,134 @@ export default function AdminQuestionsPage() {
   const [activeGroups, setActiveGroups] = useState<string[]>([]);
   const [activeTraits, setActiveTraits] = useState<string[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
+
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportCols, setExportCols] = useState<Record<string, boolean>>({});
+  const [exportErr, setExportErr] = useState<string | null>(null);
+
+  const visibleItems = useMemo(() => {
+    return items
+      .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
+      .filter((q)=> (activeGroups.length ? activeGroups.includes(q.group || '') : true))
+      .filter((q)=> (activeTraits.length ? activeTraits.includes(q.trait) : true));
+  }, [items, activeAreas, activeGroups, activeTraits]);
+
+  const areaNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of areas) m[a.id] = a.name;
+    return m;
+  }, [areas]);
+  const groupNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const g of groups) m[g.id] = g.name;
+    return m;
+  }, [groups]);
+
+  const exportColumns = useMemo(() => {
+    return [
+      { key: 'row_no', label: '번호', get: (_q: QuestionDraft, i: number) => i + 1 },
+      { key: 'id', label: '문항 ID', get: (q: QuestionDraft) => q.id },
+      { key: 'area_id', label: '영역 ID', get: (q: QuestionDraft) => q.area || '' },
+      { key: 'area_name', label: '영역', get: (q: QuestionDraft) => areaNameById[q.area || ''] || '' },
+      { key: 'group_id', label: '그룹 ID', get: (q: QuestionDraft) => q.group || '' },
+      { key: 'group_name', label: '그룹', get: (q: QuestionDraft) => groupNameById[q.group || ''] || '' },
+      { key: 'trait', label: '성향', get: (q: QuestionDraft) => q.trait },
+      { key: 'text', label: '내용', get: (q: QuestionDraft) => q.text || '' },
+      { key: 'type', label: '평가 타입', get: (q: QuestionDraft) => q.type },
+      { key: 'min', label: '최소', get: (q: QuestionDraft) => q.min ?? '' },
+      { key: 'max', label: '최대', get: (q: QuestionDraft) => q.max ?? '' },
+      { key: 'weight', label: '가중치', get: (q: QuestionDraft) => q.weight ?? '' },
+      { key: 'reverse', label: '역문항', get: (q: QuestionDraft) => q.reverse || '' },
+      { key: 'pair_id', label: '페어 ID', get: (q: QuestionDraft) => q.pairId || '' },
+      { key: 'tags', label: '태그', get: (q: QuestionDraft) => q.tags || '' },
+      { key: 'memo', label: '메모', get: (q: QuestionDraft) => q.memo || '' },
+      { key: 'image_url', label: '이미지 URL', get: (q: QuestionDraft) => q.image || '' },
+      { key: 'version', label: '버전', get: (q: QuestionDraft) => q.version ?? '' },
+      { key: 'is_active', label: '활성화', get: (q: QuestionDraft) => (q.active ? 'Y' : 'N') },
+    ] as const;
+  }, [areaNameById, groupNameById]);
+
+  useEffect(() => {
+    // 초기 기본 선택 컬럼
+    if (Object.keys(exportCols).length === 0) {
+      const defaults = ['row_no','area_name','group_name','trait','text','type','min','max','weight','reverse','pair_id','tags','memo','image_url','version','is_active'];
+      const m: Record<string, boolean> = {};
+      for (const c of exportColumns) m[c.key] = defaults.includes(c.key);
+      setExportCols(m);
+    }
+  }, [exportColumns]);
+
+  useEffect(() => {
+    // 모달 열릴 때 배경 스크롤 잠금(스크롤바 2개 방지)
+    if (!exportOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [exportOpen]);
+
+  function arrayToBase64(arr: ArrayBuffer): string {
+    const bytes = new Uint8Array(arr);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function downloadXlsx() {
+    setExportErr(null);
+    const selected = exportColumns.filter((c) => exportCols[c.key]);
+    if (selected.length === 0) {
+      setExportErr('내보낼 컬럼을 1개 이상 선택해 주세요.');
+      return;
+    }
+    const aoa: any[][] = [];
+    aoa.push(selected.map((c) => c.label));
+    visibleItems.forEach((q, i) => {
+      aoa.push(selected.map((c) => c.get(q, i)));
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'questions');
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `questions_${ts}.xlsx`;
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+
+    // ✅ WebView2(관리자앱)에서는 브라우저 다운로드가 막힐 수 있어 host로 전달
+    const host = (window as any)?.chrome?.webview;
+    if (host?.postMessage) {
+      try {
+        host.postMessage({
+          type: 'download_file',
+          filename,
+          mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          base64: arrayToBase64(out),
+        });
+        setExportOpen(false);
+        return;
+      } catch (e: any) {
+        // fallback below
+        console.warn('[export] host postMessage failed', e);
+      }
+    }
+
+    // 브라우저 환경: Blob 다운로드
+    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  }
   async function logChange(questionId: string, action: string, fromValue: any, toValue: any) {
     try {
       await supabase.from('question_change_logs').insert({ question_id: questionId, action, from_value: JSON.stringify(fromValue), to_value: JSON.stringify(toValue) });
@@ -384,8 +513,67 @@ export default function AdminQuestionsPage() {
         <ToolbarButton onClick={() => setAreaDialog('groups')}>그룹</ToolbarButton>
         <ToolbarButton onClick={() => setFilterOpen((s)=>!s)}>필터</ToolbarButton>
         <div style={{ flex: 1 }} />
+        <ToolbarButton onClick={() => { setExportErr(null); setExportOpen(true); }}>엑셀로 내보내기</ToolbarButton>
         <ToolbarButton onClick={() => { resetDraft(); setAddQOpen(true); }}>추가</ToolbarButton>
       </div>
+
+      {exportOpen && (
+        <Modal
+          title="엑셀 내보내기"
+          width={640}
+          onClose={() => setExportOpen(false)}
+          actions={
+            <>
+              <button
+                onClick={() => {
+                  const m: Record<string, boolean> = {};
+                  for (const c of exportColumns) m[c.key] = false;
+                  setExportCols(m);
+                }}
+                style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: tokens.textDim, cursor: 'pointer' }}
+              >
+                전체 해제
+              </button>
+              <button
+                onClick={() => {
+                  const m: Record<string, boolean> = {};
+                  for (const c of exportColumns) m[c.key] = true;
+                  setExportCols(m);
+                }}
+                style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}
+              >
+                전체 선택
+              </button>
+              <button
+                onClick={downloadXlsx}
+                style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 900 }}
+              >
+                내보내기 ({visibleItems.length}건)
+              </button>
+            </>
+          }
+        >
+          <div style={{ color: tokens.textDim, fontSize: 13, lineHeight: 1.5 }}>
+            내보낼 컬럼을 선택하세요. (현재 필터가 적용된 목록 기준)
+          </div>
+          <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {exportColumns.map((c) => {
+              const checked = !!exportCols[c.key];
+              return (
+                <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: `1px solid ${tokens.border}`, borderRadius: 10, background: tokens.panel }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => setExportCols((m) => ({ ...m, [c.key]: e.target.checked }))}
+                  />
+                  <div style={{ color: tokens.text, fontWeight: 700 }}>{c.label}</div>
+                </label>
+              );
+            })}
+          </div>
+          {exportErr && <div style={{ marginTop: 12, color: '#ff8686', fontSize: 13 }}>{exportErr}</div>}
+        </Modal>
+      )}
 
       {/* 요약 위젯 */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
@@ -456,11 +644,7 @@ export default function AdminQuestionsPage() {
         {items.length === 0 ? (
           <div style={{ padding: 16, color: tokens.textDim }}>아직 문항이 없습니다. 우측 상단의 ‘추가’를 눌러 문항을 만들어 보세요.</div>
         ) : (
-          items
-            .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
-            .filter((q)=> (activeGroups.length ? activeGroups.includes(q.group || '') : true))
-            .filter((q)=> (activeTraits.length ? activeTraits.includes(q.trait) : true))
-            .map((q, idx, arr) => {
+          visibleItems.map((q, idx, arr) => {
               const isLast5 = (arr.length - idx) <= 5;
               return (
             <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
