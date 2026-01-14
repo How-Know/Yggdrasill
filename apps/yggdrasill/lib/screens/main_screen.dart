@@ -935,14 +935,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             Column(
                                 children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-                                child: SizedBox(
-                                  height: 44,
-                                  child: Row(
-                                    children: [
-                                      const _TodayDateLabel(),
-                                      const Spacer(),
-                                      Row(
+                                padding: const EdgeInsets.fromLTRB(24, 5, 24, 12),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const _TodayDateLabel(),
+                                        const Spacer(),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Tooltip(
@@ -980,15 +986,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           ),
                                         ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               // 출석 박스
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
                                 child: Container(
-                                  margin: const EdgeInsets.symmetric(vertical: 16),
+                                  // 헤더(날짜+버튼)와의 간격을 절반으로 축소
+                                  margin: const EdgeInsets.only(top: 0, bottom: 16),
                                   width: double.infinity,
                                   decoration: BoxDecoration(
                                     color: const Color(0xFF15171C),
