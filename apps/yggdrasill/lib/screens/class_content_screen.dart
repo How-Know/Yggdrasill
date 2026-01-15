@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../services/data_manager.dart';
 import 'dart:async';
 import 'dart:math' as math;
@@ -53,7 +53,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
     return Stack(
       children: [
         Container(
-          color: const Color(0xFF1F1F1F),
+          color: const Color(0xFF0B1112),
           width: double.infinity,
           child: ValueListenableBuilder<List<AttendanceRecord>>(
             valueListenable: DataManager.instance.attendanceRecordsNotifier,

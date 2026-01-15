@@ -333,26 +333,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       builder: (context) => Positioned(
         left: position.dx + 12, // 마우스 오른쪽 약간 띄움
         top: position.dy + 12,  // 마우스 아래 약간 띄움
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 160),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: const Color(0xFF232326),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white24, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.18),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Text(
-              text,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
+        // 툴팁이 마우스 이벤트를 가로채지 않도록 한다.
+        // (onExit 누락/히트테스트 흔들림으로 툴팁이 남는 현상 완화)
+        child: IgnorePointer(
+          ignoring: true,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232326),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white24, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.18),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Text(
+                text,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
             ),
           ),
         ),
@@ -520,6 +525,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
+    _removeTooltip();
     DataManager.instance.attendanceRecordsNotifier.removeListener(_markSideSheetDirty);
     _rotationAnimation.dispose();
     _fabController.dispose();
@@ -536,6 +543,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       if (_sideSheetDebug) {
         debugPrint('[SIDE][toggle] close');
       }
+      // 시트 닫힘/애니메이션 중에는 MouseRegion.onExit가 보장되지 않을 수 있어 툴팁을 강제 제거
+      _removeTooltip();
       _rotationAnimation.reverse();
     } else {
       _sideSheetDataDirty = true;
@@ -995,18 +1004,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
                                 child: Container(
                                   // 헤더(날짜+버튼)와의 간격을 절반으로 축소
-                                  margin: const EdgeInsets.only(top: 0, bottom: 16),
+                                  margin: const EdgeInsets.only(top: 0, bottom: 0),
                                   width: double.infinity,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF15171C),
-                                    border: Border.all(color: const Color(0xFF15171C), width: 2),
-                                    borderRadius: BorderRadius.circular(18),
-                                  ),
                                   constraints: BoxConstraints(
                                     minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                     maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
                                   ),
-                                  padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+                                  // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
+                                  padding: const EdgeInsets.fromLTRB(0, 0, 16.0, 24.0),
                                   child: Scrollbar(
                                     controller: _attendedScrollCtrl,
                                     thumbVisibility: true,
@@ -1063,11 +1068,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                   ),
                                 ),
                               ),
+                              // 출석(등원한) 영역과 등원 예정 영역 구분선
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 24.0),
+                                child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
+                              ),
                               // 출석 전 학생 리스트
                               if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
                                 Expanded(
                                   child: Padding(
-                                    padding: const EdgeInsets.only(top: 0, left: 24.0, right: 24.0, bottom: 24.0),
+                                    padding: const EdgeInsets.only(top: 8, left: 24.0, right: 24.0, bottom: 24.0),
                                     child: Scrollbar(
                                       controller: _waitingScrollCtrl,
                                       thumbVisibility: true,
@@ -1242,14 +1252,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       default:
         // waiting(등원 예정)
         // - 기본: 테두리=회색(통일)
-        // - 수업이 있으면: 이름만 수업 색상
+        // - 수업이 있으면: 이름 + 테두리 수업 색상
         // - 보강/추가수업: 테두리만 해당 색상(보강=파랑, 추가=초록)
+        final Color? classColor = t.classInfo?.color;
         borderColor = isSpecialOverride
             ? (t.overrideType == OverrideType.replace
                 ? const Color(0xFF1976D2)
                 : const Color(0xFF4CAF50))
-            : Colors.grey;
-        final Color? classColor = t.classInfo?.color;
+            : (classColor ?? Colors.grey);
         textColor = (!isSpecialOverride && classColor != null) ? classColor : Colors.white70;
         nameWidget = Text(
           t.student.name,
@@ -1404,7 +1414,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               decoration: BoxDecoration(
               // 등원 완료(출석) 카드: 내부 배경색 없이 통일
               color: Colors.transparent,
-                border: Border.all(color: borderColor, width: 2),
+                border: Border.all(color: borderColor, width: 1.5),
               borderRadius: BorderRadius.circular(12),
               ),
               child: attendedChild,
@@ -1481,7 +1491,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
           decoration: BoxDecoration(
             color: Colors.transparent,
-            border: Border.all(color: borderColor, width: 2),
+            border: Border.all(color: borderColor, width: 1.5),
             borderRadius: BorderRadius.circular(25),
           ),
           child: cardChild,

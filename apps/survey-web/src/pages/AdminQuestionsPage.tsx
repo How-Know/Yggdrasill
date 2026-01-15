@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { supabase } from '../lib/supabaseClient';
+import { getSupabaseConfig, supabase } from '../lib/supabaseClient';
 import * as XLSX from 'xlsx';
 
 const tokens = {
@@ -356,6 +356,15 @@ export default function AdminQuestionsPage() {
   const [exportCols, setExportCols] = useState<Record<string, boolean>>({});
   const [exportErr, setExportErr] = useState<string | null>(null);
 
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportModel, setReportModel] = useState('gpt-4.1-mini');
+  const [reportPromptVersion, setReportPromptVersion] = useState('v1');
+  const [reportForce, setReportForce] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportErr, setReportErr] = useState<string | null>(null);
+  const [reportFiltersHash, setReportFiltersHash] = useState<string | null>(null);
+  const [reportRuns, setReportRuns] = useState<any[]>([]);
+
   const visibleItems = useMemo(() => {
     return items
       .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
@@ -410,13 +419,129 @@ export default function AdminQuestionsPage() {
 
   useEffect(() => {
     // 모달 열릴 때 배경 스크롤 잠금(스크롤바 2개 방지)
-    if (!exportOpen) return;
+    if (!exportOpen && !reportOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [exportOpen]);
+  }, [exportOpen, reportOpen]);
+
+  function canonicalizeFilters() {
+    const payload: any = {
+      slug: 'trait_v1',
+      is_active_only: true,
+      traits: [...activeTraits].sort(),
+      area_ids: [...activeAreas].sort(),
+      group_ids: [...activeGroups].sort(),
+    };
+    // 키 정렬
+    const keys = Object.keys(payload).sort();
+    const out: any = {};
+    for (const k of keys) out[k] = payload[k];
+    return out;
+  }
+
+  async function sha256Hex(str: string): Promise<string> {
+    const buf = new TextEncoder().encode(str);
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function callFunction(name: string, opts: { method?: string; query?: Record<string,string>; body?: any }) {
+    const cfg = getSupabaseConfig();
+    if (!cfg.ok) throw new Error('Supabase 설정이 없습니다.');
+    const session = (await supabase.auth.getSession()).data.session;
+    const token = session?.access_token;
+    if (!token) throw new Error('로그인이 필요합니다.');
+    const q = new URLSearchParams(opts.query ?? {}).toString();
+    const url = `${cfg.url.replace(/\/$/,'')}/functions/v1/${name}${q ? `?${q}` : ''}`;
+    const res = await fetch(url, {
+      method: opts.method ?? 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: cfg.anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const text = await res.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* ignore */ }
+    if (!res.ok) throw new Error((data?.error ?? text ?? `http_${res.status}`) as string);
+    return data;
+  }
+
+  async function refreshRuns(hash?: string | null) {
+    const h = hash ?? reportFiltersHash;
+    if (!h) return;
+    const data = await callFunction('trait_report_runs', { method: 'GET', query: { filters_hash: h, limit: '20' } });
+    setReportRuns(Array.isArray(data?.runs) ? data.runs : []);
+  }
+
+  async function runReport() {
+    setReportErr(null);
+    setReportLoading(true);
+    try {
+      const filters = canonicalizeFilters();
+      const filtersHash = await sha256Hex(JSON.stringify(filters));
+      setReportFiltersHash(filtersHash);
+      const res = await callFunction('trait_report_run', {
+        method: 'POST',
+        body: {
+          filters_json: filters,
+          model: reportModel,
+          prompt_version: reportPromptVersion,
+          force: reportForce,
+          source: 'admin_ui',
+        },
+      });
+      const run = res?.run;
+      if (run?.filters_hash) setReportFiltersHash(String(run.filters_hash));
+      await refreshRuns(String(run?.filters_hash ?? filtersHash));
+    } catch (e:any) {
+      setReportErr(e?.message || String(e));
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  async function downloadReport(runId: string, kind: 'json' | 'html') {
+    try {
+      setReportErr(null);
+      const res = await callFunction('trait_report_run_get', { method: 'GET', query: { id: runId } });
+      const signedUrl = res?.signed?.[kind];
+      if (!signedUrl) throw new Error('다운로드 URL을 만들 수 없습니다.');
+
+      const r = await fetch(String(signedUrl));
+      if (!r.ok) throw new Error(`download_http_${r.status}`);
+      const arr = await r.arrayBuffer();
+
+      const filename = `trait_report_${runId}.${kind === 'json' ? 'json' : 'html'}`;
+      const mime = kind === 'json' ? 'application/json' : 'text/html';
+      const host = (window as any)?.chrome?.webview;
+      if (host?.postMessage) {
+        host.postMessage({
+          type: 'download_file',
+          filename,
+          mime,
+          base64: arrayToBase64(arr),
+        });
+        return;
+      }
+      const blob = new Blob([arr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e:any) {
+      setReportErr(e?.message || String(e));
+    }
+  }
 
   function arrayToBase64(arr: ArrayBuffer): string {
     const bytes = new Uint8Array(arr);
@@ -513,9 +638,89 @@ export default function AdminQuestionsPage() {
         <ToolbarButton onClick={() => setAreaDialog('groups')}>그룹</ToolbarButton>
         <ToolbarButton onClick={() => setFilterOpen((s)=>!s)}>필터</ToolbarButton>
         <div style={{ flex: 1 }} />
+        <ToolbarButton onClick={async () => { setReportErr(null); setReportOpen(true); try { const filters = canonicalizeFilters(); const h = await sha256Hex(JSON.stringify(filters)); setReportFiltersHash(h); await refreshRuns(h); } catch (e:any) { setReportErr(e?.message || String(e)); } }}>리포트</ToolbarButton>
         <ToolbarButton onClick={() => { setExportErr(null); setExportOpen(true); }}>엑셀로 내보내기</ToolbarButton>
         <ToolbarButton onClick={() => { resetDraft(); setAddQOpen(true); }}>추가</ToolbarButton>
       </div>
+
+      {reportOpen && (
+        <Modal
+          title="리포트 생성/조회"
+          width={760}
+          onClose={() => setReportOpen(false)}
+          actions={
+            <>
+              <button
+                onClick={() => refreshRuns()}
+                style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: tokens.textDim, cursor: 'pointer' }}
+              >
+                새로고침
+              </button>
+              <button
+                disabled={reportLoading}
+                onClick={runReport}
+                style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: reportLoading ? 'not-allowed' : 'pointer', fontWeight: 900, opacity: reportLoading ? 0.6 : 1 }}
+              >
+                {reportLoading ? '생성 중...' : '리포트 생성'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <div style={{ color: tokens.textDim, fontSize: 13, marginBottom: 6 }}>모델</div>
+              <input
+                value={reportModel}
+                onChange={(e) => setReportModel(e.target.value)}
+                style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <div style={{ color: tokens.textDim, fontSize: 13, marginBottom: 6 }}>프롬프트 버전</div>
+              <input
+                value={reportPromptVersion}
+                onChange={(e) => setReportPromptVersion(e.target.value)}
+                style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, color: tokens.textDim, fontSize: 13 }}>
+            <input type="checkbox" checked={reportForce} onChange={(e) => setReportForce(e.target.checked)} />
+            캐시 무시하고 강제 재생성
+          </label>
+          <div style={{ marginTop: 10, color: tokens.textDim, fontSize: 12, lineHeight: 1.5 }}>
+            현재 필터 기준으로 스냅샷을 만들고 리포트를 생성합니다. (현재 필터 적용 문항: <b style={{ color: tokens.text }}>{visibleItems.length}</b>개)
+            <br />
+            filters_hash: <span style={{ color: tokens.text }}>{reportFiltersHash ?? '-'}</span>
+          </div>
+
+          {reportErr && <div style={{ marginTop: 12, color: '#ff8686', fontSize: 13 }}>{reportErr}</div>}
+
+          <div style={{ marginTop: 14, border: `1px solid ${tokens.border}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ padding: 12, background: '#141416', color: tokens.textDim, fontSize: 13, display: 'grid', gridTemplateColumns: '1.6fr 0.8fr 1fr 1fr', gap: 10 }}>
+              <div>run_id</div>
+              <div>상태</div>
+              <div>다운로드</div>
+              <div>생성일</div>
+            </div>
+            {reportRuns.length === 0 ? (
+              <div style={{ padding: 12, color: tokens.textDim }}>아직 리포트가 없습니다.</div>
+            ) : (
+              reportRuns.map((r) => (
+                <div key={r.id} style={{ padding: 12, borderTop: `1px solid ${tokens.border}`, display: 'grid', gridTemplateColumns: '1.6fr 0.8fr 1fr 1fr', gap: 10, alignItems: 'center' }}>
+                  <div style={{ color: tokens.text, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.id}</div>
+                  <div style={{ color: tokens.textDim, fontSize: 13 }}>{r.status}</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => downloadReport(String(r.id), 'json')} style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer', fontSize: 12 }}>JSON</button>
+                    <button onClick={() => downloadReport(String(r.id), 'html')} style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer', fontSize: 12 }}>HTML</button>
+                  </div>
+                  <div style={{ color: tokens.textDim, fontSize: 12 }}>{String(r.created_at ?? '')}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </Modal>
+      )}
 
       {exportOpen && (
         <Modal

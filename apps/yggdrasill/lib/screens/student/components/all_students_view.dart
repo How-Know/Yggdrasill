@@ -1561,14 +1561,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       ? Symbols.android
                       : Symbols.settings_accessibility),
               color: _studentListPrimaryTextColor,
-              size: 26,
+              size: 31,
             ),
             const SizedBox(width: 15),
             Text(
               title,
               style: const TextStyle(
                 color: _studentListPrimaryTextColor,
-                fontSize: 23,
+                fontSize: 28,
                 fontWeight: FontWeight.bold,
               ),
             ),
