@@ -32,6 +32,23 @@ type QuestionDraft = {
   version?: number;
 };
 
+type TraitRound = {
+  id: string;
+  name: string;
+  description?: string | null;
+  order_index?: number | null;
+  is_active?: boolean | null;
+};
+
+type TraitRoundPart = {
+  id: string;
+  round_id: string;
+  name: string;
+  description?: string | null;
+  image_url?: string | null;
+  order_index?: number | null;
+};
+
 function ToolbarButton({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
   return (
     <button onClick={onClick} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>{children}</button>
@@ -352,6 +369,260 @@ export default function AdminQuestionsPage() {
   const [activeTraits, setActiveTraits] = useState<string[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
 
+  // 회차/파트 설계
+  const [roundOpen, setRoundOpen] = useState(false);
+  const [rounds, setRounds] = useState<TraitRound[]>([]);
+  const [roundParts, setRoundParts] = useState<TraitRoundPart[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null);
+  const [roundLoading, setRoundLoading] = useState(false);
+  const [roundErr, setRoundErr] = useState<string | null>(null);
+
+  const [newRoundName, setNewRoundName] = useState('');
+  const [newRoundDesc, setNewRoundDesc] = useState('');
+  const [editingRoundId, setEditingRoundId] = useState<string | null>(null);
+  const [editingRoundName, setEditingRoundName] = useState('');
+  const [editingRoundDesc, setEditingRoundDesc] = useState('');
+  const [dragRoundIdx, setDragRoundIdx] = useState<number | null>(null);
+
+  const [newPartName, setNewPartName] = useState('');
+  const [newPartDesc, setNewPartDesc] = useState('');
+  const [editingPartId, setEditingPartId] = useState<string | null>(null);
+  const [editingPartName, setEditingPartName] = useState('');
+  const [editingPartDesc, setEditingPartDesc] = useState('');
+  const [dragPartIdx, setDragPartIdx] = useState<number | null>(null);
+
+  async function loadRounds() {
+    setRoundErr(null);
+    setRoundLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('trait_rounds')
+        .select('id,name,description,order_index,is_active')
+        .order('order_index', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      const list = (data as any[] | null) ?? [];
+      setRounds(list as any);
+      const first = list[0]?.id ? String(list[0].id) : null;
+      setSelectedRoundId((prev) => prev ?? first);
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차를 불러오지 못했습니다.');
+    } finally {
+      setRoundLoading(false);
+    }
+  }
+
+  async function loadParts(roundId: string) {
+    setRoundErr(null);
+    try {
+      const { data, error } = await supabase
+        .from('trait_round_parts')
+        .select('id,round_id,name,description,image_url,order_index')
+        .eq('round_id', roundId)
+        .order('order_index', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setRoundParts(((data as any[]) ?? []) as any);
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트를 불러오지 못했습니다.');
+    }
+  }
+
+  useEffect(() => {
+    if (!roundOpen) return;
+    loadRounds();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundOpen]);
+
+  useEffect(() => {
+    if (!roundOpen) return;
+    if (!selectedRoundId) {
+      setRoundParts([]);
+      return;
+    }
+    loadParts(selectedRoundId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundOpen, selectedRoundId]);
+
+  useEffect(() => {
+    if (!selectedRoundId) {
+      setEditingRoundId(null);
+      setEditingRoundName('');
+      setEditingRoundDesc('');
+      return;
+    }
+    const r = rounds.find((x) => x.id === selectedRoundId);
+    if (!r) return;
+    setEditingRoundId(r.id);
+    setEditingRoundName(r.name || '');
+    setEditingRoundDesc(r.description || '');
+  }, [selectedRoundId, rounds]);
+
+  async function addRound() {
+    const name = newRoundName.trim();
+    if (!name) return;
+    try {
+      const { data, error } = await supabase
+        .from('trait_rounds')
+        .insert({
+          name,
+          description: newRoundDesc.trim() || null,
+          order_index: rounds.length,
+          is_active: true,
+        })
+        .select('id,name,description,order_index,is_active')
+        .single();
+      if (error) throw error;
+      const row = data as any;
+      setRounds((arr) => [...arr, row]);
+      setSelectedRoundId(String(row.id));
+      setNewRoundName('');
+      setNewRoundDesc('');
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 추가 실패');
+    }
+  }
+
+  function startEditRound(r: TraitRound) {
+    setSelectedRoundId(r.id);
+    setEditingRoundId(r.id);
+    setEditingRoundName(r.name || '');
+    setEditingRoundDesc(r.description || '');
+  }
+
+  async function saveEditRound() {
+    if (!editingRoundId) return;
+    try {
+      const nextName = editingRoundName.trim();
+      if (!nextName) return;
+      const nextDesc = editingRoundDesc.trim() || null;
+      const { error } = await supabase
+        .from('trait_rounds')
+        .update({ name: nextName, description: nextDesc })
+        .eq('id', editingRoundId);
+      if (error) throw error;
+      setRounds((arr) => arr.map((x) => (x.id === editingRoundId ? { ...x, name: nextName, description: nextDesc } : x)));
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 수정 실패');
+    }
+  }
+
+  async function deleteRound(id: string) {
+    const ok = window.confirm('회차를 삭제하시겠습니까? (하위 파트도 함께 삭제됩니다)');
+    if (!ok) return;
+    try {
+      const { error } = await supabase.from('trait_rounds').delete().eq('id', id);
+      if (error) throw error;
+      setRounds((arr) => arr.filter((x) => x.id !== id));
+      if (selectedRoundId === id) {
+        setSelectedRoundId(null);
+        setEditingRoundId(null);
+        setEditingRoundName('');
+        setEditingRoundDesc('');
+      }
+      setRoundParts([]);
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 삭제 실패');
+    }
+  }
+
+  async function reorderRounds(startIdx: number, endIdx: number) {
+    if (endIdx < 0 || endIdx >= rounds.length || startIdx === endIdx) return;
+    const next = rounds.slice();
+    const [moved] = next.splice(startIdx, 1);
+    next.splice(endIdx, 0, moved);
+    setRounds(next);
+    const payload = next.map((r, i) => ({ id: r.id, order_index: i }));
+    await supabase.from('trait_rounds').upsert(payload, { onConflict: 'id' });
+  }
+
+  async function addPart() {
+    if (!selectedRoundId) return;
+    const name = newPartName.trim();
+    if (!name) return;
+    try {
+      const { data, error } = await supabase
+        .from('trait_round_parts')
+        .insert({
+          round_id: selectedRoundId,
+          name,
+          description: newPartDesc.trim() || null,
+          order_index: roundParts.length,
+          image_url: null,
+        })
+        .select('id,round_id,name,description,image_url,order_index')
+        .single();
+      if (error) throw error;
+      setRoundParts((arr) => [...arr, data as any]);
+      setNewPartName('');
+      setNewPartDesc('');
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트 추가 실패');
+    }
+  }
+
+  function startEditPart(p: TraitRoundPart) {
+    setEditingPartId(p.id);
+    setEditingPartName(p.name || '');
+    setEditingPartDesc(p.description || '');
+  }
+
+  async function saveEditPart() {
+    if (!editingPartId) return;
+    try {
+      const nextName = editingPartName.trim();
+      if (!nextName) return;
+      const nextDesc = editingPartDesc.trim() || null;
+      const { error } = await supabase.from('trait_round_parts').update({ name: nextName, description: nextDesc }).eq('id', editingPartId);
+      if (error) throw error;
+      setRoundParts((arr) => arr.map((x) => (x.id === editingPartId ? { ...x, name: nextName, description: nextDesc } : x)));
+      setEditingPartId(null);
+      setEditingPartName('');
+      setEditingPartDesc('');
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트 수정 실패');
+    }
+  }
+
+  async function deletePart(id: string) {
+    const ok = window.confirm('파트를 삭제하시겠습니까?');
+    if (!ok) return;
+    try {
+      const { error } = await supabase.from('trait_round_parts').delete().eq('id', id);
+      if (error) throw error;
+      setRoundParts((arr) => arr.filter((x) => x.id !== id));
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트 삭제 실패');
+    }
+  }
+
+  async function reorderParts(startIdx: number, endIdx: number) {
+    if (endIdx < 0 || endIdx >= roundParts.length || startIdx === endIdx) return;
+    const next = roundParts.slice();
+    const [moved] = next.splice(startIdx, 1);
+    next.splice(endIdx, 0, moved);
+    setRoundParts(next);
+    const payload = next.map((p, i) => ({ id: p.id, order_index: i }));
+    await supabase.from('trait_round_parts').upsert(payload, { onConflict: 'id' });
+  }
+
+  async function uploadPartImage(partId: string, file: File) {
+    try {
+      setRoundErr(null);
+      const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+      const path = `round_parts/${selectedRoundId}/${partId}.${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('survey').upload(path, file, { upsert: true, cacheControl: '3600', contentType: (file as any).type || 'application/octet-stream' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('survey').getPublicUrl(path);
+      const url = (pub as any)?.publicUrl as string;
+      const { error } = await supabase.from('trait_round_parts').update({ image_url: url }).eq('id', partId);
+      if (error) throw error;
+      setRoundParts((arr) => arr.map((x) => (x.id === partId ? { ...x, image_url: url } : x)));
+    } catch (e: any) {
+      setRoundErr(e?.message || '이미지 업로드 실패');
+    }
+  }
+
   const [exportOpen, setExportOpen] = useState(false);
   const [exportCols, setExportCols] = useState<Record<string, boolean>>({});
   const [exportErr, setExportErr] = useState<string | null>(null);
@@ -419,13 +690,13 @@ export default function AdminQuestionsPage() {
 
   useEffect(() => {
     // 모달 열릴 때 배경 스크롤 잠금(스크롤바 2개 방지)
-    if (!exportOpen && !reportOpen) return;
+    if (!exportOpen && !reportOpen && !roundOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [exportOpen, reportOpen]);
+  }, [exportOpen, reportOpen, roundOpen]);
 
   function canonicalizeFilters() {
     const payload: any = {
@@ -631,17 +902,203 @@ export default function AdminQuestionsPage() {
     return { total, perTrait, totalMax, perTraitMax };
   }, [items]);
 
+  const selectedRound = useMemo(() => {
+    return rounds.find((r) => r.id === selectedRoundId) || null;
+  }, [rounds, selectedRoundId]);
+
   return (
     <div style={{ color: tokens.text }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <ToolbarButton onClick={() => setAreaDialog('areas')}>영역</ToolbarButton>
         <ToolbarButton onClick={() => setAreaDialog('groups')}>그룹</ToolbarButton>
+        <ToolbarButton onClick={() => { setRoundErr(null); setRoundOpen(true); }}>회차</ToolbarButton>
         <ToolbarButton onClick={() => setFilterOpen((s)=>!s)}>필터</ToolbarButton>
         <div style={{ flex: 1 }} />
         <ToolbarButton onClick={async () => { setReportErr(null); setReportOpen(true); try { const filters = canonicalizeFilters(); const h = await sha256Hex(JSON.stringify(filters)); setReportFiltersHash(h); await refreshRuns(h); } catch (e:any) { setReportErr(e?.message || String(e)); } }}>리포트</ToolbarButton>
         <ToolbarButton onClick={() => { setExportErr(null); setExportOpen(true); }}>엑셀로 내보내기</ToolbarButton>
         <ToolbarButton onClick={() => { resetDraft(); setAddQOpen(true); }}>추가</ToolbarButton>
       </div>
+
+      {roundOpen && (
+        <Modal
+          title="회차 설계"
+          width={920}
+          onClose={() => setRoundOpen(false)}
+          actions={<>
+            <button onClick={() => setRoundOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>닫기</button>
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 900 }}>회차/파트 설계</div>
+                <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2 }}>1) 회차 편집 → 2) 회차 선택 후 파트 편집</div>
+              </div>
+              {roundErr && <div style={{ color: '#ff8686', fontSize: 12 }}>{roundErr}</div>}
+            </div>
+
+            <div style={{ maxHeight: '72vh', overflow: 'auto', paddingRight: 4 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 320px) 1fr', gap: 14 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 8 }}>새 회차</div>
+                    <input value={newRoundName} onChange={(e)=>setNewRoundName(e.target.value)} placeholder="회차 이름"
+                           style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+                    <textarea value={newRoundDesc} onChange={(e)=>setNewRoundDesc(e.target.value)} placeholder="회차 설명(선택)" rows={2}
+                              style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                      <button onClick={addRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>회차 추가</button>
+                    </div>
+                  </div>
+
+                  <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ fontWeight: 800 }}>회차 목록</div>
+                      <div style={{ color: tokens.textDim, fontSize: 12 }}>{rounds.length}개</div>
+                    </div>
+                    <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {roundLoading ? (
+                        <div style={{ padding: 10, color: tokens.textDim }}>불러오는 중...</div>
+                      ) : rounds.length === 0 ? (
+                        <div style={{ padding: 10, color: tokens.textDim }}>회차가 없습니다.</div>
+                      ) : (
+                        rounds.map((r, idx) => (
+                          <div
+                            key={r.id}
+                            draggable
+                            onDragStart={()=>setDragRoundIdx(idx)}
+                            onDragOver={(e)=>e.preventDefault()}
+                            onDrop={()=>{ if (dragRoundIdx !== null) reorderRounds(dragRoundIdx, idx); setDragRoundIdx(null); }}
+                            onClick={()=>startEditRound(r)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: '8px 10px',
+                              borderRadius: 10,
+                              border: selectedRoundId === r.id ? `1px solid ${tokens.accent}` : `1px solid ${tokens.border}`,
+                              background: selectedRoundId === r.id ? '#1C1F23' : '#121214',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <div style={{ opacity: 0.8 }}><DragHandle /></div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700 }}>{r.name}</div>
+                              {r.description ? (
+                                <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.description}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {!selectedRoundId ? (
+                    <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 16, color: tokens.textDim }}>
+                      회차를 선택하면 파트를 편집할 수 있어요.
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <div style={{ fontWeight: 800 }}>회차 편집</div>
+                          {selectedRound?.id ? <div style={{ color: tokens.textDim, fontSize: 11 }}>ID {selectedRound.id}</div> : null}
+                        </div>
+                        <input value={editingRoundName} onChange={(e)=>setEditingRoundName(e.target.value)} placeholder="회차 이름"
+                               style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+                        <textarea value={editingRoundDesc} onChange={(e)=>setEditingRoundDesc(e.target.value)} placeholder="회차 설명(선택)" rows={2}
+                                  style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+                          <button onClick={saveEditRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>저장</button>
+                          <button onClick={() => selectedRoundId && deleteRound(selectedRoundId)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: '#ff8686', cursor: 'pointer' }}>삭제</button>
+                        </div>
+                      </div>
+
+                      <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <div style={{ fontWeight: 800 }}>파트 편집</div>
+                          <div style={{ color: tokens.textDim, fontSize: 12 }}>{roundParts.length}개</div>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+                          <input value={newPartName} onChange={(e)=>setNewPartName(e.target.value)} placeholder="파트 이름"
+                                 style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+                          <button onClick={addPart} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>파트 추가</button>
+                        </div>
+                        <textarea value={newPartDesc} onChange={(e)=>setNewPartDesc(e.target.value)} placeholder="파트 설명(선택)" rows={2}
+                                  style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+
+                        <div style={{ border:`1px solid ${tokens.border}`, borderRadius: 10, marginTop: 10, padding: 8, display:'flex', flexDirection:'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
+                          {roundParts.length === 0 ? (
+                            <div style={{ padding: 10, color: tokens.textDim }}>파트가 없습니다.</div>
+                          ) : (
+                            roundParts.map((p, idx) => (
+                              <div
+                                key={p.id}
+                                draggable
+                                onDragStart={()=>setDragPartIdx(idx)}
+                                onDragOver={(e)=>e.preventDefault()}
+                                onDrop={()=>{ if (dragPartIdx !== null) reorderParts(dragPartIdx, idx); setDragPartIdx(null); }}
+                                style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
+                              >
+                                <div style={{ display:'grid', gridTemplateColumns:'24px 1fr 220px', gap: 10, alignItems:'start' }}>
+                                  <div style={{ opacity: 0.8 }}><DragHandle /></div>
+                                  <div style={{ minWidth: 0 }}>
+                                    {editingPartId === p.id ? (
+                                      <>
+                                        <input value={editingPartName} onChange={(e)=>setEditingPartName(e.target.value)}
+                                               style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.text, padding:'0 10px', boxSizing:'border-box' }} />
+                                        <textarea value={editingPartDesc} onChange={(e)=>setEditingPartDesc(e.target.value)} rows={2}
+                                                  style={{ width:'100%', marginTop: 6, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.text, padding:10, boxSizing:'border-box' }} />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div style={{ fontWeight: 800 }}>{p.name}</div>
+                                        {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
+                                        {p.image_url ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.image_url}</div> : null}
+                                      </>
+                                    )}
+                                  </div>
+                                  <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+                                    <div
+                                      onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) uploadPartImage(p.id, file); }}
+                                      onDragOver={(e)=>e.preventDefault()}
+                                      onClick={async()=>{ if (p.image_url) { await supabase.from('trait_round_parts').update({ image_url: null }).eq('id', p.id); setRoundParts(arr=>arr.map(x=>x.id===p.id?{...x,image_url:null}:x)); } }}
+                                      title={p.image_url ? '클릭하여 이미지 제거' : '이미지 드롭하여 등록'}
+                                      style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
+                                    >
+                                      {p.image_url ? '이미지 ✔ (클릭=제거)' : '이미지 드롭'}
+                                    </div>
+                                    <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
+                                      {editingPartId === p.id ? (
+                                        <>
+                                          <button onClick={saveEditPart} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>저장</button>
+                                          <button onClick={()=>{ setEditingPartId(null); setEditingPartName(''); setEditingPartDesc(''); }} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color: tokens.textDim, cursor:'pointer' }}>취소</button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <button onClick={()=>startEditPart(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>수정</button>
+                                          <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {reportOpen && (
         <Modal
