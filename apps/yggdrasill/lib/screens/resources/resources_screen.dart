@@ -1,8 +1,8 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:flutter/gestures.dart';
-import '../../widgets/custom_tab_bar.dart';
+import '../../widgets/pill_tab_selector.dart';
 import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -1019,31 +1019,33 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     // ignore: avoid_print
     print('[RES] ResourcesScreen build');
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: const Color(0xFF0B1112),
       body: Stack(
         children: [
           Column(
             children: [
               const SizedBox(height: 0),
               SizedBox(height: 5),
-              CustomTabBar(
-                selectedIndex: _customTabIndex,
-                tabs: const ['교재', '시험', '기타'],
-                onTabSelected: (i) {
-                  setState(() {
-                    // 탭 전환 시에는 드롭다운을 닫되, 탭 전환 직후 build 전에 닫기 로직이 다시 먹지 않도록 여기만 처리
-                    if (_isGradeMenuOpen) _closeGradeMenu();
-                    _customTabIndex = i;
-                    // 탭 변경 시 데이터 재로딩 및 트리 초기화
-                    _expandedFolderIds.clear();
-                    _selectedFolderIdForTree = _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
-                    // 이전 탭 데이터가 잠깐 보이는 플리커 방지: 즉시 클리어
-                    _folders.clear();
-                    _files.clear();
-                  });
-                  // 카테고리별 데이터 로드
-                  _loadLayout();
-                },
+              Center(
+                child: PillTabSelector(
+                  selectedIndex: _customTabIndex,
+                  tabs: const ['교재', '시험', '기타'],
+                  onTabSelected: (i) {
+                    setState(() {
+                      // 탭 전환 시에는 드롭다운을 닫되, 탭 전환 직후 build 전에 닫기 로직이 다시 먹지 않도록 여기만 처리
+                      if (_isGradeMenuOpen) _closeGradeMenu();
+                      _customTabIndex = i;
+                      // 탭 변경 시 데이터 재로딩 및 트리 초기화
+                      _expandedFolderIds.clear();
+                      _selectedFolderIdForTree = _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
+                      // 이전 탭 데이터가 잠깐 보이는 플리커 방지: 즉시 클리어
+                      _folders.clear();
+                      _files.clear();
+                    });
+                    // 카테고리별 데이터 로드
+                    _loadLayout();
+                  },
+                ),
               ),
               const SizedBox(height: 1),
               Align(

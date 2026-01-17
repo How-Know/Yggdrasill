@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/pill_tab_selector.dart';
 import '../../models/academy_settings.dart';
 import '../../models/operating_hours.dart';
 import '../../services/data_manager.dart';
@@ -77,6 +78,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const Color _kSignatureGreen = Color(0xFF33A373);
+  static const Color _kPageBackground = Color(0xFF0B1112);
+
   SettingType _selectedType = SettingType.academy;
   DayOfWeek? _selectedDay = DayOfWeek.monday;
   PaymentType _paymentType = PaymentType.monthly;
@@ -526,7 +530,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: () async {
                         await UpdateService.oneClickUpdate(context);
                       },
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                      style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                       icon: const Icon(Icons.refresh, size: 18),
                       label: const Text('업데이트 확인'),
                     ),
@@ -584,7 +588,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(width: 12),
                         FilledButton(
                           onPressed: _occurrenceBackfillRunning ? null : () async => _runOccurrenceBackfillTool(),
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: _occurrenceBackfillRunning
                               ? const SizedBox(
                                   width: 18,
@@ -634,7 +638,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(width: 12),
                         FilledButton(
                           onPressed: _cycleOrderBackfillRunning ? null : () async => _runCycleOrderBackfillTool(),
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: _cycleOrderBackfillRunning
                               ? const SizedBox(
                                   width: 18,
@@ -722,7 +726,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   await p.setBool('ai_summary_enabled', value);
                                   setState(() {});
                                 } : null,
-                                activeColor: const Color(0xFF1976D2),
+                                activeColor: _kSignatureGreen,
                               ),
                             ],
                           ),
@@ -766,7 +770,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 borderSide: BorderSide(color: Colors.white24),
                               ),
                               focusedBorder: const OutlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                borderSide: BorderSide(color: _kSignatureGreen),
                               ),
                             ),
                           ),
@@ -780,18 +784,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               await prefs.remove('kakao_api_base_url');
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('서버 주소가 제거되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             } else {
                               await prefs.setString('kakao_api_base_url', value);
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('서버 주소가 저장되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             }
                             setState(() {});
                           },
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: const Text('저장'),
                         ),
                       ],
@@ -831,7 +835,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 borderSide: BorderSide(color: Colors.white24),
                               ),
                               focusedBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                borderSide: BorderSide(color: _kSignatureGreen),
                               ),
                             ),
                           ),
@@ -848,11 +852,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                               content: Text('설문 웹 주소가 저장되었습니다.', style: TextStyle(color: Colors.white)),
-                              backgroundColor: Color(0xFF1976D2),
+                              backgroundColor: _kSignatureGreen,
                             ));
                             setState(() {});
                           },
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: const Text('저장'),
                         ),
                       ],
@@ -880,7 +884,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 borderSide: BorderSide(color: Colors.white24),
                               ),
                               focusedBorder: const OutlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                borderSide: BorderSide(color: _kSignatureGreen),
                               ),
                             ),
                           ),
@@ -894,18 +898,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               await prefs.remove('kakao_api_token');
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('API 토큰이 제거되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             } else {
                               await prefs.setString('kakao_api_token', value);
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('API 토큰이 저장되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             }
                             setState(() {});
                           },
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: const Text('저장'),
                         ),
                         const SizedBox(width: 8),
@@ -937,7 +941,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 borderSide: BorderSide(color: Colors.white24),
                               ),
                               focusedBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                borderSide: BorderSide(color: _kSignatureGreen),
                               ),
                             ),
                           ),
@@ -951,18 +955,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               await prefs.remove('kakao_internal_token');
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('내부 동기화 토큰이 제거되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             } else {
                               await prefs.setString('kakao_internal_token', value);
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                                 content: Text('내부 동기화 토큰이 저장되었습니다.', style: TextStyle(color: Colors.white)),
-                                backgroundColor: Color(0xFF1976D2),
+                                backgroundColor: _kSignatureGreen,
                               ));
                             }
                             setState(() {});
                           },
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                          style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                           child: const Text('저장'),
                         ),
                         const SizedBox(width: 8),
@@ -990,17 +994,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final scaffold = ScaffoldMessenger.of(context);
                         scaffold.showSnackBar(const SnackBar(
                           content: Text('초기 동기화 재실행 중...', style: TextStyle(color: Colors.white)),
-                          backgroundColor: Color(0xFF1976D2),
+                          backgroundColor: _kSignatureGreen,
                           duration: Duration(milliseconds: 1200),
                         ));
                         await SyncService.instance.resetInitialSyncFlag();
                         await SyncService.instance.runInitialSyncIfNeeded();
                         scaffold.showSnackBar(const SnackBar(
                           content: Text('초기 동기화 트리거 완료', style: TextStyle(color: Colors.white)),
-                          backgroundColor: Color(0xFF1976D2),
+                          backgroundColor: _kSignatureGreen,
                         ));
                       },
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                      style: FilledButton.styleFrom(backgroundColor: _kSignatureGreen),
                       child: const Text('초기 동기화 재실행'),
                     ),
                     const SizedBox(width: 8),
@@ -1017,7 +1021,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               await prefs.setBool('enable_students_sync', v);
                               setState(() {});
                             },
-                            activeColor: const Color(0xFF1976D2),
+                            activeColor: _kSignatureGreen,
                           ),
                           const Text('학생/전화 동기화', style: TextStyle(color: Colors.white70)),
                         ]);
@@ -1029,16 +1033,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final scaffold = ScaffoldMessenger.of(context);
                         scaffold.showSnackBar(const SnackBar(
                           content: Text('수동 동기화(최근 7주) 시작', style: TextStyle(color: Colors.white)),
-                          backgroundColor: Color(0xFF1976D2),
+                          backgroundColor: _kSignatureGreen,
                           duration: Duration(milliseconds: 800),
                         ));
                         await SyncService.instance.manualSync(days: 49);
                         scaffold.showSnackBar(const SnackBar(
                           content: Text('수동 동기화 완료', style: TextStyle(color: Colors.white)),
-                          backgroundColor: Color(0xFF1976D2),
+                          backgroundColor: _kSignatureGreen,
                         ));
                       },
-                      style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1976D2), side: const BorderSide(color: Color(0xFF1976D2))),
+                      style: OutlinedButton.styleFrom(foregroundColor: _kSignatureGreen, side: const BorderSide(color: _kSignatureGreen)),
                       child: const Text('지금 동기화(7주)'),
                     ),
                   ],
@@ -1113,7 +1117,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                       ),
                       focusedBorder: const OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                        borderSide: BorderSide(color: _kSignatureGreen),
                       ),
                     ),
                     dropdownColor: const Color(0xFF1F1F1F),
@@ -1152,7 +1156,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (bool value) {
                     // TODO: 알림 설정 기능 구현
                   },
-                  activeColor: const Color(0xFF1976D2),
+                  activeColor: _kSignatureGreen,
                 ),
                 SwitchListTile(
                   title: const Text(
@@ -1167,7 +1171,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (bool value) {
                     // TODO: 알림 설정 기능 구현
                   },
-                  activeColor: const Color(0xFF1976D2),
+                  activeColor: _kSignatureGreen,
                 ),
                 const SizedBox(height: 40),
                 // 자동 백업
@@ -1193,7 +1197,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (bool value) {
                     // TODO: 백업 설정 기능 구현
                   },
-                  activeColor: const Color(0xFF1976D2),
+                  activeColor: _kSignatureGreen,
                 ),
                 // [추가] 실행/전체화면 설정
                 const SizedBox(height: 40),
@@ -1225,7 +1229,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await prefs.setBool('fullscreen_enabled', value);
                     if (value) await prefs.setBool('maximize_enabled', false);
                   },
-                  activeColor: const Color(0xFF1976D2),
+                  activeColor: _kSignatureGreen,
                 ),
                 SwitchListTile(
                   title: const Text(
@@ -1246,7 +1250,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await prefs.setBool('maximize_enabled', value);
                     if (value) await prefs.setBool('fullscreen_enabled', false);
                   },
-                  activeColor: const Color(0xFF1976D2),
+                  activeColor: _kSignatureGreen,
                 ),
                 const SizedBox(height: 40),
                 const Text(
@@ -1354,23 +1358,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildOperatingHoursSection() {
     const double blockWidth = 100.0; // 더 좁게
     return Center(
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF18181A), // 학원 정보 컨테이너와 동일하게
-          borderRadius: BorderRadius.circular(16), // 학원 정보 라운드 값과 동일하게
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              '운영 시간',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w500,
-              ),
+      child: SizedBox(
+        width: 780, // 위쪽 "학원 정보" 컨테이너와 폭 통일
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF18181A), // 학원 정보 컨테이너와 동일하게
+            borderRadius: BorderRadius.circular(16), // 학원 정보 라운드 값과 동일하게
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+            Row(
+              children: [
+                const Text(
+                  '운영 시간',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _promptAddBreakTime,
+                  icon: const Icon(Icons.add, color: _kSignatureGreen, size: 18),
+                  label: const Text(
+                    '휴식',
+                    style: TextStyle(color: _kSignatureGreen, fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _kSignatureGreen,
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 14),
             SingleChildScrollView(
@@ -1483,9 +1507,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         data: Theme.of(context).copyWith(
                                           colorScheme: const ColorScheme(
                                             brightness: Brightness.dark,
-                                            primary: Color(0xFF1976D2),
+                                            primary: _kSignatureGreen,
                                             onPrimary: Colors.white,
-                                            secondary: Color(0xFF1976D2),
+                                            secondary: _kSignatureGreen,
                                             onSecondary: Colors.white,
                                             error: Color(0xFFB00020),
                                             onError: Colors.white,
@@ -1497,15 +1521,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           dialogBackgroundColor: const Color(0xFF18181A),
                                           timePickerTheme: const TimePickerThemeData(
                                             backgroundColor: Color(0xFF18181A),
-                                            hourMinuteColor: Color(0xFF1976D2),
+                                            hourMinuteColor: _kSignatureGreen,
                                             hourMinuteTextColor: Colors.white,
-                                            dialHandColor: Color(0xFF1976D2),
+                                            dialHandColor: _kSignatureGreen,
                                             dialBackgroundColor: Color(0xFF18181A),
-                                            entryModeIconColor: Color(0xFF1976D2),
+                                            entryModeIconColor: _kSignatureGreen,
                                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
                                             helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                             dayPeriodTextColor: Colors.white,
-                                            dayPeriodColor: Color(0xFF1976D2),
+                                            dayPeriodColor: _kSignatureGreen,
                                           ),
                                         ),
                                         child: Localizations.override(
@@ -1535,9 +1559,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         data: Theme.of(context).copyWith(
                                           colorScheme: const ColorScheme(
                                             brightness: Brightness.dark,
-                                            primary: Color(0xFF1976D2),
+                                            primary: _kSignatureGreen,
                                             onPrimary: Colors.white,
-                                            secondary: Color(0xFF1976D2),
+                                            secondary: _kSignatureGreen,
                                             onSecondary: Colors.white,
                                             error: Color(0xFFB00020),
                                             onError: Colors.white,
@@ -1549,15 +1573,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           dialogBackgroundColor: const Color(0xFF18181A),
                                           timePickerTheme: const TimePickerThemeData(
                                             backgroundColor: Color(0xFF18181A),
-                                            hourMinuteColor: Color(0xFF1976D2),
+                                            hourMinuteColor: _kSignatureGreen,
                                             hourMinuteTextColor: Colors.white,
-                                            dialHandColor: Color(0xFF1976D2),
+                                            dialHandColor: _kSignatureGreen,
                                             dialBackgroundColor: Color(0xFF18181A),
-                                            entryModeIconColor: Color(0xFF1976D2),
+                                            entryModeIconColor: _kSignatureGreen,
                                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
                                             helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                             dayPeriodTextColor: Colors.white,
-                                            dayPeriodColor: Color(0xFF1976D2),
+                                            dayPeriodColor: _kSignatureGreen,
                                           ),
                                         ),
                                         child: Localizations.override(
@@ -1639,6 +1663,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               child: AnimatedContainer(
                                 duration: Duration(milliseconds: 150),
                                 width: blockWidth,
+                                height: 60,
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF18181A),
                                   borderRadius: BorderRadius.circular(8),
@@ -1651,38 +1676,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ),
                                   ],
                                 ),
-                                child: Column(
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                                      child: Center(
-                                        child: Text(
-                                          '${_formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.startHour, minute: _operatingHours[day]!.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.endHour, minute: _operatingHours[day]!.endMinute))}',
+                                child: Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(4, 6, 4, 9),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          _formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.startHour, minute: _operatingHours[day]!.startMinute)),
                                           style: const TextStyle(
                                             color: Colors.white,
-                                            fontSize: 13, // 기존 12 → 13
+                                            fontSize: 13,
                                             fontWeight: FontWeight.w600,
+                                            height: 1.05,
                                           ),
-                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
                                           textAlign: TextAlign.center,
                                         ),
-                                      ),
+                                        const Text(
+                                          '-',
+                                          style: TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            height: 1.0,
+                                          ),
+                                          maxLines: 1,
+                                          textAlign: TextAlign.center,
+                                        ),
+                                        Text(
+                                          _formatTimeOfDay(TimeOfDay(hour: _operatingHours[day]!.endHour, minute: _operatingHours[day]!.endMinute)),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.05,
+                                          ),
+                                          maxLines: 1,
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           )
                         : Container(
                             width: blockWidth,
-                            height: 32,
+                            height: 60,
                             margin: const EdgeInsets.only(bottom: 0),
                             padding: EdgeInsets.zero,
                             child: Center(
                               child: TextButton(
                                 onPressed: () => _selectOperatingHours(context, day),
                                 style: TextButton.styleFrom(
-                                  foregroundColor: Color(0xFF1976D2),
+                                  foregroundColor: _kSignatureGreen,
                                   textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                                   padding: EdgeInsets.zero,
                                 ),
@@ -1736,9 +1786,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     data: Theme.of(context).copyWith(
                                       colorScheme: const ColorScheme(
                                         brightness: Brightness.dark,
-                                        primary: Color(0xFF1976D2),
+                                        primary: _kSignatureGreen,
                                         onPrimary: Colors.white,
-                                        secondary: Color(0xFF1976D2),
+                                        secondary: _kSignatureGreen,
                                         onSecondary: Colors.white,
                                         error: Color(0xFFB00020),
                                         onError: Colors.white,
@@ -1750,15 +1800,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       dialogBackgroundColor: const Color(0xFF18181A),
                                       timePickerTheme: const TimePickerThemeData(
                                         backgroundColor: Color(0xFF18181A),
-                                        hourMinuteColor: Color(0xFF1976D2),
+                                        hourMinuteColor: _kSignatureGreen,
                                         hourMinuteTextColor: Colors.white,
-                                        dialHandColor: Color(0xFF1976D2),
+                                        dialHandColor: _kSignatureGreen,
                                         dialBackgroundColor: Color(0xFF18181A),
-                                        entryModeIconColor: Color(0xFF1976D2),
+                                        entryModeIconColor: _kSignatureGreen,
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
                                         helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                         dayPeriodTextColor: Colors.white,
-                                        dayPeriodColor: Color(0xFF1976D2),
+                                        dayPeriodColor: _kSignatureGreen,
                                       ),
                                     ),
                                     child: Localizations.override(
@@ -1788,9 +1838,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     data: Theme.of(context).copyWith(
                                       colorScheme: const ColorScheme(
                                         brightness: Brightness.dark,
-                                        primary: Color(0xFF1976D2),
+                                        primary: _kSignatureGreen,
                                         onPrimary: Colors.white,
-                                        secondary: Color(0xFF1976D2),
+                                        secondary: _kSignatureGreen,
                                         onSecondary: Colors.white,
                                         error: Color(0xFFB00020),
                                         onError: Colors.white,
@@ -1802,15 +1852,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       dialogBackgroundColor: const Color(0xFF18181A),
                                       timePickerTheme: const TimePickerThemeData(
                                         backgroundColor: Color(0xFF18181A),
-                                        hourMinuteColor: Color(0xFF1976D2),
+                                        hourMinuteColor: _kSignatureGreen,
                                         hourMinuteTextColor: Colors.white,
-                                        dialHandColor: Color(0xFF1976D2),
+                                        dialHandColor: _kSignatureGreen,
                                         dialBackgroundColor: Color(0xFF18181A),
-                                        entryModeIconColor: Color(0xFF1976D2),
+                                        entryModeIconColor: _kSignatureGreen,
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
                                         helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                                         dayPeriodTextColor: Colors.white,
-                                        dayPeriodColor: Color(0xFF1976D2),
+                                        dayPeriodColor: _kSignatureGreen,
                                       ),
                                     ),
                                     child: Localizations.override(
@@ -1875,7 +1925,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             decoration: BoxDecoration(
                               color: const Color(0xFF18181A),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Color(0xFF1976D2)),
+                              border: Border.all(color: _kSignatureGreen),
                             ),
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(4, 0, 4, 3),
@@ -1883,7 +1933,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 child: Text(
                                   '${_formatTimeOfDay(TimeOfDay(hour: breakTime.startHour, minute: breakTime.startMinute))} - ${_formatTimeOfDay(TimeOfDay(hour: breakTime.endHour, minute: breakTime.endMinute))}',
                                   style: const TextStyle(
-                                    color: Color(0xFF1976D2),
+                                    color: _kSignatureGreen,
                                     fontSize: 12, // 기존 11 → 12
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -1896,23 +1946,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       );
                     }).toList()),
-                    // +휴식 버튼 (TextButton)
-                    if (hasOperatingHours && !isLastThirty)
-                      TextButton.icon(
-                        icon: const Icon(Icons.add, color: Color(0xFF1976D2), size: 15), // 기존 14 → 15
-                        label: const Text('휴식', style: TextStyle(color: Color(0xFF1976D2), fontSize: 12)), // 기존 11 → 12
-                        style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF1976D2),
-                          minimumSize: const Size(0, 24),
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                        ),
-                        onPressed: () => _addBreakTime(day),
-                      ),
                   ],
                 );
               }).toList(),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1924,6 +1963,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return '$hour:$minute';
   }
 
+  bool _isLastThirtyMarkerDay(DayOfWeek day) {
+    final range = _operatingHours[day];
+    if (range == null) return false;
+
+    TimeOfDay? latestEnd;
+    for (var v in _operatingHours.values) {
+      if (v != null) {
+        if (latestEnd == null ||
+            v.endHour > latestEnd.hour ||
+            (v.endHour == latestEnd.hour && v.endMinute > latestEnd.minute)) {
+          latestEnd = TimeOfDay(hour: v.endHour, minute: v.endMinute);
+        }
+      }
+    }
+    if (latestEnd == null) return false;
+
+    final endMinutes = latestEnd.hour * 60 + latestEnd.minute;
+    final startMinutes = endMinutes - 30;
+    final latestStart = TimeOfDay(hour: startMinutes ~/ 60, minute: startMinutes % 60);
+
+    return range.startHour == latestStart.hour &&
+        range.startMinute == latestStart.minute &&
+        range.endHour == latestEnd.hour &&
+        range.endMinute == latestEnd.minute;
+  }
+
+  Future<void> _promptAddBreakTime() async {
+    final availableDays = DayOfWeek.values.where((d) => _operatingHours[d] != null && !_isLastThirtyMarkerDay(d)).toList();
+    if (availableDays.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('휴식을 추가할 요일이 없습니다. 먼저 운영시간을 등록하세요.')));
+      return;
+    }
+
+    final DayOfWeek? pickedDay = await showDialog<DayOfWeek>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF18181A),
+          title: const Text('요일 선택', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+          content: SizedBox(
+            width: 320,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: availableDays.length,
+              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+              itemBuilder: (_, i) {
+                final d = availableDays[i];
+                return ListTile(
+                  dense: true,
+                  title: Text(d.koreanName, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                  trailing: const Icon(Icons.chevron_right, color: Colors.white24),
+                  onTap: () => Navigator.of(ctx).pop(d),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (pickedDay == null) return;
+    await _addBreakTime(pickedDay);
+  }
+
   Future<void> _addBreakTime(DayOfWeek day) async {
     final TimeOfDay? startTime = await showTimePicker(
       context: context,
@@ -1933,9 +2043,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme(
               brightness: Brightness.dark,
-              primary: Color(0xFF1976D2),
+              primary: _kSignatureGreen,
               onPrimary: Colors.white,
-              secondary: Color(0xFF1976D2),
+              secondary: _kSignatureGreen,
               onSecondary: Colors.white,
               error: Color(0xFFB00020),
               onError: Colors.white,
@@ -1947,15 +2057,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             dialogBackgroundColor: const Color(0xFF18181A),
             timePickerTheme: const TimePickerThemeData(
               backgroundColor: Color(0xFF18181A),
-              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteColor: _kSignatureGreen,
               hourMinuteTextColor: Colors.white,
-              dialHandColor: Color(0xFF1976D2),
+              dialHandColor: _kSignatureGreen,
               dialBackgroundColor: Color(0xFF18181A),
-              entryModeIconColor: Color(0xFF1976D2),
+              entryModeIconColor: _kSignatureGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
               helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               dayPeriodTextColor: Colors.white,
-              dayPeriodColor: Color(0xFF1976D2),
+              dayPeriodColor: _kSignatureGreen,
             ),
           ),
           child: Localizations.override(
@@ -1985,9 +2095,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             data: Theme.of(context).copyWith(
               colorScheme: const ColorScheme(
                 brightness: Brightness.dark,
-                primary: Color(0xFF1976D2),
+                primary: _kSignatureGreen,
                 onPrimary: Colors.white,
-                secondary: Color(0xFF1976D2),
+                secondary: _kSignatureGreen,
                 onSecondary: Colors.white,
                 error: Color(0xFFB00020),
                 onError: Colors.white,
@@ -1999,15 +2109,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               dialogBackgroundColor: const Color(0xFF18181A),
               timePickerTheme: const TimePickerThemeData(
                 backgroundColor: Color(0xFF18181A),
-                hourMinuteColor: Color(0xFF1976D2),
+                hourMinuteColor: _kSignatureGreen,
                 hourMinuteTextColor: Colors.white,
-                dialHandColor: Color(0xFF1976D2),
+                dialHandColor: _kSignatureGreen,
                 dialBackgroundColor: Color(0xFF18181A),
-                entryModeIconColor: Color(0xFF1976D2),
+                entryModeIconColor: _kSignatureGreen,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
                 helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 dayPeriodTextColor: Colors.white,
-                dayPeriodColor: Color(0xFF1976D2),
+                dayPeriodColor: _kSignatureGreen,
               ),
             ),
             child: Localizations.override(
@@ -2120,7 +2230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                             ),
                             focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              borderSide: BorderSide(color: _kSignatureGreen),
                             ),
                           ),
                         ),
@@ -2139,7 +2249,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                             ),
                             focusedBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF1976D2)),
+                              borderSide: BorderSide(color: _kSignatureGreen),
                             ),
                           ),
                         ),
@@ -2162,7 +2272,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                                   ),
                                   focusedBorder: const OutlineInputBorder(
-                                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                    borderSide: BorderSide(color: _kSignatureGreen),
                                   ),
                                 ),
                               ),
@@ -2180,7 +2290,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                                   ),
                                   focusedBorder: const OutlineInputBorder(
-                                    borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                    borderSide: BorderSide(color: _kSignatureGreen),
                                   ),
                                 ),
                               ),
@@ -2210,7 +2320,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                                 ),
                                 focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                  borderSide: BorderSide(color: _kSignatureGreen),
                                 ),
                               ),
                               dropdownColor: const Color(0xFF1F1F1F),
@@ -2249,7 +2359,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
                                 ),
                                 focusedBorder: const OutlineInputBorder(
-                                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                  borderSide: BorderSide(color: _kSignatureGreen),
                                 ),
                               ),
                             ),
@@ -2315,24 +2425,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildOperatingHoursSection(),
         const SizedBox(height: 40),
         Center(
-          child: ElevatedButton.icon(
+          child: ElevatedButton(
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const StudentArchivesScreen()),
               );
             },
-            icon: const Icon(Icons.inventory_2_outlined, color: Colors.white),
-            label: const Text(
-              '학생 아카이브 보기',
+            child: const Text(
+              '퇴원 학생 아카이브',
               style: TextStyle(
                 color: Colors.white,
-                fontSize: 15,
+                fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1976D2),
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+              backgroundColor: const Color(0xFF2A2A2A),
+              padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
             ),
           ),
@@ -2349,7 +2458,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text('하나 이상의 운영시간이 등록되어야 합니다.', style: TextStyle(color: Colors.white)),
-                        backgroundColor: Color(0xFF1976D2),
+                        backgroundColor: _kSignatureGreen,
                       ),
                     );
                     return;
@@ -2450,7 +2559,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1976D2),
+                  backgroundColor: _kSignatureGreen,
                   padding: const EdgeInsets.symmetric(horizontal: 72, vertical: 16),
                 ),
                 child: const Text(
@@ -2472,101 +2581,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: const Color(0xFF0B1112),
       body: Column(
         children: [
           const SizedBox(height: 0),
-          SizedBox(
-            height: 48,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                const tabWidth = 120.0;
-                final tabCount = 3; // 학원, 선생님, 일반
-                const tabGap = 21.0;
-                final totalWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
-                final leftPadding = (constraints.maxWidth - totalWidth) / 2;
-                return Stack(
-                  children: [
-                    AnimatedPositioned(
-                      duration: const Duration(milliseconds: 400),
-                      curve: Curves.easeOutBack,
-                      left: leftPadding + (_customTabIndex * (tabWidth + tabGap)),
-                      bottom: 0,
-                      child: Container(
-                        width: tabWidth,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: Colors.blue,
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: tabWidth,
-                          child: TextButton(
-                            onPressed: () => setState(() {
-                              _prevTabIndex = _customTabIndex;
-                              _customTabIndex = 0;
-                              _selectedType = SettingType.academy;
-                            }),
-                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                            child: Text(
-                              '학원',
-                              style: TextStyle(
-                                color: _customTabIndex == 0 ? Colors.blue : Colors.white70,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: tabGap),
-                        SizedBox(
-                          width: tabWidth,
-                          child: TextButton(
-                            onPressed: () => setState(() {
-                              _prevTabIndex = _customTabIndex;
-                              _customTabIndex = 1;
-                              _selectedType = SettingType.teachers;
-                            }),
-                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                            child: Text(
-                              '선생님',
-                              style: TextStyle(
-                                color: _customTabIndex == 1 ? Colors.blue : Colors.white70,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: tabGap),
-                        SizedBox(
-                          width: tabWidth,
-                          child: TextButton(
-                            onPressed: () => setState(() {
-                              _prevTabIndex = _customTabIndex;
-                              _customTabIndex = 2;
-                              _selectedType = SettingType.general;
-                            }),
-                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                            child: Text(
-                              '일반',
-                              style: TextStyle(
-                                color: _customTabIndex == 2 ? Colors.blue : Colors.white70,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                );
+          const SizedBox(height: 5),
+          Center(
+            child: PillTabSelector(
+              selectedIndex: _customTabIndex,
+              tabs: const ['학원', '선생님', '일반'],
+              onTabSelected: (i) {
+                setState(() {
+                  _prevTabIndex = _customTabIndex;
+                  _customTabIndex = i;
+                  _selectedType = i == 0
+                      ? SettingType.academy
+                      : (i == 1 ? SettingType.teachers : SettingType.general);
+                });
               },
             ),
           ),
@@ -2638,9 +2669,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme(
               brightness: Brightness.dark,
-              primary: Color(0xFF1976D2),
+              primary: _kSignatureGreen,
               onPrimary: Colors.white,
-              secondary: Color(0xFF1976D2),
+              secondary: _kSignatureGreen,
               onSecondary: Colors.white,
               error: Color(0xFFB00020),
               onError: Colors.white,
@@ -2652,15 +2683,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             dialogBackgroundColor: const Color(0xFF18181A),
             timePickerTheme: const TimePickerThemeData(
               backgroundColor: Color(0xFF18181A), // 프로그램 배경색
-              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteColor: _kSignatureGreen,
               hourMinuteTextColor: Colors.white,
-              dialHandColor: Color(0xFF1976D2),
+              dialHandColor: _kSignatureGreen,
               dialBackgroundColor: Color(0xFF18181A),
-              entryModeIconColor: Color(0xFF1976D2),
+              entryModeIconColor: _kSignatureGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
               helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               dayPeriodTextColor: Colors.white,
-              dayPeriodColor: Color(0xFF1976D2),
+              dayPeriodColor: _kSignatureGreen,
             ),
           ),
           child: Localizations.override(
@@ -2690,9 +2721,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme(
               brightness: Brightness.dark,
-              primary: Color(0xFF1976D2),
+              primary: _kSignatureGreen,
               onPrimary: Colors.white,
-              secondary: Color(0xFF1976D2),
+              secondary: _kSignatureGreen,
               onSecondary: Colors.white,
               error: Color(0xFFB00020),
               onError: Colors.white,
@@ -2704,15 +2735,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             dialogBackgroundColor: const Color(0xFF18181A),
             timePickerTheme: const TimePickerThemeData(
               backgroundColor: Color(0xFF18181A), // 프로그램 배경색
-              hourMinuteColor: Color(0xFF1976D2),
+              hourMinuteColor: _kSignatureGreen,
               hourMinuteTextColor: Colors.white,
-              dialHandColor: Color(0xFF1976D2),
+              dialHandColor: _kSignatureGreen,
               dialBackgroundColor: Color(0xFF18181A),
-              entryModeIconColor: Color(0xFF1976D2),
+              entryModeIconColor: _kSignatureGreen,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
               helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               dayPeriodTextColor: Colors.white,
-              dayPeriodColor: Color(0xFF1976D2),
+              dayPeriodColor: _kSignatureGreen,
             ),
           ),
           child: Localizations.override(
@@ -2837,7 +2868,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ElevatedButton(
                       onPressed: _isOwner ? _showAddTeacherDialog : null,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1976D2),
+                        backgroundColor: _kSignatureGreen,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -3062,7 +3093,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 각 내용 위젯을 배경색 컨테이너로 감싸는 래퍼 추가
   Widget _buildAcademySettingsContainer() {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: _kPageBackground,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(
@@ -3089,7 +3120,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
   Widget _buildTeacherSettingsContainer() {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: _kPageBackground,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(
@@ -3116,7 +3147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
   Widget _buildGeneralSettingsContainer() {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: _kPageBackground,
       child: ScrollConfiguration(
         behavior: const ScrollBehavior(),
         child: Scrollbar(

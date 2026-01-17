@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../widgets/custom_tab_bar.dart';
+import '../../widgets/pill_tab_selector.dart';
 import 'problem_bank_view.dart';
 
 class LearningScreen extends StatefulWidget {
@@ -15,18 +15,20 @@ class _LearningScreenState extends State<LearningScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: const Color(0xFF0B1112),
       body: Column(
         children: [
           const SizedBox(height: 5),
-          CustomTabBar(
-            selectedIndex: _selectedTab,
-            tabs: const ['커리큘럼', '문제은행'],
-            onTabSelected: (i) {
-              setState(() {
-                _selectedTab = i;
-              });
-            },
+          Center(
+            child: PillTabSelector(
+              selectedIndex: _selectedTab,
+              tabs: const ['커리큘럼', '문제은행'],
+              onTabSelected: (i) {
+                setState(() {
+                  _selectedTab = i;
+                });
+              },
+            ),
           ),
           const SizedBox(height: 16),
           Expanded(

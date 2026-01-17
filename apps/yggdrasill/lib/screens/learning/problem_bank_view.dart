@@ -155,7 +155,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: const Color(0xFF0B1112),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
