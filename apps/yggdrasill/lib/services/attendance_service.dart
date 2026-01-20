@@ -2317,18 +2317,19 @@ class AttendanceService {
         _isStudentPausedOn(studentId, dayLocal);
 
     // ===== SessionOverride 반영 =====
-    // - skip/replace(원래 회차): 해당 분(minute)에 planned 생성 제외
-    // - add/replace(대체/추가 회차): replacement 분(minute)에 planned 생성 추가
+    // - skip/replace(원래 회차): planned/completed 모두 해당 분(minute)에 planned 생성 제외
+    // - add/replace(대체/추가 회차): planned 상태만 replacement 분(minute)에 planned 생성 추가
     final Map<String, SessionOverride> overrideByOriginalKey = {};
     final Map<String, List<SessionOverride>> overridesByReplacementDate = {};
     for (final o in _d.getSessionOverrides()) {
-      if (o.status != OverrideStatus.planned) continue;
+      if (o.status == OverrideStatus.canceled) continue;
       final orig = o.originalClassDateTime;
       if ((o.overrideType == OverrideType.skip ||
               o.overrideType == OverrideType.replace) &&
           orig != null) {
         overrideByOriginalKey['${o.studentId}|${minKey(orig)}'] = o;
       }
+      if (o.status != OverrideStatus.planned) continue;
       final rep = o.replacementClassDateTime;
       if ((o.overrideType == OverrideType.add ||
               o.overrideType == OverrideType.replace) &&
@@ -4038,6 +4039,13 @@ class AttendanceService {
       await _d.updateSessionOverrideRemote(updated);
     } catch (_) {}
     _d.applySessionOverrideLocal(updated);
+    if (updated.overrideType == OverrideType.replace &&
+        updated.originalClassDateTime != null) {
+      await removePlannedAttendanceForDate(
+        studentId: updated.studentId,
+        classDateTime: updated.originalClassDateTime!,
+      );
+    }
   }
 
   Future<void> regeneratePlannedAttendanceForOverride(

@@ -1446,8 +1446,21 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           return !d.isBefore(qs) && !d.isAfter(qe);
         }
 
+        String minuteKey(DateTime d) => '${d.year}-${d.month}-${d.day}-${d.hour}-${d.minute}';
+        // ✅ 보강(대체) 원본 예정은 출석 탭에서 숨김 (planned/completed 모두)
+        final Set<String> hiddenOriginalPlannedKeys = {
+          for (final o in ovs)
+            if (o.reason == OverrideReason.makeup &&
+                o.overrideType == OverrideType.replace &&
+                o.status != OverrideStatus.canceled &&
+                o.originalClassDateTime != null)
+              minuteKey(o.originalClassDateTime!),
+        };
+
         // 순수 예정(planned) 전체 (추가수업의 '예정 연결' 후보로도 사용)
-        final purePlanned = all.where(_isPurePlanned).toList()
+        final purePlanned = all.where(_isPurePlanned).where((r) {
+          return !hiddenOriginalPlannedKeys.contains(minuteKey(r.classDateTime));
+        }).toList()
           ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
 
         // 1) 실제 출석 기록(실기록): planned 여부와 무관하게 등/하원/출석 정보가 있는 항목

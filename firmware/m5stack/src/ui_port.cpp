@@ -461,6 +461,7 @@ void ui_port_init() {
     Serial.printf("[INIT] Starting in homework mode for student: %s\n", studentId.c_str());
     // MQTT 연결 후 student_info와 homeworks는 onMqttConnect에서 자동 요청됨
   } else {
+    studentId = "";
     build_student_list_ui();
     Serial.println("[INIT] Starting in student list mode");
   }

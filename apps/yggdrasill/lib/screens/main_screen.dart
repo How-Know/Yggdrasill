@@ -117,6 +117,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     final now = DateTime.now();
     final anchor = DateTime(now.year, now.month, now.day);
+    String minuteKey(DateTime d) => '${d.year}-${d.month}-${d.day}-${d.hour}-${d.minute}';
+    final Set<String> hiddenOriginalPlannedKeys = <String>{};
+    for (final o in DataManager.instance.sessionOverrides) {
+      if (o.reason != OverrideReason.makeup) continue;
+      if (o.overrideType != OverrideType.replace) continue;
+      if (o.status == OverrideStatus.canceled) continue;
+      final orig = o.originalClassDateTime;
+      if (orig == null) continue;
+      if (orig.year != anchor.year ||
+          orig.month != anchor.month ||
+          orig.day != anchor.day) {
+        continue;
+      }
+      hiddenOriginalPlannedKeys.add('${o.studentId}|${minuteKey(orig)}');
+    }
     // setId별로 "가장 이른 수업 시간" 하나만 대표로 사용 (실제 등원 기록이 있으면 우선 선택)
     final Map<String, AttendanceRecord> earliestBySet = {};
     int todayTotal = 0;
@@ -126,6 +141,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     for (final r in source) {
       final dt = r.classDateTime;
       if (dt.year != anchor.year || dt.month != anchor.month || dt.day != anchor.day) continue;
+      if (r.isPlanned == true &&
+          !r.isPresent &&
+          r.arrivalTime == null &&
+          r.departureTime == null) {
+        final key = '${r.studentId}|${minuteKey(dt)}';
+        if (hiddenOriginalPlannedKeys.contains(key)) {
+          if (_sideSheetDebug) {
+            debugPrint(
+              '[SIDE][skip-planned] overridden original student=${r.studentId} dt=$dt',
+            );
+          }
+          continue;
+        }
+      }
       todayTotal++;
       String effectiveSetId = '';
       if (r.setId != null && r.setId!.isNotEmpty) {

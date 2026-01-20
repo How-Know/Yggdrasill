@@ -36,7 +36,7 @@ static const char* WIFI_PASS = CFG_WIFI_PASSWORD;
 static const char* MQTT_HOST = CFG_MQTT_HOST;
 static const uint16_t MQTT_PORT = CFG_MQTT_PORT;
 static String academyId = CFG_ACADEMY_ID;
-static String studentId = "student-id"; // 서버 바인딩 후 업데이트 예정
+String studentId = ""; // 바인딩 전에는 비워둠 (list_today 요청용)
 static String deviceId = CFG_DEVICE_ID;
 
 AsyncMqttClient mqtt;
