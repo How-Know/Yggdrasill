@@ -8,6 +8,8 @@
 
 // main.cpp에 정의된 전역 변수 (바인딩 추적용)
 extern String studentId;
+// Small bitmap font for meta text (school/grade)
+extern const lv_font_t kakao_kr_16;
 
 // External icon declarations
 LV_IMG_DECLARE(home_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
@@ -50,6 +52,7 @@ static lv_obj_t* s_battery_label = nullptr;
 static lv_obj_t* s_ota_popup = nullptr;
 static lv_obj_t* s_ota_progress_bar = nullptr;
 static lv_obj_t* s_ota_status_label = nullptr;
+static uint32_t s_last_refresh_ms = 0;
 
 // Phase 2 카드의 accumulated 실시간 업데이트용
 struct Phase2CardData {
@@ -128,6 +131,47 @@ static void anim_exec_set_border_opa(void* obj, int32_t v) {
   lv_obj_set_style_border_opa((lv_obj_t*)obj, (lv_opa_t)v, LV_PART_MAIN);
 }
 
+static void refresh_list_cb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  uint32_t now = millis();
+  if (now - s_last_refresh_ms < 800) return;
+  s_last_refresh_ms = now;
+  fw_publish_list_today();
+}
+
+static void append_refresh_button() {
+  if (!s_list || !lv_obj_is_valid(s_list)) return;
+  lv_obj_t* card = lv_obj_create(s_list);
+  lv_obj_set_width(card, lv_pct(100));
+  lv_obj_set_height(card, 72);
+  lv_obj_set_style_radius(card, 10, 0);
+  lv_obj_set_style_bg_color(card, lv_color_hex(0x232326), 0);
+  lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
+  lv_obj_set_style_border_width(card, 2, 0);
+  lv_obj_set_style_pad_all(card, 12, 0);
+  lv_obj_t* lbl = lv_label_create(card);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
+  if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
+  lv_label_set_text(lbl, u8"새로고침");
+  lv_obj_center(lbl);
+  lv_obj_add_event_cb(card, refresh_list_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void append_empty_message() {
+  if (!s_list || !lv_obj_is_valid(s_list)) return;
+  lv_obj_t* row = lv_obj_create(s_list);
+  lv_obj_set_width(row, lv_pct(100));
+  lv_obj_set_height(row, 64);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 8, 0);
+  lv_obj_t* lbl = lv_label_create(row);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0A0A0), 0);
+  if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
+  lv_label_set_text(lbl, u8"등원 예정 학생이 없습니다.");
+  lv_obj_center(lbl);
+}
+
 static void handle_drag_end(lv_event_t* e) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
   lv_coord_t sheetY = lv_obj_get_y(s_bottom_sheet);
@@ -180,7 +224,7 @@ static void create_base_container() {
   // container (full screen, no rounding)
   lv_obj_t* container = lv_obj_create(scr);
   lv_obj_set_size(container, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(container, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_color(container, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_border_width(container, 0, 0);
   lv_obj_set_style_radius(container, 0, 0);
   lv_obj_set_style_pad_all(container, 0, 0);
@@ -208,7 +252,7 @@ static void build_student_list_ui() {
   s_list = lv_obj_create(s_stage);
   lv_obj_set_size(s_list, lv_pct(100), lv_pct(100));
   lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 0);
-  lv_obj_set_style_bg_color(s_list, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_color(s_list, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_border_width(s_list, 0, 0);
   lv_obj_set_style_radius(s_list, 0, 0);
   lv_obj_set_style_pad_all(s_list, 4, 0);
@@ -232,9 +276,11 @@ static void build_student_list_ui() {
   lv_obj_set_style_text_color(s_empty_label, lv_color_hex(0xA0A0A0), 0);
   lv_label_set_text(s_empty_label, u8"등원 예정 학생이 없습니다.");
   lv_obj_center(s_empty_label);
+  lv_obj_add_flag(s_empty_overlay, LV_OBJ_FLAG_HIDDEN);
   LV_LOG_USER("empty_label created and text set");
   // Re-attach screensaver activity handlers
   screensaver_attach_activity(lv_scr_act());
+  append_refresh_button();
 }
 
 static void build_homeworks_ui_internal() {
@@ -761,27 +807,17 @@ void ui_port_update_students(const JsonArray& students) {
   s_empty_label = nullptr;
   size_t count = 0;
   for (JsonObject _ : students) { (void)_; ++count; }
+  if (s_empty_overlay) lv_obj_add_flag(s_empty_overlay, LV_OBJ_FLAG_HIDDEN);
   if (count == 0) {
-    // show empty message
-    if (!s_empty_overlay) {
-      s_empty_overlay = lv_obj_create(s_stage);
-      lv_obj_set_size(s_empty_overlay, lv_pct(100), lv_pct(100));
-      lv_obj_set_style_bg_opa(s_empty_overlay, LV_OPA_TRANSP, 0);
-      lv_obj_set_style_border_width(s_empty_overlay, 0, 0);
-      s_empty_label = lv_label_create(s_empty_overlay);
-    }
-    lv_obj_clear_flag(s_empty_overlay, LV_OBJ_FLAG_HIDDEN);
-    if (!s_empty_label) s_empty_label = lv_label_create(s_empty_overlay);
-    lv_obj_set_style_text_color(s_empty_label, lv_color_hex(0xA0A0A0), 0);
-    lv_label_set_text(s_empty_label, u8"등원 예정 학생이 없습니다.");
-    lv_obj_center(s_empty_label);
+    append_empty_message();
+    append_refresh_button();
     return;
   }
-  // hide empty overlay when data is present
-  if (s_empty_overlay) lv_obj_add_flag(s_empty_overlay, LV_OBJ_FLAG_HIDDEN);
   for (JsonObject s : students) {
     const char* name = s["name"] | s["student_name"] | u8"학생";
     const char* sid = s.containsKey("student_id") ? (const char*)s["student_id"] : (s.containsKey("id") ? (const char*)s["id"] : "");
+    const char* school = s["school"] | "";
+    int grade = s["grade"] | 0;
     lv_obj_t* card = lv_obj_create(s_list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, 96);
@@ -790,10 +826,29 @@ void ui_port_update_students(const JsonArray& students) {
     lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
     lv_obj_set_style_border_width(card, 2, 0);
     lv_obj_set_style_pad_all(card, 14, 0);
+    lv_obj_set_style_pad_left(card, 21, 0);
     lv_obj_t* lbl = lv_label_create(card);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
+    if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
     lv_label_set_text(lbl, name);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, 180);
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    String meta;
+    if (school && *school) {
+      meta += school;
+    }
+    if (grade > 0) {
+      if (meta.length() > 0) meta += " ";
+      meta += String(grade) + u8"학년";
+    }
+    if (meta.length() > 0) {
+      lv_obj_t* meta_lbl = lv_label_create(card);
+      lv_obj_set_style_text_color(meta_lbl, lv_color_hex(0xA0A0A0), 0);
+      lv_obj_set_style_text_font(meta_lbl, &kakao_kr_16, 0);
+      lv_label_set_text(meta_lbl, meta.c_str());
+      lv_obj_align(meta_lbl, LV_ALIGN_RIGHT_MID, -6, 0);
+    }
     if (sid && *sid) {
       char* sid_copy = (char*)malloc(strlen(sid) + 1);
       if (sid_copy) {
@@ -809,6 +864,7 @@ void ui_port_update_students(const JsonArray& students) {
       }
     }
   }
+  append_refresh_button();
 }
 
 // Debounce: M5에서 연속 업데이트 시 충돌 방지 (300ms)

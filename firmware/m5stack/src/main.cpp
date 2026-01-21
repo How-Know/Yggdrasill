@@ -106,7 +106,7 @@ static void initLvgl() {
 
   // Root screen style: solid black, no radius
   lv_obj_t* scr = lv_scr_act();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(scr, 0, 0);
 
@@ -353,6 +353,15 @@ void fw_publish_check_update() {
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
+void fw_publish_list_today() {
+  DynamicJsonDocument cmd(64);
+  cmd["action"] = "list_today";
+  String payload; serializeJson(cmd, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  Serial.println("[MQTT] Requested list_today (manual)");
 }
 
 void setup() {

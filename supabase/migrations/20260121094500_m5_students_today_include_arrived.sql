@@ -1,6 +1,6 @@
--- Align M5 list_today with Flutter side-sheet "waiting" list.
--- Use attendance_records (planned/actual) instead of student_time_blocks,
--- apply override filtering, and exclude arrived/leaved.
+-- Include arrived students in M5 list (exclude only departed).
+
+drop function if exists public.m5_get_students_today_basic(uuid);
 
 create or replace function public.m5_get_students_today_basic(
   p_academy_id uuid
@@ -83,8 +83,6 @@ begin
     select r.*
     from ranked r
     where r.rn = 1
-      and r.arrival_time is null
-      and (r.is_present is null or r.is_present = false)
       and r.departure_time is null
   )
   select

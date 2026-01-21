@@ -1,6 +1,7 @@
--- Align M5 list_today with Flutter side-sheet "waiting" list.
--- Use attendance_records (planned/actual) instead of student_time_blocks,
--- apply override filtering, and exclude arrived/leaved.
+-- Refresh m5_get_students_today_basic to include school/grade.
+-- Note: this is a reapply migration; editing old files won't re-run.
+
+drop function if exists public.m5_get_students_today_basic(uuid);
 
 create or replace function public.m5_get_students_today_basic(
   p_academy_id uuid
