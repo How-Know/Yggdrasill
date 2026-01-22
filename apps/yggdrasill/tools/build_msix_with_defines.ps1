@@ -40,16 +40,22 @@ try{
   $m5Dir = Join-Path $repoRoot 'firmware\m5stack'
   if(Test-Path $m5Dir){
     Write-Host "[INFO] Building M5Stack firmware (PlatformIO)..." -ForegroundColor Cyan
+    $pioExe = $null
     $pioCmd = Get-Command pio -ErrorAction SilentlyContinue
-    if(-not $pioCmd){
+    if($pioCmd){ $pioExe = $pioCmd.Source }
+    if(-not $pioExe){
+      $guess = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
+      if(Test-Path $guess){ $pioExe = $guess }
+    }
+    if(-not $pioExe){
       if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){
-        Write-Host "[WARN] PlatformIO(pio)가 PATH에 없습니다. 기존 dist의 m5stack-core2_firmware.bin을 그대로 사용합니다." -ForegroundColor Yellow
+        Write-Host "[WARN] PlatformIO(pio)를 찾지 못했습니다. 기존 dist의 m5stack-core2_firmware.bin을 그대로 사용합니다." -ForegroundColor Yellow
       } else {
-        Write-Host "[WARN] PlatformIO(pio)가 PATH에 없습니다. M5Stack 펌웨어 빌드를 건너뜁니다." -ForegroundColor Yellow
+        Write-Host "[WARN] PlatformIO(pio)를 찾지 못했습니다. M5Stack 펌웨어 빌드를 건너뜁니다." -ForegroundColor Yellow
       }
     } else {
       Push-Location $m5Dir
-      pio run -e m5stack-core2 | Out-Host
+      & $pioExe run -e m5stack-core2 | Out-Host
       $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
       if(Test-Path $fw){
         $out = Join-Path $dist 'm5stack-core2_firmware.bin'
