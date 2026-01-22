@@ -1,15 +1,14 @@
-#ifndef VERSION_H
+﻿#ifndef VERSION_H
 #define VERSION_H
 
-// M5Stack 펌웨어 버전
-// GitHub Release 태그와 동기화해야 함
-#define FIRMWARE_VERSION "1.0.5.1"
+// M5Stack ?뚯썾??踰꾩쟾
+// GitHub Release ?쒓렇? ?숆린?뷀빐????#define FIRMWARE_VERSION "1.0.6.3"
 #define FIRMWARE_BUILD_DATE __DATE__
 #define FIRMWARE_BUILD_TIME __TIME__
 
-// GitHub 저장소 정보 (릴리스 확인용)
+// GitHub ??μ냼 ?뺣낫 (由대━???뺤씤??
 #ifndef GITHUB_OWNER
-#define GITHUB_OWNER "your-username"  // 빌드 시 -D로 주입 권장
+#define GITHUB_OWNER "your-username"  // 鍮뚮뱶 ??-D濡?二쇱엯 沅뚯옣
 #endif
 
 #ifndef GITHUB_REPO
@@ -17,4 +16,5 @@
 #endif
 
 #endif // VERSION_H
+
 
