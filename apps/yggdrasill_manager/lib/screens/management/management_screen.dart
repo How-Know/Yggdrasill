@@ -231,6 +231,7 @@ class _ManagementScreenState extends State<ManagementScreen> {
     final sep = Platform.pathSeparator;
     final docsReadme = '$docsRoot${sep}README.md';
     final docsModel = '$docsRoot${sep}model.md';
+    final docsPhilosophy = '$docsRoot${sep}philosophy.md';
     final docsTodo = '$docsRoot${sep}TODO.md';
     return Container(
       color: const Color(0xFF1F1F1F),
@@ -434,6 +435,17 @@ class _ManagementScreenState extends State<ManagementScreen> {
                                   onPressed: () => _openMarkdownViewer(title: '정의/근거', path: docsModel),
                                   icon: const Icon(Icons.account_tree_outlined),
                                   label: const Text('정의/근거', style: TextStyle(fontWeight: FontWeight.w800)),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    side: const BorderSide(color: Color(0xFF2A2A2A)),
+                                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: () => _openMarkdownViewer(title: '철학', path: docsPhilosophy),
+                                  icon: const Icon(Icons.auto_stories_outlined),
+                                  label: const Text('철학', style: TextStyle(fontWeight: FontWeight.w800)),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: Colors.white,
                                     side: const BorderSide(color: Color(0xFF2A2A2A)),
@@ -1266,6 +1278,7 @@ class _AssessmentStructurePage extends StatelessWidget {
     final tree = _buildTree();
     final readme = _docPath(['README.md']);
     final model = _docPath(['model.md']);
+    final philosophy = _docPath(['philosophy.md']);
 
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
@@ -1314,6 +1327,15 @@ class _AssessmentStructurePage extends StatelessWidget {
                       onPressed: () => _openDoc(context, '정의/근거', model),
                       icon: const Icon(Icons.account_tree_outlined),
                       label: const Text('정의/근거'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF2A2A2A)),
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _openDoc(context, '철학', philosophy),
+                      icon: const Icon(Icons.auto_stories_outlined),
+                      label: const Text('철학'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,
                         side: const BorderSide(color: Color(0xFF2A2A2A)),

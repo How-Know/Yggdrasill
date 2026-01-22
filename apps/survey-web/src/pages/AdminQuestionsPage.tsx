@@ -30,6 +30,8 @@ type QuestionDraft = {
   pairId?: string;
   active?: boolean;
   version?: number;
+  roundLabel?: string;
+  partIndex?: number | null;
 };
 
 type TraitRound = {
@@ -169,7 +171,21 @@ function ManageListDialog({ title, items, setItems, onClose }: { title: string; 
   );
 }
 type OptionItem = { label: string; value: string };
-function SelectPopup({ value, options, onChange, compact, dropUp }: { value: string; options: OptionItem[]; onChange: (v: string) => void; compact?: boolean; dropUp?: boolean }) {
+function SelectPopup({
+  value,
+  options,
+  onChange,
+  compact,
+  dropUp,
+  disabled,
+}: {
+  value: string;
+  options: OptionItem[];
+  onChange: (v: string) => void;
+  compact?: boolean;
+  dropUp?: boolean;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -190,6 +206,7 @@ function SelectPopup({ value, options, onChange, compact, dropUp }: { value: str
 
   function toggle() {
     if (!btnRef.current) return;
+    if (disabled) return;
     setRect(btnRef.current.getBoundingClientRect());
     setOpen((s) => !s);
   }
@@ -200,7 +217,18 @@ function SelectPopup({ value, options, onChange, compact, dropUp }: { value: str
   return (
     <>
       <button ref={btnRef} type="button" onClick={toggle}
-        style={{ width: '100%', height: compact ? 36 : 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, textAlign: 'left', padding: '0 12px', cursor: 'pointer', marginTop: compact ? 0 : 6 }}>
+        style={{
+          width: '100%',
+          height: compact ? 36 : 40,
+          background: disabled ? '#1B1B1D' : '#2A2A2A',
+          border: `1px solid ${tokens.border}`,
+          borderRadius: 8,
+          color: disabled ? tokens.textDim : tokens.text,
+          textAlign: 'left',
+          padding: '0 12px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          marginTop: compact ? 0 : 6,
+        }}>
         {label}
         <span style={{ float: 'right', opacity: 0.7 }}>▾</span>
       </button>
@@ -289,6 +317,8 @@ export default function AdminQuestionsPage() {
     if (patch.pairId !== undefined) out.pair_id = patch.pairId ?? null;
     if (patch.active !== undefined) out.is_active = !!patch.active;
     if (patch.version !== undefined) out.version = patch.version ?? null;
+    if (patch.roundLabel !== undefined) out.round_label = patch.roundLabel ?? null;
+    if (patch.partIndex !== undefined) out.part_index = patch.partIndex ?? null;
     return out;
   }
 
@@ -323,7 +353,7 @@ export default function AdminQuestionsPage() {
     (async () => {
       const { data } = await supabase
         .from(QUESTIONS_TABLE)
-        .select('id, area_id, group_id, trait, text, type, min_score, max_score, weight, reverse, tags, memo, image_url, pair_id, version, is_active')
+        .select('id, area_id, group_id, trait, text, type, min_score, max_score, weight, reverse, tags, memo, image_url, pair_id, version, is_active, round_label, part_index')
         .order('created_at', { ascending: true });
       if (data) {
         setItems((data as any[]).map(row => ({
@@ -343,6 +373,8 @@ export default function AdminQuestionsPage() {
           pairId: row.pair_id || undefined,
           version: typeof row.version === 'number' ? row.version : undefined,
           active: !!row.is_active,
+          roundLabel: row.round_label || undefined,
+          partIndex: typeof row.part_index === 'number' ? row.part_index : (row.part_index ?? undefined),
         })));
       }
     })();
@@ -367,15 +399,22 @@ export default function AdminQuestionsPage() {
   const [activeAreas, setActiveAreas] = useState<string[]>([]);
   const [activeGroups, setActiveGroups] = useState<string[]>([]);
   const [activeTraits, setActiveTraits] = useState<string[]>([]);
+  const [activeRounds, setActiveRounds] = useState<string[]>([]);
+  const [activeParts, setActiveParts] = useState<number[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
 
   // 회차/파트 설계
   const [roundOpen, setRoundOpen] = useState(false);
   const [rounds, setRounds] = useState<TraitRound[]>([]);
   const [roundParts, setRoundParts] = useState<TraitRoundPart[]>([]);
+  const [allRoundParts, setAllRoundParts] = useState<TraitRoundPart[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null);
   const [roundLoading, setRoundLoading] = useState(false);
   const [roundErr, setRoundErr] = useState<string | null>(null);
+  const [roundAddOpen, setRoundAddOpen] = useState(false);
+  const [partAddOpen, setPartAddOpen] = useState(false);
+  const [roundEditOpen, setRoundEditOpen] = useState(false);
+  const [partEditOpen, setPartEditOpen] = useState(false);
 
   const [newRoundName, setNewRoundName] = useState('');
   const [newRoundDesc, setNewRoundDesc] = useState('');
@@ -428,11 +467,39 @@ export default function AdminQuestionsPage() {
     }
   }
 
+  async function loadAllParts() {
+    try {
+      const { data, error } = await supabase
+        .from('trait_round_parts')
+        .select('id,round_id,name,description,image_url,order_index')
+        .order('order_index', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setAllRoundParts(((data as any[]) ?? []) as any);
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트를 불러오지 못했습니다.');
+    }
+  }
+
   useEffect(() => {
     if (!roundOpen) return;
     loadRounds();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundOpen]);
+
+  useEffect(() => {
+    loadRounds();
+    loadAllParts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function closeRoundDialogs() {
+    setRoundOpen(false);
+    setRoundAddOpen(false);
+    setPartAddOpen(false);
+    setRoundEditOpen(false);
+    setPartEditOpen(false);
+  }
 
   useEffect(() => {
     if (!roundOpen) return;
@@ -478,9 +545,17 @@ export default function AdminQuestionsPage() {
       setSelectedRoundId(String(row.id));
       setNewRoundName('');
       setNewRoundDesc('');
+      setRoundAddOpen(false);
     } catch (e: any) {
       setRoundErr(e?.message || '회차 추가 실패');
     }
+  }
+
+  function openRoundAdd() {
+    setRoundErr(null);
+    setNewRoundName('');
+    setNewRoundDesc('');
+    setRoundAddOpen(true);
   }
 
   function startEditRound(r: TraitRound) {
@@ -488,6 +563,12 @@ export default function AdminQuestionsPage() {
     setEditingRoundId(r.id);
     setEditingRoundName(r.name || '');
     setEditingRoundDesc(r.description || '');
+  }
+
+  function openRoundEdit(r: TraitRound) {
+    setRoundErr(null);
+    startEditRound(r);
+    setRoundEditOpen(true);
   }
 
   async function saveEditRound() {
@@ -502,6 +583,7 @@ export default function AdminQuestionsPage() {
         .eq('id', editingRoundId);
       if (error) throw error;
       setRounds((arr) => arr.map((x) => (x.id === editingRoundId ? { ...x, name: nextName, description: nextDesc } : x)));
+      setRoundEditOpen(false);
     } catch (e: any) {
       setRoundErr(e?.message || '회차 수정 실패');
     }
@@ -520,6 +602,7 @@ export default function AdminQuestionsPage() {
         setEditingRoundName('');
         setEditingRoundDesc('');
       }
+      setRoundEditOpen(false);
       setRoundParts([]);
     } catch (e: any) {
       setRoundErr(e?.message || '회차 삭제 실패');
@@ -556,15 +639,33 @@ export default function AdminQuestionsPage() {
       setRoundParts((arr) => [...arr, data as any]);
       setNewPartName('');
       setNewPartDesc('');
+      setPartAddOpen(false);
     } catch (e: any) {
       setRoundErr(e?.message || '파트 추가 실패');
     }
+  }
+
+  function openPartAdd() {
+    if (!selectedRoundId) {
+      setRoundErr('회차를 선택한 뒤 파트를 추가할 수 있어요.');
+      return;
+    }
+    setRoundErr(null);
+    setNewPartName('');
+    setNewPartDesc('');
+    setPartAddOpen(true);
   }
 
   function startEditPart(p: TraitRoundPart) {
     setEditingPartId(p.id);
     setEditingPartName(p.name || '');
     setEditingPartDesc(p.description || '');
+  }
+
+  function openPartEdit(p: TraitRoundPart) {
+    setRoundErr(null);
+    startEditPart(p);
+    setPartEditOpen(true);
   }
 
   async function saveEditPart() {
@@ -579,6 +680,7 @@ export default function AdminQuestionsPage() {
       setEditingPartId(null);
       setEditingPartName('');
       setEditingPartDesc('');
+      setPartEditOpen(false);
     } catch (e: any) {
       setRoundErr(e?.message || '파트 수정 실패');
     }
@@ -591,6 +693,12 @@ export default function AdminQuestionsPage() {
       const { error } = await supabase.from('trait_round_parts').delete().eq('id', id);
       if (error) throw error;
       setRoundParts((arr) => arr.filter((x) => x.id !== id));
+      if (editingPartId === id) {
+        setEditingPartId(null);
+        setEditingPartName('');
+        setEditingPartDesc('');
+        setPartEditOpen(false);
+      }
     } catch (e: any) {
       setRoundErr(e?.message || '파트 삭제 실패');
     }
@@ -635,13 +743,52 @@ export default function AdminQuestionsPage() {
   const [reportErr, setReportErr] = useState<string | null>(null);
   const [reportFiltersHash, setReportFiltersHash] = useState<string | null>(null);
   const [reportRuns, setReportRuns] = useState<any[]>([]);
+  const [importErr, setImportErr] = useState<string | null>(null);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const roundOrderMap = useMemo(() => {
+    const list = [...rounds].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+    const map: Record<string, number> = {};
+    list.forEach((r, i) => {
+      if (r.name) map[r.name] = i + 1;
+    });
+    return map;
+  }, [rounds]);
+
+  const roundOrderOf = (label?: string) => {
+    const raw = String(label || '').trim();
+    if (!raw) return Number.POSITIVE_INFINITY;
+    if (roundOrderMap[raw] != null) return roundOrderMap[raw];
+    const m = raw.match(/\d+/);
+    if (!m) return Number.POSITIVE_INFINITY;
+    const n = Number(m[0]);
+    return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+  };
 
   const visibleItems = useMemo(() => {
     return items
-      .filter((q)=> (activeAreas.length ? activeAreas.includes(q.area || '') : true))
-      .filter((q)=> (activeGroups.length ? activeGroups.includes(q.group || '') : true))
-      .filter((q)=> (activeTraits.length ? activeTraits.includes(q.trait) : true));
-  }, [items, activeAreas, activeGroups, activeTraits]);
+      .map((q, i) => ({ q, i }))
+      .filter(({ q }) => (activeAreas.length ? activeAreas.includes(q.area || '') : true))
+      .filter(({ q }) => (activeGroups.length ? activeGroups.includes(q.group || '') : true))
+      .filter(({ q }) => (activeTraits.length ? activeTraits.includes(q.trait) : true))
+      .filter(({ q }) => (activeRounds.length ? activeRounds.includes(q.roundLabel || '') : true))
+      .filter(({ q }) => {
+        if (!activeParts.length) return true;
+        return typeof q.partIndex === 'number' && activeParts.includes(q.partIndex);
+      })
+      .sort((a, b) => {
+        const ra = roundOrderOf(a.q.roundLabel);
+        const rb = roundOrderOf(b.q.roundLabel);
+        if (ra !== rb) return ra - rb;
+        const pa = typeof a.q.partIndex === 'number' ? a.q.partIndex : Number.POSITIVE_INFINITY;
+        const pb = typeof b.q.partIndex === 'number' ? b.q.partIndex : Number.POSITIVE_INFINITY;
+        if (pa !== pb) return pa - pb;
+        return a.i - b.i;
+      })
+      .map(({ q }) => q);
+  }, [items, activeAreas, activeGroups, activeTraits, activeRounds, activeParts]);
 
   const areaNameById = useMemo(() => {
     const m: Record<string, string> = {};
@@ -653,6 +800,54 @@ export default function AdminQuestionsPage() {
     for (const g of groups) m[g.id] = g.name;
     return m;
   }, [groups]);
+
+  const sortedRounds = useMemo(() => {
+    return [...rounds].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+  }, [rounds]);
+
+  const partListByRoundId = useMemo(() => {
+    const map: Record<string, TraitRoundPart[]> = {};
+    for (const p of allRoundParts) {
+      if (!map[p.round_id]) map[p.round_id] = [];
+      map[p.round_id].push(p);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+    }
+    return map;
+  }, [allRoundParts]);
+
+  const roundOptions = useMemo<OptionItem[]>(() => {
+    return [
+      { label: '선택', value: '' },
+      ...sortedRounds.map((r) => ({ label: r.name, value: r.name })),
+    ];
+  }, [sortedRounds]);
+
+  const roundFilterOptions = useMemo(() => {
+    return sortedRounds.map((r) => r.name).filter(Boolean);
+  }, [sortedRounds]);
+
+  const partFilterOptions = useMemo(() => {
+    const set = new Set<number>();
+    items.forEach((q) => {
+      if (typeof q.partIndex === 'number') set.add(q.partIndex);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [items]);
+
+  function getPartOptions(roundLabel?: string): OptionItem[] {
+    const name = String(roundLabel || '').trim();
+    if (!name) return [{ label: '선택', value: '' }];
+    const round = sortedRounds.find((r) => r.name === name);
+    if (!round) return [{ label: '선택', value: '' }];
+    const parts = partListByRoundId[round.id] ?? [];
+    const list = parts.map((p, idx) => ({
+      label: p.name || `파트 ${idx + 1}`,
+      value: String(idx + 1),
+    }));
+    return [{ label: '선택', value: '' }, ...list];
+  }
 
   const exportColumns = useMemo(() => {
     return [
@@ -705,6 +900,8 @@ export default function AdminQuestionsPage() {
       traits: [...activeTraits].sort(),
       area_ids: [...activeAreas].sort(),
       group_ids: [...activeGroups].sort(),
+      round_labels: [...activeRounds].sort(),
+      part_indexes: [...activeParts].sort((a, b) => a - b),
     };
     // 키 정렬
     const keys = Object.keys(payload).sort();
@@ -875,6 +1072,164 @@ export default function AdminQuestionsPage() {
     URL.revokeObjectURL(url);
     setExportOpen(false);
   }
+
+  async function importRoundPartXlsx(file: File) {
+    setImportErr(null);
+    setImportMsg(null);
+    setImportLoading(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) throw new Error('엑셀 시트를 찾을 수 없습니다.');
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }) as any[];
+      if (!rows.length) throw new Error('엑셀에 데이터가 없습니다.');
+
+      const normalize = (v: any) => String(v ?? '').trim();
+      const getField = (row: any, names: string[]) => {
+        for (const name of names) {
+          if (row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
+            return row[name];
+          }
+        }
+        return '';
+      };
+
+      const normalizeRoundLabel = (raw: any, sorted: TraitRound[]) => {
+        const text = normalize(raw);
+        if (!text) return '';
+        const direct = sorted.find((r) => r.name === text);
+        if (direct) return direct.name;
+        const m = text.match(/\d+/);
+        if (m) {
+          const n = Number(m[0]);
+          if (Number.isFinite(n) && sorted[n - 1]) return sorted[n - 1].name;
+        }
+        return text;
+      };
+
+      const parsePartIndex = (raw: any) => {
+        const text = normalize(raw);
+        if (!text) return null;
+        const n = Number(text);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      const roundList = rounds.length
+        ? [...rounds]
+        : (((await supabase
+            .from('trait_rounds')
+            .select('id,name,description,order_index,is_active')
+            .order('order_index', { ascending: true })
+            .order('created_at', { ascending: true })).data as any[]) ?? []);
+      const sorted = roundList.slice().sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+
+      const itemsById = new Map(items.map((q) => [q.id, q]));
+      const keyMap = new Map<string, QuestionDraft[]>();
+      const keyMapLite = new Map<string, QuestionDraft[]>();
+      const makeKey = (text: any, trait: any, type: any, reverse: any, pairId: any) => {
+        return [
+          normalize(text).toLowerCase(),
+          normalize(trait).toUpperCase(),
+          normalize(type).toLowerCase(),
+          normalize(reverse).toUpperCase(),
+          normalize(pairId).toUpperCase(),
+        ].join('|');
+      };
+      const pushMap = (map: Map<string, QuestionDraft[]>, key: string, item: QuestionDraft) => {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(item);
+      };
+      items.forEach((q) => {
+        pushMap(keyMap, makeKey(q.text, q.trait, q.type, q.reverse, q.pairId), q);
+        pushMap(keyMapLite, makeKey(q.text, q.trait, q.type, q.reverse, ''), q);
+      });
+
+      const updates: { id: string; round_label: string | null; part_index: number | null }[] = [];
+      const missing: number[] = [];
+      const ambiguous: number[] = [];
+
+      rows.forEach((row, i) => {
+        const rowNo = i + 2;
+        const idRaw = normalize(getField(row, ['문항 ID', '문항ID', 'question_id', 'id', 'ID']));
+        let target: QuestionDraft | undefined;
+        if (idRaw && itemsById.has(idRaw)) {
+          target = itemsById.get(idRaw);
+        } else {
+          const text = getField(row, ['내용', 'text', '문항']);
+          const trait = getField(row, ['성향', 'trait']);
+          const type = getField(row, ['평가 타입', 'type']);
+          const reverse = getField(row, ['역문항', 'reverse']);
+          const pairId = getField(row, ['페어 ID', 'pair_id', 'pairId']);
+          const key = makeKey(text, trait, type, reverse, pairId);
+          const hit = keyMap.get(key);
+          if (hit && hit.length === 1) {
+            target = hit[0];
+          } else {
+            const keyLite = makeKey(text, trait, type, reverse, '');
+            const hitLite = keyMapLite.get(keyLite);
+            if (hitLite && hitLite.length === 1) target = hitLite[0];
+            else if ((hit && hit.length > 1) || (hitLite && hitLite.length > 1)) ambiguous.push(rowNo);
+          }
+        }
+        if (!target) {
+          if (!ambiguous.includes(rowNo)) missing.push(rowNo);
+          return;
+        }
+        const roundLabelRaw = getField(row, ['회차', 'round', 'round_label']);
+        const partRaw = getField(row, ['파트', 'part', 'part_index']);
+        const roundLabel = normalizeRoundLabel(roundLabelRaw, sorted);
+        const partIndex = roundLabel ? parsePartIndex(partRaw) : null;
+        updates.push({
+          id: target.id,
+          round_label: roundLabel || null,
+          part_index: partIndex ?? null,
+        });
+      });
+
+      if (!updates.length) {
+        throw new Error('엑셀에서 매칭된 문항이 없습니다.');
+      }
+
+      const chunkSize = 50;
+      for (let i = 0; i < updates.length; i += chunkSize) {
+        const chunk = updates.slice(i, i + chunkSize);
+        const results = await Promise.all(
+          chunk.map((u) =>
+            supabase
+              .from(QUESTIONS_TABLE)
+              .update({ round_label: u.round_label, part_index: u.part_index })
+              .eq('id', u.id)
+          )
+        );
+        const err = results.find((r) => r.error)?.error;
+        if (err) throw err;
+      }
+
+      const updateMap = new Map(updates.map((u) => [u.id, u]));
+      setItems((prev) =>
+        prev.map((q) => {
+          const u = updateMap.get(q.id);
+          if (!u) return q;
+          return {
+            ...q,
+            roundLabel: u.round_label || undefined,
+            partIndex: u.part_index ?? null,
+          };
+        })
+      );
+
+      const warn = [
+        missing.length ? `미매칭 ${missing.length}건` : null,
+        ambiguous.length ? `중복매칭 ${ambiguous.length}건` : null,
+      ].filter(Boolean).join(' · ');
+      setImportMsg(`업데이트 완료: ${updates.length}건${warn ? ` (${warn})` : ''}`);
+    } catch (e: any) {
+      setImportErr(e?.message || '일괄 업데이트 실패');
+    } finally {
+      setImportLoading(false);
+    }
+  }
   async function logChange(questionId: string, action: string, fromValue: any, toValue: any) {
     try {
       await supabase.from('question_change_logs').insert({ question_id: questionId, action, from_value: JSON.stringify(fromValue), to_value: JSON.stringify(toValue) });
@@ -916,41 +1271,51 @@ export default function AdminQuestionsPage() {
         <div style={{ flex: 1 }} />
         <ToolbarButton onClick={async () => { setReportErr(null); setReportOpen(true); try { const filters = canonicalizeFilters(); const h = await sha256Hex(JSON.stringify(filters)); setReportFiltersHash(h); await refreshRuns(h); } catch (e:any) { setReportErr(e?.message || String(e)); } }}>리포트</ToolbarButton>
         <ToolbarButton onClick={() => { setExportErr(null); setExportOpen(true); }}>엑셀로 내보내기</ToolbarButton>
+        <ToolbarButton onClick={() => { setImportErr(null); setImportMsg(null); importInputRef.current?.click(); }}>
+          {importLoading ? '업데이트 중...' : '엑셀로 가져오기'}
+        </ToolbarButton>
         <ToolbarButton onClick={() => { resetDraft(); setAddQOpen(true); }}>추가</ToolbarButton>
       </div>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.currentTarget.value = '';
+          if (!file) return;
+          importRoundPartXlsx(file);
+        }}
+      />
+      {importErr && <div style={{ marginBottom: 8, color: '#ff8686', fontSize: 12 }}>{importErr}</div>}
+      {importMsg && <div style={{ marginBottom: 8, color: tokens.textDim, fontSize: 12 }}>{importMsg}</div>}
 
       {roundOpen && (
         <Modal
           title="회차 설계"
           width={920}
-          onClose={() => setRoundOpen(false)}
+          onClose={closeRoundDialogs}
           actions={<>
-            <button onClick={() => setRoundOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>닫기</button>
+            <button onClick={closeRoundDialogs} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>닫기</button>
           </>}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div>
                 <div style={{ fontWeight: 900 }}>회차/파트 설계</div>
-                <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2 }}>1) 회차 편집 → 2) 회차 선택 후 파트 편집</div>
+                <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2 }}>회차를 선택하면 오른쪽에서 파트를 확인합니다.</div>
               </div>
-              {roundErr && <div style={{ color: '#ff8686', fontSize: 12 }}>{roundErr}</div>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button onClick={openRoundAdd} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>회차 추가</button>
+                <button onClick={openPartAdd} disabled={!selectedRoundId} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: selectedRoundId ? tokens.panel : '#1B1B1D', color: selectedRoundId ? tokens.text : tokens.textDim, cursor: selectedRoundId ? 'pointer' : 'not-allowed' }}>파트 추가</button>
+              </div>
             </div>
+            {roundErr && <div style={{ color: '#ff8686', fontSize: 12 }}>{roundErr}</div>}
 
             <div style={{ maxHeight: '72vh', overflow: 'auto', paddingRight: 4 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 320px) 1fr', gap: 14 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
-                    <div style={{ fontWeight: 800, marginBottom: 8 }}>새 회차</div>
-                    <input value={newRoundName} onChange={(e)=>setNewRoundName(e.target.value)} placeholder="회차 이름"
-                           style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
-                    <textarea value={newRoundDesc} onChange={(e)=>setNewRoundDesc(e.target.value)} placeholder="회차 설명(선택)" rows={2}
-                              style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                      <button onClick={addRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>회차 추가</button>
-                    </div>
-                  </div>
-
                   <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                       <div style={{ fontWeight: 800 }}>회차 목록</div>
@@ -969,7 +1334,7 @@ export default function AdminQuestionsPage() {
                             onDragStart={()=>setDragRoundIdx(idx)}
                             onDragOver={(e)=>e.preventDefault()}
                             onDrop={()=>{ if (dragRoundIdx !== null) reorderRounds(dragRoundIdx, idx); setDragRoundIdx(null); }}
-                            onClick={()=>startEditRound(r)}
+                            onClick={()=>setSelectedRoundId(r.id)}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
@@ -988,6 +1353,12 @@ export default function AdminQuestionsPage() {
                                 <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.description}</div>
                               ) : null}
                             </div>
+                            <button
+                              onClick={(e)=>{ e.stopPropagation(); openRoundEdit(r); }}
+                              style={{ padding: '6px 10px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}
+                            >
+                              편집
+                            </button>
                           </div>
                         ))
                       )}
@@ -998,104 +1369,152 @@ export default function AdminQuestionsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {!selectedRoundId ? (
                     <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 16, color: tokens.textDim }}>
-                      회차를 선택하면 파트를 편집할 수 있어요.
+                      회차를 선택하면 파트 목록이 표시됩니다.
                     </div>
                   ) : (
-                    <>
-                      <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <div style={{ fontWeight: 800 }}>회차 편집</div>
-                          {selectedRound?.id ? <div style={{ color: tokens.textDim, fontSize: 11 }}>ID {selectedRound.id}</div> : null}
-                        </div>
-                        <input value={editingRoundName} onChange={(e)=>setEditingRoundName(e.target.value)} placeholder="회차 이름"
-                               style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
-                        <textarea value={editingRoundDesc} onChange={(e)=>setEditingRoundDesc(e.target.value)} placeholder="회차 설명(선택)" rows={2}
-                                  style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-                          <button onClick={saveEditRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>저장</button>
-                          <button onClick={() => selectedRoundId && deleteRound(selectedRoundId)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: '#ff8686', cursor: 'pointer' }}>삭제</button>
+                    <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <div style={{ fontWeight: 800 }}>파트 목록</div>
+                        <div style={{ color: tokens.textDim, fontSize: 12 }}>
+                          {selectedRound?.name ? `${selectedRound.name} · ` : ''}{roundParts.length}개
                         </div>
                       </div>
 
-                      <div style={{ background: '#141416', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <div style={{ fontWeight: 800 }}>파트 편집</div>
-                          <div style={{ color: tokens.textDim, fontSize: 12 }}>{roundParts.length}개</div>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-                          <input value={newPartName} onChange={(e)=>setNewPartName(e.target.value)} placeholder="파트 이름"
-                                 style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
-                          <button onClick={addPart} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>파트 추가</button>
-                        </div>
-                        <textarea value={newPartDesc} onChange={(e)=>setNewPartDesc(e.target.value)} placeholder="파트 설명(선택)" rows={2}
-                                  style={{ width:'100%', marginTop: 8, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
-
-                        <div style={{ border:`1px solid ${tokens.border}`, borderRadius: 10, marginTop: 10, padding: 8, display:'flex', flexDirection:'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
-                          {roundParts.length === 0 ? (
-                            <div style={{ padding: 10, color: tokens.textDim }}>파트가 없습니다.</div>
-                          ) : (
-                            roundParts.map((p, idx) => (
-                              <div
-                                key={p.id}
-                                draggable
-                                onDragStart={()=>setDragPartIdx(idx)}
-                                onDragOver={(e)=>e.preventDefault()}
-                                onDrop={()=>{ if (dragPartIdx !== null) reorderParts(dragPartIdx, idx); setDragPartIdx(null); }}
-                                style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
-                              >
-                                <div style={{ display:'grid', gridTemplateColumns:'24px 1fr 220px', gap: 10, alignItems:'start' }}>
-                                  <div style={{ opacity: 0.8 }}><DragHandle /></div>
-                                  <div style={{ minWidth: 0 }}>
-                                    {editingPartId === p.id ? (
-                                      <>
-                                        <input value={editingPartName} onChange={(e)=>setEditingPartName(e.target.value)}
-                                               style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.text, padding:'0 10px', boxSizing:'border-box' }} />
-                                        <textarea value={editingPartDesc} onChange={(e)=>setEditingPartDesc(e.target.value)} rows={2}
-                                                  style={{ width:'100%', marginTop: 6, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.text, padding:10, boxSizing:'border-box' }} />
-                                      </>
-                                    ) : (
-                                      <>
-                                        <div style={{ fontWeight: 800 }}>{p.name}</div>
-                                        {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
-                                        {p.image_url ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.image_url}</div> : null}
-                                      </>
-                                    )}
+                      <div style={{ border:`1px solid ${tokens.border}`, borderRadius: 10, padding: 8, display:'flex', flexDirection:'column', gap: 8, maxHeight: 520, overflowY: 'auto' }}>
+                        {roundParts.length === 0 ? (
+                          <div style={{ padding: 10, color: tokens.textDim }}>파트가 없습니다.</div>
+                        ) : (
+                          roundParts.map((p, idx) => (
+                            <div
+                              key={p.id}
+                              draggable
+                              onDragStart={()=>setDragPartIdx(idx)}
+                              onDragOver={(e)=>e.preventDefault()}
+                              onDrop={()=>{ if (dragPartIdx !== null) reorderParts(dragPartIdx, idx); setDragPartIdx(null); }}
+                              style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
+                            >
+                              <div style={{ display:'grid', gridTemplateColumns:'24px 1fr 220px', gap: 10, alignItems:'start' }}>
+                                <div style={{ opacity: 0.8 }}><DragHandle /></div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 800 }}>{p.name}</div>
+                                  {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
+                                  {p.image_url ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.image_url}</div> : null}
+                                </div>
+                                <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+                                  <div
+                                    onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) uploadPartImage(p.id, file); }}
+                                    onDragOver={(e)=>e.preventDefault()}
+                                    onClick={async()=>{ if (p.image_url) { await supabase.from('trait_round_parts').update({ image_url: null }).eq('id', p.id); setRoundParts(arr=>arr.map(x=>x.id===p.id?{...x,image_url:null}:x)); } }}
+                                    title={p.image_url ? '클릭하여 이미지 제거' : '이미지 드롭하여 등록'}
+                                    style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
+                                  >
+                                    {p.image_url ? '이미지 ✔ (클릭=제거)' : '이미지 드롭'}
                                   </div>
-                                  <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
-                                    <div
-                                      onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) uploadPartImage(p.id, file); }}
-                                      onDragOver={(e)=>e.preventDefault()}
-                                      onClick={async()=>{ if (p.image_url) { await supabase.from('trait_round_parts').update({ image_url: null }).eq('id', p.id); setRoundParts(arr=>arr.map(x=>x.id===p.id?{...x,image_url:null}:x)); } }}
-                                      title={p.image_url ? '클릭하여 이미지 제거' : '이미지 드롭하여 등록'}
-                                      style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
-                                    >
-                                      {p.image_url ? '이미지 ✔ (클릭=제거)' : '이미지 드롭'}
-                                    </div>
-                                    <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
-                                      {editingPartId === p.id ? (
-                                        <>
-                                          <button onClick={saveEditPart} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>저장</button>
-                                          <button onClick={()=>{ setEditingPartId(null); setEditingPartName(''); setEditingPartDesc(''); }} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color: tokens.textDim, cursor:'pointer' }}>취소</button>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <button onClick={()=>startEditPart(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>수정</button>
-                                          <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
-                                        </>
-                                      )}
-                                    </div>
+                                  <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
+                                    <button onClick={()=>openPartEdit(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>편집</button>
+                                    <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
                                   </div>
                                 </div>
                               </div>
-                            ))
-                          )}
-                        </div>
+                            </div>
+                          ))
+                        )}
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
               </div>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {roundAddOpen && (
+        <Modal
+          title="회차 추가"
+          width={520}
+          onClose={() => setRoundAddOpen(false)}
+          actions={<>
+            <button onClick={() => setRoundAddOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>취소</button>
+            <button onClick={addRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 900 }}>추가</button>
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ color: tokens.textDim, fontSize: 13 }}>회차 이름</label>
+            <input value={newRoundName} onChange={(e)=>setNewRoundName(e.target.value)} placeholder="회차 이름"
+                   style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>회차 설명(선택)</label>
+            <textarea value={newRoundDesc} onChange={(e)=>setNewRoundDesc(e.target.value)} placeholder="회차 설명" rows={3}
+                      style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+          </div>
+        </Modal>
+      )}
+
+      {roundEditOpen && (
+        <Modal
+          title="회차 편집"
+          width={520}
+          onClose={() => setRoundEditOpen(false)}
+          actions={<>
+            <button onClick={() => setRoundEditOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>취소</button>
+            <button onClick={saveEditRound} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 900 }}>저장</button>
+            {editingRoundId && (
+              <button onClick={() => deleteRound(editingRoundId)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: '#ff8686', cursor: 'pointer' }}>삭제</button>
+            )}
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ color: tokens.textDim, fontSize: 13 }}>회차 이름</label>
+            <input value={editingRoundName} onChange={(e)=>setEditingRoundName(e.target.value)} placeholder="회차 이름"
+                   style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>회차 설명(선택)</label>
+            <textarea value={editingRoundDesc} onChange={(e)=>setEditingRoundDesc(e.target.value)} placeholder="회차 설명" rows={3}
+                      style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+          </div>
+        </Modal>
+      )}
+
+      {partAddOpen && (
+        <Modal
+          title="파트 추가"
+          width={520}
+          onClose={() => setPartAddOpen(false)}
+          actions={<>
+            <button onClick={() => setPartAddOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>취소</button>
+            <button onClick={addPart} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 900 }}>추가</button>
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ color: tokens.textDim, fontSize: 13 }}>파트 이름</label>
+            <input value={newPartName} onChange={(e)=>setNewPartName(e.target.value)} placeholder="파트 이름"
+                   style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>파트 설명(선택)</label>
+            <textarea value={newPartDesc} onChange={(e)=>setNewPartDesc(e.target.value)} placeholder="파트 설명" rows={3}
+                      style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+          </div>
+        </Modal>
+      )}
+
+      {partEditOpen && (
+        <Modal
+          title="파트 편집"
+          width={520}
+          onClose={() => setPartEditOpen(false)}
+          actions={<>
+            <button onClick={() => setPartEditOpen(false)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>취소</button>
+            <button onClick={saveEditPart} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 900 }}>저장</button>
+            {editingPartId && (
+              <button onClick={() => deletePart(editingPartId)} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: '#ff8686', cursor: 'pointer' }}>삭제</button>
+            )}
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ color: tokens.textDim, fontSize: 13 }}>파트 이름</label>
+            <input value={editingPartName} onChange={(e)=>setEditingPartName(e.target.value)} placeholder="파트 이름"
+                   style={{ width: '100%', height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>파트 설명(선택)</label>
+            <textarea value={editingPartDesc} onChange={(e)=>setEditingPartDesc(e.target.value)} placeholder="파트 설명" rows={3}
+                      style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
           </div>
         </Modal>
       )}
@@ -1286,6 +1705,34 @@ export default function AdminQuestionsPage() {
               );
             })}
           </div>
+          <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 12, marginBottom: 8 }}>회차</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {roundFilterOptions.length === 0 ? (
+              <div style={{ color: tokens.textDim, fontSize: 12 }}>회차가 없습니다.</div>
+            ) : (
+              roundFilterOptions.map((name) => {
+                const on = activeRounds.includes(name);
+                return (
+                  <button key={name} onClick={()=> setActiveRounds(on ? activeRounds.filter(x=>x!==name) : [...activeRounds, name])}
+                          style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${tokens.border}`, background: on ? tokens.accent : 'transparent', color: on ? '#fff' : tokens.text, cursor: 'pointer' }}>{name}</button>
+                );
+              })
+            )}
+          </div>
+          <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 12, marginBottom: 8 }}>파트</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {partFilterOptions.length === 0 ? (
+              <div style={{ color: tokens.textDim, fontSize: 12 }}>파트가 없습니다.</div>
+            ) : (
+              partFilterOptions.map((p) => {
+                const on = activeParts.includes(p);
+                return (
+                  <button key={p} onClick={()=> setActiveParts(on ? activeParts.filter(x=>x!==p) : [...activeParts, p])}
+                          style={{ padding: '6px 10px', borderRadius: 999, border: `1px solid ${tokens.border}`, background: on ? tokens.accent : 'transparent', color: on ? '#fff' : tokens.text, cursor: 'pointer' }}>{`파트 ${p}`}</button>
+                );
+              })
+            )}
+          </div>
           <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 12, marginBottom: 8 }}>성향</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {(['D','I','A','C','N','L','S','P'] as const).map((t) => {
@@ -1300,8 +1747,8 @@ export default function AdminQuestionsPage() {
       )}
 
       <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, overflowX: 'hidden', width: '100%', margin: '0 auto 48px' }}>
-        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
-          <div style={{ textAlign:'right', paddingRight:4 }}>번호</div><div>영역</div><div>그룹</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center', paddingRight: 4 }}>활성화</div>
+        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
+          <div style={{ textAlign:'right', paddingRight:4 }}>번호</div><div>영역</div><div>그룹</div><div>회차</div><div>파트</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center', paddingRight: 4 }}>활성화</div>
         </div>
         {items.length === 0 ? (
           <div style={{ padding: 16, color: tokens.textDim }}>아직 문항이 없습니다. 우측 상단의 ‘추가’를 눌러 문항을 만들어 보세요.</div>
@@ -1309,7 +1756,7 @@ export default function AdminQuestionsPage() {
           visibleItems.map((q, idx, arr) => {
               const isLast5 = (arr.length - idx) <= 5;
               return (
-            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
+            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
               <div style={{ color: tokens.textDim, textAlign:'right', paddingRight:4 }}>{idx + 1}</div>
               <div>
                 <SelectPopup compact dropUp={isLast5} value={q.area || ''} options={areas.map(a=>({label:a.name, value:a.id}))}
@@ -1318,6 +1765,31 @@ export default function AdminQuestionsPage() {
               <div>
                 <SelectPopup compact dropUp={isLast5} value={q.group || ''} options={groups.map(g=>({label:g.name, value:g.id}))}
                   onChange={(v)=>saveField(q.id, { group: v })} />
+              </div>
+              <div>
+                <SelectPopup
+                  compact
+                  dropUp={isLast5}
+                  value={q.roundLabel || ''}
+                  options={roundOptions}
+                  onChange={(v)=>{
+                    const next = v || '';
+                    saveField(q.id, { roundLabel: next || undefined, partIndex: null });
+                  }}
+                />
+              </div>
+              <div>
+                <SelectPopup
+                  compact
+                  dropUp={isLast5}
+                  value={typeof q.partIndex === 'number' ? String(q.partIndex) : ''}
+                  options={getPartOptions(q.roundLabel)}
+                  disabled={!q.roundLabel}
+                  onChange={(v)=>{
+                    const next = v ? Number(v) : null;
+                    saveField(q.id, { partIndex: next });
+                  }}
+                />
               </div>
               <div>
                 <SelectPopup compact dropUp={isLast5} value={q.trait} options={traitOptions}

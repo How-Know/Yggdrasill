@@ -10,6 +10,31 @@ type TraitQuestion = {
   min?: number|null;
   max?: number|null;
   image_url?: string|null;
+  round_label?: string|null;
+  part_index?: number|null;
+};
+
+type TraitRound = {
+  id: string;
+  name: string;
+  description?: string | null;
+  order_index?: number | null;
+  is_active?: boolean | null;
+};
+
+type TraitRoundPart = {
+  id: string;
+  round_id: string;
+  name: string;
+  description?: string | null;
+  image_url?: string | null;
+  order_index?: number | null;
+};
+
+type NormalizedQuestion = TraitQuestion & {
+  round_no: number;
+  part_no: number;
+  order_index: number;
 };
 
 function getClientId(): string {
@@ -67,6 +92,23 @@ function resolveImageUrl(raw: string | null | undefined): string | null {
   return data.publicUrl || v;
 }
 
+function parseRoundNo(value: unknown): number | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const m = raw.match(/\d+/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parsePartNo(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [questions, setQuestions] = useState<TraitQuestion[]>([]);
   const [idx, setIdx] = useState(0);
@@ -84,6 +126,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [imgErr, setImgErr] = useState<string | null>(null);
   const [maxVisitedIndex, setMaxVisitedIndex] = useState(0);
   const [needAnswerOpen, setNeedAnswerOpen] = useState(false);
+  const [rounds, setRounds] = useState<TraitRound[]>([]);
+  const [roundParts, setRoundParts] = useState<TraitRoundPart[]>([]);
+  const [activeRound, setActiveRound] = useState<number | null>(null);
+  const [answersLoaded, setAnswersLoaded] = useState(false);
+  const [seenParts, setSeenParts] = useState<Record<string, boolean>>({});
+  const [partIntroOpen, setPartIntroOpen] = useState(false);
   const clientId = getClientId();
   const [reloadKey, setReloadKey] = useState(0);
   const sbCfg = getSupabaseConfig();
@@ -101,6 +149,24 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
   useEffect(() => {
     (async () => {
+      if (!hasSupabaseEnv) return;
+      try {
+        const { data: roundData, error: roundErr } = await supabase.rpc('list_trait_rounds_public');
+        if (!roundErr && Array.isArray(roundData)) {
+          setRounds(roundData as TraitRound[]);
+        }
+        const { data: partData, error: partErr } = await supabase.rpc('list_trait_round_parts_public');
+        if (!partErr && Array.isArray(partData)) {
+          setRoundParts(partData as TraitRoundPart[]);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [hasSupabaseEnv]);
+
+  useEffect(() => {
+    (async () => {
       setLoading(true);
       if (!hasSupabaseEnv) {
         setQuestions([]);
@@ -114,7 +180,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       }
       const { data, error } = await supabase
         .from('questions')
-        .select('id, trait, text, type, min_score, max_score, image_url')
+        .select('id, trait, text, type, min_score, max_score, image_url, round_label, part_index')
         .eq('is_active', true)
         .order('created_at', { ascending: true });
       if (error) {
@@ -123,9 +189,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       }
       const list = (data || []).map((r: any) => ({
         id: r.id, trait: r.trait, text: r.text, type: r.type,
-        min: r.min_score, max: r.max_score, image_url: r.image_url
+        min: r.min_score, max: r.max_score, image_url: r.image_url,
+        round_label: r.round_label, part_index: r.part_index,
       })) as TraitQuestion[];
       setQuestions(list);
+      setActiveRound(null);
       setIdx(0); setScaleValue(null); setTextValue(''); setMaxVisitedIndex(0);
       setLoading(false);
     })();
@@ -150,16 +218,18 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
   // ✅ 앱(WebView) 플로우: 학생(sid=uuid) 기준으로 진행상태를 불러와 이어하기
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      if (!hasSupabaseEnv) return;
+      setAnswersLoaded(false);
+      if (!hasSupabaseEnv) { if (!cancelled) setAnswersLoaded(true); return; }
       const sid = participantInfo.sid;
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
-      if (!isUuid) return;
+      if (!isUuid) { if (!cancelled) setAnswersLoaded(true); return; }
 
       try {
         // ✅ participant row가 없으면 먼저 생성(또는 캐시 사용)
         const pid = await ensureParticipantId();
-        if (!pid) return;
+        if (!pid) { if (!cancelled) setAnswersLoaded(true); return; }
 
         // response를 항상 동일하게(1명=1응답) 가져와서 답변을 불러온다.
         const { data: rid, error: re } = await supabase.rpc('get_or_create_trait_response', {
@@ -169,6 +239,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         } as any);
         if (re || !rid) {
           console.error(re);
+          if (!cancelled) setAnswersLoaded(true);
           return;
         }
         const rId = String(rid);
@@ -177,6 +248,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         const { data: rows, error: ae } = await supabase.rpc('list_trait_answers', { p_response_id: rId } as any);
         if (ae) {
           console.error(ae);
+          if (!cancelled) setAnswersLoaded(true);
           return;
         }
         const map: Record<string, number | string> = {};
@@ -188,13 +260,125 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         setAnswers(map);
       } catch (e) {
         console.error(e);
+      } finally {
+        if (!cancelled) setAnswersLoaded(true);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
   }, [hasSupabaseEnv, participantInfo.sid, slug]);
 
+  const hasAnswer = (qid: string) => {
+    const v = answers[qid];
+    if (v == null) return false;
+    if (typeof v === 'string') return v.trim().length > 0;
+    return true;
+  };
+
+  const normalizedQuestions = useMemo(() => {
+    return questions.map((q, orderIndex) => {
+      const roundNo = parseRoundNo(q.round_label) ?? 1;
+      const partNo = parsePartNo(q.part_index) ?? 1;
+      return { ...q, round_no: roundNo, part_no: partNo, order_index: orderIndex };
+    });
+  }, [questions]);
+
+  const hasRoundData = useMemo(() => {
+    return questions.some((q) => String(q.round_label ?? '').trim().length > 0);
+  }, [questions]);
+
+  const hasPartData = useMemo(() => {
+    return questions.some((q) => q.part_index != null && String(q.part_index).trim().length > 0);
+  }, [questions]);
+
+  const roundQuestionsByNo = useMemo(() => {
+    const map: Record<number, NormalizedQuestion[]> = {};
+    for (const q of normalizedQuestions) {
+      if (!map[q.round_no]) map[q.round_no] = [];
+      map[q.round_no].push(q);
+    }
+    for (const key of Object.keys(map)) {
+      const list = map[Number(key)];
+      list.sort((a, b) => {
+        if (a.part_no !== b.part_no) return a.part_no - b.part_no;
+        return a.order_index - b.order_index;
+      });
+    }
+    return map;
+  }, [normalizedQuestions]);
+
+  const roundNos = useMemo(() => {
+    return Object.keys(roundQuestionsByNo).map(Number).sort((a, b) => a - b);
+  }, [roundQuestionsByNo]);
+
   useEffect(() => {
-    const q = questions[idx];
+    if (activeRound != null) return;
+    if (!answersLoaded || normalizedQuestions.length === 0) return;
+    if (!hasRoundData || roundNos.length <= 1) {
+      setActiveRound(roundNos[0] ?? 1);
+      return;
+    }
+    const round1 = roundQuestionsByNo[1] ?? roundQuestionsByNo[roundNos[0]];
+    const round2 = roundQuestionsByNo[2] ?? roundQuestionsByNo[roundNos[1]];
+    const round1Complete = !!round1?.length && round1.every((q) => hasAnswer(q.id));
+    const nextRound = round1Complete && round2?.length ? 2 : 1;
+    setActiveRound(nextRound);
+  }, [activeRound, answersLoaded, normalizedQuestions.length, hasRoundData, roundNos, roundQuestionsByNo, answers]);
+
+  useEffect(() => {
+    setSeenParts({});
+    setPartIntroOpen(false);
+    setIdx(0);
+    setMaxVisitedIndex(0);
+  }, [activeRound]);
+
+  const activeQuestions = useMemo(() => {
+    if (activeRound == null) return [] as NormalizedQuestion[];
+    return roundQuestionsByNo[activeRound] ?? [];
+  }, [activeRound, roundQuestionsByNo]);
+
+  const current = activeQuestions[idx];
+
+  const sortedRounds = useMemo(() => {
+    return [...rounds].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+  }, [rounds]);
+
+  const roundPartsByRoundId = useMemo(() => {
+    const map: Record<string, TraitRoundPart[]> = {};
+    for (const p of roundParts) {
+      if (!map[p.round_id]) map[p.round_id] = [];
+      map[p.round_id].push(p);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+    }
+    return map;
+  }, [roundParts]);
+
+  const currentRoundMeta = useMemo(() => {
+    if (activeRound == null) return null;
+    return sortedRounds[activeRound - 1] ?? null;
+  }, [activeRound, sortedRounds]);
+
+  const currentRoundParts = useMemo(() => {
+    if (!currentRoundMeta) return [];
+    return roundPartsByRoundId[currentRoundMeta.id] ?? [];
+  }, [currentRoundMeta, roundPartsByRoundId]);
+
+  const currentPartNo = current?.part_no ?? 1;
+  const currentPartMeta = useMemo(() => {
+    if (!currentRoundParts.length) return null;
+    const idx = Math.max(0, currentPartNo - 1);
+    return currentRoundParts[idx] ?? null;
+  }, [currentRoundParts, currentPartNo]);
+
+  const currentRoundLabel = currentRoundMeta?.name ?? (activeRound ? `${activeRound}차` : '');
+  const currentPartLabel = currentPartMeta?.name ?? (currentPartNo ? `파트 ${currentPartNo}` : '');
+
+  useEffect(() => {
+    const q = activeQuestions[idx];
     if (!q) return;
     setImgLoaded(false);
     setImgErr(null);
@@ -207,9 +391,22 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       setTextValue(typeof prev === 'string' ? (prev as string) : '');
       setScaleValue(null);
     }
-  }, [idx, questions]);
+  }, [idx, activeQuestions, answers]);
 
-  const current = questions[idx];
+  const partKey = current ? `${activeRound ?? 0}:${currentPartNo}` : '';
+  const isFirstOfPart = !!current && (idx === 0 || activeQuestions[idx - 1]?.part_no !== currentPartNo);
+
+  useEffect(() => {
+    if (!current || !hasPartData || !activeQuestions.length) {
+      setPartIntroOpen(false);
+      return;
+    }
+    if (isFirstOfPart && partKey && !seenParts[partKey]) {
+      setPartIntroOpen(true);
+      return;
+    }
+    setPartIntroOpen(false);
+  }, [current, hasPartData, activeQuestions.length, isFirstOfPart, partKey, seenParts]);
 
   async function ensureParticipantId(): Promise<string | null> {
     if (participantId) return participantId;
@@ -300,7 +497,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     if (!isAnswered) { setNeedAnswerOpen(true); return; }
     const ok = await saveCurrentAnswer();
     if (!ok) return;
-    if (idx + 1 < questions.length) {
+    if (idx + 1 < activeQuestions.length) {
       const nextIdx = idx + 1;
       setIdx(nextIdx);
       setMaxVisitedIndex((m) => Math.max(m, nextIdx));
@@ -315,13 +512,13 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
 
   // answers가 로드된 뒤, 첫 미응답 문항으로 자동 이동(이어하기)
   useEffect(() => {
-    if (!questions.length) return;
-    const firstUnanswered = questions.findIndex((q) => answers[q.id] == null || (typeof answers[q.id] === 'string' && String(answers[q.id]).trim() === ''));
-    const nextIdx = firstUnanswered >= 0 ? firstUnanswered : Math.max(0, questions.length - 1);
+    if (!activeQuestions.length) return;
+    const firstUnanswered = activeQuestions.findIndex((q) => answers[q.id] == null || (typeof answers[q.id] === 'string' && String(answers[q.id]).trim() === ''));
+    const nextIdx = firstUnanswered >= 0 ? firstUnanswered : Math.max(0, activeQuestions.length - 1);
     if (idx !== nextIdx) setIdx(nextIdx);
     setMaxVisitedIndex((m) => Math.max(m, nextIdx));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, answers]);
+  }, [activeQuestions, answers]);
 
   if (loading) return <p style={{ color: tokens.textDim }}>불러오는 중...</p>;
   if (submitted) return (
@@ -370,12 +567,77 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     );
   }
 
+  const partImageSrc = currentPartMeta?.image_url ? resolveImageUrl(currentPartMeta.image_url) : null;
+  const isFinalRound = activeRound != null ? (roundNos.length <= 1 || activeRound === roundNos[roundNos.length - 1]) : true;
+
   return (
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-      {current && (
+      {partIntroOpen && current ? (
+        <div
+          style={{
+            background: tokens.panel,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: 14,
+            padding: 20,
+          }}
+        >
+          {currentRoundLabel && (
+            <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>{currentRoundLabel}</div>
+          )}
+          <div style={{ fontSize: 24, fontWeight: 900, color: tokens.text }}>{currentPartLabel}</div>
+          {currentPartMeta?.description && (
+            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+              {currentPartMeta.description}
+            </div>
+          )}
+          {partImageSrc && (
+            <div style={{ marginTop: 16 }}>
+              <img
+                src={partImageSrc}
+                alt="part"
+                loading="eager"
+                decoding="async"
+                style={{
+                  width: '100%',
+                  maxHeight: 320,
+                  objectFit: 'contain',
+                  borderRadius: 10,
+                  border: `1px solid ${tokens.border}`,
+                }}
+              />
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (partKey) {
+                  setSeenParts((m) => ({ ...m, [partKey]: true }));
+                }
+                setPartIntroOpen(false);
+              }}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '12px 22px',
+                borderRadius: 12,
+                fontWeight: 900,
+                cursor: 'pointer',
+              }}
+            >
+              시작
+            </button>
+          </div>
+        </div>
+      ) : current ? (
         <div>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom: 8 }}>
-            <div style={{ color: tokens.textFaint }}>{idx + 1} / {questions.length} · {current.trait}</div>
+            <div style={{ color: tokens.textFaint }}>
+              {[currentRoundLabel, currentPartLabel].filter(Boolean).join(' · ')}
+              {currentRoundLabel || currentPartLabel ? ' · ' : ''}
+              {idx + 1} / {activeQuestions.length} · {current.trait}
+            </div>
             <button
               type="button"
               onClick={onSaveAndExit}
@@ -525,11 +787,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               style={{ background:tokens.accent, color:'#fff', border:'none', padding:'12px 22px', borderRadius:12, fontWeight:900, fontSize:16, boxShadow:'0 0 0 1px rgba(255,255,255,0.04) inset', cursor:'pointer' }}
               onMouseEnter={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'brightness(1.08)'; }}
               onMouseLeave={(e)=>{ (e.currentTarget as HTMLButtonElement).style.filter = 'none'; }}>
-              {idx + 1 === questions.length ? '제출' : '다음'}
+              {idx + 1 === activeQuestions.length ? '제출' : '다음'}
             </button>
           </div>
         </div>
-      )}
+      ) : null}
       {toast && (
         <div style={{ marginTop: 12, fontSize: 13, color: tokens.accent }}>{toast}</div>
       )}
@@ -549,12 +811,34 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       {confirmOpen && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50 }}>
           <div style={{ width:'min(520px,92vw)', background:tokens.panel, border:`1px solid ${tokens.border}`, borderRadius:12, padding:20 }}>
-            <div style={{ fontSize:18, fontWeight:900, marginBottom:12 }}>제출 확인</div>
-            <div style={{ color:tokens.textFaint, marginBottom:16 }}>제출 후에는 답변을 수정할 수 없습니다. 제출하시겠습니까?</div>
+            <div style={{ fontSize:18, fontWeight:900, marginBottom:12 }}>
+              {isFinalRound ? '제출 확인' : `${currentRoundLabel || '1회차'} 종료`}
+            </div>
+            <div style={{ color:tokens.textFaint, marginBottom:16 }}>
+              {isFinalRound
+                ? '제출 후에는 답변을 수정할 수 없습니다. 제출하시겠습니까?'
+                : '제출하면 1회차가 종료됩니다. 나중에 2회차를 이어서 진행할 수 있어요.'}
+            </div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
-              <button onClick={async()=>{ const ok = await saveCurrentAnswer(); if (!ok) return; setSubmitted(true); setToast('제출이 완료되었습니다. 감사합니다!'); sessionStorage.removeItem('trait_response_id'); sessionStorage.removeItem('trait_participant_id'); setConfirmOpen(false); }}
-                style={{ background:tokens.accent, color:'#fff', border:'none', padding:'10px 20px', borderRadius:10, cursor:'pointer', fontWeight:800 }}>제출</button>
+              <button
+                onClick={async()=> {
+                  const ok = await saveCurrentAnswer();
+                  if (!ok) return;
+                  sessionStorage.removeItem('trait_response_id');
+                  sessionStorage.removeItem('trait_participant_id');
+                  setConfirmOpen(false);
+                  if (!isFinalRound) {
+                    await onSaveAndExit();
+                    return;
+                  }
+                  setSubmitted(true);
+                  setToast('제출이 완료되었습니다. 감사합니다!');
+                }}
+                style={{ background:tokens.accent, color:'#fff', border:'none', padding:'10px 20px', borderRadius:10, cursor:'pointer', fontWeight:800 }}
+              >
+                {isFinalRound ? '제출' : '1회차 제출'}
+              </button>
             </div>
           </div>
         </div>

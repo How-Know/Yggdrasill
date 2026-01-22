@@ -8,6 +8,8 @@ type FiltersJson = {
   traits?: string[];
   area_ids?: string[];
   group_ids?: string[];
+  round_labels?: string[];
+  part_indexes?: number[];
   version_min?: number;
   version_max?: number;
   include_images_only?: boolean;
@@ -20,10 +22,12 @@ function normalizeFilters(raw: FiltersJson): Required<Pick<FiltersJson, 'slug' |
   const traits = [...new Set((raw.traits ?? []).map((s) => String(s).trim()).filter(Boolean))].sort();
   const area_ids = [...new Set((raw.area_ids ?? []).map((s) => String(s).trim()).filter(Boolean))].sort();
   const group_ids = [...new Set((raw.group_ids ?? []).map((s) => String(s).trim()).filter(Boolean))].sort();
+  const round_labels = [...new Set((raw.round_labels ?? []).map((s) => String(s).trim()).filter(Boolean))].sort();
+  const part_indexes = [...new Set((raw.part_indexes ?? []).map((n) => Number(n)).filter((n) => Number.isFinite(n)) as number[])].sort((a, b) => a - b);
   const version_min = typeof raw.version_min === 'number' ? raw.version_min : undefined;
   const version_max = typeof raw.version_max === 'number' ? raw.version_max : undefined;
   const include_images_only = raw.include_images_only ?? false;
-  return { slug, is_active_only, traits, area_ids, group_ids, version_min, version_max, include_images_only };
+  return { slug, is_active_only, traits, area_ids, group_ids, round_labels, part_indexes, version_min, version_max, include_images_only };
 }
 
 function toQuestionPayload(row: any) {
@@ -42,6 +46,8 @@ function toQuestionPayload(row: any) {
     memo: row.memo ?? null,
     image_url: row.image_url ?? null,
     pair_id: row.pair_id ?? null,
+    round_label: row.round_label ?? null,
+    part_index: row.part_index ?? null,
     version: row.version ?? null,
     is_active: !!row.is_active,
     created_at: row.created_at ?? null,
@@ -223,13 +229,15 @@ Deno.serve(async (req) => {
 
     let q = admin
       .from('questions')
-      .select('id, area_id, group_id, trait, text, type, min_score, max_score, weight, reverse, tags, memo, image_url, pair_id, version, is_active, created_at, updated_at')
+      .select('id, area_id, group_id, trait, text, type, min_score, max_score, weight, reverse, tags, memo, image_url, pair_id, round_label, part_index, version, is_active, created_at, updated_at')
       .order('created_at', { ascending: true });
 
     if (filters.is_active_only) q = q.eq('is_active', true);
     if (filters.traits?.length) q = q.in('trait', filters.traits);
     if (filters.area_ids?.length) q = q.in('area_id', filters.area_ids);
     if (filters.group_ids?.length) q = q.in('group_id', filters.group_ids);
+    if (filters.round_labels?.length) q = q.in('round_label', filters.round_labels);
+    if (filters.part_indexes?.length) q = q.in('part_index', filters.part_indexes);
     if (typeof filters.version_min === 'number') q = q.gte('version', filters.version_min);
     if (typeof filters.version_max === 'number') q = q.lte('version', filters.version_max);
     if (filters.include_images_only) q = q.neq('image_url', '').not('image_url', 'is', null);
