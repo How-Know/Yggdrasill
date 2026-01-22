@@ -48,27 +48,26 @@ try{
       if(Test-Path $guess){ $pioExe = $guess }
     }
     if(-not $pioExe){
-      if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){
-        Write-Host "[WARN] PlatformIO(pio)를 찾지 못했습니다. 기존 dist의 m5stack-core2_firmware.bin을 그대로 사용합니다." -ForegroundColor Yellow
-      } else {
-        Write-Host "[WARN] PlatformIO(pio)를 찾지 못했습니다. M5Stack 펌웨어 빌드를 건너뜁니다." -ForegroundColor Yellow
-      }
+      throw "PlatformIO(pio)를 찾지 못했습니다. (PATH 또는 $env:USERPROFILE\\.platformio\\penv\\Scripts\\pio.exe 확인)"
     } else {
       Push-Location $m5Dir
-      & $pioExe run -e m5stack-core2 | Out-Host
       $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
+      # 실패 시 이전 산출물 복사되는 문제 방지: 기존 파일 제거
+      if(Test-Path $fw){ Remove-Item $fw -Force -ErrorAction SilentlyContinue }
+      & $pioExe run -e m5stack-core2 | Out-Host
+      if($LASTEXITCODE -ne 0){ throw "pio build failed (exit=$LASTEXITCODE)" }
       if(Test-Path $fw){
         $out = Join-Path $dist 'm5stack-core2_firmware.bin'
         Copy-Item $fw $out -Force
         Write-Host "[OK] M5Stack firmware copied to $out" -ForegroundColor Green
       } else {
-        Write-Host "[WARN] M5Stack firmware.bin 산출물을 찾지 못했습니다: $fw" -ForegroundColor Yellow
+        throw "M5Stack firmware.bin 산출물을 찾지 못했습니다: $fw"
       }
       Pop-Location
     }
   }
 } catch {
-  Write-Host "[WARN] M5Stack 펌웨어 빌드/복사 실패: $($_.Exception.Message)" -ForegroundColor Yellow
+  throw
 }
 
 # Create portable ZIP (x64) from Release folder

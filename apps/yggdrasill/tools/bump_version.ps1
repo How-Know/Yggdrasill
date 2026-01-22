@@ -55,12 +55,29 @@ foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appins
 $fwVerPath = Join-Path (Join-Path (Get-Location) '..\..') 'firmware\m5stack\src\version.h'
 if(Test-Path $fwVerPath){
   $fw = Get-Content $fwVerPath -Raw
-  if($fw -match '#define\s+FIRMWARE_VERSION\s+"[^"]+"'){
-    $fw = [regex]::Replace($fw, '#define\s+FIRMWARE_VERSION\s+"[^"]+"', ('#define FIRMWARE_VERSION "' + ($ver + '.' + $new) + '"'))
+  $newFwVer = ($ver + '.' + $new)
+  # 라인 시작(#define ...)만 정확히 치환 (인코딩/주석 꼬임 방지)
+  if($fw -match '(?m)^#define\\s+FIRMWARE_VERSION\\s+\"[^\"]+\"\\s*$'){
+    $fw = [regex]::Replace($fw, '(?m)^#define\\s+FIRMWARE_VERSION\\s+\"[^\"]+\"\\s*$', ('#define FIRMWARE_VERSION \"' + $newFwVer + '\"'))
     Set-Content $fwVerPath $fw -Encoding UTF8
-    Ok "firmware version.h updated: $fwVerPath"
+    Ok "firmware version.h updated: $fwVerPath ($newFwVer)"
   } else {
-    Info "firmware version.h found but FIRMWARE_VERSION define not matched: $fwVerPath"
+    # 없으면 파일 맨 위쪽에 삽입 (최소 안전장치)
+    $lines = $fw -split \"`r?`n\"
+    $inserted = $false
+    for($i=0; $i -lt $lines.Length; $i++){
+      if($lines[$i] -match '^#define\\s+VERSION_H'){ 
+        $lines = $lines[0..$i] + ('#define FIRMWARE_VERSION \"' + $newFwVer + '\"') + $lines[($i+1)..($lines.Length-1)]
+        $inserted = $true
+        break
+      }
+    }
+    if($inserted){
+      Set-Content $fwVerPath ($lines -join \"`r`n\") -Encoding UTF8
+      Ok \"firmware version.h inserted: $fwVerPath ($newFwVer)\"
+    } else {
+      Info \"firmware version.h found but cannot safely update/insert: $fwVerPath\"
+    }
   }
 } else {
   Info "firmware version.h not found (skip): $fwVerPath"
