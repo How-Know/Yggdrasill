@@ -63,7 +63,7 @@ if(Test-Path $fwVerPath){
     Ok "firmware version.h updated: $fwVerPath ($newFwVer)"
   } else {
     # 없으면 파일 맨 위쪽에 삽입 (최소 안전장치)
-    $lines = $fw -split \"`r?`n\"
+    $lines = $fw -split "`r?`n"
     $inserted = $false
     for($i=0; $i -lt $lines.Length; $i++){
       if($lines[$i] -match '^#define\\s+VERSION_H'){ 
@@ -73,7 +73,7 @@ if(Test-Path $fwVerPath){
       }
     }
     if($inserted){
-      Set-Content $fwVerPath ($lines -join \"`r`n\") -Encoding UTF8
+      Set-Content $fwVerPath ($lines -join "`r`n") -Encoding UTF8
       Ok \"firmware version.h inserted: $fwVerPath ($newFwVer)\"
     } else {
       Info \"firmware version.h found but cannot safely update/insert: $fwVerPath\"
