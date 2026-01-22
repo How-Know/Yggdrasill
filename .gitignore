@@ -1,6 +1,9 @@
 # Miscellaneous
 *.class
 *.log
+
+# Office temp files (e.g. Excel opens xlsx and creates "~$*.xlsx")
+~$*.xlsx
 *.pyc
 *.swp
 .DS_Store

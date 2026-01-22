@@ -34,6 +34,47 @@ $dist = Join-Path (Get-Location) 'dist'
 if(-not (Test-Path $dist)) { New-Item -ItemType Directory $dist | Out-Null }
 Copy-Item (Join-Path $releaseDir 'mneme_flutter.msix') (Join-Path $dist 'mneme_flutter.msix') -Force
 
+# Build M5Stack firmware and copy artifact into dist (release asset)
+try{
+  $repoRoot = Resolve-Path (Join-Path (Get-Location) '..\..')  # apps/yggdrasill -> repo root
+  $m5Dir = Join-Path $repoRoot 'firmware\m5stack'
+  if(Test-Path $m5Dir){
+    Write-Host "[INFO] Building M5Stack firmware (PlatformIO)..." -ForegroundColor Cyan
+    $pioCmd = Get-Command pio -ErrorAction SilentlyContinue
+    if(-not $pioCmd){
+      if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){
+        Write-Host "[WARN] PlatformIO(pio)가 PATH에 없습니다. 기존 dist의 m5stack-core2_firmware.bin을 그대로 사용합니다." -ForegroundColor Yellow
+      } else {
+        Write-Host "[WARN] PlatformIO(pio)가 PATH에 없습니다. M5Stack 펌웨어 빌드를 건너뜁니다." -ForegroundColor Yellow
+      }
+    } else {
+      Push-Location $m5Dir
+      pio run -e m5stack-core2 | Out-Host
+      $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
+      if(Test-Path $fw){
+        $out = Join-Path $dist 'm5stack-core2_firmware.bin'
+        Copy-Item $fw $out -Force
+        Write-Host "[OK] M5Stack firmware copied to $out" -ForegroundColor Green
+      } else {
+        Write-Host "[WARN] M5Stack firmware.bin 산출물을 찾지 못했습니다: $fw" -ForegroundColor Yellow
+      }
+      Pop-Location
+    }
+  }
+} catch {
+  Write-Host "[WARN] M5Stack 펌웨어 빌드/복사 실패: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+# Create portable ZIP (x64) from Release folder
+try{
+  $portableZip = Join-Path $dist 'Yggdrasill_portable_x64.zip'
+  if(Test-Path $portableZip){ Remove-Item $portableZip -Force -ErrorAction SilentlyContinue }
+  Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $portableZip -Force
+  Write-Host "[OK] Portable ZIP created: $portableZip" -ForegroundColor Green
+} catch {
+  Write-Host "[WARN] Portable ZIP 생성 실패: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 # Export signing certificate (.cer) next to appinstaller for bootstrap installs
 $pubspecPath = Join-Path (Get-Location) 'pubspec.yaml'
 $pubRaw = Get-Content $pubspecPath -Raw
@@ -75,6 +116,8 @@ if(Test-Path (Join-Path $dist 'howknow_codesign_new.cer')){ $bundleFiles += (Joi
 if(Test-Path (Join-Path $dist 'Yggdrasill.appinstaller')){ $bundleFiles += (Join-Path $dist 'Yggdrasill.appinstaller') }
 if(Test-Path (Join-Path $dist 'Install-Yggdrasill.ps1')){ $bundleFiles += (Join-Path $dist 'Install-Yggdrasill.ps1') }
 if(Test-Path $howto){ $bundleFiles += $howto }
+# (선택) 펌웨어는 설치 ZIP에 꼭 필요하진 않지만, 같이 배포하려면 포함 가능
+if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $bundleFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
 if($bundleFiles.Count -gt 0){
   try{ Compress-Archive -Path $bundleFiles -DestinationPath $installerZip -Force } catch { }
 }
@@ -84,6 +127,9 @@ if(Get-Command gh -ErrorAction SilentlyContinue) {
   $uploadFiles = @()
   $uploadFiles += (Join-Path $dist 'mneme_flutter.msix')
   $uploadFiles += (Join-Path $dist 'Yggdrasill.appinstaller')
+  if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $uploadFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
+  if(Test-Path (Join-Path $dist 'Yggdrasill_portable_x64.zip')){ $uploadFiles += (Join-Path $dist 'Yggdrasill_portable_x64.zip') }
+  if(Test-Path (Join-Path $dist 'howknow_codesign_new.cer')){ $uploadFiles += (Join-Path $dist 'howknow_codesign_new.cer') }
   if(Test-Path $installerZip){ $uploadFiles += $installerZip }
   gh release upload $ReleaseTag -R $Repo @uploadFiles --clobber | Out-Host
 }
