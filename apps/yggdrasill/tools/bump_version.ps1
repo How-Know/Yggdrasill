@@ -52,32 +52,33 @@ foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appins
 }
 
 # M5Stack firmware version header 동기화 (설정창 표시 + OTA 비교에 사용됨)
-$fwVerPath = Join-Path (Join-Path (Get-Location) '..\..') 'firmware\m5stack\src\version.h'
+$fwVerPath = Join-Path (Resolve-Path (Join-Path (Get-Location) '..\..')) 'firmware\m5stack\src\version.h'
 if(Test-Path $fwVerPath){
-  $fw = Get-Content $fwVerPath -Raw
   $newFwVer = ($ver + '.' + $new)
-  # 라인 시작(#define ...)만 정확히 치환 (인코딩/주석 꼬임 방지)
-  if($fw -match '(?m)^#define\\s+FIRMWARE_VERSION\\s+\"[^\"]+\"\\s*$'){
-    $fw = [regex]::Replace($fw, '(?m)^#define\\s+FIRMWARE_VERSION\\s+\"[^\"]+\"\\s*$', ('#define FIRMWARE_VERSION \"' + $newFwVer + '\"'))
-    Set-Content $fwVerPath $fw -Encoding UTF8
-    Ok "firmware version.h updated: $fwVerPath ($newFwVer)"
-  } else {
-    # 없으면 파일 맨 위쪽에 삽입 (최소 안전장치)
-    $lines = $fw -split "`r?`n"
-    $inserted = $false
-    for($i=0; $i -lt $lines.Length; $i++){
-      if($lines[$i] -match '^#define\\s+VERSION_H'){ 
-        $lines = $lines[0..$i] + ('#define FIRMWARE_VERSION \"' + $newFwVer + '\"') + $lines[($i+1)..($lines.Length-1)]
-        $inserted = $true
+  $fwLines = Get-Content $fwVerPath
+  $updated = $false
+  for($i=0; $i -lt $fwLines.Length; $i++){
+    if($fwLines[$i] -match '^#define\s+FIRMWARE_VERSION\s+'){
+      $fwLines[$i] = '#define FIRMWARE_VERSION "' + $newFwVer + '"'
+      $updated = $true
+      break
+    }
+  }
+  if(-not $updated){
+    # 정의가 없으면 include guard 직후에 삽입
+    for($i=0; $i -lt $fwLines.Length; $i++){
+      if($fwLines[$i] -match '^#define\s+VERSION_H'){
+        $fwLines = $fwLines[0..$i] + ('#define FIRMWARE_VERSION "' + $newFwVer + '"') + $fwLines[($i+1)..($fwLines.Length-1)]
+        $updated = $true
         break
       }
     }
-    if($inserted){
-      Set-Content $fwVerPath ($lines -join "`r`n") -Encoding UTF8
-      Ok \"firmware version.h inserted: $fwVerPath ($newFwVer)\"
-    } else {
-      Info \"firmware version.h found but cannot safely update/insert: $fwVerPath\"
-    }
+  }
+  if($updated){
+    Set-Content $fwVerPath $fwLines -Encoding UTF8
+    Ok "firmware version.h updated: $fwVerPath ($newFwVer)"
+  } else {
+    Fail "firmware version.h found but cannot update/insert FIRMWARE_VERSION: $fwVerPath"
   }
 } else {
   Info "firmware version.h not found (skip): $fwVerPath"
