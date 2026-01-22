@@ -51,6 +51,21 @@ foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appins
   Ok "$aiPath updated"
 }
 
+# M5Stack firmware version header 동기화 (설정창 표시 + OTA 비교에 사용됨)
+$fwVerPath = Join-Path (Join-Path (Get-Location) '..\..') 'firmware\m5stack\src\version.h'
+if(Test-Path $fwVerPath){
+  $fw = Get-Content $fwVerPath -Raw
+  if($fw -match '#define\s+FIRMWARE_VERSION\s+"[^"]+"'){
+    $fw = [regex]::Replace($fw, '#define\s+FIRMWARE_VERSION\s+"[^"]+"', ('#define FIRMWARE_VERSION "' + ($ver + '.' + $new) + '"'))
+    Set-Content $fwVerPath $fw -Encoding UTF8
+    Ok "firmware version.h updated: $fwVerPath"
+  } else {
+    Info "firmware version.h found but FIRMWARE_VERSION define not matched: $fwVerPath"
+  }
+} else {
+  Info "firmware version.h not found (skip): $fwVerPath"
+}
+
 if(-not $NoGit){
   git add -A | Out-Null
   git commit -m ("chore(release): bump to $ver.$new") | Out-Null
