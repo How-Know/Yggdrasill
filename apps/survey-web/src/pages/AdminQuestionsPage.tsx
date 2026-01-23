@@ -1094,6 +1094,9 @@ export default function AdminQuestionsPage() {
         }
         return '';
       };
+      const hasPairColumn = rows.some((row) =>
+        normalize(getField(row, ['페어 ID', 'pair_id', 'pairId'])) !== ''
+      );
 
       const normalizeRoundLabel = (raw: any, sorted: TraitRound[]) => {
         const text = normalize(raw);
@@ -1145,13 +1148,19 @@ export default function AdminQuestionsPage() {
         pushMap(keyMapLite, makeKey(q.text, q.trait, q.type, q.reverse, ''), q);
       });
 
-      const updates: { id: string; round_label: string | null; part_index: number | null }[] = [];
+      const updates: {
+        id: string;
+        round_label: string | null;
+        part_index: number | null;
+        pair_id?: string | null;
+      }[] = [];
       const missing: number[] = [];
       const ambiguous: number[] = [];
 
       rows.forEach((row, i) => {
         const rowNo = i + 2;
         const idRaw = normalize(getField(row, ['문항 ID', '문항ID', 'question_id', 'id', 'ID']));
+        const pairId = getField(row, ['페어 ID', 'pair_id', 'pairId']);
         let target: QuestionDraft | undefined;
         if (idRaw && itemsById.has(idRaw)) {
           target = itemsById.get(idRaw);
@@ -1160,7 +1169,6 @@ export default function AdminQuestionsPage() {
           const trait = getField(row, ['성향', 'trait']);
           const type = getField(row, ['평가 타입', 'type']);
           const reverse = getField(row, ['역문항', 'reverse']);
-          const pairId = getField(row, ['페어 ID', 'pair_id', 'pairId']);
           const key = makeKey(text, trait, type, reverse, pairId);
           const hit = keyMap.get(key);
           if (hit && hit.length === 1) {
@@ -1178,12 +1186,17 @@ export default function AdminQuestionsPage() {
         }
         const roundLabelRaw = getField(row, ['회차', 'round', 'round_label']);
         const partRaw = getField(row, ['파트', 'part', 'part_index']);
+        const pairIdNormalized = normalize(pairId);
+        const pairIdValue = hasPairColumn
+          ? (pairIdNormalized ? pairIdNormalized.toUpperCase() : null)
+          : undefined;
         const roundLabel = normalizeRoundLabel(roundLabelRaw, sorted);
         const partIndex = roundLabel ? parsePartIndex(partRaw) : null;
         updates.push({
           id: target.id,
           round_label: roundLabel || null,
           part_index: partIndex ?? null,
+          pair_id: pairIdValue,
         });
       });
 
@@ -1195,12 +1208,14 @@ export default function AdminQuestionsPage() {
       for (let i = 0; i < updates.length; i += chunkSize) {
         const chunk = updates.slice(i, i + chunkSize);
         const results = await Promise.all(
-          chunk.map((u) =>
-            supabase
+          chunk.map((u) => {
+            const patch: any = { round_label: u.round_label, part_index: u.part_index };
+            if (u.pair_id !== undefined) patch.pair_id = u.pair_id;
+            return supabase
               .from(QUESTIONS_TABLE)
-              .update({ round_label: u.round_label, part_index: u.part_index })
-              .eq('id', u.id)
-          )
+              .update(patch)
+              .eq('id', u.id);
+          })
         );
         const err = results.find((r) => r.error)?.error;
         if (err) throw err;
@@ -1215,6 +1230,7 @@ export default function AdminQuestionsPage() {
             ...q,
             roundLabel: u.round_label || undefined,
             partIndex: u.part_index ?? null,
+            pairId: u.pair_id !== undefined ? (u.pair_id || undefined) : q.pairId,
           };
         })
       );

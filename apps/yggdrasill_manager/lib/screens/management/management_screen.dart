@@ -1127,6 +1127,18 @@ class _AssessmentStructurePage extends StatelessWidget {
                     title: '인지적 회복력',
                     docPath: _termPath('intervention/mental_cognitive_resilience.md'),
                   ),
+                  _StructureNode(
+                    title: '과제 가치 인식',
+                    docPath: _termPath('intervention/mental_task_value.md'),
+                  ),
+                  _StructureNode(
+                    title: '내재적 동기',
+                    docPath: _termPath('intervention/mental_intrinsic_motivation.md'),
+                  ),
+                  _StructureNode(
+                    title: '지속 의지',
+                    docPath: _termPath('intervention/mental_persistence_intent.md'),
+                  ),
                 ],
               ),
               _StructureNode(
@@ -1136,6 +1148,18 @@ class _AssessmentStructurePage extends StatelessWidget {
                   _StructureNode(
                     title: '불안 수준',
                     docPath: _termPath('intervention/mental_anxiety_level.md'),
+                  ),
+                  _StructureNode(
+                    title: '흥미',
+                    docPath: _termPath('intervention/mental_interest.md'),
+                  ),
+                  _StructureNode(
+                    title: '즐거움',
+                    docPath: _termPath('intervention/mental_enjoyment.md'),
+                  ),
+                  _StructureNode(
+                    title: '좌절',
+                    docPath: _termPath('intervention/mental_frustration.md'),
                   ),
                   _StructureNode(
                     title: '자신감',
