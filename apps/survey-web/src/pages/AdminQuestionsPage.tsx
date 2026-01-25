@@ -15,7 +15,7 @@ const tokens = {
 
 type QuestionDraft = {
   id: string;
-  trait: 'D'|'I'|'A'|'C'|'N'|'L'|'S'|'P';
+  trait: ''|'D'|'I'|'A'|'C'|'N'|'L'|'S'|'P';
   text: string;
   type: 'scale'|'text';
   min?: number;
@@ -76,19 +76,51 @@ function DragHandle() {
   return <span style={{ cursor: 'grab', color: tokens.textDim }}>≡</span>;
 }
 
+function orderButtonStyle(disabled: boolean, size = 22): React.CSSProperties {
+  return {
+    width: size,
+    height: size,
+    borderRadius: 6,
+    border: 'none',
+    background: 'transparent',
+    color: tokens.text,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.45 : 1,
+    padding: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontWeight: 700,
+    fontSize: 12,
+  };
+}
+
 function ManageListDialog({ title, items, setItems, onClose }: { title: string; items: {id:string; name:string}[]; setItems: (v: {id:string; name:string}[]) => void; onClose: () => void }) {
   const [name, setName] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   async function add() {
-    if (!name.trim()) return;
-    const table = title.includes('영역') ? 'question_areas' : 'question_groups';
-    const { data, error } = await supabase.from(table).insert({ name: name.trim(), order_index: items.length }).select('id,name').single();
-    if (!error && data) {
-      setItems([...items, { id: (data as any).id, name: (data as any).name }]);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setErr('이름을 입력해주세요.');
+      return;
     }
+    setErr(null);
+    const table = title.includes('영역') ? 'question_areas' : 'question_groups';
+    const { data, error } = await supabase.from(table).insert({ name: trimmed, order_index: items.length }).select('id,name').single();
+    if (error) {
+      console.error(error);
+      setErr(error.message || '그룹 추가 실패');
+      return;
+    }
+    if (!data) {
+      setErr('저장 결과가 비어있습니다.');
+      return;
+    }
+    setItems((prev) => [...prev, { id: (data as any).id, name: (data as any).name }]);
     setName('');
   }
   async function remove(id: string) {
@@ -130,6 +162,7 @@ function ManageListDialog({ title, items, setItems, onClose }: { title: string; 
         <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="이름 입력" style={{ flex: 1, minWidth: 0, height: 40, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px' }} />
         <button onClick={add} style={{ padding: '8px 12px', borderRadius: 10, border: 'none', background: tokens.accent, color: '#fff', cursor: 'pointer' }}>추가</button>
       </div>
+      {err && <div style={{ color: '#ff8686', fontSize: 12, marginBottom: 8 }}>{err}</div>}
 
       <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12 }}>
         {items.length === 0 ? (
@@ -138,9 +171,10 @@ function ManageListDialog({ title, items, setItems, onClose }: { title: string; 
           items.map((it, idx) => (
             <div key={it.id}
                  draggable
-                 onDragStart={()=>setDragIndex(idx)}
-                 onDragOver={(e)=>e.preventDefault()}
-                 onDrop={()=>{ if (dragIndex !== null) onDrag(dragIndex, idx); setDragIndex(null); }}
+                 onDragStart={(e)=>{ e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', it.id); setDragIndex(idx); }}
+                 onDragEnd={()=>setDragIndex(null)}
+                 onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                 onDrop={(e)=>{ e.preventDefault(); if (dragIndex !== null) onDrag(dragIndex, idx); setDragIndex(null); }}
                  style={{ display: 'grid', gridTemplateColumns: '32px 1fr 200px', alignItems: 'center', gap: 8, padding: 10, borderBottom: `1px solid ${tokens.border}` }}>
               <div><DragHandle /></div>
               <div>
@@ -255,7 +289,7 @@ export default function AdminQuestionsPage() {
   const [addQOpen, setAddQOpen] = useState(false);
   const [draft, setDraft] = useState<QuestionDraft>({
     id: Math.random().toString(36).slice(2),
-    trait: 'D',
+    trait: '',
     text: '',
     type: 'scale',
     min: 1,
@@ -304,7 +338,7 @@ export default function AdminQuestionsPage() {
     const out: any = {};
     if (patch.area !== undefined) out.area_id = patch.area || null;
     if (patch.group !== undefined) out.group_id = patch.group || null;
-    if (patch.trait !== undefined) out.trait = patch.trait;
+    if (patch.trait !== undefined) out.trait = patch.trait ? patch.trait : null;
     if (patch.text !== undefined) out.text = patch.text;
     if (patch.type !== undefined) out.type = patch.type;
     if (patch.min !== undefined) out.min_score = patch.min ?? null;
@@ -360,7 +394,7 @@ export default function AdminQuestionsPage() {
           id: row.id,
           area: row.area_id || undefined,
           group: row.group_id || undefined,
-          trait: row.trait,
+          trait: row.trait ?? '',
           text: row.text || '',
           type: row.type,
           min: row.min_score ?? undefined,
@@ -390,11 +424,14 @@ export default function AdminQuestionsPage() {
   const isScale = draft.type === 'scale';
 
   function resetDraft() {
-    setDraft({ id: Math.random().toString(36).slice(2), trait: 'D', text: '', type: 'scale', min: lastScaleRange.min, max: lastScaleRange.max, reverse: 'N', image: '', active: true });
+    setDraft({ id: Math.random().toString(36).slice(2), trait: '', text: '', type: 'scale', min: lastScaleRange.min, max: lastScaleRange.max, reverse: 'N', image: '', active: true });
     setDraftWeightText('');
   }
 
-  const traitOptions = useMemo<OptionItem[]>(() => ['D','I','A','C','N','L','S','P'].map(v=>({label:v, value:v})), []);
+  const traitOptions = useMemo<OptionItem[]>(
+    () => [{ label: '선택', value: '' }, ...(['D','I','A','C','N','L','S','P'] as const).map(v => ({ label: v, value: v }))],
+    []
+  );
   const [filterOpen, setFilterOpen] = useState(false);
   const [activeAreas, setActiveAreas] = useState<string[]>([]);
   const [activeGroups, setActiveGroups] = useState<string[]>([]);
@@ -421,14 +458,12 @@ export default function AdminQuestionsPage() {
   const [editingRoundId, setEditingRoundId] = useState<string | null>(null);
   const [editingRoundName, setEditingRoundName] = useState('');
   const [editingRoundDesc, setEditingRoundDesc] = useState('');
-  const [dragRoundIdx, setDragRoundIdx] = useState<number | null>(null);
 
   const [newPartName, setNewPartName] = useState('');
   const [newPartDesc, setNewPartDesc] = useState('');
   const [editingPartId, setEditingPartId] = useState<string | null>(null);
   const [editingPartName, setEditingPartName] = useState('');
   const [editingPartDesc, setEditingPartDesc] = useState('');
-  const [dragPartIdx, setDragPartIdx] = useState<number | null>(null);
 
   async function loadRounds() {
     setRoundErr(null);
@@ -611,12 +646,27 @@ export default function AdminQuestionsPage() {
 
   async function reorderRounds(startIdx: number, endIdx: number) {
     if (endIdx < 0 || endIdx >= rounds.length || startIdx === endIdx) return;
+    setRoundErr(null);
+    const prev = rounds;
     const next = rounds.slice();
     const [moved] = next.splice(startIdx, 1);
     next.splice(endIdx, 0, moved);
-    setRounds(next);
-    const payload = next.map((r, i) => ({ id: r.id, order_index: i }));
-    await supabase.from('trait_rounds').upsert(payload, { onConflict: 'id' });
+    const withOrder = next.map((r, i) => ({ ...r, order_index: i }));
+    setRounds(withOrder);
+    try {
+    const payload = withOrder.map((r) => ({
+      id: r.id,
+      name: r.name ?? '',
+      description: r.description ?? null,
+      order_index: r.order_index ?? 0,
+      is_active: r.is_active ?? true,
+    }));
+      const { error } = await supabase.from('trait_rounds').upsert(payload, { onConflict: 'id' });
+      if (error) throw error;
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 순서 저장 실패');
+      setRounds(prev);
+    }
   }
 
   async function addPart() {
@@ -706,12 +756,32 @@ export default function AdminQuestionsPage() {
 
   async function reorderParts(startIdx: number, endIdx: number) {
     if (endIdx < 0 || endIdx >= roundParts.length || startIdx === endIdx) return;
+    setRoundErr(null);
+    const prevParts = roundParts;
+    const prevAllParts = allRoundParts;
     const next = roundParts.slice();
     const [moved] = next.splice(startIdx, 1);
     next.splice(endIdx, 0, moved);
-    setRoundParts(next);
-    const payload = next.map((p, i) => ({ id: p.id, order_index: i }));
-    await supabase.from('trait_round_parts').upsert(payload, { onConflict: 'id' });
+    const withOrder = next.map((p, i) => ({ ...p, order_index: i }));
+    setRoundParts(withOrder);
+    const orderMap = new Map(withOrder.map((p) => [p.id, p.order_index ?? 0]));
+    setAllRoundParts((arr) => arr.map((p) => orderMap.has(p.id) ? { ...p, order_index: orderMap.get(p.id) } : p));
+    try {
+    const payload = withOrder.map((p) => ({
+      id: p.id,
+      round_id: p.round_id,
+      name: p.name ?? '',
+      description: p.description ?? null,
+      image_url: p.image_url ?? null,
+      order_index: p.order_index ?? 0,
+    }));
+      const { error } = await supabase.from('trait_round_parts').upsert(payload, { onConflict: 'id' });
+      if (error) throw error;
+    } catch (e: any) {
+      setRoundErr(e?.message || '파트 순서 저장 실패');
+      setRoundParts(prevParts);
+      setAllRoundParts(prevAllParts);
+    }
   }
 
   async function uploadPartImage(partId: string, file: File) {
@@ -857,6 +927,8 @@ export default function AdminQuestionsPage() {
       { key: 'area_name', label: '영역', get: (q: QuestionDraft) => areaNameById[q.area || ''] || '' },
       { key: 'group_id', label: '그룹 ID', get: (q: QuestionDraft) => q.group || '' },
       { key: 'group_name', label: '그룹', get: (q: QuestionDraft) => groupNameById[q.group || ''] || '' },
+      { key: 'round_label', label: '회차', get: (q: QuestionDraft) => q.roundLabel || '' },
+      { key: 'part_index', label: '파트', get: (q: QuestionDraft) => (typeof q.partIndex === 'number' ? q.partIndex : '') },
       { key: 'trait', label: '성향', get: (q: QuestionDraft) => q.trait },
       { key: 'text', label: '내용', get: (q: QuestionDraft) => q.text || '' },
       { key: 'type', label: '평가 타입', get: (q: QuestionDraft) => q.type },
@@ -876,7 +948,7 @@ export default function AdminQuestionsPage() {
   useEffect(() => {
     // 초기 기본 선택 컬럼
     if (Object.keys(exportCols).length === 0) {
-      const defaults = ['row_no','area_name','group_name','trait','text','type','min','max','weight','reverse','pair_id','tags','memo','image_url','version','is_active'];
+      const defaults = ['row_no','area_name','group_name','round_label','part_index','trait','text','type','min','max','weight','reverse','pair_id','tags','memo','image_url','version','is_active'];
       const m: Record<string, boolean> = {};
       for (const c of exportColumns) m[c.key] = defaults.includes(c.key);
       setExportCols(m);
@@ -1346,10 +1418,6 @@ export default function AdminQuestionsPage() {
                         rounds.map((r, idx) => (
                           <div
                             key={r.id}
-                            draggable
-                            onDragStart={()=>setDragRoundIdx(idx)}
-                            onDragOver={(e)=>e.preventDefault()}
-                            onDrop={()=>{ if (dragRoundIdx !== null) reorderRounds(dragRoundIdx, idx); setDragRoundIdx(null); }}
                             onClick={()=>setSelectedRoundId(r.id)}
                             style={{
                               display: 'flex',
@@ -1362,12 +1430,31 @@ export default function AdminQuestionsPage() {
                               cursor: 'pointer',
                             }}
                           >
-                            <div style={{ opacity: 0.8 }}><DragHandle /></div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 700 }}>{r.name}</div>
                               {r.description ? (
                                 <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.description}</div>
                               ) : null}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <button
+                                type="button"
+                                title="위로"
+                                disabled={idx === 0}
+                                onClick={(e)=>{ e.stopPropagation(); if (idx > 0) reorderRounds(idx, idx - 1); }}
+                                style={orderButtonStyle(idx === 0, 20)}
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                title="아래로"
+                                disabled={idx === rounds.length - 1}
+                                onClick={(e)=>{ e.stopPropagation(); if (idx < rounds.length - 1) reorderRounds(idx, idx + 1); }}
+                                style={orderButtonStyle(idx === rounds.length - 1, 20)}
+                              >
+                                ▼
+                              </button>
                             </div>
                             <button
                               onClick={(e)=>{ e.stopPropagation(); openRoundEdit(r); }}
@@ -1403,14 +1490,9 @@ export default function AdminQuestionsPage() {
                           roundParts.map((p, idx) => (
                             <div
                               key={p.id}
-                              draggable
-                              onDragStart={()=>setDragPartIdx(idx)}
-                              onDragOver={(e)=>e.preventDefault()}
-                              onDrop={()=>{ if (dragPartIdx !== null) reorderParts(dragPartIdx, idx); setDragPartIdx(null); }}
                               style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
                             >
-                              <div style={{ display:'grid', gridTemplateColumns:'24px 1fr 220px', gap: 10, alignItems:'start' }}>
-                                <div style={{ opacity: 0.8 }}><DragHandle /></div>
+                              <div style={{ display:'grid', gridTemplateColumns:'1fr 220px', gap: 10, alignItems:'start' }}>
                                 <div style={{ minWidth: 0 }}>
                                   <div style={{ fontWeight: 800 }}>{p.name}</div>
                                   {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
@@ -1427,6 +1509,24 @@ export default function AdminQuestionsPage() {
                                     {p.image_url ? '이미지 ✔ (클릭=제거)' : '이미지 드롭'}
                                   </div>
                                   <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
+                                    <button
+                                      type="button"
+                                      title="위로"
+                                      disabled={idx === 0}
+                                      onClick={(e)=>{ e.stopPropagation(); if (idx > 0) reorderParts(idx, idx - 1); }}
+                                      style={orderButtonStyle(idx === 0, 20)}
+                                    >
+                                      ▲
+                                    </button>
+                                    <button
+                                      type="button"
+                                      title="아래로"
+                                      disabled={idx === roundParts.length - 1}
+                                      onClick={(e)=>{ e.stopPropagation(); if (idx < roundParts.length - 1) reorderParts(idx, idx + 1); }}
+                                      style={orderButtonStyle(idx === roundParts.length - 1, 20)}
+                                    >
+                                      ▼
+                                    </button>
                                     <button onClick={()=>openPartEdit(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>편집</button>
                                     <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
                                   </div>
@@ -1995,7 +2095,7 @@ export default function AdminQuestionsPage() {
           <button onClick={async () => {
             try {
               const payload = toDbPatch(draft);
-              payload.trait = draft.trait;
+              payload.trait = draft.trait || null;
               payload.text = draft.text;
               payload.type = draft.type;
               if (draft.type === 'scale') {
@@ -2017,7 +2117,7 @@ export default function AdminQuestionsPage() {
                   id: row.id,
                   area: row.area_id || undefined,
                   group: row.group_id || undefined,
-                  trait: row.trait,
+                  trait: row.trait ?? '',
                   text: row.text || '',
                   type: row.type,
                   min: row.min_score ?? undefined,
@@ -2028,6 +2128,8 @@ export default function AdminQuestionsPage() {
                   memo: row.memo || undefined,
                   image: row.image_url || undefined,
                   pairId: row.pair_id || undefined,
+                  roundLabel: row.round_label || undefined,
+                  partIndex: typeof row.part_index === 'number' ? row.part_index : (row.part_index ?? undefined),
                   active: !!row.is_active,
                 }
               ]);
@@ -2054,6 +2156,27 @@ export default function AdminQuestionsPage() {
               <div style={{ minWidth: 0 }}>
                 <label style={{ color: tokens.textDim, fontSize: 13 }}>성향 코드</label>
                 <SelectPopup value={draft.trait} options={traitOptions} onChange={(v)=>setDraft({ ...draft, trait: v as any })} />
+              </div>
+            </div>
+
+            {/* 1.5행: 회차, 파트 */}
+            <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: 12, minWidth: 0 }}>
+              <div style={{ minWidth: 0 }}>
+                <label style={{ color: tokens.textDim, fontSize: 13 }}>회차</label>
+                <SelectPopup
+                  value={draft.roundLabel || ''}
+                  options={roundOptions}
+                  onChange={(v)=>setDraft({ ...draft, roundLabel: v || undefined, partIndex: undefined })}
+                />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <label style={{ color: tokens.textDim, fontSize: 13 }}>파트</label>
+                <SelectPopup
+                  value={typeof draft.partIndex === 'number' ? String(draft.partIndex) : ''}
+                  options={getPartOptions(draft.roundLabel)}
+                  onChange={(v)=>setDraft({ ...draft, partIndex: v ? Number(v) : undefined })}
+                  disabled={!draft.roundLabel}
+                />
               </div>
             </div>
 

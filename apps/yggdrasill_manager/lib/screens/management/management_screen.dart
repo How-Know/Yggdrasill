@@ -966,16 +966,8 @@ class _AssessmentStructurePage extends StatelessWidget {
             docPath: _termPath('non_intervention/mind.md'),
             children: [
               _StructureNode(
-                title: '기질적 불안 민감성',
-                docPath: _termPath('non_intervention/mind_anxiety_sensitivity.md'),
-              ),
-              _StructureNode(
-                title: '기본 정서 반응성',
+                title: '기질(정서 반응성)',
                 docPath: _termPath('non_intervention/mind_emotional_reactivity.md'),
-              ),
-              _StructureNode(
-                title: '스트레스 취약성',
-                docPath: _termPath('non_intervention/mind_stress_vulnerability.md'),
               ),
               _StructureNode(
                 title: '성향 (인지·행동 접근 경향)',
@@ -1000,6 +992,52 @@ class _AssessmentStructurePage extends StatelessWidget {
                   _StructureNode(
                     title: '16가지 성향 프로파일',
                     docPath: _termPath('non_intervention/mind_tendency_profiles.md'),
+                  ),
+                ],
+              ),
+              _StructureNode(
+                title: '신념·자기 개념 체계',
+                docPath: _termPath('non_intervention/mind_belief_identity_system.md'),
+                children: [
+                  _StructureNode(
+                    title: '신념 체계',
+                    docPath: _termPath('non_intervention/mind_belief_system.md'),
+                    children: [
+                      _StructureNode(
+                        title: '수학 능력에 대한 암묵적 신념',
+                        docPath: _termPath('non_intervention/mind_implicit_belief_math_ability.md'),
+                      ),
+                      _StructureNode(
+                        title: '통제 가능성 신념',
+                        docPath: _termPath('non_intervention/mind_controllability_belief.md'),
+                        children: [
+                          _StructureNode(
+                            title: '노력–성과 연결 신념',
+                            docPath: _termPath('non_intervention/mind_effort_outcome_belief.md'),
+                          ),
+                          _StructureNode(
+                            title: '주도성 인식',
+                            docPath: _termPath('non_intervention/mind_self_directedness_belief.md'),
+                          ),
+                        ],
+                      ),
+                      _StructureNode(
+                        title: '실패 해석 신념',
+                        docPath: _termPath('non_intervention/mind_failure_attribution_belief.md'),
+                      ),
+                      _StructureNode(
+                        title: '질문/이해에 대한 신념',
+                        docPath: _termPath('non_intervention/mind_epistemic_belief_math.md'),
+                      ),
+                      _StructureNode(
+                        title: '회복 기대 신념',
+                        docPath: _termPath('non_intervention/mind_resilience_expectancy_belief.md'),
+                      ),
+                    ],
+                  ),
+                  _StructureNode(
+                    title: '자기 개념 / 정체성',
+                    docPath: _termPath('non_intervention/mind_identity.md'),
                   ),
                 ],
               ),
@@ -1432,6 +1470,8 @@ class _TreeNodeViewState extends State<_TreeNodeView> {
     final node = widget.node;
     final hasChildren = node.children.isNotEmpty;
     final hasDoc = node.docPath != null;
+    const lineColor = Color(0xFF2A2A2A);
+    const leadingWidth = 28.0;
     final titleStyle = TextStyle(
       color: Colors.white,
       fontSize: 14,
@@ -1442,19 +1482,24 @@ class _TreeNodeViewState extends State<_TreeNodeView> {
       children: [
         ListTile(
           contentPadding: EdgeInsets.only(left: widget.indent, right: 12),
+          minLeadingWidth: leadingWidth,
+          horizontalTitleGap: 8,
           dense: true,
           visualDensity: VisualDensity.compact,
           leading: hasChildren
-              ? IconButton(
-                  icon: Icon(
-                    _expanded ? Icons.expand_more : Icons.chevron_right,
-                    color: const Color(0xFF9E9E9E),
-                    size: 20,
+              ? GestureDetector(
+                  onTap: _toggleExpanded,
+                  child: SizedBox(
+                    width: leadingWidth,
+                    height: leadingWidth,
+                    child: Icon(
+                      _expanded ? Icons.expand_more : Icons.chevron_right,
+                      color: const Color(0xFF9E9E9E),
+                      size: 20,
+                    ),
                   ),
-                  onPressed: _toggleExpanded,
-                  tooltip: _expanded ? '접기' : '펼치기',
                 )
-              : const SizedBox(width: 24),
+              : const SizedBox(width: leadingWidth, height: leadingWidth),
           title: Text(node.title, style: titleStyle),
           trailing: hasDoc
               ? TextButton.icon(
@@ -1472,12 +1517,26 @@ class _TreeNodeViewState extends State<_TreeNodeView> {
           onTap: hasChildren ? _toggleExpanded : null,
         ),
         if (hasChildren && _expanded)
-          ...node.children.map(
-            (child) => _TreeNodeView(
-              node: child,
-              indent: widget.indent + 16,
-              onOpen: widget.onOpen,
-            ),
+          Stack(
+            children: [
+              Positioned(
+                left: widget.indent + (leadingWidth / 2),
+                top: 0,
+                bottom: 0,
+                child: Container(width: 1, color: lineColor),
+              ),
+              Column(
+                children: node.children
+                    .map(
+                      (child) => _TreeNodeView(
+                        node: child,
+                        indent: widget.indent + 16,
+                        onOpen: widget.onOpen,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
           ),
       ],
     );
