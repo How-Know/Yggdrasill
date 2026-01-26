@@ -55,19 +55,9 @@ class _TendencyWebViewState extends State<TendencyWebView> {
       // ignore
     }
     _webMessageSub?.cancel();
-    _webMessageSub = _controller.webMessage.listen(
-      (message) async {
-        // ✅ 웹 -> 앱 메시지가 실제로 들어오는지 확인용 로그
-        // - 여기 로그가 안 찍히면: WebMessage 자체가 안 들어오는 상태
-        // - 여기 로그는 찍히는데 처리/응답이 안 오면: 파싱/등록 로직 문제
-        print('[TendencyWebView][webMessage] runtimeType=${message.runtimeType} value=$message');
-        await _handleWebMessage(message);
-      },
-      onError: (e) {
-        // json.decode 실패 등은 onError로 떨어질 수 있다.
-        print('[TendencyWebView][webMessage][ERROR] $e');
-      },
-    );
+    _webMessageSub = _controller.webMessage.listen((message) async {
+      await _handleWebMessage(message);
+    });
 
     // ✅ WebMessage가 환경에 따라 막힐 수 있어, URL hash 브릿지를 함께 사용한다.
     // 웹에서 window.location.hash = "__ygg__<nonce>__<encodedJson>" 로 보내면 여기서 잡는다.
@@ -84,7 +74,6 @@ class _TendencyWebViewState extends State<TendencyWebView> {
         final encoded = frag.substring(idx + 2);
         final jsonStr = Uri.decodeComponent(encoded);
         final decoded = jsonDecode(jsonStr);
-        print('[TendencyWebView][hashMessage] $decoded');
         await _handleWebMessage(decoded);
 
         // 처리 후 hash 제거(반복 트리거 방지)
@@ -93,9 +82,7 @@ class _TendencyWebViewState extends State<TendencyWebView> {
             "try { history.replaceState(null,'',location.pathname+location.search); } catch(e) {}",
           );
         } catch (_) {}
-      } catch (e) {
-        print('[TendencyWebView][hashMessage][ERROR] $e');
-      }
+      } catch (_) {}
     });
     final prefs = await SharedPreferences.getInstance();
     final base = prefs.getString('survey_base_url') ?? 'http://localhost:5173';
@@ -240,8 +227,6 @@ class _TendencyWebViewState extends State<TendencyWebView> {
 
     if (type != 'new_student_submit') return;
 
-    // ✅ 여기까지 왔으면 "메시지 수신 자체"는 성공
-    print('[TendencyWebView][new_student_submit] requestId=$requestId');
     await _progressToWeb(requestId, 'received');
 
     try {

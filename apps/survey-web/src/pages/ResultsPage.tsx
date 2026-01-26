@@ -12,6 +12,7 @@ export default function ResultsPage() {
   const [selected, setSelected] = React.useState<Row | null>(null);
   const [answers, setAnswers] = React.useState<any[]>([]);
   const [traitSumByParticipant, setTraitSumByParticipant] = React.useState<Record<string, Record<string, number>>>({});
+  const [fastStatsByParticipant, setFastStatsByParticipant] = React.useState<Record<string, { fast: number; total: number; avgMs: number | null }>>({});
 
   React.useEffect(() => {
     (async () => {
@@ -27,8 +28,9 @@ export default function ResultsPage() {
     (async () => {
       const { data } = await supabase
         .from('question_answers')
-        .select('answer_number, question:questions(trait,type,min_score,max_score,reverse,weight), response:question_responses(participant_id)');
+        .select('answer_number, response_ms, is_fast, question:questions(trait,type,min_score,max_score,reverse,weight), response:question_responses(participant_id)');
       const map: Record<string, Record<string, number>> = {};
+      const fastMap: Record<string, { fast: number; total: number; sumMs: number; countMs: number }> = {};
       (data as any[] || []).forEach((row) => {
         const pid = row.response?.participant_id as string | undefined;
         const q = row.question as any;
@@ -43,8 +45,26 @@ export default function ResultsPage() {
         const adj = val * weight;
         if (!map[pid]) map[pid] = {};
         map[pid][trait] = (map[pid][trait] ?? 0) + adj;
+
+        if (!fastMap[pid]) fastMap[pid] = { fast: 0, total: 0, sumMs: 0, countMs: 0 };
+        const isFast = row.is_fast === true;
+        if (isFast) fastMap[pid].fast += 1;
+        fastMap[pid].total += 1;
+        if (typeof row.response_ms === 'number') {
+          fastMap[pid].sumMs += row.response_ms;
+          fastMap[pid].countMs += 1;
+        }
       });
       setTraitSumByParticipant(map);
+      const out: Record<string, { fast: number; total: number; avgMs: number | null }> = {};
+      Object.entries(fastMap).forEach(([pid, stats]) => {
+        out[pid] = {
+          fast: stats.fast,
+          total: stats.total,
+          avgMs: stats.countMs ? (stats.sumMs / stats.countMs) : null,
+        };
+      });
+      setFastStatsByParticipant(out);
     })();
   }, []);
 
@@ -52,7 +72,8 @@ export default function ResultsPage() {
     setSelected(row);
     const { data } = await supabase
       .from('question_answers')
-      .select('question_id, answer_text, answer_number, question:questions(text, trait, type)')
+      .select('question_id, answer_text, answer_number, response_ms, is_fast, question:questions(text, trait, type), response:question_responses!inner(participant_id)')
+      .eq('response.participant_id', row.id)
       .order('question_id');
     setAnswers((data as any[]) || []);
   }
@@ -73,12 +94,17 @@ export default function ResultsPage() {
             <div onClick={()=>openDetails(r)} style={{ color: tokens.textDim, cursor:'pointer' }}>
               {(() => {
                 const s = traitSumByParticipant[r.id];
+                const f = fastStatsByParticipant[r.id];
                 const order = ['D','I','A','C','N','L','S','P'];
                 if (!s) return '미집계';
                 const parts = order
                   .filter(k => s[k] !== undefined)
                   .map(k => `${k} ${Math.round(s[k])}`);
-                return parts.length ? parts.join(' · ') : '미집계';
+                const fastLabel = f ? `빠름 ${f.fast}/${f.total}` : '빠름 -';
+                const avgLabel = f?.avgMs != null ? `평균 ${Math.round(f.avgMs)}ms` : '';
+                return parts.length
+                  ? [parts.join(' · '), fastLabel, avgLabel].filter(Boolean).join(' · ')
+                  : '미집계';
               })()}
             </div>
             <div>
@@ -87,12 +113,13 @@ export default function ResultsPage() {
                   const ok = window.confirm('해당 참여자와 응답을 삭제하시겠습니까? 되돌릴 수 없습니다.');
                   if (!ok) return;
                   try {
-                    // 참가자 삭제: 응답은 별도 테이블이라 정합성을 위해 함께 정리
-                    await supabase.from('survey_participants').delete().eq('id', r.id);
-                    // 연쇄 삭제: 해당 참가자의 response가 있다면 정리
                     const { data: resps } = await supabase.from('question_responses').select('id').eq('participant_id', r.id);
                     const ids = (resps as any[]||[]).map(x=>x.id);
-                    if (ids.length) await supabase.from('question_responses').delete().in('id', ids);
+                    if (ids.length) {
+                      await supabase.from('question_answers').delete().in('response_id', ids);
+                      await supabase.from('question_responses').delete().in('id', ids);
+                    }
+                    await supabase.from('survey_participants').delete().eq('id', r.id);
                     setRows(prev => prev.filter(x => x.id !== r.id));
                   } catch (e) {
                     alert('삭제 실패: ' + ((e as any)?.message || '알 수 없는 오류'));
@@ -111,15 +138,20 @@ export default function ResultsPage() {
             <div style={{ color: tokens.textDim, fontSize:12 }}>{selected.email}</div>
           </div>
           <div>
-            <div style={{ display:'grid', gridTemplateColumns:'0.8fr 5fr 1fr', gap:12, padding:12, color:tokens.textDim }}>
-              <div>성향</div><div>문항</div><div>응답</div>
+            <div style={{ display:'grid', gridTemplateColumns:'0.8fr 5fr 1fr 1fr', gap:12, padding:12, color:tokens.textDim }}>
+              <div>성향</div><div>문항</div><div>응답</div><div>응답시간</div>
             </div>
             <div>
               {answers.map((a, i) => (
-                <div key={i} style={{ display:'grid', gridTemplateColumns:'0.8fr 5fr 1fr', gap:12, padding:'10px 12px', borderTop:`1px solid ${tokens.border}` }}>
+                <div key={i} style={{ display:'grid', gridTemplateColumns:'0.8fr 5fr 1fr 1fr', gap:12, padding:'10px 12px', borderTop:`1px solid ${tokens.border}` }}>
                   <div>{a.question?.trait}</div>
                   <div>{a.question?.text}</div>
                   <div>{a.answer_number ?? a.answer_text ?? ''}</div>
+                  <div style={{ color: tokens.textDim }}>
+                    {typeof a.response_ms === 'number'
+                      ? `${Math.round(a.response_ms)}ms${a.is_fast ? ' · 빠름' : ''}`
+                      : ''}
+                  </div>
                 </div>
               ))}
             </div>

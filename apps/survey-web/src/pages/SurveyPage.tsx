@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getSupabaseConfig, supabase } from '../lib/supabaseClient';
 import { tokens } from '../theme';
 
@@ -18,6 +18,7 @@ type TraitRound = {
   id: string;
   name: string;
   description?: string | null;
+  image_url?: string | null;
   order_index?: number | null;
   is_active?: boolean | null;
 };
@@ -109,7 +110,25 @@ function parsePartNo(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function shuffleList<T>(list: T[]): T[] {
+  const arr = list.slice();
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function normalizeNonNegativeInt(value: string): string {
+  return value.replace(/[^\d]/g, '');
+}
+
+function isValidNonNegativeInt(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
 export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
+  const FAST_RESPONSE_MS = 3000;
   const [questions, setQuestions] = useState<TraitQuestion[]>([]);
   const [idx, setIdx] = useState(0);
   const [scaleValue, setScaleValue] = useState<number | null>(null);
@@ -130,8 +149,22 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [roundParts, setRoundParts] = useState<TraitRoundPart[]>([]);
   const [activeRound, setActiveRound] = useState<number | null>(null);
   const [answersLoaded, setAnswersLoaded] = useState(false);
+  const [seenRounds, setSeenRounds] = useState<Record<string, boolean>>({});
+  const [roundIntroOpen, setRoundIntroOpen] = useState(false);
   const [seenParts, setSeenParts] = useState<Record<string, boolean>>({});
   const [partIntroOpen, setPartIntroOpen] = useState(false);
+  const [roundOrders, setRoundOrders] = useState<Record<number, string[]>>({});
+  const [roundComplete, setRoundComplete] = useState(false);
+  const questionStartRef = useRef<number | null>(null);
+  const lastQuestionIdRef = useRef<string | null>(null);
+  const questionElapsedRef = useRef<number>(0);
+  const timerRunningRef = useRef<boolean>(false);
+  const questionVisibleAtRef = useRef<number | null>(null);
+  const isSavingRef = useRef<boolean>(false);
+  const [pageActive, setPageActive] = useState(() => {
+    if (typeof document === 'undefined') return true;
+    return document.visibilityState === 'visible';
+  });
   const clientId = getClientId();
   const [reloadKey, setReloadKey] = useState(0);
   const sbCfg = getSupabaseConfig();
@@ -144,6 +177,34 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       school: (q.get('school') ?? '').trim(),
       level: (q.get('level') ?? '').trim() as any,
       grade: (q.get('grade') ?? '').trim(),
+    };
+  }, []);
+
+  useEffect(() => {
+    const isWebView = (() => {
+      try {
+        return Boolean((window as any)?.chrome?.webview);
+      } catch {
+        return false;
+      }
+    })();
+    const update = () => {
+      const visible = isWebView ? true : document.visibilityState === 'visible';
+      const focused = isWebView ? true : (document.hasFocus ? document.hasFocus() : true);
+      setPageActive(visible && focused);
+    };
+    update();
+    if (!isWebView) {
+      document.addEventListener('visibilitychange', update);
+      window.addEventListener('focus', update);
+      window.addEventListener('blur', update);
+    }
+    return () => {
+      if (!isWebView) {
+        document.removeEventListener('visibilitychange', update);
+        window.removeEventListener('focus', update);
+        window.removeEventListener('blur', update);
+      }
     };
   }, []);
 
@@ -199,9 +260,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     })();
   }, [slug, reloadKey, hasSupabaseEnv]);
 
-  async function onSaveAndExit() {
-    // 현재 문항에 응답이 있으면 저장 후 종료
-    if (isAnswered) await saveCurrentAnswer();
+  function goHome() {
     try {
       const u = new URL(window.location.href);
       u.pathname = '/';
@@ -214,6 +273,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     } catch {
       window.location.href = '/';
     }
+  }
+
+  async function onSaveAndExit(skipSave = false) {
+    // 현재 문항에 응답이 있으면 저장 후 종료
+    if (!skipSave && isAnswered) await saveCurrentAnswer();
+    goHome();
   }
 
   // ✅ 앱(WebView) 플로우: 학생(sid=uuid) 기준으로 진행상태를 불러와 이어하기
@@ -277,20 +342,30 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     return true;
   };
 
+  const sortedRounds = useMemo(() => {
+    return [...rounds].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+  }, [rounds]);
+
+  const roundOrderMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    sortedRounds.forEach((r, i) => {
+      const name = String(r.name ?? '').trim();
+      if (name) map[name] = i + 1;
+    });
+    return map;
+  }, [sortedRounds]);
+
   const normalizedQuestions = useMemo(() => {
     return questions.map((q, orderIndex) => {
-      const roundNo = parseRoundNo(q.round_label) ?? 1;
+      const roundLabel = String(q.round_label ?? '').trim();
+      const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(q.round_label) ?? 1;
       const partNo = parsePartNo(q.part_index) ?? 1;
       return { ...q, round_no: roundNo, part_no: partNo, order_index: orderIndex };
     });
-  }, [questions]);
+  }, [questions, roundOrderMap]);
 
   const hasRoundData = useMemo(() => {
     return questions.some((q) => String(q.round_label ?? '').trim().length > 0);
-  }, [questions]);
-
-  const hasPartData = useMemo(() => {
-    return questions.some((q) => q.part_index != null && String(q.part_index).trim().length > 0);
   }, [questions]);
 
   const roundQuestionsByNo = useMemo(() => {
@@ -330,20 +405,70 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   useEffect(() => {
     setSeenParts({});
     setPartIntroOpen(false);
+    setRoundIntroOpen(false);
+    setRoundComplete(false);
     setIdx(0);
     setMaxVisitedIndex(0);
   }, [activeRound]);
 
-  const activeQuestions = useMemo(() => {
+  const currentRoundMeta = useMemo(() => {
+    if (activeRound == null) return null;
+    return sortedRounds[activeRound - 1] ?? null;
+  }, [activeRound, sortedRounds]);
+
+  const activeQuestionsRaw = useMemo(() => {
     if (activeRound == null) return [] as NormalizedQuestion[];
     return roundQuestionsByNo[activeRound] ?? [];
   }, [activeRound, roundQuestionsByNo]);
 
-  const current = activeQuestions[idx];
+  const isPreSurveyRound = useMemo(() => {
+    const metaName = currentRoundMeta?.name ?? '';
+    if (metaName.includes('사전')) return true;
+    const sampleLabel = String(activeQuestionsRaw[0]?.round_label ?? '');
+    if (sampleLabel.includes('사전')) return true;
+    const firstRoundNo = roundNos[0] ?? 1;
+    return activeRound === firstRoundNo;
+  }, [currentRoundMeta, activeQuestionsRaw, activeRound, roundNos]);
 
-  const sortedRounds = useMemo(() => {
-    return [...rounds].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
-  }, [rounds]);
+  useEffect(() => {
+    if (activeRound == null) return;
+    if (!activeQuestionsRaw.length) return;
+    if (!isPreSurveyRound) return;
+    const key = `trait_round_order:${slug}:${activeRound}:${clientId}`;
+    let order: string[] | null = null;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) order = parsed.filter((v) => typeof v === 'string');
+      }
+    } catch {}
+    const ids = activeQuestionsRaw.map((q) => q.id);
+    if (!order || order.length !== ids.length || order.some((id) => !ids.includes(id))) {
+      order = shuffleList(ids);
+      try {
+        localStorage.setItem(key, JSON.stringify(order));
+      } catch {}
+    }
+    setRoundOrders((prev) => ({ ...prev, [activeRound]: order as string[] }));
+  }, [activeRound, activeQuestionsRaw, isPreSurveyRound, slug, clientId]);
+
+  const activeQuestions = useMemo(() => {
+    if (!activeQuestionsRaw.length) return [] as NormalizedQuestion[];
+    if (!isPreSurveyRound) return activeQuestionsRaw;
+    const order = activeRound != null ? roundOrders[activeRound] : null;
+    if (!order || !order.length) return activeQuestionsRaw;
+    const rank = new Map(order.map((id, i) => [id, i]));
+    return [...activeQuestionsRaw].sort((a, b) => {
+      return (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0);
+    });
+  }, [activeQuestionsRaw, isPreSurveyRound, roundOrders, activeRound]);
+
+  const current = activeQuestions[idx];
+  const totalQuestions = activeQuestions.length;
+  const progressPercent = totalQuestions > 0
+    ? Math.round(((idx + 1) / totalQuestions) * 100)
+    : 0;
 
   const roundPartsByRoundId = useMemo(() => {
     const map: Record<string, TraitRoundPart[]> = {};
@@ -357,15 +482,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     return map;
   }, [roundParts]);
 
-  const currentRoundMeta = useMemo(() => {
-    if (activeRound == null) return null;
-    return sortedRounds[activeRound - 1] ?? null;
-  }, [activeRound, sortedRounds]);
-
   const currentRoundParts = useMemo(() => {
     if (!currentRoundMeta) return [];
     return roundPartsByRoundId[currentRoundMeta.id] ?? [];
   }, [currentRoundMeta, roundPartsByRoundId]);
+
+  const hasPartsForRound = currentRoundParts.length > 0;
 
   const currentPartNo = current?.part_no ?? 1;
   const currentPartMeta = useMemo(() => {
@@ -374,8 +496,28 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     return currentRoundParts[idx] ?? null;
   }, [currentRoundParts, currentPartNo]);
 
-  const currentRoundLabel = currentRoundMeta?.name ?? (activeRound ? `${activeRound}차` : '');
-  const currentPartLabel = currentPartMeta?.name ?? (currentPartNo ? `파트 ${currentPartNo}` : '');
+  const fallbackRoundLabel = String(current?.round_label ?? '').trim();
+  const currentRoundLabel = currentRoundMeta?.name ?? (fallbackRoundLabel || (activeRound ? `${activeRound}차` : ''));
+  const currentPartLabel = hasPartsForRound
+    ? (currentPartMeta?.name ?? (currentPartNo ? `파트 ${currentPartNo}` : ''))
+    : '';
+  const roundKey = activeRound != null ? `round:${activeRound}` : '';
+
+  useEffect(() => {
+    if (!current || activeRound == null || !hasRoundData) {
+      setRoundIntroOpen(false);
+      return;
+    }
+    if (roundKey && !seenRounds[roundKey]) {
+      setRoundIntroOpen(true);
+      return;
+    }
+    setRoundIntroOpen(false);
+  }, [current, activeRound, hasRoundData, roundKey, seenRounds]);
+
+  const progressLabel = [currentRoundLabel, currentPartLabel].filter(Boolean).join(' · ');
+  const questionPositionLabel = `${idx + 1} / ${activeQuestions.length}`;
+  const headerLabel = progressLabel ? `${progressLabel} · ${questionPositionLabel}` : questionPositionLabel;
 
   useEffect(() => {
     const q = activeQuestions[idx];
@@ -393,11 +535,44 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     }
   }, [idx, activeQuestions, answers]);
 
-  const partKey = current ? `${activeRound ?? 0}:${currentPartNo}` : '';
-  const isFirstOfPart = !!current && (idx === 0 || activeQuestions[idx - 1]?.part_no !== currentPartNo);
+  useEffect(() => {
+    const shouldRunTimer = !!current
+      && !roundIntroOpen
+      && !partIntroOpen
+      && !confirmOpen
+      && !needAnswerOpen
+      && pageActive;
+
+    if (!current) return;
+    if (lastQuestionIdRef.current !== current.id) {
+      lastQuestionIdRef.current = current.id;
+      questionVisibleAtRef.current = Date.now();
+      questionElapsedRef.current = 0;
+      questionStartRef.current = null;
+      timerRunningRef.current = false;
+    }
+
+    if (shouldRunTimer) {
+      if (questionStartRef.current == null) {
+        questionStartRef.current = Date.now();
+        timerRunningRef.current = true;
+      }
+    } else if (questionStartRef.current != null) {
+      questionElapsedRef.current += Date.now() - questionStartRef.current;
+      questionStartRef.current = null;
+      timerRunningRef.current = false;
+    }
+  }, [current, roundIntroOpen, partIntroOpen, confirmOpen, needAnswerOpen, pageActive]);
+
+  const partKey = current && hasPartsForRound ? `${activeRound ?? 0}:${currentPartNo}` : '';
+  const isFirstOfPart = !!current && hasPartsForRound && (idx === 0 || activeQuestions[idx - 1]?.part_no !== currentPartNo);
 
   useEffect(() => {
-    if (!current || !hasPartData || !activeQuestions.length) {
+    if (roundIntroOpen) {
+      setPartIntroOpen(false);
+      return;
+    }
+    if (!current || !hasPartsForRound || !activeQuestions.length) {
       setPartIntroOpen(false);
       return;
     }
@@ -406,7 +581,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       return;
     }
     setPartIntroOpen(false);
-  }, [current, hasPartData, activeQuestions.length, isFirstOfPart, partKey, seenParts]);
+  }, [current, hasPartsForRound, activeQuestions.length, isFirstOfPart, partKey, seenParts, roundIntroOpen]);
 
   async function ensureParticipantId(): Promise<string | null> {
     if (participantId) return participantId;
@@ -458,39 +633,74 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   }
 
   async function saveCurrentAnswer(): Promise<boolean> {
-    if (!current) return false;
+    const q = current; // 현재 문항 스냅샷 고정
+    if (!q || isSavingRef.current) return false;
+
     const rid = await ensureResponseId();
     if (!rid) return false;
-    const answerNumber = current.type === 'scale' ? scaleValue : null;
-    const answerText = current.type === 'text' ? textValue : null;
 
-    // ✅ 1순위: RPC(SECURITY DEFINER)로 저장 → RLS/returning 문제를 근본적으로 회피
-    const { error: rpcErr } = await supabase.rpc('save_question_answer', {
-      p_response_id: rid,
-      p_question_id: current.id,
-      p_answer_number: answerNumber,
-      p_answer_text: answerText,
-    } as any);
-    if (rpcErr) {
-      // fallback: upsert (DB에 RPC 미적용 상태 대비)
-      console.error('[save_question_answer][rpc]', rpcErr);
-      const payload: any = { response_id: rid, question_id: current.id };
-      if (current.type === 'scale') payload.answer_number = scaleValue;
-      else payload.answer_text = textValue;
-      const { error } = await supabase
-        .from('question_answers')
-        .upsert(payload, { onConflict: 'response_id,question_id', returning: 'minimal' as any });
-      if (error) {
-        console.error('[question_answers][upsert]', error);
-        setToast(`답변 저장 중 오류: ${error.message || 'unknown'}`);
-        return false;
-      }
+    isSavingRef.current = true;
+
+    // 1. 시간 계산 (동기적으로 즉시 수행)
+    const startedAt = questionStartRef.current;
+    const elapsedSoFar = questionElapsedRef.current;
+    const visibleAt = questionVisibleAtRef.current;
+    const runningMs = startedAt != null ? (Date.now() - startedAt) : 0;
+    let elapsedMs = Math.round(elapsedSoFar + runningMs);
+    if (startedAt == null && elapsedSoFar <= 0 && visibleAt != null) {
+      elapsedMs = Math.round(Date.now() - visibleAt);
     }
-    setAnswers((m) => ({ ...m, [current.id]: current.type === 'scale' ? (scaleValue as number) : textValue }));
-    return true;
+    elapsedMs = Math.max(0, elapsedMs);
+    const isFast = elapsedMs < FAST_RESPONSE_MS;
+
+    // 2. 응답 값 스냅샷 고정
+    const answerNumber = q.type === 'scale' ? scaleValue : null;
+    const answerText = q.type === 'text' ? textValue : null;
+
+    // 3. 타이머 리셋 (중요: DB 저장 전에 동기적으로 리셋하여 다음 문항 타이머와의 간섭 차단)
+    questionStartRef.current = null;
+    questionElapsedRef.current = 0;
+    timerRunningRef.current = false;
+    questionVisibleAtRef.current = null;
+
+    try {
+      // ✅ 1순위: RPC(SECURITY DEFINER)로 저장
+      const { error: rpcErr } = await supabase.rpc('save_question_answer', {
+        p_response_id: rid,
+        p_question_id: q.id,
+        p_answer_number: answerNumber,
+        p_answer_text: answerText,
+        p_response_ms: elapsedMs,
+        p_is_fast: isFast,
+      } as any);
+
+      if (rpcErr) {
+        console.error('[save_question_answer][rpc]', rpcErr);
+        const payload: any = { response_id: rid, question_id: q.id };
+        if (q.type === 'scale') payload.answer_number = answerNumber;
+        else payload.answer_text = answerText;
+        payload.response_ms = elapsedMs;
+        payload.is_fast = isFast;
+        const { error } = await supabase
+          .from('question_answers')
+          .upsert(payload, { onConflict: 'response_id,question_id' });
+
+        if (error) {
+          console.error('[question_answers][upsert]', error);
+          setToast(`답변 저장 중 오류: ${error.message || 'unknown'}`);
+          return false;
+        }
+      }
+      setAnswers((m) => ({ ...m, [q.id]: q.type === 'scale' ? (answerNumber as number) : (answerText as string) }));
+      return true;
+    } finally {
+      isSavingRef.current = false;
+    }
   }
 
-  const isAnswered = current ? (current.type === 'scale' ? scaleValue !== null : (textValue.trim().length > 0)) : false;
+  const isAnswered = current
+    ? (current.type === 'scale' ? scaleValue !== null : isValidNonNegativeInt(textValue))
+    : false;
 
   async function onNext() {
     if (!current) return;
@@ -502,6 +712,10 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       setIdx(nextIdx);
       setMaxVisitedIndex((m) => Math.max(m, nextIdx));
     } else {
+      if (isPreSurveyRound) {
+        setRoundComplete(true);
+        return;
+      }
       setConfirmOpen(true);
     }
   }
@@ -526,6 +740,39 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       <div style={{ fontSize: 18, color: tokens.text, fontWeight: 900 }}>참여해 주셔서 감사합니다!</div>
     </div>
   );
+  if (roundComplete) {
+    return (
+      <div style={{ minHeight:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 14, padding: 24, minWidth: 320 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>수고하셨습니다!</div>
+          <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+            사전 조사가 완료되었습니다. 감사합니다.
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+            <button
+              type="button"
+              onClick={() => {
+                sessionStorage.removeItem('trait_response_id');
+                sessionStorage.removeItem('trait_participant_id');
+                onSaveAndExit(true);
+              }}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '10px 18px',
+                borderRadius: 10,
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              종료
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!current) {
     return (
@@ -567,12 +814,69 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     );
   }
 
+  const roundImageSrc = currentRoundMeta?.image_url ? resolveImageUrl(currentRoundMeta.image_url) : null;
   const partImageSrc = currentPartMeta?.image_url ? resolveImageUrl(currentPartMeta.image_url) : null;
   const isFinalRound = activeRound != null ? (roundNos.length <= 1 || activeRound === roundNos[roundNos.length - 1]) : true;
 
   return (
     <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-      {partIntroOpen && current ? (
+      {roundIntroOpen && current ? (
+        <div
+          style={{
+            background: tokens.panel,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: 14,
+            padding: 20,
+          }}
+        >
+          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>회차 안내</div>
+          <div style={{ fontSize: 24, fontWeight: 900, color: tokens.text }}>{currentRoundLabel}</div>
+          {currentRoundMeta?.description && (
+            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+              {currentRoundMeta.description}
+            </div>
+          )}
+          {roundImageSrc && (
+            <div style={{ marginTop: 16 }}>
+              <img
+                src={roundImageSrc}
+                alt="round"
+                loading="eager"
+                decoding="async"
+                style={{
+                  width: '100%',
+                  maxHeight: 320,
+                  objectFit: 'contain',
+                  borderRadius: 10,
+                  border: `1px solid ${tokens.border}`,
+                }}
+              />
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (roundKey) {
+                  setSeenRounds((m) => ({ ...m, [roundKey]: true }));
+                }
+                setRoundIntroOpen(false);
+              }}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '12px 22px',
+                borderRadius: 12,
+                fontWeight: 900,
+                cursor: 'pointer',
+              }}
+            >
+              다음
+            </button>
+          </div>
+        </div>
+      ) : partIntroOpen && current ? (
         <div
           style={{
             background: tokens.panel,
@@ -632,15 +936,21 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
         </div>
       ) : current ? (
         <div>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom: 8 }}>
-            <div style={{ color: tokens.textFaint }}>
-              {[currentRoundLabel, currentPartLabel].filter(Boolean).join(' · ')}
-              {currentRoundLabel || currentPartLabel ? ' · ' : ''}
-              {idx + 1} / {activeQuestions.length} · {current.trait}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: tokens.textFaint, marginBottom: 6 }}>{headerLabel}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, height: 8, background: tokens.field, border: `1px solid ${tokens.border}`, borderRadius: 999, overflow: 'hidden' }}>
+                  <div style={{ width: `${progressPercent}%`, height: '100%', background: tokens.accent }} />
+                </div>
+                <div style={{ color: tokens.textFaint, fontSize: 12, minWidth: 48, textAlign: 'right' }}>{progressPercent}%</div>
+              </div>
             </div>
             <button
               type="button"
-              onClick={onSaveAndExit}
+              onClick={() => {
+                void onSaveAndExit();
+              }}
               style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'8px 12px', borderRadius:10, cursor:'pointer', fontWeight:800, whiteSpace:'nowrap' }}
             >
               저장 후 종료
@@ -764,7 +1074,14 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               })()}
             </div>
           ) : (
-            <textarea value={textValue} onChange={(e)=>setTextValue(e.target.value)} rows={4} style={{ width:'100%', padding:12, background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:10, color:tokens.text, marginBottom:24 }} />
+            <input
+              value={textValue}
+              onChange={(e)=>setTextValue(normalizeNonNegativeInt(e.target.value))}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder="0 이상 정수 입력"
+              style={{ width:'100%', height:44, padding:'0 12px', background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:10, color:tokens.text, marginBottom:24, boxSizing:'border-box', appearance:'textfield' as any }}
+            />
           )}
           <div style={{ display:'flex', gap:12, justifyContent:'flex-end' }}>
             {/* < 버튼 */}
@@ -795,7 +1112,6 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       {toast && (
         <div style={{ marginTop: 12, fontSize: 13, color: tokens.accent }}>{toast}</div>
       )}
-
       {needAnswerOpen && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.44)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:60 }}>
           <div style={{ width:'min(420px,92vw)', background:tokens.panel, border:`1px solid ${tokens.border}`, borderRadius:12, padding:20 }}>
@@ -823,13 +1139,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
               <button
                 onClick={async()=> {
-                  const ok = await saveCurrentAnswer();
-                  if (!ok) return;
                   sessionStorage.removeItem('trait_response_id');
                   sessionStorage.removeItem('trait_participant_id');
                   setConfirmOpen(false);
                   if (!isFinalRound) {
-                    await onSaveAndExit();
+                    await onSaveAndExit(true);
                     return;
                   }
                   setSubmitted(true);
