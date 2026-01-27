@@ -3,6 +3,7 @@ import './global.css';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { tokens } from './theme';
+import packageJson from '../package.json';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';
 
@@ -22,10 +23,31 @@ function levelLabel(level?: string): string {
   return level; // fallback
 }
 
+function isValidEmail(email: string): boolean {
+  const v = email.trim();
+  if (!v) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+function newUuid(): string {
+  const cryptoObj = (globalThis as any).crypto as Crypto | undefined;
+  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+  if (!cryptoObj?.getRandomValues) {
+    return `uuid_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+  const bytes = new Uint8Array(16);
+  cryptoObj.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 // ✅ Supabase env 미설정 시에도 첫 화면(Landing)이 안 죽게,
 // 설문/결과 페이지는 필요할 때만 로드(lazy import)한다.
 const SurveyPage = React.lazy(() => import('./pages/SurveyPage'));
 const ResultsPage = React.lazy(() => import('./pages/ResultsPage'));
+const APP_VERSION = packageJson.version;
 
 function sendToAppViaHash(message: unknown): boolean {
   try {
@@ -301,9 +323,11 @@ function useQuery() {
 function Landing({
   onPickNew,
   onPickExisting,
+  isInWebViewHost,
 }: {
   onPickNew: () => void;
   onPickExisting: () => void;
+  isInWebViewHost: boolean;
 }) {
   const card: React.CSSProperties = {
     flex: 1,
@@ -318,10 +342,37 @@ function Landing({
     transition: 'background 160ms ease',
   };
   const label: React.CSSProperties = { color: tokens.text, fontSize: 30, fontWeight: 800 };
+  const versionLabel: React.CSSProperties = { color: tokens.textFaint, marginTop: 8, fontSize: 12, letterSpacing: 0.6 };
+  if (!isInWebViewHost) {
+    return (
+      <div style={{ maxWidth: 1100, margin: '64px auto 0' }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ color: tokens.text, fontSize: 84, fontWeight: 900, letterSpacing: 0.5 }}>성향분석</div>
+          <div style={versionLabel}>v{APP_VERSION}</div>
+          <div style={{ color: tokens.textFaint, marginTop: 10, fontSize: 16 }}>테스트에 15분 정도가 소요됩니다.</div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 18 }}>
+          <div
+            data-testid="btn-start"
+            onClick={onPickNew}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panel)}
+            style={{ ...card, maxWidth: 420, minHeight: 180 }}
+          >
+            <span style={label}>시작하기</span>
+          </div>
+        </div>
+        <div style={{ textAlign: 'center', marginTop: 14, color: tokens.textDim, fontSize: 14, fontWeight: 800, letterSpacing: 1.2 }}>
+          SISU MATH
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ maxWidth: 1100, margin: '64px auto 0' }}>
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <div style={{ color: tokens.text, fontSize: 84, fontWeight: 900, letterSpacing: 0.5 }}>성향분석</div>
+        <div style={versionLabel}>v{APP_VERSION}</div>
         <div style={{ color: tokens.textFaint, marginTop: 10, fontSize: 16 }}>테스트에 15분 정도가 소요됩니다.</div>
       </div>
       <div style={{ display: 'flex', gap: 18, marginTop: 18 }}>
@@ -351,9 +402,11 @@ function Landing({
 function NewStudentForm({
   onRegistered,
   onBack,
+  isInWebViewHost,
 }: {
-  onRegistered?: (student?: { id: string; name: string; school: string; level: EducationLevel; grade: string }) => void;
+  onRegistered?: (student?: { id: string; name: string; school: string; level: EducationLevel; grade: string; email?: string }) => void;
   onBack?: () => void;
+  isInWebViewHost: boolean;
 }) {
   const q = useQuery();
   const [page, setPage] = useState<'basic' | 'details'>('basic');
@@ -361,6 +414,7 @@ function NewStudentForm({
   const [level, setLevel] = useState<EducationLevel>('elementary');
   const [grade, setGrade] = useState('');
   const [school, setSchool] = useState('');
+  const [email, setEmail] = useState('');
   const [studentPhone, setStudentPhone] = useState('');
   const [parentPhone, setParentPhone] = useState('');
   // ✅ 추가 입력(양식만)
@@ -378,6 +432,7 @@ function NewStudentForm({
   const submitTimerRef = useRef<number | null>(null);
 
   const sid = q.get('sid') ?? '';
+  const isSimpleWeb = !isInWebViewHost;
 
   const [isNarrow, setIsNarrow] = useState<boolean>(false);
   useEffect(() => {
@@ -439,6 +494,7 @@ function NewStudentForm({
               school: school.trim(),
               level,
               grade,
+              email: email.trim() || undefined,
             });
           } else {
             onRegistered?.();
@@ -467,6 +523,8 @@ function NewStudentForm({
     if (!school.trim()) return '학교는 필수입니다.';
     if (!grade) return '학년을 선택해주세요.';
     if (!['elementary','middle','high'].includes(level)) return '과정을 선택해주세요.';
+    if (isSimpleWeb && !email.trim()) return '이메일은 필수입니다.';
+    if (email.trim() && !isValidEmail(email)) return '이메일 형식을 확인해주세요.';
     if (studentPhone.trim() && !/^\d{9,11}$/.test(studentPhone.replace(/[^0-9]/g, ''))) return '학생 연락처는 숫자 9~11자리로 입력하세요.';
     if (parentPhone.trim() && !/^\d{9,11}$/.test(parentPhone.replace(/[^0-9]/g, ''))) return '학부모 연락처는 숫자 9~11자리로 입력하세요.';
     return null;
@@ -476,6 +534,8 @@ function NewStudentForm({
     if (!name.trim()) return '이름은 필수입니다.';
     if (!school.trim()) return '학교는 필수입니다.';
     if (!grade) return '과정/학년을 선택해주세요.';
+    if (isSimpleWeb && !email.trim()) return '이메일은 필수입니다.';
+    if (email.trim() && !isValidEmail(email)) return '이메일 형식을 확인해주세요.';
     if (studentPhone.trim() && !/^\d{9,11}$/.test(studentPhone.replace(/[^0-9]/g, ''))) {
       return '학생 연락처는 숫자 9~11자리로 입력하세요.';
     }
@@ -486,6 +546,23 @@ function NewStudentForm({
   }
 
   function submitNewStudent() {
+    if (isSimpleWeb) {
+      setError(null); setOk(null);
+      const err = validateBasic();
+      if (err) { setError(err); return; }
+      const id = (sid && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid))
+        ? sid
+        : newUuid();
+      onRegistered?.({
+        id,
+        name: name.trim(),
+        school: school.trim(),
+        level,
+        grade,
+        email: email.trim(),
+      });
+      return;
+    }
     // ✅ 2/2(추가정보) 단계에서 "시작" 버튼을 눌렀을 때만 전송한다.
     // (1/2 → 2/2 전환 시점에 의도치 않게 전송/설문 시작되는 현상 방지)
     if (page !== 'details') return;
@@ -552,7 +629,7 @@ function NewStudentForm({
         }
       }}
       style={{
-        width: isNarrow ? '40vw' : '40vw',
+        width: isNarrow ? '92vw' : '40vw',
         maxWidth: 1100,
         margin: '32px auto 0',
         background: tokens.panel,
@@ -566,74 +643,20 @@ function NewStudentForm({
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 12, marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>신규학생 등록</div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>
+            {isSimpleWeb ? '설문 시작' : '신규학생 등록'}
+          </div>
           <div style={{ marginTop: 4, color: tokens.textFaint, fontSize: 13 }}>
-            {page === 'basic' ? '1/2 · 필수 정보와 연락처를 입력해 주세요.' : '2/2 · 추가 정보를 입력해 주세요.'}
+            {isSimpleWeb
+              ? '필수 정보를 입력해 주세요.'
+              : (page === 'basic' ? '1/2 · 필수 정보와 연락처를 입력해 주세요.' : '2/2 · 추가 정보를 입력해 주세요.')}
           </div>
         </div>
       </div>
 
       <div style={{ height: 1, background: tokens.border, margin: '14px 0 10px' }} />
 
-      {page === 'basic' ? (
-        <>
-          <SectionHeader title="필수 정보" />
-          {/* 1행: 이름 / 학교 */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr',
-              columnGap: 16,
-              rowGap: 14,
-            }}
-          >
-            <div style={{ maxWidth: 306 }}>
-              <FieldLabel text="이름" required />
-              <TextInput value={name} onChange={setName} placeholder="예: 홍길동" />
-            </div>
-            <div style={{ maxWidth: 306 }}>
-              <FieldLabel text="학교" required />
-              <TextInput value={school} onChange={setSchool} placeholder="예: 서울중학교" />
-            </div>
-          </div>
-
-          <div style={{ marginTop: 12, maxWidth: 306 }}>
-            <FieldLabel text="과정/학년" required />
-            <SelectBox
-              options={['선택', ...gradeOptions.map((x) => x.label)]}
-              value={selectedGradeLabel || ''}
-              placeholder="선택"
-              onChange={(v) => {
-                if (v === '선택') { setGrade(''); return; }
-                const hit = gradeOptions.find((x) => x.label === v);
-                if (!hit) return;
-                setLevel(hit.level);
-                setGrade(hit.grade);
-              }}
-              style={{ height: 44, marginTop: 6 }}
-            />
-          </div>
-
-          <SectionHeader title="연락처" />
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr',
-              columnGap: 16,
-              rowGap: 14,
-            }}
-          >
-            <div style={{ maxWidth: 306 }}>
-              <FieldLabel text="학부모 연락처" />
-              <TextInput value={parentPhone} onChange={setParentPhone} placeholder="예: 01012345678" inputMode="numeric" />
-            </div>
-            <div style={{ maxWidth: 306 }}>
-              <FieldLabel text="본인 연락처" />
-              <TextInput value={studentPhone} onChange={setStudentPhone} placeholder="예: 01012345678" inputMode="numeric" />
-            </div>
-          </div>
-        </>
-      ) : (
+      {!isSimpleWeb && page === 'details' ? (
         <>
           <SectionHeader title="진도" subtitle="현재/이전 진도를 입력해 주세요." />
           <div
@@ -697,12 +720,104 @@ function NewStudentForm({
           </div>
 
         </>
+      ) : (
+        <>
+          <SectionHeader title="필수 정보" />
+          {/* 1행: 이름 / 학교 */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr',
+              columnGap: 16,
+              rowGap: 14,
+            }}
+          >
+            <div style={{ maxWidth: 306 }}>
+              <FieldLabel text="이름" required />
+              <TextInput value={name} onChange={setName} placeholder="예: 홍길동" />
+            </div>
+            <div style={{ maxWidth: 306 }}>
+              <FieldLabel text="학교" required />
+              <TextInput value={school} onChange={setSchool} placeholder="예: 서울중학교" />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, maxWidth: 306 }}>
+            <FieldLabel text="과정/학년" required />
+            <SelectBox
+              options={['선택', ...gradeOptions.map((x) => x.label)]}
+              value={selectedGradeLabel || ''}
+              placeholder="선택"
+              onChange={(v) => {
+                if (v === '선택') { setGrade(''); return; }
+                const hit = gradeOptions.find((x) => x.label === v);
+                if (!hit) return;
+                setLevel(hit.level);
+                setGrade(hit.grade);
+              }}
+              style={{ height: 44, marginTop: 6 }}
+            />
+          </div>
+          {isSimpleWeb ? (
+            <div style={{ marginTop: 12, maxWidth: 306 }}>
+              <FieldLabel text="이메일" required />
+              <TextInput value={email} onChange={setEmail} placeholder="you@example.com" inputMode="email" />
+            </div>
+          ) : (
+            <>
+              <SectionHeader title="연락처" />
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr',
+                  columnGap: 16,
+                  rowGap: 14,
+                }}
+              >
+                <div style={{ maxWidth: 306 }}>
+                  <FieldLabel text="학부모 연락처" />
+                  <TextInput value={parentPhone} onChange={setParentPhone} placeholder="예: 01012345678" inputMode="numeric" />
+                </div>
+                <div style={{ maxWidth: 306 }}>
+                  <FieldLabel text="본인 연락처" />
+                  <TextInput value={studentPhone} onChange={setStudentPhone} placeholder="예: 01012345678" inputMode="numeric" />
+                </div>
+              </div>
+            </>
+          )}
+        </>
       )}
 
       {error && <div style={{ color: tokens.danger, marginTop: 12, fontSize: 13 }}>{error}</div>}
       {ok && <div style={{ color: '#7ED957', marginTop: 12, fontSize: 13 }} data-testid="toast-success">{ok}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 32, justifyContent: 'flex-end' }}>
-        {page === 'basic' ? (
+        {isSimpleWeb ? (
+          <>
+            <button
+              type="button"
+              onClick={onBack}
+              style={{ background: 'transparent', color: tokens.textDim, border: `1px solid ${tokens.border}`, padding: '12px 18px', borderRadius: 10, fontWeight: 900, cursor: 'pointer' }}
+            >
+              뒤로
+            </button>
+            <button
+              data-testid="btn-submit"
+              type="button"
+              onClick={() => submitNewStudent()}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '12px 18px',
+                borderRadius: 10,
+                fontWeight: 900,
+                cursor: 'pointer',
+              }}
+            >
+              시작하기
+            </button>
+          </>
+        ) : page === 'basic' ? (
           <>
             <button
               type="button"
@@ -960,14 +1075,17 @@ function App() {
             qs.set('school', s.school);
             qs.set('level', s.level);
             qs.set('grade', s.grade);
+            if (s.email) qs.set('email', s.email);
             navigate(`/survey?${qs.toString()}`);
           }}
           onBack={() => navigate('/')}
+          isInWebViewHost={isInWebViewHost}
         />
       ) : (
         <Landing
           onPickNew={() => navigate('/take')}
           onPickExisting={() => navigate('/existing')}
+          isInWebViewHost={isInWebViewHost}
         />
       )}
     </div>

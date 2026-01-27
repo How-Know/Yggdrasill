@@ -95,7 +95,7 @@ function orderButtonStyle(disabled: boolean, size = 22): React.CSSProperties {
   };
 }
 
-function ManageListDialog({ title, items, setItems, onClose }: { title: string; items: {id:string; name:string}[]; setItems: (v: {id:string; name:string}[]) => void; onClose: () => void }) {
+function ManageListDialog({ title, items, setItems, onClose }: { title: string; items: {id:string; name:string}[]; setItems: React.Dispatch<React.SetStateAction<{id:string; name:string}[]>>; onClose: () => void }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);

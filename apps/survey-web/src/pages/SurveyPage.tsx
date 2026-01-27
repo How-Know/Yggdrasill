@@ -52,6 +52,12 @@ function newUuid(): string {
   return (window.crypto?.randomUUID?.() || `u_${Date.now()}_${Math.random().toString(16).slice(2)}`);
 }
 
+function isValidEmail(email: string): boolean {
+  const v = email.trim();
+  if (!v) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
 function resolveImageUrl(raw: string | null | undefined): string | null {
   const v = (raw ?? '').trim();
   if (!v) return null;
@@ -155,12 +161,28 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const [partIntroOpen, setPartIntroOpen] = useState(false);
   const [roundOrders, setRoundOrders] = useState<Record<number, string[]>>({});
   const [roundComplete, setRoundComplete] = useState(false);
+  const isInWebViewHost = !!((window as any)?.chrome?.webview);
+  const [round2Access, setRound2Access] = useState<'unknown' | 'allowed' | 'denied'>(isInWebViewHost ? 'allowed' : 'unknown');
+  const [round2AccessMsg, setRound2AccessMsg] = useState<string | null>(null);
+  const [round2LinkStatus, setRound2LinkStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [round2LinkError, setRound2LinkError] = useState<string | null>(null);
+  const round2Token = useMemo(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return (q.get('r2') ?? '').trim();
+    } catch {
+      return '';
+    }
+  }, []);
   const questionStartRef = useRef<number | null>(null);
   const lastQuestionIdRef = useRef<string | null>(null);
   const questionElapsedRef = useRef<number>(0);
   const timerRunningRef = useRef<boolean>(false);
   const questionVisibleAtRef = useRef<number | null>(null);
   const isSavingRef = useRef<boolean>(false);
+  const isNarrowScreen = window.innerWidth < 720;
+  const pageMargin = isNarrowScreen ? '24px auto' : '40px auto';
+  const pagePadding = isNarrowScreen ? 8 : 16;
   const [pageActive, setPageActive] = useState(() => {
     if (typeof document === 'undefined') return true;
     return document.visibilityState === 'visible';
@@ -177,6 +199,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       school: (q.get('school') ?? '').trim(),
       level: (q.get('level') ?? '').trim() as any,
       grade: (q.get('grade') ?? '').trim(),
+      email: (q.get('email') ?? '').trim(),
     };
   }, []);
 
@@ -207,6 +230,52 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (isInWebViewHost) {
+      setRound2Access('allowed');
+      setRound2AccessMsg(null);
+      return;
+    }
+    if (!round2Token) {
+      setRound2Access('denied');
+      setRound2AccessMsg('2차 설문은 이메일로 받은 링크에서만 진행할 수 있습니다.');
+      return;
+    }
+    const tokenIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(round2Token);
+    if (!tokenIsUuid) {
+      setRound2Access('denied');
+      setRound2AccessMsg('링크가 유효하지 않습니다.');
+      return;
+    }
+    const sid = participantInfo.sid;
+    const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
+    if (!sidIsUuid) {
+      setRound2Access('denied');
+      setRound2AccessMsg('링크에 참여자 정보가 없어 2차 설문을 시작할 수 없습니다.');
+      return;
+    }
+    let cancelled = false;
+    setRound2Access('unknown');
+    setRound2AccessMsg(null);
+    (async () => {
+      const { data, error } = await supabase.rpc('verify_trait_round2_link', { p_token: round2Token } as any);
+      if (cancelled) return;
+      if (error) {
+        setRound2Access('denied');
+        setRound2AccessMsg('링크 확인 중 오류가 발생했습니다.');
+        return;
+      }
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row?.participant_id || String(row.participant_id) !== sid) {
+        setRound2Access('denied');
+        setRound2AccessMsg('링크가 유효하지 않습니다.');
+        return;
+      }
+      setRound2Access('allowed');
+    })();
+    return () => { cancelled = true; };
+  }, [isInWebViewHost, round2Token, participantInfo.sid]);
 
   useEffect(() => {
     (async () => {
@@ -469,6 +538,12 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const progressPercent = totalQuestions > 0
     ? Math.round(((idx + 1) / totalQuestions) * 100)
     : 0;
+  const secondRoundNo = roundNos.length > 1 ? roundNos[1] : null;
+  const isSecondRound = secondRoundNo != null && activeRound === secondRoundNo;
+  const round2Blocked = !isInWebViewHost && !!secondRoundNo && isSecondRound && round2Access !== 'allowed';
+  const round2BlockMessage = round2Access === 'unknown'
+    ? '링크를 확인 중입니다...'
+    : (round2AccessMsg || '2차 설문은 이메일로 받은 링크에서만 진행할 수 있습니다.');
 
   const roundPartsByRoundId = useMemo(() => {
     const map: Record<string, TraitRoundPart[]> = {};
@@ -583,6 +658,14 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     setPartIntroOpen(false);
   }, [current, hasPartsForRound, activeQuestions.length, isFirstOfPart, partKey, seenParts, roundIntroOpen]);
 
+  useEffect(() => {
+    if (!roundComplete) return;
+    if (isInWebViewHost) return;
+    if (roundNos.length < 2) return;
+    if (round2LinkStatus !== 'idle') return;
+    void sendRound2Link();
+  }, [roundComplete, isInWebViewHost, roundNos.length, round2LinkStatus]);
+
   async function ensureParticipantId(): Promise<string | null> {
     if (participantId) return participantId;
     // ✅ 앱(WebView)에서는 sid(학생 uuid)를 참여자 id로 사용해 재진입 시 이어하기 가능
@@ -602,6 +685,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       p_school: participantInfo.school || null,
       p_level: participantInfo.level || null,
       p_grade: participantInfo.grade || null,
+      p_email: participantInfo.email || null,
     } as any);
     if (pe || !out) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe?.message || 'unknown'})`); return null; }
     sessionStorage.setItem(cacheKey, pid);
@@ -630,6 +714,52 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     rid = String(rpcRid);
     sessionStorage.setItem(cacheKey, rid); setResponseId(rid);
     return rid;
+  }
+
+  async function sendRound2Link(): Promise<boolean> {
+    if (isInWebViewHost) return false;
+    if (!hasSupabaseEnv) {
+      setRound2LinkStatus('error');
+      setRound2LinkError('설문 서버 설정이 없어 이메일을 전송할 수 없습니다.');
+      return false;
+    }
+    const email = participantInfo.email.trim();
+    if (!email) {
+      setRound2LinkStatus('error');
+      setRound2LinkError('이메일 정보가 없습니다.');
+      return false;
+    }
+    if (!isValidEmail(email)) {
+      setRound2LinkStatus('error');
+      setRound2LinkError('이메일 형식을 확인해주세요.');
+      return false;
+    }
+    const pid = await ensureParticipantId();
+    const rid = await ensureResponseId();
+    if (!pid || !rid) {
+      setRound2LinkStatus('error');
+      setRound2LinkError('참여자 정보를 확인하지 못했습니다.');
+      return false;
+    }
+    setRound2LinkStatus('sending');
+    setRound2LinkError(null);
+    const baseUrl = window.location.origin;
+    const { data, error } = await supabase.functions.invoke('trait_round2_link_send', {
+      body: {
+        participant_id: pid,
+        response_id: rid,
+        email,
+        base_url: baseUrl,
+      },
+    });
+    if (error || (data as any)?.error) {
+      const msg = (data as any)?.error || error?.message || '메일 전송 실패';
+      setRound2LinkStatus('error');
+      setRound2LinkError(String(msg));
+      return false;
+    }
+    setRound2LinkStatus('sent');
+    return true;
   }
 
   async function saveCurrentAnswer(): Promise<boolean> {
@@ -747,6 +877,22 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
           <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>수고하셨습니다!</div>
           <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
             사전 조사가 완료되었습니다. 감사합니다.
+            {!isInWebViewHost && secondRoundNo ? (
+              <div style={{ marginTop: 8 }}>
+                2차 설문 링크를 이메일로 전송했습니다. 해당 링크로 접속해 진행해 주세요.
+              </div>
+            ) : null}
+            {!isInWebViewHost && round2LinkStatus === 'sending' ? (
+              <div style={{ marginTop: 8 }}>이메일 전송 중...</div>
+            ) : null}
+            {!isInWebViewHost && round2LinkStatus === 'sent' ? (
+              <div style={{ marginTop: 8, color: '#7ED957' }}>이메일 전송 완료</div>
+            ) : null}
+            {!isInWebViewHost && round2LinkStatus === 'error' ? (
+              <div style={{ marginTop: 8, color: tokens.danger }}>
+                링크 전송 실패: {round2LinkError || '알 수 없는 오류'}
+              </div>
+            ) : null}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
             <button
@@ -774,9 +920,39 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     );
   }
 
+  if (round2Blocked) {
+    return (
+      <div style={{ minHeight:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 14, padding: 24, minWidth: 320, maxWidth: 520 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: tokens.text }}>2차 설문 안내</div>
+          <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+            {round2BlockMessage}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+            <button
+              type="button"
+              onClick={goHome}
+              style={{
+                background: tokens.accent,
+                color: '#fff',
+                border: 'none',
+                padding: '10px 18px',
+                borderRadius: 10,
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              홈으로
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!current) {
     return (
-      <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+      <div style={{ maxWidth: 720, margin: pageMargin, padding: pagePadding }}>
         <div
           style={{
             background: tokens.panel,
@@ -819,7 +995,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const isFinalRound = activeRound != null ? (roundNos.length <= 1 || activeRound === roundNos[roundNos.length - 1]) : true;
 
   return (
-    <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+    <div style={{ maxWidth: 720, margin: pageMargin, padding: pagePadding }}>
       {roundIntroOpen && current ? (
         <div
           style={{
@@ -1046,8 +1222,11 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                 const min = current.min ?? 1;
                 const max = current.max ?? 10;
                 const count = Math.max(1, (max - min + 1));
-                const btnW = isNarrow ? 40 : 48;
-                const gap = isNarrow ? 8 : 12;
+                const gap = isNarrow ? 4 : 12;
+                const available = Math.min(720, window.innerWidth) - (pagePadding * 2) - (isNarrow ? 24 : 0);
+                const rawBtnW = Math.floor((available - (count - 1) * gap) / count);
+                const btnW = isNarrow ? Math.max(14, Math.min(44, rawBtnW)) : 48;
+                const btnFont = isNarrow ? Math.max(11, Math.min(16, Math.round(btnW * 0.55))) : 16;
                 const containerWidth = count * btnW + (count - 1) * gap;
                 const centerIdx = (min === 1 && max === 10) ? 5 : Math.ceil(count / 2);
                 return (
@@ -1064,7 +1243,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                         const on = scaleValue === v;
                         return (
                           <button key={v} type="button" onClick={()=>setScaleValue(v)}
-                            style={{ width:btnW, height:btnW, borderRadius:10, border:`1px solid ${tokens.border}`, background:on?tokens.accent:tokens.field, color:'#fff', cursor:'pointer', fontSize:16 }}>{v}</button>
+                            style={{ width:btnW, height:btnW, borderRadius:10, border:`1px solid ${tokens.border}`, background:on?tokens.accent:tokens.field, color:'#fff', cursor:'pointer', fontSize:btnFont }}>{v}</button>
                         );
                       })}
                     </div>
