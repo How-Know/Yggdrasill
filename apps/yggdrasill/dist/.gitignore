@@ -1,0 +1,6 @@
+# dist는 자동 업데이트에 필요한 AppInstaller만 Git으로 추적합니다.
+# 나머지 산출물(msix/zip/bin/pfx/cer/howto 등)은 빌드 스크립트가 생성하고 GitHub Release에 업로드합니다.
+*
+!.gitignore
+!Yggdrasill.appinstaller
+!Yggdrasill_utf8.appinstaller
