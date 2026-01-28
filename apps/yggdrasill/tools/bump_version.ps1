@@ -85,9 +85,14 @@ if(Test-Path $fwVerPath){
 }
 
 if(-not $NoGit){
+  # NOTE: 이 스크립트는 firmware/m5stack/src/version.h 같이 apps/yggdrasill 바깥 파일도 수정할 수 있으므로,
+  # git add/commit/push 는 반드시 repo root에서 수행해야 누락이 발생하지 않습니다.
+  $repoRoot = Resolve-Path (Join-Path (Get-Location) '..\..')
+  Push-Location $repoRoot | Out-Null
   git add -A | Out-Null
   git commit -m ("chore(release): bump to $ver.$new") | Out-Null
   git push | Out-Null
+  Pop-Location | Out-Null
   Ok 'git push done'
 }
 

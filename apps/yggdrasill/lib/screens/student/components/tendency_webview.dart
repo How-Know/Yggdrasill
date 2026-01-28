@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RendererBinding;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:webview_windows/webview_windows.dart';
@@ -369,6 +370,27 @@ class _TendencyWebViewState extends State<TendencyWebView> {
     if (!_initialized) {
       return const Center(child: CircularProgressIndicator());
     }
+    final bool allowWheelProxy = RendererBinding.instance.mouseTracker.mouseIsConnected;
+    final Widget webViewWidget = allowWheelProxy
+        ? Listener(
+            behavior: HitTestBehavior.deferToChild,
+            onPointerSignal: (signal) async {
+              if (signal is PointerScrollEvent) {
+                if (signal.kind != PointerDeviceKind.mouse) return;
+                final dy = signal.scrollDelta.dy.round();
+                if (dy == 0) return;
+                // NOTE: scrollingElement가 있으면 그쪽으로, 없으면 window로 fallback
+                final js = 'try { (document.scrollingElement || document.documentElement || document.body).scrollBy(0, $dy); } catch (e) { window.scrollBy(0, $dy); }';
+                try {
+                  await _controller.executeScript(js);
+                } catch (_) {
+                  // ignore
+                }
+              }
+            },
+            child: Webview(_controller),
+          )
+        : Webview(_controller);
     return Column(
       children: [
         Container(
@@ -398,23 +420,7 @@ class _TendencyWebViewState extends State<TendencyWebView> {
               Positioned.fill(
                 // ✅ 일부 환경(특히 Windows)에서 WebView가 마우스 휠 스크롤을 못 받는 케이스가 있어,
                 // Flutter 쪽에서 휠 이벤트를 감지해 JS로 스크롤을 전달한다.
-                child: Listener(
-                  behavior: HitTestBehavior.translucent,
-                  onPointerSignal: (signal) async {
-                    if (signal is PointerScrollEvent) {
-                      final dy = signal.scrollDelta.dy.round();
-                      if (dy == 0) return;
-                      // NOTE: scrollingElement가 있으면 그쪽으로, 없으면 window로 fallback
-                      final js = 'try { (document.scrollingElement || document.documentElement || document.body).scrollBy(0, $dy); } catch (e) { window.scrollBy(0, $dy); }';
-                      try {
-                        await _controller.executeScript(js);
-                      } catch (_) {
-                        // ignore
-                      }
-                    }
-                  },
-                  child: Webview(_controller),
-                ),
+                child: webViewWidget,
               ),
               const Positioned(left: 0, right: 0, top: 0, height: 1, child: ColoredBox(color: _bg)),
             ],

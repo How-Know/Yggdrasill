@@ -181,8 +181,9 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const questionVisibleAtRef = useRef<number | null>(null);
   const isSavingRef = useRef<boolean>(false);
   const isNarrowScreen = window.innerWidth < 720;
-  const pageMargin = isNarrowScreen ? '24px auto' : '40px auto';
-  const pagePadding = isNarrowScreen ? 8 : 16;
+  const appPadding = isNarrowScreen ? 12 : 24;
+  const pageMargin = isNarrowScreen ? '20px auto' : '40px auto';
+  const pagePadding = isNarrowScreen ? 6 : 16;
   const [pageActive, setPageActive] = useState(() => {
     if (typeof document === 'undefined') return true;
     return document.visibilityState === 'visible';
@@ -1222,19 +1223,21 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                 const min = current.min ?? 1;
                 const max = current.max ?? 10;
                 const count = Math.max(1, (max - min + 1));
-                const gap = isNarrow ? 4 : 12;
-                const available = Math.min(720, window.innerWidth) - (pagePadding * 2) - (isNarrow ? 24 : 0);
+                const gap = isNarrow ? 3 : 12;
+                const available = Math.min(720, window.innerWidth - (appPadding * 2)) - (pagePadding * 2) - (isNarrow ? 8 : 0);
                 const rawBtnW = Math.floor((available - (count - 1) * gap) / count);
-                const btnW = isNarrow ? Math.max(14, Math.min(44, rawBtnW)) : 48;
-                const btnFont = isNarrow ? Math.max(11, Math.min(16, Math.round(btnW * 0.55))) : 16;
+                const btnW = isNarrow ? Math.max(12, Math.min(44, rawBtnW)) : 48;
+                const btnFont = isNarrow ? Math.max(10, Math.min(16, Math.round(btnW * 0.55))) : 16;
                 const containerWidth = count * btnW + (count - 1) * gap;
-                const centerIdx = (min === 1 && max === 10) ? 5 : Math.ceil(count / 2);
+                const isTenScale = min === 1 && max === 10;
+                const centerIdx = isTenScale ? 5 : Math.ceil(count / 2);
+                const centerColumn = isTenScale ? '5 / span 2' : String(centerIdx);
                 return (
                   <div style={{ maxWidth: '100%', overflowX: 'auto' }}>
                     <div style={{ width: `${containerWidth}px`, maxWidth: '100%', margin: '0 auto' }}>
                     <div style={{ display:'grid', gridTemplateColumns:`repeat(${count}, ${btnW}px)`, columnGap:gap, color:tokens.textFaint, fontSize:13, marginBottom:8 }}>
                       <div style={{ gridColumn:'1', justifySelf:'start', whiteSpace:'nowrap' }}>전혀 그렇지 않다</div>
-                      <div style={{ gridColumn:String(centerIdx), justifySelf:'center', whiteSpace:'nowrap' }}>보통이다</div>
+                      <div style={{ gridColumn:centerColumn, justifySelf:'center', whiteSpace:'nowrap' }}>보통이다</div>
                       <div style={{ gridColumn:String(count), justifySelf:'end', whiteSpace:'nowrap' }}>매우 그렇다</div>
                     </div>
                     <div style={{ display:'grid', gridTemplateColumns:`repeat(${count}, ${btnW}px)`, columnGap:gap }}>

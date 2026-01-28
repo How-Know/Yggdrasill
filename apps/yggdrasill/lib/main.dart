@@ -1130,60 +1130,66 @@ class _GlobalMemoFloatingBannersState extends State<_GlobalMemoFloatingBanners> 
   @override
   Widget build(BuildContext context) {
     // FAB 드롭다운과 겹치지 않도록 좌측 하단으로 이동
-    return Positioned(
-      right: 30,
-      bottom: 100,
-      child: ValueListenableBuilder<List<Memo>>(
-        valueListenable: DataManager.instance.memosNotifier,
-        builder: (context, memos, _) {
-          // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
-          // 디버그 로그 제거
-          final withSchedule = memos.where((m) => m.scheduledAt != null).toList();
-          final notDismissedFlag = withSchedule.where((m) => !m.dismissed).toList();
-          final notSessionDismissed = notDismissedFlag.where((m) => !_sessionDismissed.contains(m.id)).toList();
-          // 일정 있는 메모: 미래 포함, 세션 해제/영구 해제 제외
-          final scheduledCandidates = notSessionDismissed
-              .toList()
-            ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
-          // 일정 없는 메모: 삭제 전까지 항상 표시 (dismissed/세션 해제 무시)
-          final unscheduledCandidates = memos
-              .where((m) => m.scheduledAt == null)
-              .toList();
-          // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
-          DateTime sortKey(m) => (m.scheduledAt ?? m.createdAt);
-          final combined = [...scheduledCandidates, ...unscheduledCandidates]
-            ..sort((a, b) => sortKey(a).compareTo(sortKey(b)));
-          if (combined.isEmpty) return const SizedBox.shrink();
-          // 아래에서 위로 쌓기
-          return Material(
-            color: Colors.transparent,
-            child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: combined.take(12).map((m) {
-              return _MemoBanner(
-                memo: m,
-                onClose: () async {
-                  // 무일정 메모는 삭제 전까지 항상 표시: X 동작 무시
-                  if (m.scheduledAt == null) {
-                    return;
-                  }
-                  // 일정 있는 메모: 세션 동안 숨김, 지난 일정이면 영구 숨김
-                  setState(() {
-                    _sessionDismissed.add(m.id);
-                  });
-                  if (DateTime.now().isAfter(m.scheduledAt!)) {
-                    await DataManager.instance.updateMemo(
-                      m.copyWith(dismissed: true, updatedAt: DateTime.now()),
-                    );
-                  }
-                },
+    return ValueListenableBuilder<bool>(
+      valueListenable: hideGlobalMemoFloatingBanners,
+      builder: (context, hidden, _) {
+        if (hidden) return const SizedBox.shrink();
+        return Positioned(
+          right: 30,
+          bottom: 100,
+          child: ValueListenableBuilder<List<Memo>>(
+            valueListenable: DataManager.instance.memosNotifier,
+            builder: (context, memos, _) {
+              // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
+              // 디버그 로그 제거
+              final withSchedule = memos.where((m) => m.scheduledAt != null).toList();
+              final notDismissedFlag = withSchedule.where((m) => !m.dismissed).toList();
+              final notSessionDismissed = notDismissedFlag.where((m) => !_sessionDismissed.contains(m.id)).toList();
+              // 일정 있는 메모: 미래 포함, 세션 해제/영구 해제 제외
+              final scheduledCandidates = notSessionDismissed
+                  .toList()
+                ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
+              // 일정 없는 메모: 삭제 전까지 항상 표시 (dismissed/세션 해제 무시)
+              final unscheduledCandidates = memos
+                  .where((m) => m.scheduledAt == null)
+                  .toList();
+              // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
+              DateTime sortKey(m) => (m.scheduledAt ?? m.createdAt);
+              final combined = [...scheduledCandidates, ...unscheduledCandidates]
+                ..sort((a, b) => sortKey(a).compareTo(sortKey(b)));
+              if (combined.isEmpty) return const SizedBox.shrink();
+              // 아래에서 위로 쌓기
+              return Material(
+                color: Colors.transparent,
+                child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: combined.take(12).map((m) {
+                  return _MemoBanner(
+                    memo: m,
+                    onClose: () async {
+                      // 무일정 메모는 삭제 전까지 항상 표시: X 동작 무시
+                      if (m.scheduledAt == null) {
+                        return;
+                      }
+                      // 일정 있는 메모: 세션 동안 숨김, 지난 일정이면 영구 숨김
+                      setState(() {
+                        _sessionDismissed.add(m.id);
+                      });
+                      if (DateTime.now().isAfter(m.scheduledAt!)) {
+                        await DataManager.instance.updateMemo(
+                          m.copyWith(dismissed: true, updatedAt: DateTime.now()),
+                        );
+                      }
+                    },
+                  );
+                }).toList(),
+                ),
               );
-            }).toList(),
-            ),
-          );
-        },
-      ),
+            },
+          ),
+        );
+      },
     );
   }
 }

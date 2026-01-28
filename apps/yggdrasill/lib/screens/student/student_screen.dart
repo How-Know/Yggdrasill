@@ -33,6 +33,7 @@ import '../../models/student_payment_info.dart';
 import 'package:uuid/uuid.dart';
 import 'components/attendance_indicator.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../app_overlays.dart';
 
 const Color _studentPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentMutedTextColor = Color(0xFFD0DDDD);
@@ -81,6 +82,7 @@ class StudentScreenState extends State<StudentScreen> {
   void initState() {
     super.initState();
     _loadFuture = _loadData();
+    _syncMemoFloatingVisibility();
   }
 
   @override
@@ -121,7 +123,12 @@ class StudentScreenState extends State<StudentScreen> {
     _searchFocusNode.dispose();
     _removeToolsDropdown();
     _searchController.dispose();
+    hideGlobalMemoFloatingBanners.value = false;
     super.dispose();
+  }
+
+  void _syncMemoFloatingVisibility() {
+    hideGlobalMemoFloatingBanners.value = _customTabIndex == 1;
   }
 
   List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
@@ -753,6 +760,7 @@ class StudentScreenState extends State<StudentScreen> {
                             setState(() {
                               _customTabIndex = i;
                             });
+                            _syncMemoFloatingVisibility();
                           },
                         ),
                       ),

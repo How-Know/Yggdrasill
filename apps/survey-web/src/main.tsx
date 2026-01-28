@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { tokens } from './theme';
 import packageJson from '../package.json';
+import { getSupabaseConfig, supabase } from './lib/supabaseClient';
 
 type EducationLevel = 'elementary' | 'middle' | 'high';
 
@@ -14,6 +15,8 @@ type ExistingStudent = {
   level?: EducationLevel;
   grade?: string;
 };
+
+type RoundProgressState = 'inactive' | 'active' | 'done';
 
 function levelLabel(level?: string): string {
   if (!level) return '-';
@@ -27,6 +30,19 @@ function isValidEmail(email: string): boolean {
   const v = email.trim();
   if (!v) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+function parseRoundNo(value: unknown): number | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const m = raw.match(/\d+/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function newUuid(): string {
@@ -906,6 +922,13 @@ function ExistingStudentsPage({
   onPick: (s: ExistingStudent) => void;
 }) {
   const [q, setQ] = useState('');
+  const sbCfg = getSupabaseConfig();
+  const canFetchProgress = isInWebViewHost && sbCfg.ok;
+  const [questionRoundMap, setQuestionRoundMap] = useState<Record<string, number>>({});
+  const [roundTotals, setRoundTotals] = useState<Record<number, number>>({});
+  const [progressMap, setProgressMap] = useState<Record<string, RoundProgressState[]>>({});
+  const [progressLoading, setProgressLoading] = useState(false);
+  const defaultProgress: RoundProgressState[] = ['inactive', 'inactive', 'inactive'];
 
   useEffect(() => {
     // 페이지 진입 시 자동 로드
@@ -922,6 +945,102 @@ function ExistingStudentsPage({
       return hay.includes(needle);
     });
   }, [q, students]);
+
+  useEffect(() => {
+    if (!canFetchProgress) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const roundOrderMap: Record<string, number> = {};
+        const { data: roundData } = await supabase.rpc('list_trait_rounds_public');
+        if (Array.isArray(roundData)) {
+          const sorted = [...roundData].sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
+          sorted.forEach((r: any, i: number) => {
+            const key = String(r?.name ?? '').trim();
+            if (key) roundOrderMap[key] = i + 1;
+          });
+        }
+        const { data, error: qErr } = await supabase
+          .from('questions')
+          .select('id, round_label')
+          .eq('is_active', true)
+          .order('created_at', { ascending: true });
+        if (qErr) throw qErr;
+        const nextRoundMap: Record<string, number> = {};
+        const totals: Record<number, number> = {};
+        for (const row of (data ?? []) as any[]) {
+          const label = String(row?.round_label ?? '').trim();
+          const roundNo = roundOrderMap[label] ?? parseRoundNo(label) ?? 1;
+          const qid = String(row?.id ?? '');
+          if (!qid) continue;
+          nextRoundMap[qid] = roundNo;
+          totals[roundNo] = (totals[roundNo] ?? 0) + 1;
+        }
+        if (!cancelled) {
+          setQuestionRoundMap(nextRoundMap);
+          setRoundTotals(totals);
+        }
+      } catch {
+        if (!cancelled) {
+          setQuestionRoundMap({});
+          setRoundTotals({});
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canFetchProgress]);
+
+  useEffect(() => {
+    if (!canFetchProgress) return;
+    if (!students.length || Object.keys(questionRoundMap).length === 0) {
+      setProgressMap({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setProgressLoading(true);
+      const ids = students.map((s) => s.id).filter((id) => isUuid(id));
+      if (!ids.length) {
+        if (!cancelled) {
+          setProgressMap({});
+          setProgressLoading(false);
+        }
+        return;
+      }
+      const { data, error: pErr } = await supabase.rpc('list_trait_answers_by_participants', { p_participant_ids: ids });
+      if (cancelled) return;
+      if (pErr) {
+        setProgressMap({});
+        setProgressLoading(false);
+        return;
+      }
+      const countsByStudent: Record<string, Record<number, number>> = {};
+      for (const row of (data ?? []) as any[]) {
+        const pid = String(row?.participant_id ?? '');
+        const qid = String(row?.question_id ?? '');
+        const roundNo = questionRoundMap[qid];
+        if (!pid || !roundNo) continue;
+        if (!countsByStudent[pid]) countsByStudent[pid] = {};
+        countsByStudent[pid][roundNo] = (countsByStudent[pid][roundNo] ?? 0) + 1;
+      }
+      const roundSlots = [1, 2, 3];
+      const nextProgress: Record<string, RoundProgressState[]> = {};
+      for (const s of students) {
+        const counts = countsByStudent[s.id] ?? {};
+        nextProgress[s.id] = roundSlots.map((roundNo) => {
+          const total = roundTotals[roundNo] ?? 0;
+          const answered = counts[roundNo] ?? 0;
+          if (total <= 0) return 'inactive';
+          if (answered <= 0) return 'inactive';
+          if (answered >= total) return 'done';
+          return 'active';
+        });
+      }
+      setProgressMap(nextProgress);
+      setProgressLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [canFetchProgress, students, questionRoundMap, roundTotals]);
 
   return (
     <div style={{ maxWidth: 900, margin: '32px auto 0' }}>
@@ -975,9 +1094,26 @@ function ExistingStudentsPage({
                 onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
               >
-                <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
-                <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
-                  {(s.school ?? '-') + ' · ' + levelLabel(s.level) + ' ' + (s.grade ?? '-')}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
+                    <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
+                      {(s.school ?? '-') + ' · ' + levelLabel(s.level) + ' ' + (s.grade ?? '-')}
+                    </div>
+                  </div>
+                  {isInWebViewHost && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: progressLoading ? 0.7 : 1 }}>
+                      {(progressMap[s.id] ?? defaultProgress).map((st, i) => {
+                        const color = st === 'done' ? tokens.accent : st === 'active' ? tokens.textDim : tokens.border;
+                        return (
+                          <div
+                            key={`${s.id}_${i}`}
+                            style={{ width: 22, height: 8, borderRadius: 999, background: color, border: `1px solid ${tokens.border}` }}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -995,6 +1131,8 @@ function App() {
   const { path, navigate } = useRoute();
   const pathname = (path.split('?')[0] || '/');
   const isInWebViewHost = !!((window as any)?.chrome?.webview);
+  const isNarrowScreen = window.innerWidth < 720;
+  const appPadding = isNarrowScreen ? 12 : 24;
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | null>(null);
   const [existingStudents, setExistingStudents] = useState<ExistingStudent[]>([]);
@@ -1046,7 +1184,7 @@ function App() {
     navigate(`/survey?${qs.toString()}`);
   }
   return (
-    <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: 24, boxSizing: 'border-box' }}>
+    <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: appPadding, boxSizing: 'border-box' }}>
       {pathname.startsWith('/results') ? (
         <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
           <ResultsPage />
