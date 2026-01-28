@@ -180,6 +180,22 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
   const timerRunningRef = useRef<boolean>(false);
   const questionVisibleAtRef = useRef<number | null>(null);
   const isSavingRef = useRef<boolean>(false);
+  const storage = useMemo<Storage>(() => {
+    try {
+      return isInWebViewHost ? window.sessionStorage : window.localStorage;
+    } catch {
+      return window.sessionStorage;
+    }
+  }, [isInWebViewHost]);
+  const storageGet = (key: string) => {
+    try { return storage.getItem(key); } catch { return null; }
+  };
+  const storageSet = (key: string, value: string) => {
+    try { storage.setItem(key, value); } catch {}
+  };
+  const storageRemove = (key: string) => {
+    try { storage.removeItem(key); } catch {}
+  };
   const isNarrowScreen = window.innerWidth < 720;
   const appPadding = isNarrowScreen ? 12 : 24;
   const pageMargin = isNarrowScreen ? '20px auto' : '40px auto';
@@ -673,7 +689,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     const sid = participantInfo.sid;
     const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
     const cacheKey = sidIsUuid ? `trait_participant_id:${slug}:${sid}` : `trait_participant_id:${slug}`;
-    const cached = sessionStorage.getItem(cacheKey);
+    const cached = storageGet(cacheKey);
     if (cached) { setParticipantId(cached); return cached; }
     const pid = sidIsUuid ? sid : newUuid();
     // ✅ 권장: get_or_create RPC(SECURITY DEFINER)로 participant를 보장한다.
@@ -689,7 +705,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
       p_email: participantInfo.email || null,
     } as any);
     if (pe || !out) { console.error(pe); setToast(`참여자 정보를 저장하지 못했습니다. (${pe?.message || 'unknown'})`); return null; }
-    sessionStorage.setItem(cacheKey, pid);
+    storageSet(cacheKey, pid);
     setParticipantId(pid);
     return pid;
   }
@@ -699,7 +715,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     const sid = participantInfo.sid;
     const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
     const cacheKey = sidIsUuid ? `trait_response_id:${slug}:${sid}` : `trait_response_id:${slug}`;
-    let rid = sessionStorage.getItem(cacheKey);
+    let rid = storageGet(cacheKey);
     if (rid) { setResponseId(rid); return rid; }
     // ✅ 기존학생/신규학생 플로우: 설문 시작 전 participant를 먼저 생성
     // (anon은 select가 막혀있어 "조회 후 재사용" 불가)
@@ -713,8 +729,20 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     } as any);
     if (re || !rpcRid) { console.error(re); setToast(`오류가 발생했습니다. (${re?.message || 'unknown'})`); return null; }
     rid = String(rpcRid);
-    sessionStorage.setItem(cacheKey, rid); setResponseId(rid);
+    storageSet(cacheKey, rid); setResponseId(rid);
     return rid;
+  }
+
+  function clearStoredProgress() {
+    const sid = participantInfo.sid;
+    const sidIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sid);
+    const participantKey = sidIsUuid ? `trait_participant_id:${slug}:${sid}` : `trait_participant_id:${slug}`;
+    const responseKey = sidIsUuid ? `trait_response_id:${slug}:${sid}` : `trait_response_id:${slug}`;
+    storageRemove(participantKey);
+    storageRemove(responseKey);
+    // legacy keys
+    storageRemove('trait_participant_id');
+    storageRemove('trait_response_id');
   }
 
   async function sendRound2Link(): Promise<boolean> {
@@ -899,8 +927,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
             <button
               type="button"
               onClick={() => {
-                sessionStorage.removeItem('trait_response_id');
-                sessionStorage.removeItem('trait_participant_id');
+                clearStoredProgress();
                 onSaveAndExit(true);
               }}
               style={{
@@ -1256,14 +1283,69 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               })()}
             </div>
           ) : (
-            <input
-              value={textValue}
-              onChange={(e)=>setTextValue(normalizeNonNegativeInt(e.target.value))}
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="0 이상 정수 입력"
-              style={{ width:'100%', height:44, padding:'0 12px', background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:10, color:tokens.text, marginBottom:24, boxSizing:'border-box', appearance:'textfield' as any }}
-            />
+            isInWebViewHost ? (() => {
+              const keypadBtn: React.CSSProperties = {
+                height: 48,
+                borderRadius: 12,
+                border: `1px solid ${tokens.border}`,
+                background: tokens.field,
+                color: tokens.text,
+                fontSize: 18,
+                fontWeight: 800,
+                cursor: 'pointer',
+              };
+              const actionBtn: React.CSSProperties = {
+                ...keypadBtn,
+                background: tokens.panelAlt,
+                color: tokens.textDim,
+                fontWeight: 700,
+              };
+              const appendDigit = (d: string) => setTextValue((prev) => normalizeNonNegativeInt(`${prev}${d}`));
+              const removeLast = () => setTextValue((prev) => (prev ? prev.slice(0, -1) : ''));
+              const clearAll = () => setTextValue('');
+              return (
+                <div style={{ marginBottom: 24 }}>
+                  <div
+                    style={{
+                      width: '100%',
+                      minHeight: 48,
+                      padding: '10px 12px',
+                      background: tokens.field,
+                      border: `1px solid ${tokens.border}`,
+                      borderRadius: 10,
+                      color: tokens.text,
+                      fontSize: 18,
+                      boxSizing: 'border-box',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      letterSpacing: 1,
+                    }}
+                  >
+                    {textValue ? textValue : <span style={{ color: tokens.textFaint }}>0 이상 정수 입력</span>}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 10 }}>
+                    {['1','2','3','4','5','6','7','8','9'].map((d) => (
+                      <button key={d} type="button" style={keypadBtn} onClick={() => appendDigit(d)}>{d}</button>
+                    ))}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 8 }}>
+                    <button type="button" style={actionBtn} onClick={clearAll}>초기화</button>
+                    <button type="button" style={keypadBtn} onClick={() => appendDigit('0')}>0</button>
+                    <button type="button" style={actionBtn} onClick={removeLast}>삭제</button>
+                  </div>
+                </div>
+              );
+            })() : (
+              <input
+                value={textValue}
+                onChange={(e)=>setTextValue(normalizeNonNegativeInt(e.target.value))}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="0 이상 정수 입력"
+                style={{ width:'100%', height:44, padding:'0 12px', background:tokens.field, border:`1px solid ${tokens.border}`, borderRadius:10, color:tokens.text, marginBottom:24, boxSizing:'border-box', appearance:'textfield' as any }}
+              />
+            )
           )}
           <div style={{ display:'flex', gap:12, justifyContent:'flex-end' }}>
             {/* < 버튼 */}
@@ -1321,8 +1403,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
               <button onClick={()=>setConfirmOpen(false)} style={{ background:'transparent', color:tokens.textFaint, border:`1px solid ${tokens.border}`, padding:'10px 16px', borderRadius:10, cursor:'pointer' }}>취소</button>
               <button
                 onClick={async()=> {
-                  sessionStorage.removeItem('trait_response_id');
-                  sessionStorage.removeItem('trait_participant_id');
+                  clearStoredProgress();
                   setConfirmOpen(false);
                   if (!isFinalRound) {
                     await onSaveAndExit(true);

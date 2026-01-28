@@ -966,11 +966,17 @@ class _AssessmentStructurePage extends StatelessWidget {
             docPath: _termPath('non_intervention/mind.md'),
             children: [
               _StructureNode(
-                title: '기질(정서 반응성)',
-                docPath: _termPath('non_intervention/mind_emotional_reactivity.md'),
+                title: '기질',
+                docPath: _termPath('non_intervention/mind_temperament.md'),
+                children: [
+                  _StructureNode(
+                    title: '정서 반응성',
+                    docPath: _termPath('non_intervention/mind_emotional_reactivity.md'),
+                  ),
+                ],
               ),
               _StructureNode(
-                title: '성향 (인지·행동 접근 경향)',
+                title: '성향',
                 docPath: _termPath('non_intervention/mind_tendency.md'),
                 children: [
                   _StructureNode(
@@ -996,7 +1002,7 @@ class _AssessmentStructurePage extends StatelessWidget {
                 ],
               ),
               _StructureNode(
-                title: '신념·자기 개념 체계',
+                title: '신념',
                 docPath: _termPath('non_intervention/mind_belief_identity_system.md'),
                 children: [
                   _StructureNode(
@@ -1036,7 +1042,11 @@ class _AssessmentStructurePage extends StatelessWidget {
                     ],
                   ),
                   _StructureNode(
-                    title: '자기 개념 / 정체성',
+                    title: '자기 개념',
+                    docPath: _termPath('non_intervention/mind_self_concept.md'),
+                  ),
+                  _StructureNode(
+                    title: '정체성',
                     docPath: _termPath('non_intervention/mind_identity.md'),
                   ),
                 ],
@@ -1234,6 +1244,12 @@ class _AssessmentStructurePage extends StatelessWidget {
                   _StructureNode(
                     title: '지속성',
                     docPath: _termPath('intervention/behavior_persistence.md'),
+                    children: [
+                      _StructureNode(
+                        title: '문제 지속성',
+                        docPath: _termPath('intervention/behavior_persistence.md'),
+                      ),
+                    ],
                   ),
                 ],
               ),
