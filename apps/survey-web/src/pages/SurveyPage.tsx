@@ -900,6 +900,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
     </div>
   );
   if (roundComplete) {
+    const shouldGateExit = !isInWebViewHost && !!secondRoundNo && round2LinkStatus !== 'sent';
     return (
       <div style={{ minHeight:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
         <div style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 14, padding: 24, minWidth: 320 }}>
@@ -922,27 +923,34 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                 링크 전송 실패: {round2LinkError || '알 수 없는 오류'}
               </div>
             ) : null}
+            {shouldGateExit ? (
+              <div style={{ marginTop: 10, color: tokens.textDim }}>
+                이메일 전송이 완료될 때까지 창을 닫지 말아 주세요.
+              </div>
+            ) : null}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-            <button
-              type="button"
-              onClick={() => {
-                clearStoredProgress();
-                onSaveAndExit(true);
-              }}
-              style={{
-                background: tokens.accent,
-                color: '#fff',
-                border: 'none',
-                padding: '10px 18px',
-                borderRadius: 10,
-                fontWeight: 800,
-                cursor: 'pointer',
-              }}
-            >
-              종료
-            </button>
-          </div>
+          {!shouldGateExit && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  clearStoredProgress();
+                  onSaveAndExit(true);
+                }}
+                style={{
+                  background: tokens.accent,
+                  color: '#fff',
+                  border: 'none',
+                  padding: '10px 18px',
+                  borderRadius: 10,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                종료
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1034,9 +1042,9 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
           }}
         >
           <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>회차 안내</div>
-          <div style={{ fontSize: 24, fontWeight: 900, color: tokens.text }}>{currentRoundLabel}</div>
+          <div style={{ fontSize: 24, fontWeight: 900, color: tokens.text, textAlign: 'center' }}>{currentRoundLabel}</div>
           {currentRoundMeta?.description && (
-            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5, whiteSpace: 'pre-line' }}>
               {currentRoundMeta.description}
             </div>
           )}
@@ -1052,7 +1060,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
                   maxHeight: 320,
                   objectFit: 'contain',
                   borderRadius: 10,
-                  border: `1px solid ${tokens.border}`,
+                  border: '1px solid transparent',
                 }}
               />
             </div>
@@ -1094,7 +1102,7 @@ export default function SurveyPage({ slug = 'welcome' }: { slug?: string }) {
           )}
           <div style={{ fontSize: 24, fontWeight: 900, color: tokens.text }}>{currentPartLabel}</div>
           {currentPartMeta?.description && (
-            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5 }}>
+            <div style={{ marginTop: 10, color: tokens.textFaint, lineHeight: 1.5, whiteSpace: 'pre-line' }}>
               {currentPartMeta.description}
             </div>
           )}

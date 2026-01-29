@@ -104,8 +104,17 @@ export default function ResultsPage() {
       (data as any[] || []).forEach((row) => {
         const pid = row.response?.participant_id as string | undefined;
         const q = row.question as any;
+        if (!pid || !q) return;
+
+        // ✅ 진행률은 문항 타입과 무관하게 "응답 존재" 기준으로 집계
+        const roundLabel = String(q.round_label ?? '').trim();
+        const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(roundLabel) ?? 1;
+        if (!progressMap[pid]) progressMap[pid] = {};
+        progressMap[pid][roundNo] = (progressMap[pid][roundNo] ?? 0) + 1;
+
+        // ✅ 점수/빠름 통계는 scale 문항만 집계
         const valRaw = row.answer_number as number | null;
-        if (!pid || !q || q.type !== 'scale' || typeof valRaw !== 'number') return;
+        if (q.type !== 'scale' || typeof valRaw !== 'number') return;
         const trait = q.trait as string;
         const min = (q.min_score ?? 1) as number;
         const max = (q.max_score ?? 10) as number;
@@ -124,11 +133,6 @@ export default function ResultsPage() {
           fastMap[pid].sumMs += row.response_ms;
           fastMap[pid].countMs += 1;
         }
-
-        const roundLabel = String(q.round_label ?? '').trim();
-        const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(roundLabel) ?? 1;
-        if (!progressMap[pid]) progressMap[pid] = {};
-        progressMap[pid][roundNo] = (progressMap[pid][roundNo] ?? 0) + 1;
       });
       setTraitSumByParticipant(map);
       const out: Record<string, { fast: number; total: number; avgMs: number | null }> = {};

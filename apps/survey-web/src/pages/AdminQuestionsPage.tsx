@@ -38,6 +38,7 @@ type TraitRound = {
   id: string;
   name: string;
   description?: string | null;
+  image_url?: string | null;
   order_index?: number | null;
   is_active?: boolean | null;
 };
@@ -50,6 +51,329 @@ type TraitRoundPart = {
   image_url?: string | null;
   order_index?: number | null;
 };
+
+type TagNode = {
+  label: string;
+  children?: TagNode[];
+};
+
+const TAG_PATH_SEP = ' > ';
+
+const TAG_TREE: TagNode[] = [
+  {
+    label: '비개입 변수(통제 어려운 것)',
+    children: [
+      {
+        label: '마음',
+        children: [
+          {
+            label: '기질',
+            children: [
+              { label: '정서 반응성' },
+              { label: '기질적 불안 민감성' },
+              { label: '스트레스 취약성' },
+            ],
+          },
+          {
+            label: '성향',
+            children: [
+              {
+                label: '접근 성향 (Style Axes)',
+                children: [
+                  { label: '자율성 축 (자주적 ↔ 의존적)' },
+                  { label: '인지 처리 축 (논리 ↔ 직관)' },
+                  { label: '실행 스타일 축 (계획 ↔ 즉흥)' },
+                  { label: '도전 반응 축 (도전 ↔ 회피)' },
+                  { label: '16가지 성향 프로파일' },
+                ],
+              },
+              {
+                label: '조절 성향 (Regulatory Dispositions)',
+                children: [
+                  { label: '메타인지 성향' },
+                ],
+              },
+            ],
+          },
+          {
+            label: '신념',
+            children: [
+              {
+                label: '신념 체계',
+                children: [
+                  { label: '수학 능력관' },
+                  {
+                    label: '통제 가능성 신념',
+                    children: [
+                      { label: '노력–성과 연결 신념' },
+                      { label: '주도성 인식' },
+                      { label: '외적 귀인 신념' },
+                    ],
+                  },
+                  { label: '실패 해석 신념' },
+                  { label: '질문/이해에 대한 신념' },
+                  { label: '회복 기대 신념' },
+                ],
+              },
+              { label: '자기 개념' },
+              { label: '정체성' },
+            ],
+          },
+        ],
+      },
+      {
+        label: '재능',
+        children: [
+          { label: '처리 속도' },
+          { label: '작업기억 용량' },
+          { label: '공간 능력' },
+        ],
+      },
+      {
+        label: '운',
+        children: [
+          { label: '만난 문제 유형' },
+          { label: '시험 당일 컨디션' },
+          { label: '우연한 성공/실패 경험' },
+        ],
+      },
+      {
+        label: '학습 환경',
+        children: [
+          { label: '교사' },
+          { label: '커리큘럼' },
+          { label: '가정/학교 맥락' },
+        ],
+      },
+    ],
+  },
+  {
+    label: '개입 가능 변수(통제 가능한 것)',
+    children: [
+      {
+        label: '통합적 수학 역량',
+        children: [
+          {
+            label: '능력 지표',
+            children: [
+              { label: '질문 구성 능력' },
+              { label: '사고력' },
+              { label: '논리력' },
+              { label: '문제해결력' },
+              { label: '메타인지' },
+            ],
+          },
+        ],
+      },
+      {
+        label: '정신',
+        children: [
+          {
+            label: '능력 지표',
+            children: [
+              { label: '정서 조절 능력' },
+              { label: '동기 조절 능력' },
+              { label: '인지적 회복력' },
+              { label: '과제 가치 인식' },
+              { label: '내재적 동기' },
+              { label: '지속 의지' },
+            ],
+          },
+          {
+            label: '상태 지표',
+            children: [
+              { label: '불안 수준' },
+              { label: '흥미' },
+              { label: '즐거움' },
+              { label: '좌절' },
+              { label: '자신감' },
+              { label: '긴장' },
+              { label: '피로' },
+            ],
+          },
+        ],
+      },
+      {
+        label: '행동',
+        children: [
+          {
+            label: '능력 지표',
+            children: [
+              { label: '전략 실행 능력' },
+              { label: '오류 회복 능력' },
+              {
+                label: '지속성',
+                children: [
+                  { label: '문제 지속성' },
+                ],
+              },
+            ],
+          },
+          {
+            label: '상태 지표',
+            children: [
+              { label: '시도 빈도' },
+              { label: '회피 반응' },
+              { label: '질문 빈도' },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    label: '성과 상태(결과 변수)',
+    children: [
+      {
+        label: '1차 분해(양상)',
+        children: [
+          { label: '안정성' },
+          { label: '범위' },
+          { label: '전이성' },
+          { label: '지속성' },
+        ],
+      },
+      {
+        label: '2차 분해(역량 발현)',
+        children: [
+          { label: '사고 발현 성과' },
+          { label: '논리 발현 성과' },
+          { label: '문제해결 발현 성과' },
+          { label: '질문 발현 성과' },
+          { label: '메타인지 발현 성과' },
+        ],
+      },
+      {
+        label: '보조 지표',
+        children: [
+          { label: '점수' },
+          { label: '성취도' },
+          { label: '정답률' },
+        ],
+      },
+    ],
+  },
+  { label: '내용 영역(독립 축)' },
+];
+
+function splitTags(raw?: string) {
+  return (raw ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function tagLeaf(label: string) {
+  const parts = label.split('>').map((v) => v.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : label.trim();
+}
+
+function getTagDisplay(raw?: string) {
+  const list = splitTags(raw);
+  if (list.length === 0) return '';
+  const last = list[list.length - 1];
+  const leaf = tagLeaf(last);
+  if (list.length <= 1) return leaf;
+  return `${leaf} 외 ${list.length - 1}`;
+}
+
+function addTag(raw: string | undefined, tagPath: string) {
+  const list = splitTags(raw);
+  if (!list.includes(tagPath)) list.push(tagPath);
+  return list.join(', ');
+}
+
+function TagTreeNodeView({
+  node,
+  depth,
+  parentPath,
+  onPick,
+}: {
+  node: TagNode;
+  depth: number;
+  parentPath: string[];
+  onPick: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(depth < 2);
+  const hasChildren = !!(node.children && node.children.length > 0);
+  const currentPath = [...parentPath, node.label];
+  const pathLabel = currentPath.join(TAG_PATH_SEP);
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', paddingLeft: depth * 14 }}>
+        {hasChildren ? (
+          <button
+            onClick={() => setOpen((v) => !v)}
+            style={{ width: 18, height: 18, borderRadius: 6, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.textDim, cursor: 'pointer', lineHeight: '16px', padding: 0 }}
+          >
+            {open ? '▾' : '▸'}
+          </button>
+        ) : (
+          <span style={{ width: 18 }} />
+        )}
+        <div style={{ flex: 1, color: tokens.text, fontSize: 13 }}>{node.label}</div>
+        <button
+          onClick={() => onPick(pathLabel)}
+          style={{ padding: '4px 8px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer', fontSize: 12 }}
+        >
+          선택
+        </button>
+      </div>
+      {hasChildren && open && (
+        <div>
+          {node.children!.map((child) => (
+            <TagTreeNodeView key={`${pathLabel}:${child.label}`} node={child} depth={depth + 1} parentPath={currentPath} onPick={onPick} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagPickerDialog({
+  title,
+  currentTags,
+  onPick,
+  onClear,
+  onClose,
+}: {
+  title: string;
+  currentTags?: string;
+  onPick: (path: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const summary = getTagDisplay(currentTags);
+  const full = splitTags(currentTags).join(', ');
+  return (
+    <Modal
+      title={title}
+      width="min(860px, 94vw)"
+      onClose={onClose}
+      actions={
+        <>
+          <button onClick={onClear} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.textDim, cursor: 'pointer' }}>태그 초기화</button>
+          <button onClick={onClose} style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor: 'pointer' }}>닫기</button>
+        </>
+      }
+    >
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ color: tokens.textDim, fontSize: 12 }}>현재 선택</div>
+        <div style={{ color: tokens.text, fontSize: 14 }} title={full || ''}>
+          {summary || '선택된 태그가 없습니다.'}
+        </div>
+        <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
+          항목을 선택하면 해당 경로가 태그로 추가됩니다.
+        </div>
+      </div>
+      <div style={{ maxHeight: 520, overflow: 'auto', border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 10, background: tokens.panel }}>
+        {TAG_TREE.map((node) => (
+          <TagTreeNodeView key={node.label} node={node} depth={0} parentPath={[]} onPick={onPick} />
+        ))}
+      </div>
+    </Modal>
+  );
+}
 
 function ToolbarButton({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
   return (
@@ -374,6 +698,40 @@ export default function AdminQuestionsPage() {
     }
   }
 
+  async function clearPairForQuestion(questionId: string) {
+    const target = items.find((q) => q.id === questionId);
+    const pairId = target?.pairId;
+    if (!pairId) return;
+    const prev = items;
+    const affectedIds = prev.filter((q) => q.pairId === pairId).map((q) => q.id);
+    setItems((arr) => arr.map((q) => (q.pairId === pairId ? { ...q, pairId: undefined } : q)));
+    try {
+      const isUuid = (s: string) => /[0-9a-fA-F-]{36}/.test(s);
+      const tasks = affectedIds.filter(isUuid).map((id) =>
+        supabase.from(QUESTIONS_TABLE).update({ pair_id: null }).eq('id', id)
+      );
+      if (tasks.length) {
+        const results = await Promise.all(tasks);
+        const err = results.find((r) => r.error)?.error;
+        if (err) throw err;
+      }
+    } catch (e: any) {
+      alert('페어 ID 해제 실패: ' + (e?.message || '알 수 없는 오류'));
+      setItems(prev);
+    }
+  }
+
+  function applyTagToQuestion(questionId: string, tagPath: string) {
+    const q = items.find((it) => it.id === questionId);
+    if (!q) return;
+    const next = addTag(q.tags, tagPath);
+    saveField(questionId, { tags: next });
+  }
+
+  function clearQuestionTags(questionId: string) {
+    saveField(questionId, { tags: '' });
+  }
+
   useEffect(() => {
     (async () => {
       const { data: a } = await supabase.from('question_areas').select('id,name,order_index').order('order_index', { ascending: true });
@@ -439,6 +797,8 @@ export default function AdminQuestionsPage() {
   const [activeRounds, setActiveRounds] = useState<string[]>([]);
   const [activeParts, setActiveParts] = useState<number[]>([]);
   const [pairPickForId, setPairPickForId] = useState<string | null>(null);
+  const [tagPickForId, setTagPickForId] = useState<string | null>(null);
+  const [tagPickDraftOpen, setTagPickDraftOpen] = useState(false);
 
   // 회차/파트 설계
   const [roundOpen, setRoundOpen] = useState(false);
@@ -471,7 +831,7 @@ export default function AdminQuestionsPage() {
     try {
       const { data, error } = await supabase
         .from('trait_rounds')
-        .select('id,name,description,order_index,is_active')
+        .select('id,name,description,image_url,order_index,is_active')
         .order('order_index', { ascending: true })
         .order('created_at', { ascending: true });
       if (error) throw error;
@@ -572,7 +932,7 @@ export default function AdminQuestionsPage() {
           order_index: rounds.length,
           is_active: true,
         })
-        .select('id,name,description,order_index,is_active')
+        .select('id,name,description,image_url,order_index,is_active')
         .single();
       if (error) throw error;
       const row = data as any;
@@ -801,6 +1161,48 @@ export default function AdminQuestionsPage() {
     }
   }
 
+  async function uploadRoundImage(roundId: string, file: File) {
+    try {
+      setRoundErr(null);
+      const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+      const path = `rounds/${roundId}.${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('survey').upload(path, file, { upsert: true, cacheControl: '3600', contentType: (file as any).type || 'application/octet-stream' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('survey').getPublicUrl(path);
+      const url = (pub as any)?.publicUrl as string;
+      const { error } = await supabase.from('trait_rounds').update({ image_url: url }).eq('id', roundId);
+      if (error) throw error;
+      setRounds((arr) => arr.map((x) => (x.id === roundId ? { ...x, image_url: url } : x)));
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 이미지 업로드 실패');
+    }
+  }
+
+  async function uploadQuestionImage(questionId: string, file: File) {
+    try {
+      const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+      const path = `questions/${questionId}.${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('survey').upload(path, file, { upsert: true, cacheControl: '3600', contentType: (file as any).type || 'application/octet-stream' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('survey').getPublicUrl(path);
+      const publicUrl = (pub as any)?.publicUrl as string;
+      await saveField(questionId, { image: publicUrl });
+    } catch (e) {
+      alert('업로드 실패: ' + ((e as any)?.message || '알 수 없는 오류'));
+    }
+  }
+
+  async function clearRoundImage(roundId: string) {
+    try {
+      setRoundErr(null);
+      const { error } = await supabase.from('trait_rounds').update({ image_url: null }).eq('id', roundId);
+      if (error) throw error;
+      setRounds((arr) => arr.map((x) => (x.id === roundId ? { ...x, image_url: null } : x)));
+    } catch (e: any) {
+      setRoundErr(e?.message || '회차 이미지 삭제 실패');
+    }
+  }
+
   const [exportOpen, setExportOpen] = useState(false);
   const [exportCols, setExportCols] = useState<Record<string, boolean>>({});
   const [exportErr, setExportErr] = useState<string | null>(null);
@@ -906,6 +1308,9 @@ export default function AdminQuestionsPage() {
     return Array.from(set).sort((a, b) => a - b);
   }, [items]);
 
+  const questionGridCols =
+    '48px minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1.2fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,4.2fr) minmax(0,0.9fr) 88px minmax(0,0.8fr) minmax(0,0.9fr) minmax(220px,2.6fr) minmax(160px,1.6fr) minmax(0,0.6fr) 72px 72px';
+
   function getPartOptions(roundLabel?: string): OptionItem[] {
     const name = String(roundLabel || '').trim();
     if (!name) return [{ label: '선택', value: '' }];
@@ -957,13 +1362,13 @@ export default function AdminQuestionsPage() {
 
   useEffect(() => {
     // 모달 열릴 때 배경 스크롤 잠금(스크롤바 2개 방지)
-    if (!exportOpen && !reportOpen && !roundOpen) return;
+    if (!exportOpen && !reportOpen && !roundOpen && !tagPickForId && !tagPickDraftOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [exportOpen, reportOpen, roundOpen]);
+  }, [exportOpen, reportOpen, roundOpen, tagPickForId, tagPickDraftOpen]);
 
   function canonicalizeFilters() {
     const payload: any = {
@@ -1487,53 +1892,64 @@ export default function AdminQuestionsPage() {
                         {roundParts.length === 0 ? (
                           <div style={{ padding: 10, color: tokens.textDim }}>파트가 없습니다.</div>
                         ) : (
-                          roundParts.map((p, idx) => (
-                            <div
-                              key={p.id}
-                              style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
-                            >
-                              <div style={{ display:'grid', gridTemplateColumns:'1fr 220px', gap: 10, alignItems:'start' }}>
-                                <div style={{ minWidth: 0 }}>
-                                  <div style={{ fontWeight: 800 }}>{p.name}</div>
-                                  {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
-                                  {p.image_url ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.image_url}</div> : null}
-                                </div>
-                                <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
-                                  <div
-                                    onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) uploadPartImage(p.id, file); }}
-                                    onDragOver={(e)=>e.preventDefault()}
-                                    onClick={async()=>{ if (p.image_url) { await supabase.from('trait_round_parts').update({ image_url: null }).eq('id', p.id); setRoundParts(arr=>arr.map(x=>x.id===p.id?{...x,image_url:null}:x)); } }}
-                                    title={p.image_url ? '클릭하여 이미지 제거' : '이미지 드롭하여 등록'}
-                                    style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
-                                  >
-                                    {p.image_url ? '이미지 ✔ (클릭=제거)' : '이미지 드롭'}
+                          roundParts.map((p, idx) => {
+                            const partInputId = `part-image-${p.id}`;
+                            const hasImage = !!p.image_url;
+                            return (
+                              <div
+                                key={p.id}
+                                style={{ background: '#121316', border: `1px solid ${tokens.border}`, borderRadius: 10, padding: 10 }}
+                              >
+                                <div style={{ display:'grid', gridTemplateColumns:'1fr 220px', gap: 10, alignItems:'start' }}>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 800 }}>{p.name}</div>
+                                    {p.description ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{p.description}</div> : null}
+                                    {p.image_url ? <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.image_url}</div> : null}
                                   </div>
-                                  <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
-                                    <button
-                                      type="button"
-                                      title="위로"
-                                      disabled={idx === 0}
-                                      onClick={(e)=>{ e.stopPropagation(); if (idx > 0) reorderParts(idx, idx - 1); }}
-                                      style={orderButtonStyle(idx === 0, 20)}
+                                  <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
+                                    <input
+                                      id={partInputId}
+                                      type="file"
+                                      accept="image/*"
+                                      style={{ display: 'none' }}
+                                      onChange={(e)=>{ const file = e.currentTarget.files?.[0]; if (file) uploadPartImage(p.id, file); e.currentTarget.value = ''; }}
+                                    />
+                                    <div
+                                      onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) uploadPartImage(p.id, file); }}
+                                      onDragOver={(e)=>e.preventDefault()}
+                                      onClick={async()=>{ if (hasImage) { await supabase.from('trait_round_parts').update({ image_url: null }).eq('id', p.id); setRoundParts(arr=>arr.map(x=>x.id===p.id?{...x,image_url:null}:x)); } else { const el = document.getElementById(partInputId) as HTMLInputElement | null; el?.click(); } }}
+                                      title={hasImage ? '클릭하여 이미지 제거' : '이미지 드롭/클릭하여 등록'}
+                                      style={{ width:'100%', height: 36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
                                     >
-                                      ▲
-                                    </button>
-                                    <button
-                                      type="button"
-                                      title="아래로"
-                                      disabled={idx === roundParts.length - 1}
-                                      onClick={(e)=>{ e.stopPropagation(); if (idx < roundParts.length - 1) reorderParts(idx, idx + 1); }}
-                                      style={orderButtonStyle(idx === roundParts.length - 1, 20)}
-                                    >
-                                      ▼
-                                    </button>
-                                    <button onClick={()=>openPartEdit(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>편집</button>
-                                    <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
+                                      {hasImage ? '이미지 ✔ (클릭=제거)' : '이미지 드롭/클릭'}
+                                    </div>
+                                    <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
+                                      <button
+                                        type="button"
+                                        title="위로"
+                                        disabled={idx === 0}
+                                        onClick={(e)=>{ e.stopPropagation(); if (idx > 0) reorderParts(idx, idx - 1); }}
+                                        style={orderButtonStyle(idx === 0, 20)}
+                                      >
+                                        ▲
+                                      </button>
+                                      <button
+                                        type="button"
+                                        title="아래로"
+                                        disabled={idx === roundParts.length - 1}
+                                        onClick={(e)=>{ e.stopPropagation(); if (idx < roundParts.length - 1) reorderParts(idx, idx + 1); }}
+                                        style={orderButtonStyle(idx === roundParts.length - 1, 20)}
+                                      >
+                                        ▼
+                                      </button>
+                                      <button onClick={()=>openPartEdit(p)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, cursor:'pointer' }}>편집</button>
+                                      <button onClick={()=>deletePart(p.id)} style={{ padding:'8px 10px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}>삭제</button>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
@@ -1586,6 +2002,39 @@ export default function AdminQuestionsPage() {
             <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>회차 설명(선택)</label>
             <textarea value={editingRoundDesc} onChange={(e)=>setEditingRoundDesc(e.target.value)} placeholder="회차 설명" rows={3}
                       style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
+            <label style={{ color: tokens.textDim, fontSize: 13, marginTop: 6 }}>회차 이미지(선택)</label>
+            {(() => {
+              const r = rounds.find((x) => x.id === editingRoundId);
+              const hasImage = !!r?.image_url;
+              const inputId = editingRoundId ? `round-image-${editingRoundId}` : '';
+              return (
+                <div>
+                  {editingRoundId ? (
+                    <input
+                      id={inputId}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={(e)=>{ const file = e.currentTarget.files?.[0]; if (file) uploadRoundImage(editingRoundId, file); e.currentTarget.value = ''; }}
+                    />
+                  ) : null}
+                  <div
+                    onDrop={(e)=>{ e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file && editingRoundId) uploadRoundImage(editingRoundId, file); }}
+                    onDragOver={(e)=>e.preventDefault()}
+                    onClick={async()=>{ if (hasImage && editingRoundId) { await clearRoundImage(editingRoundId); } else if (editingRoundId) { const el = document.getElementById(inputId) as HTMLInputElement | null; el?.click(); } }}
+                    title={hasImage ? '클릭하여 이미지 제거' : '이미지 드롭/클릭하여 등록'}
+                    style={{ width:'100%', height: 40, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color: tokens.textDim, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize: 12 }}
+                  >
+                    {hasImage ? '이미지 ✔ (클릭=제거)' : '이미지 드롭/클릭'}
+                  </div>
+                  {hasImage ? (
+                    <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      {r?.image_url}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
           </div>
         </Modal>
       )}
@@ -1633,6 +2082,37 @@ export default function AdminQuestionsPage() {
                       style={{ width:'100%', background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: 10, boxSizing:'border-box' }} />
           </div>
         </Modal>
+      )}
+
+      {tagPickForId && (
+        <TagPickerDialog
+          title="태그 선택"
+          currentTags={items.find((it) => it.id === tagPickForId)?.tags}
+          onPick={(path) => {
+            applyTagToQuestion(tagPickForId, path);
+            setTagPickForId(null);
+          }}
+          onClear={() => {
+            clearQuestionTags(tagPickForId);
+            setTagPickForId(null);
+          }}
+          onClose={() => setTagPickForId(null)}
+        />
+      )}
+      {tagPickDraftOpen && (
+        <TagPickerDialog
+          title="태그 선택"
+          currentTags={draft.tags}
+          onPick={(path) => {
+            setDraft((prev) => ({ ...prev, tags: addTag(prev.tags, path) }));
+            setTagPickDraftOpen(false);
+          }}
+          onClear={() => {
+            setDraft((prev) => ({ ...prev, tags: '' }));
+            setTagPickDraftOpen(false);
+          }}
+          onClose={() => setTagPickDraftOpen(false)}
+        />
       )}
 
       {reportOpen && (
@@ -1863,7 +2343,7 @@ export default function AdminQuestionsPage() {
       )}
 
       <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, overflowX: 'hidden', width: '100%', margin: '0 auto 48px' }}>
-        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, padding: 12, borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box' }}>
+        <div style={{ width: '100%', display: 'grid', gridTemplateColumns: questionGridCols, gap: 12, padding: '12px 14px', borderBottom: `1px solid ${tokens.border}`, color: tokens.textDim, boxSizing: 'border-box', alignItems: 'center', background: '#141416' }}>
           <div style={{ textAlign:'right', paddingRight:4 }}>번호</div><div>영역</div><div>그룹</div><div>회차</div><div>파트</div><div>성향</div><div>내용</div><div>평가</div><div>가중치</div><div>역문항</div><div>페어 ID</div><div>태그</div><div>메모</div><div>그림</div><div style={{ textAlign:'center' }}>버전</div><div style={{ textAlign:'center', paddingRight: 4 }}>활성화</div>
         </div>
         {items.length === 0 ? (
@@ -1872,7 +2352,7 @@ export default function AdminQuestionsPage() {
           visibleItems.map((q, idx, arr) => {
               const isLast5 = (arr.length - idx) <= 5;
               return (
-            <div key={q.id} style={{ padding: 12, borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: '48px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,5fr) minmax(0,0.8fr) 88px minmax(0,0.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) minmax(0,0.6fr) 72px 72px', gap: 16, boxSizing: 'border-box' }}>
+            <div key={q.id} style={{ padding: '12px 14px', borderBottom: `1px solid ${tokens.border}`, width: '100%', display: 'grid', gridTemplateColumns: questionGridCols, gap: 12, boxSizing: 'border-box', alignItems: 'center' }}>
               <div style={{ color: tokens.textDim, textAlign:'right', paddingRight:4 }}>{idx + 1}</div>
               <div>
                 <SelectPopup compact dropUp={isLast5} value={q.area || ''} options={areas.map(a=>({label:a.name, value:a.id}))}
@@ -1961,73 +2441,74 @@ export default function AdminQuestionsPage() {
                 </button>
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
-                <input value={q.tags ?? ''} onChange={(e)=>saveField(q.id, { tags: e.target.value })} onBlur={(e)=>{ if (/[0-9a-fA-F-]{36}/.test(q.id)) saveField(q.id, { tags: e.target.value }); }}
-                  placeholder="태그,쉼표" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 10px' }} />
+                <input
+                  readOnly
+                  value={getTagDisplay(q.tags)}
+                  onClick={() => setTagPickForId(q.id)}
+                  onFocus={() => setTagPickForId(q.id)}
+                  title={q.tags || ''}
+                  placeholder="태그 선택"
+                  style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 10px', cursor:'pointer', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}
+                />
               </div>
               <div style={{ display:'flex', alignItems:'center' }}>
                 <input value={q.memo ?? ''} onChange={(e)=>saveField(q.id, { memo: e.target.value })}
                   placeholder="메모" style={{ width:'100%', height:36, background:'#2A2A2A', border:`1px solid ${tokens.border}`, borderRadius:8, color:tokens.text, padding:'0 10px' }} />
               </div>
-              <div onDrop={(e)=>{
-                    e.preventDefault();
-                    const file = e.dataTransfer.files?.[0];
-                    if (!file) return;
-                    (async ()=>{
-                      try {
-                        // 1) Supabase Storage 업로드
-                        const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
-                        const path = `questions/${q.id}.${Date.now()}.${ext}`;
-                        const { data: up, error: upErr } = await supabase.storage.from('survey').upload(path, file, { upsert: true, cacheControl: '3600', contentType: (file as any).type || 'application/octet-stream' });
-                        if (upErr) throw upErr;
-                        // 2) 퍼블릭 URL 가져오기
-                        const { data: pub } = supabase.storage.from('survey').getPublicUrl(path);
-                        const publicUrl = (pub as any)?.publicUrl as string;
-                        // 3) DB 반영
-                        saveField(q.id, { image: publicUrl });
-                      } catch (e) {
-                        alert('업로드 실패: ' + ((e as any)?.message || '알 수 없는 오류'));
-                      }
-                    })();
-                  }}
-                   onDragOver={(e)=>e.preventDefault()}
-                   onClick={()=>{ if (q.image) { saveField(q.id, { image: '' }); } }}
-                   title={q.image ? '클릭하여 이미지 삭제' : '이미지 드롭하여 등록'}
-                   style={{ position:'relative', width:'100%', height:36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color:tokens.text, display:'flex', alignItems:'center', justifyContent:'center', cursor: q.image ? 'pointer' : 'copy', fontSize:18, padding:'0 6px', boxSizing:'border-box' }}
-                   onMouseEnter={(e)=>{
-                     const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
-                     if (!q.image) return;
-                     const rect = t.getBoundingClientRect();
-                     const tip = document.createElement('div');
-                     tip.className = 'img-preview-tip';
-                     tip.style.position = 'fixed';
-                     const maxW = 240; const maxH = 180; const margin = 8;
-                     const left = Math.min(window.innerWidth - (maxW + margin), rect.left);
-                     const top = Math.max(margin, rect.top - (maxH + 12));
-                     tip.style.left = `${left}px`;
-                     tip.style.top = `${top}px`;
-                     tip.style.background = '#18181A';
-                     tip.style.border = `1px solid ${tokens.border}`;
-                     tip.style.borderRadius = '10px';
-                     tip.style.padding = '6px';
-                     tip.style.zIndex = '2000';
-                     tip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
-                     const img = document.createElement('img');
-                     img.src = q.image!;
-                     img.style.maxWidth = `${maxW}px`;
-                     img.style.maxHeight = `${maxH}px`;
-                     img.style.borderRadius = '8px';
-                     img.style.display = 'block';
-                     tip.appendChild(img);
-                     document.body.appendChild(tip);
-                     t.__tipEl = tip;
-                   }}
-                   onMouseLeave={(e)=>{
-                     const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
-                     if (t.__tipEl && t.__tipEl.parentElement) t.__tipEl.parentElement.removeChild(t.__tipEl);
-                     t.__tipEl = undefined;
-                   }}
-              >
-                {q.image ? '✔' : '+'}
+              <div style={{ position: 'relative' }}>
+                <input
+                  id={`question-image-${q.id}`}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e)=>{ const file = e.currentTarget.files?.[0]; if (file) uploadQuestionImage(q.id, file); e.currentTarget.value = ''; }}
+                />
+                <div onDrop={(e)=>{
+                      e.preventDefault();
+                      const file = e.dataTransfer.files?.[0];
+                      if (!file) return;
+                      uploadQuestionImage(q.id, file);
+                    }}
+                     onDragOver={(e)=>e.preventDefault()}
+                     onClick={()=>{ if (q.image) { saveField(q.id, { image: '' }); } else { const el = document.getElementById(`question-image-${q.id}`) as HTMLInputElement | null; el?.click(); } }}
+                     title={q.image ? '클릭하여 이미지 삭제' : '이미지 드롭/클릭하여 등록'}
+                     style={{ position:'relative', width:'100%', height:36, background:'#2A2A2A', border:`1px dashed ${tokens.border}`, borderRadius:8, color:tokens.text, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:18, padding:'0 6px', boxSizing:'border-box' }}
+                     onMouseEnter={(e)=>{
+                       const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
+                       if (!q.image) return;
+                       const rect = t.getBoundingClientRect();
+                       const tip = document.createElement('div');
+                       tip.className = 'img-preview-tip';
+                       tip.style.position = 'fixed';
+                       const maxW = 240; const maxH = 180; const margin = 8;
+                       const left = Math.min(window.innerWidth - (maxW + margin), rect.left);
+                       const top = Math.max(margin, rect.top - (maxH + 12));
+                       tip.style.left = `${left}px`;
+                       tip.style.top = `${top}px`;
+                       tip.style.background = '#18181A';
+                       tip.style.border = `1px solid ${tokens.border}`;
+                       tip.style.borderRadius = '10px';
+                       tip.style.padding = '6px';
+                       tip.style.zIndex = '2000';
+                       tip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+                       const img = document.createElement('img');
+                       img.src = q.image!;
+                       img.style.maxWidth = `${maxW}px`;
+                       img.style.maxHeight = `${maxH}px`;
+                       img.style.borderRadius = '8px';
+                       img.style.display = 'block';
+                       tip.appendChild(img);
+                       document.body.appendChild(tip);
+                       t.__tipEl = tip;
+                     }}
+                     onMouseLeave={(e)=>{
+                       const t = e.currentTarget as HTMLDivElement & { __tipEl?: HTMLDivElement };
+                       if (t.__tipEl && t.__tipEl.parentElement) t.__tipEl.parentElement.removeChild(t.__tipEl);
+                       t.__tipEl = undefined;
+                     }}
+                >
+                  {q.image ? '✔' : '+'}
+                </div>
               </div>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <button
@@ -2224,7 +2705,15 @@ export default function AdminQuestionsPage() {
               </div>
               <div style={{ minWidth: 0 }}>
                 <label style={{ color: tokens.textDim, fontSize: 13 }}>태그</label>
-                <input value={draft.tags ?? ''} onChange={(e)=>setDraft({ ...draft, tags: e.target.value })} placeholder="쉼표로 구분" style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box' }} />
+                <input
+                  readOnly
+                  value={getTagDisplay(draft.tags)}
+                  onClick={() => setTagPickDraftOpen(true)}
+                  onFocus={() => setTagPickDraftOpen(true)}
+                  title={draft.tags || ''}
+                  placeholder="태그 선택"
+                  style={{ width: '100%', height: 44, marginTop: 6, background: '#2A2A2A', border: `1px solid ${tokens.border}`, borderRadius: 8, color: tokens.text, padding: '0 12px', boxSizing: 'border-box', cursor: 'pointer', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}
+                />
               </div>
             </div>
 
@@ -2268,6 +2757,22 @@ export default function AdminQuestionsPage() {
       )}
       {pairPickForId && (
         <Modal title="페어 선택" onClose={()=>setPairPickForId(null)} actions={<> 
+          {(() => {
+            const target = items.find((q) => q.id === pairPickForId);
+            const hasPair = !!target?.pairId;
+            return hasPair ? (
+              <button
+                onClick={async()=>{
+                  if (!pairPickForId) return;
+                  await clearPairForQuestion(pairPickForId);
+                  setPairPickForId(null);
+                }}
+                style={{ padding:'8px 12px', borderRadius:10, border:`1px solid ${tokens.border}`, background:'transparent', color:'#ff8686', cursor:'pointer' }}
+              >
+                페어 해제
+              </button>
+            ) : null;
+          })()}
           <button onClick={()=>setPairPickForId(null)} style={{ padding:'8px 12px', borderRadius:10, border:`1px solid ${tokens.border}`, background:tokens.panel, color:tokens.text, cursor:'pointer' }}>닫기</button>
         </>}>
           <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden' }}>

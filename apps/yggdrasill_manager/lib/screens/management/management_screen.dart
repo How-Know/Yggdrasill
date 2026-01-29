@@ -980,24 +980,40 @@ class _AssessmentStructurePage extends StatelessWidget {
                 docPath: _termPath('non_intervention/mind_tendency.md'),
                 children: [
                   _StructureNode(
-                    title: '자율성 축 (자주적 ↔ 의존적)',
-                    docPath: _termPath('non_intervention/mind_tendency_axis_autonomy.md'),
+                    title: '접근 성향 (Style Axes)',
+                    docPath: _termPath('non_intervention/mind_tendency_style_axes.md'),
+                    children: [
+                      _StructureNode(
+                        title: '자율성 축 (자주적 ↔ 의존적)',
+                        docPath: _termPath('non_intervention/mind_tendency_axis_autonomy.md'),
+                      ),
+                      _StructureNode(
+                        title: '인지 처리 축 (논리 ↔ 직관)',
+                        docPath: _termPath('non_intervention/mind_tendency_axis_cognitive_processing.md'),
+                      ),
+                      _StructureNode(
+                        title: '실행 스타일 축 (계획 ↔ 즉흥)',
+                        docPath: _termPath('non_intervention/mind_tendency_axis_execution_style.md'),
+                      ),
+                      _StructureNode(
+                        title: '도전 반응 축 (도전 ↔ 회피)',
+                        docPath: _termPath('non_intervention/mind_tendency_axis_challenge_response.md'),
+                      ),
+                      _StructureNode(
+                        title: '16가지 성향 프로파일',
+                        docPath: _termPath('non_intervention/mind_tendency_profiles.md'),
+                      ),
+                    ],
                   ),
                   _StructureNode(
-                    title: '인지 처리 축 (논리 ↔ 직관)',
-                    docPath: _termPath('non_intervention/mind_tendency_axis_cognitive_processing.md'),
-                  ),
-                  _StructureNode(
-                    title: '실행 스타일 축 (계획 ↔ 즉흥)',
-                    docPath: _termPath('non_intervention/mind_tendency_axis_execution_style.md'),
-                  ),
-                  _StructureNode(
-                    title: '도전 반응 축 (도전 ↔ 회피)',
-                    docPath: _termPath('non_intervention/mind_tendency_axis_challenge_response.md'),
-                  ),
-                  _StructureNode(
-                    title: '16가지 성향 프로파일',
-                    docPath: _termPath('non_intervention/mind_tendency_profiles.md'),
+                    title: '조절 성향 (Regulatory Dispositions)',
+                    docPath: _termPath('non_intervention/mind_tendency_regulatory_dispositions.md'),
+                    children: [
+                      _StructureNode(
+                        title: '메타인지 성향',
+                        docPath: _termPath('non_intervention/mind_tendency_metacognitive_disposition.md'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1010,7 +1026,7 @@ class _AssessmentStructurePage extends StatelessWidget {
                     docPath: _termPath('non_intervention/mind_belief_system.md'),
                     children: [
                       _StructureNode(
-                        title: '수학 능력에 대한 암묵적 신념',
+                        title: '수학 능력관',
                         docPath: _termPath('non_intervention/mind_implicit_belief_math_ability.md'),
                       ),
                       _StructureNode(
@@ -1024,6 +1040,10 @@ class _AssessmentStructurePage extends StatelessWidget {
                           _StructureNode(
                             title: '주도성 인식',
                             docPath: _termPath('non_intervention/mind_self_directedness_belief.md'),
+                          ),
+                          _StructureNode(
+                            title: '외적 귀인 신념',
+                            docPath: _termPath('non_intervention/mind_external_attribution_belief.md'),
                           ),
                         ],
                       ),
