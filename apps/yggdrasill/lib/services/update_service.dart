@@ -142,6 +142,21 @@ class UpdateService {
   static Future<bool> _tryTriggerAppInstaller(BuildContext context) async {
     _showSnack(context, '업데이트를 확인하고 있습니다...');
     try {
+      // 최근 Windows 환경에서 ms-appinstaller 프로토콜이 정책/보안 이유로 비활성화되는 사례가 많다.
+      // 따라서 프로토콜에 의존하지 않고, appinstaller 파일을 내려받아 "로컬 파일"로 App Installer를 띄우는
+      // 방식을 1순위로 사용한다.
+      final okLocal = await _openAppInstallerFromDownloadedFile(context);
+      if (okLocal) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('show_update_snack', true);
+        } catch (_) {}
+        // App Installer에서 업데이트가 진행되도록 앱은 종료(기존 방식 유지)
+        await Future.delayed(const Duration(seconds: 2));
+        exit(0);
+      }
+
+      // Fallback: ms-appinstaller 프로토콜(가능한 환경에서는 동작)
       final uri = Uri.parse(_appInstallerLatestUrl);
       final can = await canLaunchUrl(uri);
       if (can) {
@@ -154,32 +169,56 @@ class UpdateService {
           await Future.delayed(const Duration(seconds: 2));
           exit(0);
         }
-        _showSnack(context, 'App Installer 실행에 실패했습니다. (차단/비활성화 가능)');
-        return false;
       }
-      // Fallback: explorer로 호출 (일부 환경에서 차단될 수 있음)
+
+      // 최종 폴백: appinstaller URL을 브라우저로 열어 사용자가 직접 다운로드/실행하도록 유도
       try {
-        await Process.start('explorer.exe', [uri.toString()]);
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('show_update_snack', true);
-        } catch (_) {}
-        await Future.delayed(const Duration(seconds: 2));
-        exit(0);
-      } catch (_) {
-        // 최종 폴백: appinstaller(https) 자체를 브라우저로 열어 사용자가 직접 설치/업데이트하도록 유도
-        try {
-          final raw = Uri.parse(_appInstallerSourceRawMain);
-          if (await canLaunchUrl(raw)) {
-            await launchUrl(raw, mode: LaunchMode.externalApplication);
-          }
-        } catch (_) {}
-        return false;
-      }
+        final raw = Uri.parse(_appInstallerSourceRawMain);
+        if (await canLaunchUrl(raw)) {
+          await launchUrl(raw, mode: LaunchMode.externalApplication);
+        }
+      } catch (_) {}
+
+      _showSnack(context, '업데이트를 시작할 수 없습니다. (App Installer 프로토콜 비활성화/정책 차단 가능)');
+      return false;
     } catch (_) {
       return false;
     }
     return true;
+  }
+
+  static Future<bool> _openAppInstallerFromDownloadedFile(BuildContext context) async {
+    try {
+      final client = http.Client();
+      try {
+        final resp = await client.get(
+          Uri.parse(_appInstallerSourceRawMain),
+          headers: {'User-Agent': 'Yggdrasill-Updater'},
+        );
+        if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
+          return false;
+        }
+        // 간단 무결성: XML 시작 확인
+        final head = utf8.decode(resp.bodyBytes.take(64).toList(), allowMalformed: true);
+        if (!head.contains('<AppInstaller') && !head.contains('<?xml')) {
+          return false;
+        }
+        final tempDir = await getTemporaryDirectory();
+        final filePath = p.join(tempDir.path, 'Yggdrasill.appinstaller');
+        final f = File(filePath);
+        await f.writeAsBytes(resp.bodyBytes, flush: true);
+        if (!await f.exists()) return false;
+
+        // 파일 연결(기본 App Installer)로 실행: ms-appinstaller 프로토콜을 거치지 않는다.
+        await Process.start('explorer.exe', [filePath]);
+        _showSnack(context, 'App Installer를 열었습니다. 뜨는 창에서 업데이트를 진행해주세요.');
+        return true;
+      } finally {
+        client.close();
+      }
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> _updateUsingZipForArm64(BuildContext context, {String? tag}) async {
