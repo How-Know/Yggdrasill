@@ -254,6 +254,13 @@ param(
 )
 
 try {
+  $log = Join-Path $env:TEMP 'ygg_update_log.txt'
+  "=== Yggdrasill updater start $(Get-Date -Format o) ===" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "ZipPath=$ZipPath" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "InstallDir=$InstallDir" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "ExeName=$ExeName" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "Tag=$Tag" | Out-File -FilePath $log -Encoding UTF8 -Append
+
   $procName = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)
   try { Wait-Process -Name $procName -Timeout 60 } catch {}
 
@@ -300,9 +307,33 @@ try {
     foreach ($c in $cands) { if ($c.Name -match 'yggdrasill|mneme') { $targetExe = $c.FullName; break } }
     if (-not (Test-Path $targetExe) -and $cands.Count -gt 0) { $targetExe = $cands[0].FullName }
   }
-  Start-Process -FilePath $targetExe
+  # 데스크탑 바로가기 생성(기존 MSIX 바로가기 대신 포터블을 쉽게 실행하도록)
+  try {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    if ($desktop -and (Test-Path $desktop)) {
+      $lnk = Join-Path $desktop 'Yggdrasill.lnk'
+      $wsh = New-Object -ComObject WScript.Shell
+      $sc = $wsh.CreateShortcut($lnk)
+      $sc.TargetPath = $targetExe
+      $sc.WorkingDirectory = (Split-Path $targetExe -Parent)
+      $sc.WindowStyle = 1
+      $sc.Description = 'Yggdrasill (portable)'
+      $sc.Save()
+      "Created shortcut: $lnk" | Out-File -FilePath $log -Encoding UTF8 -Append
+    }
+  } catch {
+    "Shortcut creation failed: $($_.Exception.Message)" | Out-File -FilePath $log -Encoding UTF8 -Append
+  }
+
+  "Start-Process: $targetExe" | Out-File -FilePath $log -Encoding UTF8 -Append
+  Start-Process -FilePath $targetExe -WorkingDirectory (Split-Path $targetExe -Parent)
 } catch {
-  # 실패 시에도 조용히 종료
+  try {
+    $log = Join-Path $env:TEMP 'ygg_update_log.txt'
+    "Updater failed: $($_.Exception.Message)" | Out-File -FilePath $log -Encoding UTF8 -Append
+    "Stack: $($_.ScriptStackTrace)" | Out-File -FilePath $log -Encoding UTF8 -Append
+    Start-Process explorer.exe $env:TEMP
+  } catch {}
 }
 ''';
 }
