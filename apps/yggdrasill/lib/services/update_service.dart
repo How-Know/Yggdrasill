@@ -12,8 +12,13 @@ import 'package:url_launcher/url_launcher.dart';
 class UpdateService {
   UpdateService._();
 
+  // IMPORTANT:
+  // - auto-update의 기준점이 되는 appinstaller는 "고정 URL"이 가장 안전하다.
+  // - releases/latest/download는 자산 누락/캐시/레이스에 취약할 수 있으므로 raw(main)의 dist를 우선 사용한다.
+  static const String _appInstallerSourceRawMain =
+      'https://raw.githubusercontent.com/How-Know/Yggdrasill/main/apps/yggdrasill/dist/Yggdrasill.appinstaller';
   static const String _appInstallerLatestUrl =
-      'ms-appinstaller:?source=https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill.appinstaller';
+      'ms-appinstaller:?source=$_appInstallerSourceRawMain';
 
   static const List<String> _arm64ZipCandidates = [
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-Windows-ARM64.zip',
@@ -56,7 +61,13 @@ class UpdateService {
         // App Installer는 비차단 설정(ShowPrompt=false, UpdateBlocksActivation=false)이면
         // 백그라운드 다운로드/적용을 준비하고, 실제 적용은 다음 재시작 시 진행됨
         _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '백그라운드에서 업데이트를 받는 중...', tag: tag));
-        unawaited(_tryTriggerAppInstaller(context).then((ok){ _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작 시 적용됩니다.', tag: tag)); }));
+        unawaited(_tryTriggerAppInstaller(context).then((ok) {
+          if (ok) {
+            _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작 시 적용됩니다.', tag: tag));
+          } else {
+            _setProgress(UpdateInfo(phase: UpdatePhase.error, message: 'App Installer 실행에 실패했습니다. (ms-appinstaller 차단/비활성화 가능)', tag: tag));
+          }
+        }));
         return;
       }
       // 포터블은 ZIP 백그라운드 업데이트를 수행하고 완료 시 재시작 안내를 앱에서 표시하도록 유지
@@ -66,6 +77,7 @@ class UpdateService {
   }
 
   static Future<String?> _fetchLatestTag() async {
+    // 1) GitHub REST API (차단/레이트리밋될 수 있음)
     try {
       final resp = await http.get(
         Uri.parse('https://api.github.com/repos/How-Know/Yggdrasill/releases/latest'),
@@ -74,6 +86,23 @@ class UpdateService {
       if (resp.statusCode == 200) {
         final map = jsonDecode(resp.body) as Map<String, dynamic>;
         return (map['tag_name'] as String?)?.trim();
+      }
+    } catch (_) {}
+
+    // 2) Fallback: GitHub 웹 리다이렉트로 태그 추출
+    // - https://github.com/.../releases/latest 는 /releases/tag/vX.Y.Z.N 으로 302/301 리다이렉트 됨
+    try {
+      final req = http.Request('GET', Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest'));
+      req.followRedirects = false;
+      final resp = await http.Client().send(req);
+      try {
+        final loc = resp.headers['location'];
+        if (loc != null && loc.isNotEmpty) {
+          final m = RegExp(r'/releases/tag/(v[0-9]+(?:\.[0-9]+){2,3})$').firstMatch(loc.trim());
+          if (m != null) return m.group(1);
+        }
+      } finally {
+        await resp.stream.drain();
       }
     } catch (_) {}
     return null;
@@ -116,7 +145,7 @@ class UpdateService {
       final uri = Uri.parse(_appInstallerLatestUrl);
       final can = await canLaunchUrl(uri);
       if (can) {
-        final ok = await launchUrl(uri);
+        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
         if (ok) {
           try {
             final prefs = await SharedPreferences.getInstance();
@@ -125,6 +154,7 @@ class UpdateService {
           await Future.delayed(const Duration(seconds: 2));
           exit(0);
         }
+        _showSnack(context, 'App Installer 실행에 실패했습니다. (차단/비활성화 가능)');
         return false;
       }
       // Fallback: explorer로 호출 (일부 환경에서 차단될 수 있음)
@@ -137,6 +167,13 @@ class UpdateService {
         await Future.delayed(const Duration(seconds: 2));
         exit(0);
       } catch (_) {
+        // 최종 폴백: appinstaller(https) 자체를 브라우저로 열어 사용자가 직접 설치/업데이트하도록 유도
+        try {
+          final raw = Uri.parse(_appInstallerSourceRawMain);
+          if (await canLaunchUrl(raw)) {
+            await launchUrl(raw, mode: LaunchMode.externalApplication);
+          }
+        } catch (_) {}
         return false;
       }
     } catch (_) {
