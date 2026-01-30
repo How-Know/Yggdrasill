@@ -98,7 +98,8 @@ class UpdateService {
     }
 
     // 항상 ZIP 자체업데이터 사용 (MSIX/AppInstaller 경로는 폐기)
-    await _updateUsingZip(context);
+    final latest = await _fetchLatestTag();
+    await _updateUsingZip(context, tag: latest);
   }
 
   static Future<void> _updateUsingZip(BuildContext context, {String? tag}) async {
@@ -117,7 +118,7 @@ class UpdateService {
       for (final url in candidates) {
         try {
           final req = http.Request('GET', Uri.parse(url));
-          final resp = await client.send(req);
+          final resp = await client.send(req).timeout(const Duration(seconds: 20));
           if (resp.statusCode == 200) {
             found = Uri.parse(url);
             streamResp = resp;
@@ -140,8 +141,34 @@ class UpdateService {
       final tempDir = await getTemporaryDirectory();
       final zipPath = p.join(tempDir.path, 'ygg_update.zip');
       final zipFile = File(zipPath);
+      final total = streamResp.contentLength ?? -1;
+      int received = 0;
       final sink = zipFile.openWrite();
-      await streamResp.stream.pipe(sink);
+      final sw = Stopwatch()..start();
+      int lastTick = 0;
+      _setProgress(UpdateInfo(
+        phase: UpdatePhase.downloading,
+        message: total > 0 ? '다운로드 중... (0/${(total / (1024 * 1024)).toStringAsFixed(0)}MB)' : '다운로드 중...',
+        tag: tag,
+      ));
+      await for (final chunk in streamResp.stream.timeout(const Duration(seconds: 30))) {
+        received += chunk.length;
+        sink.add(chunk);
+        final now = sw.elapsedMilliseconds;
+        if (now - lastTick > 900) {
+          lastTick = now;
+          if (total > 0) {
+            final pct = (received / total * 100).clamp(0, 100).toStringAsFixed(0);
+            final mb = (received / (1024 * 1024)).toStringAsFixed(0);
+            final tmb = (total / (1024 * 1024)).toStringAsFixed(0);
+            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... ($pct% · ${mb}MB/$tmbMB)', tag: tag));
+          } else {
+            final mb = (received / (1024 * 1024)).toStringAsFixed(0);
+            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... (${mb}MB)', tag: tag));
+          }
+        }
+      }
+      await sink.flush();
       await sink.close();
 
       if (!await zipFile.exists() || (await zipFile.length()) < 1024 * 1024) {
@@ -161,7 +188,8 @@ class UpdateService {
       if (_isMsixInstall()) {
         _showSnack(context, 'MSIX 설치본은 포터블로 전환하여 업데이트합니다. (최초 1회)');
       }
-      await Process.start('powershell.exe', [
+      final psExe = (await _resolvePowerShellExe()) ?? 'powershell.exe';
+      await Process.start(psExe, [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
@@ -191,6 +219,25 @@ class UpdateService {
     } finally {
       client.close();
     }
+  }
+
+  static Future<String?> _resolvePowerShellExe() async {
+    // pwsh가 있으면 우선(더 안정적인 환경이 많음), 없으면 powershell.exe
+    try {
+      final p1 = await Process.run('where', ['pwsh.exe']);
+      if (p1.exitCode == 0) {
+        final line = (p1.stdout?.toString() ?? '').split(RegExp(r'\r?\n')).firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+        if (line.isNotEmpty) return line.trim();
+      }
+    } catch (_) {}
+    try {
+      final p2 = await Process.run('where', ['powershell.exe']);
+      if (p2.exitCode == 0) {
+        final line = (p2.stdout?.toString() ?? '').split(RegExp(r'\r?\n')).firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+        if (line.isNotEmpty) return line.trim();
+      }
+    } catch (_) {}
+    return null;
   }
 
   static void _showSnack(BuildContext context, String message) {
