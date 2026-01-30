@@ -161,7 +161,7 @@ class UpdateService {
             final pct = (received / total * 100).clamp(0, 100).toStringAsFixed(0);
             final mb = (received / (1024 * 1024)).toStringAsFixed(0);
             final tmb = (total / (1024 * 1024)).toStringAsFixed(0);
-            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... ($pct% · ${mb}MB/$tmbMB)', tag: tag));
+            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... ($pct% · ${mb}MB/${tmb}MB)', tag: tag));
           } else {
             final mb = (received / (1024 * 1024)).toStringAsFixed(0);
             _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... (${mb}MB)', tag: tag));

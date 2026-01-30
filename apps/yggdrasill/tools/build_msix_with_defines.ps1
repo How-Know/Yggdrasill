@@ -24,6 +24,7 @@ flutter pub get | Out-Host
 
 # Pre-build Windows with same defines
 flutter build windows --release --dart-define=SERVER_ONLY=true --dart-define=SUPABASE_URL=$url --dart-define=SUPABASE_ANON_KEY=$key | Out-Host
+if($LASTEXITCODE -ne 0){ throw "flutter build windows failed (exit=$LASTEXITCODE)" }
 
 # Also put env.local.json next to exe so runtime can find it
 $releaseDir = Join-Path (Get-Location) 'build/windows/x64/runner/Release'
@@ -89,6 +90,9 @@ try{
   Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $portableZip -Force
   Write-Host "[OK] Portable ZIP created: $portableZip" -ForegroundColor Green
 } catch {
+  if($PortableOnly){
+    throw "Portable ZIP 생성 실패(PortableOnly): $($_.Exception.Message)"
+  }
   Write-Host "[WARN] Portable ZIP 생성 실패: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
