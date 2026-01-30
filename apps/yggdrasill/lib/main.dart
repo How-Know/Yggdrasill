@@ -110,6 +110,15 @@ final Map<String, Map<DateTime, String>> _preloadedRangesBySg = <String, Map<Dat
 // 반복되는 시맨틱스 어설션 스팸을 1회로 제한하기 위한 플래그
 bool _printedFirstSemanticsDirty = false;
 
+// 릴리즈 빌드에서 print가 남지 않도록(=assert 제거로 함께 제거) 디버그 로거 사용
+void _dlog(String message) {
+  assert(() {
+    // ignore: avoid_print
+    print(message);
+    return true;
+  }());
+}
+
 String _sgSchool(String sg) {
   final idx = sg.lastIndexOf(' ');
   return idx > 0 ? sg.substring(0, idx) : sg;
@@ -246,8 +255,7 @@ void main() async {
     final String message = details.exceptionAsString();
     if (!_printedFirstSemanticsDirty && message.contains("!semantics.parentDataDirty")) {
       _printedFirstSemanticsDirty = true;
-      // ignore: avoid_print
-      print('[SEMANTICS] First occurrence captured. See details below.');
+      _dlog('[SEMANTICS] First occurrence captured. See details below.');
       FlutterError.dumpErrorToConsole(details, forceReport: true);
     } else if (!message.contains("!semantics.parentDataDirty")) {
       FlutterError.dumpErrorToConsole(details, forceReport: true);
@@ -361,10 +369,8 @@ void main() async {
       preferSupabase: prefer.toLowerCase() == 'true',
     );
     // 디버깅 로그
-    // ignore: avoid_print
-    print('[Boot] TagPresetService flags -> dualWrite=' + TagPresetService.dualWrite.toString() + ', preferSupabaseRead=' + TagPresetService.preferSupabaseRead.toString());
-    // ignore: avoid_print
-    print('[Boot] TagStore flags -> dualWrite=' + TagStore.dualWrite.toString() + ', preferSupabaseRead=' + TagStore.preferSupabaseRead.toString());
+    _dlog('[Boot] TagPresetService flags -> dualWrite=' + TagPresetService.dualWrite.toString() + ', preferSupabaseRead=' + TagPresetService.preferSupabaseRead.toString());
+    _dlog('[Boot] TagStore flags -> dualWrite=' + TagStore.dualWrite.toString() + ', preferSupabaseRead=' + TagStore.preferSupabaseRead.toString());
   } catch (_) {}
   await windowManager.ensureInitialized();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -743,11 +749,9 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
           FilledButton(
               onPressed: () {
                 // DEBUG: 범위 추가 저장 시도
-                // ignore: avoid_print
-                print('[RANGE_ADD] try save: selectedName=$selectedName, text="${ctrlRange.text}"');
+                _dlog('[RANGE_ADD] try save: selectedName=$selectedName, text="${ctrlRange.text}"');
                 final state = context.findAncestorStateOfType<_ExamScheduleWizardState>();
-                // ignore: avoid_print
-                print('[RANGE_ADD] found wizard state? ${state != null}');
+                _dlog('[RANGE_ADD] found wizard state? ${state != null}');
                 final sg = state?._selectedSchoolGrade;
                 if (state != null && sg != null) {
                   state.setState(() {
@@ -756,8 +760,7 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
                     if (text.isNotEmpty) {
                       list.add('$selectedName: $text');
                       state._rangeBadgesBySchoolGrade[sg] = list;
-                      // ignore: avoid_print
-                      print('[RANGE_ADD] saved temp badge: sg=$sg, list=${state._rangeBadgesBySchoolGrade[sg]}');
+                      _dlog('[RANGE_ADD] saved temp badge: sg=$sg, list=${state._rangeBadgesBySchoolGrade[sg]}');
                     }
                   });
                 }
@@ -1010,16 +1013,14 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(BuildContext c
 Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context, String schoolGradeKey, Map<DateTime, List<String>> savedNames) async {
   final Map<DateTime, String> localRanges = {};
   // DEBUG: 초기 상태 로깅
-  // ignore: avoid_print
-  print('[RANGE_EDIT][init] schoolGrade=$schoolGradeKey, saved dates=${savedNames.keys.toList()}');
+  _dlog('[RANGE_EDIT][init] schoolGrade=$schoolGradeKey, saved dates=${savedNames.keys.toList()}');
   // 참고: 여기서는 기존 구현과 동일하게 임시 값으로 채우되, 실제 상태 객체 값도 비교 로그로 남긴다.
   savedNames.forEach((date, names) {
     final key = DateTime(date.year, date.month, date.day);
     final existingWrong = (_ExamScheduleWizardState()._rangesBySchoolGrade[schoolGradeKey] ?? {})[key] ?? '';
     final st = context.findAncestorStateOfType<_ExamScheduleWizardState>();
     final existingActual = st?._rangesBySchoolGrade[schoolGradeKey]?[key] ?? '';
-    // ignore: avoid_print
-    print('[RANGE_EDIT][init] date=$key, existing(wrongCtor)="$existingWrong", existing(actual)="$existingActual"');
+    _dlog('[RANGE_EDIT][init] date=$key, existing(wrongCtor)="$existingWrong", existing(actual)="$existingActual"');
     localRanges[key] = existingWrong;
   });
   final result = await showDialog<Map<DateTime, String>>(
@@ -1078,8 +1079,7 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context, String
           FilledButton(
             onPressed: () {
               final map = <DateTime, String>{}..addAll(localRanges);
-              // ignore: avoid_print
-              print('[RANGE_EDIT][save] schoolGrade=$schoolGradeKey, savedKeys=${map.keys.toList()} values=${map.values.toList()}');
+              _dlog('[RANGE_EDIT][save] schoolGrade=$schoolGradeKey, savedKeys=${map.keys.toList()} values=${map.values.toList()}');
               Navigator.of(ctx).pop(map);
             },
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
@@ -1868,8 +1868,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                   // persist selection
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setStringList(_kGradeFilterKey, _gradeFilter.toList());
-                  // ignore: avoid_print
-                  print('[GRADE_FILTER][save] ${_gradeFilter.toList()}');
+                  _dlog('[GRADE_FILTER][save] ${_gradeFilter.toList()}');
                   if (mounted) setState(() {});
                   Navigator.of(ctxSB).pop();
                 },
@@ -1894,8 +1893,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
             ..clear()
             ..addAll(list);
         });
-        // ignore: avoid_print
-        print('[GRADE_FILTER][load] $list');
+        _dlog('[GRADE_FILTER][load] $list');
       }
     });
   }
@@ -2791,8 +2789,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   if (res != null) {
                                     setState(() {
                                       _rangesBySchoolGrade[item] = res;
-                                      // ignore: avoid_print
-                                      print('[RANGE_EDIT][apply] schoolGrade=$item, keys=${res.keys.toList()}');
+                                      _dlog('[RANGE_EDIT][apply] schoolGrade=$item, keys=${res.keys.toList()}');
                                     });
                                   }
                               } else {
@@ -2930,8 +2927,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                             // 범위-먼저 추가된 임시 배지와 새 일정 매칭: 같은 시험명에 범위를 결합하고 임시 배지는 제거
                             final pending = _rangeBadgesBySchoolGrade[sg] ?? <String>[];
                             if (pending.isNotEmpty) {
-                              // ignore: avoid_print
-                              print('[RANGE_MATCH] pending before match: $pending');
+                              _dlog('[RANGE_MATCH] pending before match: $pending');
                               final Map<String, String> rangeByName = {};
                               for (final entry in pending) {
                                 final idx = entry.indexOf(':');
@@ -2963,8 +2959,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                     final name = idx > 0 ? e.substring(0, idx).trim() : e.trim();
                                     return !usedNames.contains(name);
                                   }).toList();
-                                  // ignore: avoid_print
-                                  print('[RANGE_MATCH] after match: used=$usedNames, remain=${_rangeBadgesBySchoolGrade[sg]}');
+                                  _dlog('[RANGE_MATCH] after match: used=$usedNames, remain=${_rangeBadgesBySchoolGrade[sg]}');
                                 }
                               }
                             }
@@ -3172,88 +3167,106 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
     return LayoutBuilder(builder: (context, constraints) {
       const double panelWidth = 238 * 1.2; // 기존(238)에서 +20% 확장
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
-      return Stack(children: [
-        Positioned(
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: edgeOpenZoneWidth,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // 마우스 호버로 오픈 (기존 동작)
-              MouseRegion(
-                onEnter: (_) {
-                  // ✅ 폭을 줄여도 "화면 끝까지" 가면 체감이 비슷할 수 있어
-                  // 실수로 스치기만 해도 열리는 걸 줄이기 위해 약간의 지연을 둔다.
-                  _edgeHoverTimer?.cancel();
-                  if (widget.isOpenListenable.value) return;
-                  _edgeHoverTimer = Timer(const Duration(milliseconds: 180), () {
-                    if (!mounted) return;
-                    _setOpen(true);
-                  });
-                },
-                onExit: (_) {
-                  _edgeHoverTimer?.cancel();
-                  _edgeHoverTimer = null;
-                },
-                child: const SizedBox.shrink(),
+      return ValueListenableBuilder<bool>(
+        valueListenable: blockRightSideSheetOpen,
+        builder: (context, blockOpen, _) {
+          if (blockOpen) {
+            _edgeHoverTimer?.cancel();
+            _edgeHoverTimer = null;
+            _edgeTouchActive = false;
+            _edgeDragStart = null;
+            if (widget.isOpenListenable.value) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _setOpen(false);
+              });
+            }
+          }
+          return Stack(children: [
+            if (!blockOpen)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: edgeOpenZoneWidth,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // 마우스 호버로 오픈 (기존 동작)
+                    MouseRegion(
+                      onEnter: (_) {
+                        // ✅ 폭을 줄여도 "화면 끝까지" 가면 체감이 비슷할 수 있어
+                        // 실수로 스치기만 해도 열리는 걸 줄이기 위해 약간의 지연을 둔다.
+                        _edgeHoverTimer?.cancel();
+                        if (widget.isOpenListenable.value) return;
+                        _edgeHoverTimer = Timer(const Duration(milliseconds: 180), () {
+                          if (!mounted) return;
+                          _setOpen(true);
+                        });
+                      },
+                      onExit: (_) {
+                        _edgeHoverTimer?.cancel();
+                        _edgeHoverTimer = null;
+                      },
+                      child: const SizedBox.shrink(),
+                    ),
+                    // 터치/펜 엣지 스와이프로 오픈
+                    Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: (event) {
+                        if (event.kind == PointerDeviceKind.touch || event.kind == PointerDeviceKind.stylus) {
+                          _edgeTouchActive = true;
+                          _edgeDragStart = event.position;
+                        }
+                      },
+                      onPointerMove: (event) {
+                        if (_edgeTouchActive && _edgeDragStart != null) {
+                          final dx = event.position.dx - _edgeDragStart!.dx;
+                          // 오른쪽 엣지에서 왼쪽으로 edgeOpenZoneWidth 이상 드래그 시 오픈
+                          if (dx < -edgeOpenZoneWidth) {
+                            _setOpen(true);
+                          }
+                        }
+                      },
+                      onPointerUp: (event) {
+                        _edgeTouchActive = false;
+                        _edgeDragStart = null;
+                      },
+                      onPointerCancel: (event) {
+                        _edgeTouchActive = false;
+                        _edgeDragStart = null;
+                      },
+                    ),
+                  ],
+                ),
               ),
-              // 터치/펜 엣지 스와이프로 오픈
-              Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (event) {
-                  if (event.kind == PointerDeviceKind.touch || event.kind == PointerDeviceKind.stylus) {
-                    _edgeTouchActive = true;
-                    _edgeDragStart = event.position;
-                  }
-                },
-                onPointerMove: (event) {
-                  if (_edgeTouchActive && _edgeDragStart != null) {
-                    final dx = event.position.dx - _edgeDragStart!.dx;
-                    // 오른쪽 엣지에서 왼쪽으로 edgeOpenZoneWidth 이상 드래그 시 오픈
-                    if (dx < -edgeOpenZoneWidth) {
-                      _setOpen(true);
-                    }
-                  }
-                },
-                onPointerUp: (event) {
-                  _edgeTouchActive = false;
-                  _edgeDragStart = null;
-                },
-                onPointerCancel: (event) {
-                  _edgeTouchActive = false;
-                  _edgeDragStart = null;
-                },
-              ),
-            ],
-          ),
-        ),
-        ValueListenableBuilder<bool>(
-          valueListenable: widget.isOpenListenable,
-          builder: (context, open, _) {
-            return AnimatedPositioned(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeInOut,
-              right: open ? 0 : -panelWidth,
-              top: 0,
-              bottom: 0,
-              width: panelWidth,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _MemoPanel(
-                    memosListenable: widget.memosListenable,
-                    onAddMemo: () => widget.onAddMemo(context),
-                    onEditMemo: (m) => widget.onEditMemo(context, m),
-                    onRequestClose: () => _setOpen(false),
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.isOpenListenable,
+              builder: (context, open, _) {
+                return AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeInOut,
+                  right: open ? 0 : -panelWidth,
+                  top: 0,
+                  bottom: 0,
+                  width: panelWidth,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _MemoPanel(
+                        memosListenable: widget.memosListenable,
+                        onAddMemo: () => widget.onAddMemo(context),
+                        onEditMemo: (m) => widget.onEditMemo(context, m),
+                        onRequestClose: () => _setOpen(false),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            );
-          },
-        ),
-      ]);
+                );
+              },
+            ),
+          ]);
+        },
+      );
     });
   }
 

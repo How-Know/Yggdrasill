@@ -188,5 +188,28 @@ class ConceptCategoryService {
       'depth': depth,
     }).eq('id', id);
   }
+
+  Future<void> reorderCategories({
+    required String? parentId,
+    required List<String> orderedCategoryIds,
+  }) async {
+    for (var i = 0; i < orderedCategoryIds.length; i++) {
+      final payload = {'sort_order': i};
+      if (parentId == null) {
+        await _client
+            .from('concept_categories')
+            .update(payload)
+            .eq('id', orderedCategoryIds[i]);
+      } else {
+        await _client
+            .from('concept_categories')
+            .update(payload)
+            .match({
+          'id': orderedCategoryIds[i],
+          'parent_id': parentId,
+        });
+      }
+    }
+  }
 }
 

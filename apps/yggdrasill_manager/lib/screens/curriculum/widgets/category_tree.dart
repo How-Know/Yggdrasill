@@ -2,16 +2,24 @@ import 'package:flutter/material.dart';
 
 import '../../../services/concept_category_service.dart';
 import '../../../services/concept_service.dart';
+import '../../../widgets/app_navigation_bar.dart';
+
+const double kTreeIndentStep = 18.0;
+const double kTreeConnectorWidth = 12.0;
+const Color kTreeLineColor = Color(0xFF2A2A2A);
+const Color kTreeAccentColor = kNavAccent;
 
 class CategoryTree extends StatefulWidget {
   const CategoryTree({
     super.key,
     required this.roots,
     this.forceExpandNodeId,
+    this.rootParentId,
     this.onSelect,
     this.onAddChild,
     this.onRename,
     this.onDelete,
+    this.onReorderFolder,
     this.onTapConcept,
     this.onEditConcept,
     this.onDeleteConcept,
@@ -21,10 +29,16 @@ class CategoryTree extends StatefulWidget {
 
   final List<CategoryNode> roots;
   final String? forceExpandNodeId;
+  final String? rootParentId;
   final ValueChanged<CategoryNode>? onSelect;
   final Future<void> Function(CategoryNode node)? onAddChild;
   final Future<void> Function(CategoryNode node)? onRename;
   final Future<void> Function(CategoryNode node)? onDelete;
+  final Future<void> Function({
+    required CategoryNode node,
+    required String? parentId,
+    required int direction,
+  })? onReorderFolder;
   final void Function(CategoryNode parent, ConceptItem concept)? onTapConcept;
   final Future<void> Function(CategoryNode parent, ConceptItem concept)?
       onEditConcept;
@@ -74,43 +88,110 @@ class _CategoryTreeState extends State<CategoryTree> {
       return const Center(
         child: Text(
           '표시할 폴더가 없습니다.',
-          style: TextStyle(color: Colors.white54),
+          style: TextStyle(color: Colors.white54, fontSize: 16),
         ),
       );
     }
-    final children =
-        widget.roots.map((node) => _buildNode(node, 0)).toList(growable: false);
+    final entries = _buildEntries(
+      widget.roots,
+      depth: 0,
+      parentId: widget.rootParentId,
+    );
     return Scrollbar(
-      child: ListView(
-        children: children,
+      child: ListView.builder(
+        itemCount: entries.length,
+        itemBuilder: (context, index) {
+          final entry = entries[index];
+          if (entry.type == _TreeEntryType.folder) {
+            return _buildFolderRow(
+              entry.node,
+              entry.depth,
+              entry.parentId,
+              entry.index,
+              entry.siblingCount,
+              entry.ancestorHasNext,
+              entry.hasNextSibling,
+            );
+          }
+          return _buildConceptSection(
+            entry.node,
+            entry.depth,
+            entry.ancestorHasNext,
+            entry.hasNextSibling,
+          );
+        },
       ),
     );
   }
 
-  Widget _buildNode(CategoryNode node, int depth) {
-    final widgets = <Widget>[
-      _buildFolderRow(node, depth),
-    ];
-
-    final isExpanded = _expandedIds.contains(node.id);
-    if (isExpanded) {
-      if (node.concepts.isNotEmpty) {
-        widgets.add(_buildConceptSection(node, depth + 1));
-      }
-      for (final child in node.children) {
-        widgets.add(_buildNode(child, depth + 1));
+  List<_TreeEntry> _buildEntries(
+    List<CategoryNode> nodes, {
+    required int depth,
+    required String? parentId,
+    List<bool> ancestorHasNext = const [],
+  }) {
+    final out = <_TreeEntry>[];
+    for (var i = 0; i < nodes.length; i++) {
+      final node = nodes[i];
+      final hasNextSibling = i < nodes.length - 1;
+      final nextAncestorHasNext = [...ancestorHasNext, hasNextSibling];
+      out.add(
+        _TreeEntry.folder(
+          node: node,
+          depth: depth,
+          parentId: parentId,
+          index: i,
+          siblingCount: nodes.length,
+          ancestorHasNext: ancestorHasNext,
+          hasNextSibling: hasNextSibling,
+        ),
+      );
+      if (_expandedIds.contains(node.id)) {
+        if (node.concepts.isNotEmpty) {
+          final conceptHasNext = node.children.isNotEmpty;
+          out.add(
+            _TreeEntry.concepts(
+              node: node,
+              depth: depth + 1,
+              ancestorHasNext: nextAncestorHasNext,
+              hasNextSibling: conceptHasNext,
+            ),
+          );
+        }
+        if (node.children.isNotEmpty) {
+          out.addAll(
+            _buildEntries(
+              node.children,
+              depth: depth + 1,
+              parentId: node.id,
+              ancestorHasNext: nextAncestorHasNext,
+            ),
+          );
+        }
       }
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: widgets,
-    );
+    return out;
   }
 
-  Widget _buildFolderRow(CategoryNode node, int depth) {
+  Widget _buildFolderRow(
+    CategoryNode node,
+    int depth,
+    String? parentId,
+    int index,
+    int siblingCount,
+    List<bool> ancestorHasNext,
+    bool hasNextSibling,
+  ) {
     final isExpanded = _expandedIds.contains(node.id);
     final isSelected = _selectedCategoryId == node.id;
-    final indent = depth * 18.0;
+    final hasExpandable = node.children.isNotEmpty || node.concepts.isNotEmpty;
+    final lineX = depth > 0
+        ? ((depth - 1) * kTreeIndentStep) + (kTreeIndentStep / 2)
+        : 0.0;
+    final leftInset =
+        depth > 0 ? lineX + kTreeConnectorWidth + 6 : 0.0;
+    final textColor = isSelected ? kTreeAccentColor : Colors.white;
+    final iconColor = isSelected ? kTreeAccentColor : Colors.white70;
 
     return DragTarget<_DragFolderPayload>(
       onWillAccept: (payload) =>
@@ -123,107 +204,176 @@ class _CategoryTreeState extends State<CategoryTree> {
       ),
       builder: (context, candidate, rejected) {
         return Padding(
-          padding: EdgeInsets.only(left: indent, right: 8, top: 4, bottom: 4),
-          child: GestureDetector(
-            onTap: () {
-              setState(() => _selectedCategoryId = node.id);
-              widget.onSelect?.call(node);
-            },
-            onDoubleTap: () => _expandAll(node),
-            child: LongPressDraggable<_DragFolderPayload>(
-              data: _DragFolderPayload(node),
-              feedback: _DragFolderFeedback(name: node.name),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? const Color(0xFF3A3A3A)
-                      : const Color(0xFF2B2B2B),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isSelected
-                        ? const Color(0xFF4A9EFF)
-                        : const Color(0xFF3A3A3A),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Stack(
+            children: [
+              if (depth > 0)
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _TreeIndentPainter(
+                      depth: depth,
+                      ancestorHasNext: ancestorHasNext,
+                      hasNextSibling: hasNextSibling,
+                      indentStep: kTreeIndentStep,
+                      connectorWidth: kTreeConnectorWidth,
+                      lineColor: kTreeLineColor,
+                    ),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    InkWell(
-                      onTap: () {
-                        setState(() {
-                          if (isExpanded) {
-                            _expandedIds.remove(node.id);
-                          } else {
-                            _expandedIds.add(node.id);
-                          }
-                        });
-                      },
-                      child: Icon(
-                        isExpanded
-                            ? Icons.keyboard_arrow_down
-                            : Icons.keyboard_arrow_right,
-                        size: 16,
-                        color: Colors.white70,
+              Padding(
+                padding: EdgeInsets.only(left: leftInset),
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _selectedCategoryId = node.id;
+                      if (hasExpandable) {
+                        if (isExpanded) {
+                          _expandedIds.remove(node.id);
+                        } else {
+                          _expandedIds.add(node.id);
+                        }
+                      }
+                    });
+                    widget.onSelect?.call(node);
+                  },
+                  onDoubleTap: () => _expandAll(node),
+                  child: LongPressDraggable<_DragFolderPayload>(
+                    data: _DragFolderPayload(node),
+                    feedback: _DragFolderFeedback(name: node.name),
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.transparent),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isExpanded
+                                ? Icons.keyboard_arrow_down
+                                : Icons.keyboard_arrow_right,
+                            size: 16,
+                            color: iconColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              node.name,
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 16,
+                                fontWeight:
+                                    isSelected ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                          _buildFolderActions(
+                            node,
+                            parentId: parentId,
+                            index: index,
+                            siblingCount: siblingCount,
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    Icon(
-                      isExpanded ? Icons.folder_open : Icons.folder,
-                      size: 16,
-                      color: const Color(0xFFFFC857),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        node.name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    _buildFolderActions(node),
-                  ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
         );
       },
     );
   }
 
-  Widget _buildFolderActions(CategoryNode node) {
+  Widget _buildFolderActions(
+    CategoryNode node, {
+    required String? parentId,
+    required int index,
+    required int siblingCount,
+  }) {
+    final canMoveUp = parentId != null && index > 0;
+    final canMoveDown = parentId != null && index < siblingCount - 1;
+    final canAddChild = widget.onAddChild != null;
+    final canRename = widget.onRename != null;
+    final canDelete = widget.onDelete != null;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
-          icon: const Icon(Icons.create_new_folder_outlined, size: 16),
-          tooltip: '하위 폴더',
-          onPressed: widget.onAddChild == null
+          icon: Icon(
+            Icons.keyboard_arrow_up,
+            size: 18,
+            color: canMoveUp ? kTreeAccentColor : Colors.white24,
+          ),
+          tooltip: '위로',
+          onPressed: !canMoveUp || widget.onReorderFolder == null
               ? null
-              : () => widget.onAddChild!(node),
+              : () => widget.onReorderFolder!(
+                    node: node,
+                    parentId: parentId,
+                    direction: -1,
+                  ),
         ),
         IconButton(
-          icon: const Icon(Icons.edit, size: 16),
+          icon: Icon(
+            Icons.keyboard_arrow_down,
+            size: 18,
+            color: canMoveDown ? kTreeAccentColor : Colors.white24,
+          ),
+          tooltip: '아래로',
+          onPressed: !canMoveDown || widget.onReorderFolder == null
+              ? null
+              : () => widget.onReorderFolder!(
+                    node: node,
+                    parentId: parentId,
+                    direction: 1,
+                  ),
+        ),
+        IconButton(
+          icon: Icon(
+            Icons.create_new_folder_outlined,
+            size: 16,
+            color: canAddChild ? kTreeAccentColor : Colors.white24,
+          ),
+          tooltip: '하위 폴더',
+          onPressed: !canAddChild ? null : () => widget.onAddChild!(node),
+        ),
+        IconButton(
+          icon: Icon(
+            Icons.edit,
+            size: 16,
+            color: canRename ? kTreeAccentColor : Colors.white24,
+          ),
           tooltip: '이름 변경',
-          onPressed:
-              widget.onRename == null ? null : () => widget.onRename!(node),
+          onPressed: !canRename ? null : () => widget.onRename!(node),
         ),
         IconButton(
-          icon: const Icon(Icons.delete_outline, size: 16),
+          icon: Icon(
+            Icons.delete_outline,
+            size: 16,
+            color: canDelete ? kTreeAccentColor : Colors.white24,
+          ),
           tooltip: '삭제',
-          onPressed:
-              widget.onDelete == null ? null : () => widget.onDelete!(node),
+          onPressed: !canDelete ? null : () => widget.onDelete!(node),
         ),
       ],
     );
   }
 
-  Widget _buildConceptSection(CategoryNode node, int depth) {
-    final indent = depth * 18.0;
+  Widget _buildConceptSection(
+    CategoryNode node,
+    int depth,
+    List<bool> ancestorHasNext,
+    bool hasNextSibling,
+  ) {
+    final lineX = depth > 0
+        ? ((depth - 1) * kTreeIndentStep) + (kTreeIndentStep / 2)
+        : 0.0;
+    final leftInset =
+        depth > 0 ? lineX + kTreeConnectorWidth + 6 : 0.0;
     final chips = <Widget>[];
 
     for (var i = 0; i < node.concepts.length; i++) {
@@ -248,11 +398,35 @@ class _CategoryTreeState extends State<CategoryTree> {
     );
 
     return Padding(
-      padding: EdgeInsets.only(left: indent + 12, right: 8, top: 6, bottom: 6),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: chips,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Stack(
+        children: [
+          if (depth > 0)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _TreeIndentPainter(
+                  depth: depth,
+                  ancestorHasNext: ancestorHasNext,
+                  hasNextSibling: hasNextSibling,
+                  indentStep: kTreeIndentStep,
+                  connectorWidth: kTreeConnectorWidth,
+                  lineColor: kTreeLineColor,
+                ),
+              ),
+            ),
+          Padding(
+            padding: EdgeInsets.only(
+              left: leftInset,
+              top: 8,
+              bottom: 8,
+            ),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: chips,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -284,7 +458,7 @@ class _CategoryTreeState extends State<CategoryTree> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: Colors.transparent,
             border: Border.all(color: color),
             borderRadius: BorderRadius.circular(20),
           ),
@@ -366,6 +540,66 @@ class _CategoryTreeState extends State<CategoryTree> {
   }
 }
 
+enum _TreeEntryType { folder, concepts }
+
+class _TreeEntry {
+  const _TreeEntry._({
+    required this.type,
+    required this.node,
+    required this.depth,
+    required this.ancestorHasNext,
+    required this.hasNextSibling,
+    this.parentId,
+    this.index = 0,
+    this.siblingCount = 0,
+  });
+
+  factory _TreeEntry.folder({
+    required CategoryNode node,
+    required int depth,
+    required String? parentId,
+    required int index,
+    required int siblingCount,
+    required List<bool> ancestorHasNext,
+    required bool hasNextSibling,
+  }) {
+    return _TreeEntry._(
+      type: _TreeEntryType.folder,
+      node: node,
+      depth: depth,
+      ancestorHasNext: ancestorHasNext,
+      hasNextSibling: hasNextSibling,
+      parentId: parentId,
+      index: index,
+      siblingCount: siblingCount,
+    );
+  }
+
+  factory _TreeEntry.concepts({
+    required CategoryNode node,
+    required int depth,
+    required List<bool> ancestorHasNext,
+    required bool hasNextSibling,
+  }) {
+    return _TreeEntry._(
+      type: _TreeEntryType.concepts,
+      node: node,
+      depth: depth,
+      ancestorHasNext: ancestorHasNext,
+      hasNextSibling: hasNextSibling,
+    );
+  }
+
+  final _TreeEntryType type;
+  final CategoryNode node;
+  final int depth;
+  final List<bool> ancestorHasNext;
+  final bool hasNextSibling;
+  final String? parentId;
+  final int index;
+  final int siblingCount;
+}
+
 class _ConceptChipBody extends StatelessWidget {
   const _ConceptChipBody({
     required this.color,
@@ -408,7 +642,7 @@ class _ConceptChipBody extends StatelessWidget {
             padding:
                 const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: color.withOpacity(0.4), width: 1.5),
             ),
@@ -485,7 +719,7 @@ class _ConceptDragTarget extends StatelessWidget {
         return Container(
           decoration: highlight
               ? BoxDecoration(
-                  border: Border.all(color: const Color(0xFF4A9EFF)),
+                  border: Border.all(color: kTreeAccentColor),
                   borderRadius: BorderRadius.circular(6),
                 )
               : null,
@@ -525,7 +759,7 @@ class _DragFolderFeedback extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: const Color(0xFF2B2B2B),
-          border: Border.all(color: const Color(0xFF4A9EFF)),
+          border: Border.all(color: kTreeAccentColor),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -541,6 +775,66 @@ class _DragFolderFeedback extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _TreeIndentPainter extends CustomPainter {
+  const _TreeIndentPainter({
+    required this.depth,
+    required this.ancestorHasNext,
+    required this.hasNextSibling,
+    required this.indentStep,
+    required this.connectorWidth,
+    required this.lineColor,
+  });
+
+  final int depth;
+  final List<bool> ancestorHasNext;
+  final bool hasNextSibling;
+  final double indentStep;
+  final double connectorWidth;
+  final Color lineColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (depth <= 0) return;
+    final paint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final centerY = size.height / 2;
+
+    for (var i = 0; i < depth - 1; i++) {
+      if (i >= ancestorHasNext.length || !ancestorHasNext[i]) continue;
+      final x = (i * indentStep) + (indentStep / 2);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+
+    // parent column (depth - 1): always connect to parent
+    final elbowX = ((depth - 1) * indentStep) + (indentStep / 2);
+    canvas.drawLine(Offset(elbowX, 0), Offset(elbowX, centerY), paint);
+    final parentHasNext =
+        ancestorHasNext.isNotEmpty ? ancestorHasNext.last : false;
+    if (hasNextSibling || parentHasNext) {
+      canvas.drawLine(Offset(elbowX, centerY), Offset(elbowX, size.height), paint);
+    }
+
+    final path = Path()
+      ..moveTo(elbowX, centerY)
+      ..lineTo(elbowX + connectorWidth, centerY);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TreeIndentPainter oldDelegate) {
+    return oldDelegate.depth != depth ||
+        oldDelegate.ancestorHasNext != ancestorHasNext ||
+        oldDelegate.hasNextSibling != hasNextSibling ||
+        oldDelegate.indentStep != indentStep ||
+        oldDelegate.connectorWidth != connectorWidth ||
+        oldDelegate.lineColor != lineColor;
   }
 }
 

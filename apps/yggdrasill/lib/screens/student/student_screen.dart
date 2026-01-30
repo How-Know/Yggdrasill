@@ -39,6 +39,15 @@ const Color _studentPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentMutedTextColor = Color(0xFFD0DDDD);
 const Color _studentAccentColor = Color(0xFF1B6B63);
 
+// 릴리즈 빌드에서 디버그 로그가 남지 않도록(assert 제거로 함께 제거)
+void _dlog(String message) {
+  assert(() {
+    // ignore: avoid_print
+    print(message);
+    return true;
+  }());
+}
+
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
 
@@ -124,11 +133,14 @@ class StudentScreenState extends State<StudentScreen> {
     _removeToolsDropdown();
     _searchController.dispose();
     hideGlobalMemoFloatingBanners.value = false;
+    blockRightSideSheetOpen.value = false;
     super.dispose();
   }
 
   void _syncMemoFloatingVisibility() {
-    hideGlobalMemoFloatingBanners.value = _customTabIndex == 1;
+    final isTendencyTab = _customTabIndex == 1;
+    hideGlobalMemoFloatingBanners.value = isTendencyTab;
+    blockRightSideSheetOpen.value = isTendencyTab;
   }
 
   List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
@@ -525,7 +537,7 @@ class StudentScreenState extends State<StudentScreen> {
         return ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (context, students, __) {
-            print('[DEBUG][StudentScreen] ValueListenableBuilder build: students.length=' + students.length.toString());
+            _dlog('[DEBUG][StudentScreen] ValueListenableBuilder build: students.length=' + students.length.toString());
             final filteredStudents = filterStudents(students);
             if (_viewType == StudentViewType.byClass) {
               return const Center(
@@ -570,14 +582,14 @@ class StudentScreenState extends State<StudentScreen> {
                   });
                 },
                 onStudentMoved: (studentWithInfo, newGroup) async {
-                  print('[DEBUG] onStudentMoved: \u001b[33m${studentWithInfo.student.name}\u001b[0m, \u001b[36m${newGroup?.name}\u001b[0m');
+                  _dlog('[DEBUG] onStudentMoved: ${studentWithInfo.student.name}, ${newGroup?.name}');
                   if (newGroup != null) {
                     // capacity 체크 (null/0 이면 제한 없음)
                     final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
                     final cap = newGroup.capacity;
-                    print('[DEBUG] onStudentMoved - 현재 그룹 인원: \\${groupStudents.length}, 정원: \\${newGroup.capacity}');
+                    _dlog('[DEBUG] onStudentMoved - 현재 그룹 인원: ${groupStudents.length}, 정원: ${newGroup.capacity}');
                     if (cap != null && cap > 0 && groupStudents.length >= cap) {
-                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
+                      _dlog('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
                       await showDialog(
                         context: context,
                         builder: (context) => AlertDialog(
@@ -593,10 +605,10 @@ class StudentScreenState extends State<StudentScreen> {
                           ],
                         ),
                       );
-                      print('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 종료');
+                      _dlog('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 종료');
                       return;
                     }
-                    print('[DEBUG] onStudentMoved - updateStudent 호출');
+                    _dlog('[DEBUG] onStudentMoved - updateStudent 호출');
                     await DataManager.instance.updateStudent(
                       studentWithInfo.student.copyWith(groupInfo: newGroup),
                       studentWithInfo.basicInfo.copyWith(groupId: newGroup.id),
@@ -608,7 +620,7 @@ class StudentScreenState extends State<StudentScreen> {
                       studentWithInfo.student.copyWith(groupInfo: null),
                       studentWithInfo.basicInfo.copyWith(groupId: null),
                     );
-                    print('[DEBUG] 그룹에서 제외 스낵바 호출 직전');
+                    _dlog('[DEBUG] 그룹에서 제외 스낵바 호출 직전');
                     showAppSnackBar(context, '그룹에서 제외되었습니다.');
                   }
                 },
@@ -620,14 +632,14 @@ class StudentScreenState extends State<StudentScreen> {
                   DataManager.instance.setGroupsOrder(newGroups);
                 },
                 onDeleteStudent: (studentWithInfo) async {
-                  print('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
+                  _dlog('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
                   try {
                     await DataManager.instance.deleteStudent(studentWithInfo.student.id);
-                    print('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
+                    _dlog('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
                     showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
-                    print('[DEBUG][StudentScreen] 스낵바 호출 완료');
+                    _dlog('[DEBUG][StudentScreen] 스낵바 호출 완료');
                   } catch (e) {
-                    print('[ERROR][StudentScreen] 학생 삭제 실패: $e');
+                    _dlog('[ERROR][StudentScreen] 학생 삭제 실패: $e');
                     showAppSnackBar(context, '학생 삭제 실패: $e', useRoot: true);
                   }
                 },
@@ -912,7 +924,7 @@ class StudentScreenState extends State<StudentScreen> {
                 DataManager.instance.setGroupsOrder(current);
               },
               onDeleteStudent: (studentWithInfo) async {
-                print('[DEBUG][StudentScreen] onDeleteStudent 호출: ' + studentWithInfo.student.id);
+                _dlog('[DEBUG][StudentScreen] onDeleteStudent 호출: ' + studentWithInfo.student.id);
                 final confirmed = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
@@ -931,13 +943,13 @@ class StudentScreenState extends State<StudentScreen> {
                     await DataManager.instance.deleteStudent(studentWithInfo.student.id);
                     showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
                   } catch (e) {
-                    print('[ERROR][StudentScreen] 학생 삭제 실패: $e');
+                    _dlog('[ERROR][StudentScreen] 학생 삭제 실패: $e');
                     showAppSnackBar(context, '학생 삭제 실패: $e', useRoot: true);
                   }
                 }
               },
               onStudentUpdated: (studentWithInfo) async {
-                print('[DEBUG][StudentScreen] onStudentUpdated 호출: ' + studentWithInfo.student.id);
+                _dlog('[DEBUG][StudentScreen] onStudentUpdated 호출: ' + studentWithInfo.student.id);
                 await showDialog(
                   context: context,
                   builder: (context) => StudentRegistrationDialog(
@@ -1727,7 +1739,7 @@ class StudentScreenState extends State<StudentScreen> {
                       if (_selectedStudent?.student.id != studentWithInfo.student.id) {
                         _paymentPageIndex = 0;
                         _attendancePageIndex = 0;
-                        print('[DEBUG][onTap] 학생 변경으로 인한 초기화 - ${studentWithInfo.student.name}');
+                        _dlog('[DEBUG][onTap] 학생 변경으로 인한 초기화 - ${studentWithInfo.student.name}');
                       }
                       _selectedStudent = studentWithInfo;
                     });
@@ -2054,7 +2066,7 @@ class StudentScreenState extends State<StudentScreen> {
     final leftCardsCount = currentMonthIndex; // 현재월 왼쪽에 있는 카드 수
     final maxLeftMove = (leftCardsCount - 2).clamp(0, leftCardsCount); // 최대 왼쪽 이동 가능 횟수
     
-    print('[DEBUG][_hasPastPaymentRecords] 현재월 인덱스: $currentMonthIndex, 왼쪽 카드 수: $leftCardsCount, 최대 이동: $maxLeftMove, 현재 페이지: $_paymentPageIndex');
+    _dlog('[DEBUG][_hasPastPaymentRecords] 현재월 인덱스: $currentMonthIndex, 왼쪽 카드 수: $leftCardsCount, 최대 이동: $maxLeftMove, 현재 페이지: $_paymentPageIndex');
     
     return leftCardsCount >= 3 && _paymentPageIndex < maxLeftMove;
   }
@@ -2092,9 +2104,9 @@ class StudentScreenState extends State<StudentScreen> {
     });
     
     // 페이지 인덱스에 따라 월별 카드 생성
-    print('[DEBUG][_buildPaymentSchedule] _paymentPageIndex: $_paymentPageIndex');
-    print('[DEBUG][_buildPaymentSchedule] currentMonth: $currentMonth');
-    print('[DEBUG][_buildPaymentSchedule] registrationMonth: $registrationMonth');
+    _dlog('[DEBUG][_buildPaymentSchedule] _paymentPageIndex: $_paymentPageIndex');
+    _dlog('[DEBUG][_buildPaymentSchedule] currentMonth: $currentMonth');
+    _dlog('[DEBUG][_buildPaymentSchedule] registrationMonth: $registrationMonth');
     
     // 전체 가능한 월 리스트 생성 (등록월부터 현재월+2달까지)
     final allMonths = <DateTime>[];
@@ -2104,13 +2116,13 @@ class StudentScreenState extends State<StudentScreen> {
       month = DateTime(month.year, month.month + 1);
     }
     
-    print('[DEBUG][_buildPaymentSchedule] 전체 가능한 월: ${allMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
+    _dlog('[DEBUG][_buildPaymentSchedule] 전체 가능한 월: ${allMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
     
     // 현재월의 인덱스 찾기
     final currentMonthIndex = allMonths.indexWhere((m) => 
       m.year == currentMonth.year && m.month == currentMonth.month);
     
-    print('[DEBUG][_buildPaymentSchedule] 현재월 인덱스: $currentMonthIndex');
+    _dlog('[DEBUG][_buildPaymentSchedule] 현재월 인덱스: $currentMonthIndex');
     
     final candidateMonths = <DateTime>[];
     if (currentMonthIndex == -1) {
@@ -2131,7 +2143,7 @@ class StudentScreenState extends State<StudentScreen> {
       final windowEnd = (windowStart + 5).clamp(0, allMonths.length);
       candidateMonths.addAll(allMonths.sublist(windowStart, windowEnd));
       
-      print('[DEBUG][_buildPaymentSchedule] 윈도우 범위: $windowStart~${windowEnd-1}, 표시 월: ${candidateMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
+      _dlog('[DEBUG][_buildPaymentSchedule] 윈도우 범위: $windowStart~${windowEnd-1}, 표시 월: ${candidateMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
     }
     
     // 등록월 이후의 달만 필터링
@@ -3427,9 +3439,9 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
         );
         
         await DataManager.instance.addStudentPaymentInfo(paymentInfo);
-        print('[INFO] 학생 ${widget.studentWithInfo.student.name}의 정보를 student_payment_info로 마이그레이션 완료');
+        _dlog('[INFO] 학생 ${widget.studentWithInfo.student.name}의 정보를 student_payment_info로 마이그레이션 완료');
       } catch (e) {
-        print('[ERROR] 마이그레이션 실패: $e');
+        _dlog('[ERROR] 마이그레이션 실패: $e');
       }
     }
   }

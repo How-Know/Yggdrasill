@@ -71,6 +71,7 @@ Deno.serve(async (req) => {
 
     const token = existing?.token ?? crypto.randomUUID();
     const now = new Date();
+    const nowIso = now.toISOString();
     const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 30);
 
     const { error: upsertErr } = await admin
@@ -80,7 +81,7 @@ Deno.serve(async (req) => {
         participant_id: participantId,
         response_id: responseId,
         email,
-        updated_at: now.toISOString(),
+        updated_at: nowIso,
         expires_at: expiresAt.toISOString(),
       }, { onConflict: 'participant_id' });
     if (upsertErr) throw upsertErr;
@@ -91,6 +92,15 @@ Deno.serve(async (req) => {
     const resendFrom = (Deno.env.get('RESEND_FROM') ?? '').trim();
     if (!resendKey || !resendFrom) {
       console.error('missing_email_provider_config', { hasKey: !!resendKey, hasFrom: !!resendFrom });
+      await admin
+        .from('trait_round2_links')
+        .update({
+          last_send_status: 'error',
+          last_send_error: 'missing_email_provider_config',
+          last_message_id: null,
+          updated_at: nowIso,
+        })
+        .eq('participant_id', participantId);
       return fail('missing_email_provider_config', '메일 발송 설정이 없습니다.');
     }
 
@@ -119,15 +129,36 @@ Deno.serve(async (req) => {
         text,
       }),
     });
+    const mailText = await mailResp.text();
     if (!mailResp.ok) {
-      const msg = await mailResp.text();
-      console.error('email_send_failed', msg.slice(0, 500));
-      return fail('email_send_failed', msg.slice(0, 300));
+      console.error('email_send_failed', mailText.slice(0, 500));
+      await admin
+        .from('trait_round2_links')
+        .update({
+          last_send_status: 'error',
+          last_send_error: mailText.slice(0, 300),
+          last_message_id: null,
+          updated_at: nowIso,
+        })
+        .eq('participant_id', participantId);
+      return fail('email_send_failed', mailText.slice(0, 300));
     }
+
+    let messageId: string | null = null;
+    try {
+      const mailJson = JSON.parse(mailText);
+      if (mailJson?.id) messageId = String(mailJson.id);
+    } catch {}
 
     await admin
       .from('trait_round2_links')
-      .update({ sent_at: new Date().toISOString() })
+      .update({
+        sent_at: nowIso,
+        last_send_status: 'sent',
+        last_send_error: null,
+        last_message_id: messageId,
+        updated_at: nowIso,
+      })
       .eq('participant_id', participantId);
 
     return ok({ link });

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'widgets/category_tree.dart';
 import 'widgets/concept_input_dialog.dart';
 import '../../services/concept_service.dart';
+import '../../widgets/app_navigation_bar.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import '../../services/concept_category_service.dart';
 
@@ -113,141 +114,292 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       return Container(
         color: const Color(0xFF1F1F1F),
         child: const Center(
-          child: CircularProgressIndicator(color: Color(0xFF4A9EFF)),
+          child: CircularProgressIndicator(color: kNavAccent),
         ),
       );
     }
     
     return Container(
       color: const Color(0xFF1F1F1F),
-      child: Container(
+      child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 상단: 교육과정 드롭다운 + 도메인 탭
-            _buildHeaderRow(),
-            const SizedBox(height: 16),
-            // 아래: Concept Library 트리
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF3A3A3A)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          _selectedDomain,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: _onAddConcept,
-                          icon: const Icon(Icons.add_circle_outline, color: Color(0xFF4A9EFF), size: 18),
-                          label: const Text('개념 추가', style: TextStyle(color: Color(0xFF4A9EFF))),
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton.icon(
-                          onPressed: _onAddRootFolder,
-                          icon: const Icon(Icons.create_new_folder, color: Color(0xFF4A9EFF), size: 18),
-                          label: const Text('새 폴더', style: TextStyle(color: Color(0xFF4A9EFF))),
-                        )
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: CategoryTree(
-                        roots: _categoryTree,
-                        forceExpandNodeId: _forceExpandNodeId,
-                        onSelect: (node) {
-                          _lastSelectedCategoryId = node.id;
-                        },
-                        onAddChild: _onAddChildFolder,
-                        onRename: _onRenameFolder,
-                        onDelete: _onDeleteFolder,
-                        onTapConcept: _onTapConcept,
-                        onEditConcept: _onEditConcept,
-                        onDeleteConcept: _onDeleteConcept,
-                        onMoveConcept: _onMoveConcept,
-                        onMoveFolder: _onMoveFolder,
-                      ),
-                    ),
-                  ],
-                ),
+            const Text(
+              '개념',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
               ),
             ),
+            const SizedBox(height: 8),
+            const Text(
+              '교육과정 개념과 폴더 구조를 관리합니다.',
+              style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 16),
+            ),
+            const SizedBox(height: 20),
+            _buildToolbarCard(),
+            const SizedBox(height: 16),
+            Expanded(child: _buildConceptTreeCard()),
           ],
         ),
       ),
     );
   }
   
-  // 상단: 교육과정 드롭다운 + 도메인 탭
-  Widget _buildHeaderRow() {
-    return Row(
-      children: [
-        // 교육과정 드롭다운
-        if (_curriculums.isNotEmpty)
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2A2A2A),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFF3A3A3A)),
-            ),
-            child: DropdownButton<String>(
-              value: _selectedCurriculumId,
-              dropdownColor: const Color(0xFF2A2A2A),
-              underline: const SizedBox(),
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
-              items: _curriculums
-                  .map((curriculum) => DropdownMenuItem(
-                        value: curriculum['id'] as String,
-                        child: Text(curriculum['name'] as String),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedCurriculumId = value;
-                  _loadGrades();
-                });
-              },
-            ),
-          ),
-        
-        const SizedBox(width: 12),
-        
-        // 도메인 탭 (대수, 해석, 확률통계, 기하)
-        Container(
-          height: 44,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2A2A),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFF3A3A3A)),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Row(
+  Widget _buildToolbarCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF2A2A2A)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 980;
+          final filters = Wrap(
+            spacing: 16,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _buildDomainChip('대수'),
-              _buildDomainChip('해석'),
-              _buildDomainChip('확률통계'),
-              _buildDomainChip('기하'),
+              _buildLabeledControl('교육과정', _buildCurriculumDropdown()),
+              _buildLabeledControl('도메인', _buildDomainTabs()),
             ],
+          );
+          final actions = _buildToolbarActions();
+          if (isNarrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                filters,
+                const SizedBox(height: 12),
+                actions,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: filters),
+              actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildConceptTreeCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF2A2A2A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '개념 라이브러리',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildDomainBadge(_selectedDomain),
+              const Spacer(),
+              if (_treeBusy)
+                Row(
+                  children: const [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: kNavAccent,
+                      ),
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      '동기화 중',
+                      style: TextStyle(color: Colors.white54, fontSize: 16),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(color: Color(0xFF2A2A2A), height: 1),
+          const SizedBox(height: 12),
+          Expanded(
+            child: CategoryTree(
+              roots: _categoryTree,
+              forceExpandNodeId: _forceExpandNodeId,
+              rootParentId: _domainRootId,
+              onSelect: (node) {
+                _lastSelectedCategoryId = node.id;
+              },
+              onAddChild: _onAddChildFolder,
+              onRename: _onRenameFolder,
+              onDelete: _onDeleteFolder,
+              onReorderFolder: _onReorderFolder,
+              onTapConcept: _onTapConcept,
+              onEditConcept: _onEditConcept,
+              onDeleteConcept: _onDeleteConcept,
+              onMoveConcept: _onMoveConcept,
+              onMoveFolder: _onMoveFolder,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLabeledControl(String label, Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: Color(0xFF8F8F8F), fontSize: 14),
+        ),
+        const SizedBox(height: 6),
+        child,
+      ],
+    );
+  }
+
+  Widget _buildCurriculumDropdown() {
+    if (_curriculums.isEmpty) {
+      return Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF3A3A3A)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.school_outlined, color: Colors.white54, size: 18),
+            SizedBox(width: 8),
+            Text(
+              '교육과정 없음',
+              style: TextStyle(color: Colors.white54, fontSize: 15),
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      height: 44,
+      constraints: const BoxConstraints(minWidth: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedCurriculumId,
+          dropdownColor: const Color(0xFF2A2A2A),
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+          icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
+          items: _curriculums
+              .map((curriculum) => DropdownMenuItem(
+                    value: curriculum['id'] as String,
+                    child: Text(curriculum['name'] as String),
+                  ))
+              .toList(),
+          onChanged: (value) {
+            setState(() {
+              _selectedCurriculumId = value;
+              _loadGrades();
+            });
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDomainTabs() {
+    return Container(
+      height: 44,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildDomainChip('대수'),
+          _buildDomainChip('해석'),
+          _buildDomainChip('확률통계'),
+          _buildDomainChip('기하'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolbarActions() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton.icon(
+          onPressed: _onAddRootFolder,
+          icon: const Icon(Icons.create_new_folder, size: 18),
+          label: const Text('새 폴더', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kNavAccent,
+            side: BorderSide(color: kNavAccent.withOpacity(0.5)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        FilledButton.icon(
+          onPressed: _onAddConcept,
+          icon: const Icon(Icons.add_circle_outline, size: 18),
+          label: const Text('개념 추가', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: FilledButton.styleFrom(
+            backgroundColor: kNavAccent,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDomainBadge(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
   
@@ -261,20 +413,25 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         });
         _reloadCategoryTree();
       },
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4A9EFF) : Colors.transparent,
+          color: isSelected ? kNavAccent : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? kNavAccent : Colors.transparent,
+          ),
         ),
         child: Text(
           label,
           style: TextStyle(
             color: isSelected ? Colors.white : Colors.white70,
-            fontSize: 15,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 16,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
           ),
         ),
       ),
@@ -373,7 +530,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-          TextButton(onPressed: () => Navigator.pop(ctx, value.trim()), child: const Text('확인', style: TextStyle(color: Color(0xFF4A9EFF)))),
+          TextButton(onPressed: () => Navigator.pop(ctx, value.trim()), child: const Text('확인', style: TextStyle(color: kNavAccent))),
         ],
       ),
     );
@@ -649,6 +806,41 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     } finally {
       if (mounted) setState(() => _treeBusy = false);
     }
+  }
+
+  Future<void> _onReorderFolder({
+    required CategoryNode node,
+    required String? parentId,
+    required int direction,
+  }) async {
+    if (_treeBusy) return;
+    if (parentId == null) return;
+    final siblings = _childrenByParentId(parentId);
+    if (siblings.length <= 1) return;
+    final currentIndex = siblings.indexWhere((n) => n.id == node.id);
+    if (currentIndex < 0) return;
+    final targetIndex = currentIndex + direction;
+    if (targetIndex < 0 || targetIndex >= siblings.length) return;
+    final orderedIds = siblings.map((n) => n.id).toList();
+    final moved = orderedIds.removeAt(currentIndex);
+    orderedIds.insert(targetIndex, moved);
+    try {
+      setState(() => _treeBusy = true);
+      await _cc.reorderCategories(parentId: parentId, orderedCategoryIds: orderedIds);
+      await _reloadCategoryTree();
+    } catch (e) {
+      _showError('폴더 순서 변경 실패: $e');
+    } finally {
+      if (mounted) setState(() => _treeBusy = false);
+    }
+  }
+
+  List<CategoryNode> _childrenByParentId(String parentId) {
+    if (_domainRootId != null && parentId == _domainRootId) {
+      return _categoryTree;
+    }
+    final parent = _findNodeById(_categoryTree, parentId);
+    return parent?.children ?? const [];
   }
 
   CategoryNode? _findNodeById(List<CategoryNode> list, String id) {

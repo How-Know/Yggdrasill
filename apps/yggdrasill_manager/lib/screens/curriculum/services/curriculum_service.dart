@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 class CurriculumService {
   final _supabase = Supabase.instance.client;
@@ -33,9 +34,13 @@ class CurriculumService {
     
     final groups = (data as List).map((item) {
       final map = Map<String, dynamic>.from(item as Map);
-      if (map.containsKey('notes') && map['notes'] != null) {
-        print('원본 notes: ${map['notes']}');
-      }
+      // 디버그용 로그(릴리즈에서는 assert 제거로 출력되지 않음)
+      assert(() {
+        if (map.containsKey('notes') && map['notes'] != null) {
+          debugPrint('원본 notes: ${map['notes']}');
+        }
+        return true;
+      }());
       return map;
     }).toList();
     
