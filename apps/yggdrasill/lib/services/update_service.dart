@@ -12,13 +12,10 @@ import 'package:url_launcher/url_launcher.dart';
 class UpdateService {
   UpdateService._();
 
-  // IMPORTANT:
-  // - auto-update의 기준점이 되는 appinstaller는 "고정 URL"이 가장 안전하다.
-  // - releases/latest/download는 자산 누락/캐시/레이스에 취약할 수 있으므로 raw(main)의 dist를 우선 사용한다.
-  static const String _appInstallerSourceRawMain =
-      'https://raw.githubusercontent.com/How-Know/Yggdrasill/main/apps/yggdrasill/dist/Yggdrasill.appinstaller';
-  static const String _appInstallerLatestUrl =
-      'ms-appinstaller:?source=$_appInstallerSourceRawMain';
+  // NOTE:
+  // - MSIX/AppInstaller 기반 업데이트는 Windows 정책/보안에 의해 쉽게 깨질 수 있어(특히 ms-appinstaller 프로토콜),
+  //   앞으로는 "포터블 ZIP + 자체 업데이터"만 사용한다.
+  // - MSIX로 설치된 경우에도 ZIP 업데이트는 LocalAppData로 "마이그레이션 설치"되며, 이후부터는 동일하게 동작한다.
 
   static const List<String> _arm64ZipCandidates = [
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-Windows-ARM64.zip',
@@ -56,23 +53,9 @@ class UpdateService {
       final diskTag = await _readInstalledTagFromDisk();
       final last = diskTag ?? prefs.getString(_kLastInstalledTag);
       if (last == tag) return;
-      // 비차단 모드: 앱은 그대로 실행, 업데이트 준비되면 재시작 안내는 앱이 담당
-      if (_isMsixInstall()) {
-        // App Installer는 비차단 설정(ShowPrompt=false, UpdateBlocksActivation=false)이면
-        // 백그라운드 다운로드/적용을 준비하고, 실제 적용은 다음 재시작 시 진행됨
-        _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '백그라운드에서 업데이트를 받는 중...', tag: tag));
-        unawaited(_tryTriggerAppInstaller(context).then((ok) {
-          if (ok) {
-            _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작 시 적용됩니다.', tag: tag));
-          } else {
-            _setProgress(UpdateInfo(phase: UpdatePhase.error, message: 'App Installer 실행에 실패했습니다. (ms-appinstaller 차단/비활성화 가능)', tag: tag));
-          }
-        }));
-        return;
-      }
-      // 포터블은 ZIP 백그라운드 업데이트를 수행하고 완료 시 재시작 안내를 앱에서 표시하도록 유지
+      // 포터블 ZIP 백그라운드 업데이트
       _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '업데이트 다운로드 중...', tag: tag));
-      unawaited(_updateUsingZipForArm64(context, tag: tag));
+      unawaited(_updateUsingZip(context, tag: tag));
     } catch (_) {}
   }
 
@@ -114,121 +97,24 @@ class UpdateService {
       return;
     }
 
-    // 설치 형태 우선 분기: MSIX이면 App Installer 사용
-    if (_isMsixInstall()) {
-      final ok = await _tryTriggerAppInstaller(context);
-      if (!ok) {
-        await _updateUsingZipForArm64(context);
-      }
-      return;
-    }
-
-    final arch = _detectWindowsArch();
-    if (arch == _WinArch.x64) {
-      // 일부 환경에서 ms-appinstaller가 비활성화되어 실패하므로 x64도 ZIP 플로우를 기본 사용
-      await _updateUsingZipForArm64(context);
-      return;
-    }
-
-    if (arch == _WinArch.arm64) {
-      // ARM64: AppInstaller 사용을 시도하지 않고 바로 ZIP 경로로 유도
-      await _updateUsingZipForArm64(context);
-      return;
-    }
-
-    _showSnack(context, '지원하지 않는 아키텍처입니다.');
+    // 항상 ZIP 자체업데이터 사용 (MSIX/AppInstaller 경로는 폐기)
+    await _updateUsingZip(context);
   }
 
-  static Future<bool> _tryTriggerAppInstaller(BuildContext context) async {
-    _showSnack(context, '업데이트를 확인하고 있습니다...');
-    try {
-      // 최근 Windows 환경에서 ms-appinstaller 프로토콜이 정책/보안 이유로 비활성화되는 사례가 많다.
-      // 따라서 프로토콜에 의존하지 않고, appinstaller 파일을 내려받아 "로컬 파일"로 App Installer를 띄우는
-      // 방식을 1순위로 사용한다.
-      final okLocal = await _openAppInstallerFromDownloadedFile(context);
-      if (okLocal) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('show_update_snack', true);
-        } catch (_) {}
-        // App Installer에서 업데이트가 진행되도록 앱은 종료(기존 방식 유지)
-        await Future.delayed(const Duration(seconds: 2));
-        exit(0);
-      }
-
-      // Fallback: ms-appinstaller 프로토콜(가능한 환경에서는 동작)
-      final uri = Uri.parse(_appInstallerLatestUrl);
-      final can = await canLaunchUrl(uri);
-      if (can) {
-        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (ok) {
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('show_update_snack', true);
-          } catch (_) {}
-          await Future.delayed(const Duration(seconds: 2));
-          exit(0);
-        }
-      }
-
-      // 최종 폴백: appinstaller URL을 브라우저로 열어 사용자가 직접 다운로드/실행하도록 유도
-      try {
-        final raw = Uri.parse(_appInstallerSourceRawMain);
-        if (await canLaunchUrl(raw)) {
-          await launchUrl(raw, mode: LaunchMode.externalApplication);
-        }
-      } catch (_) {}
-
-      _showSnack(context, '업데이트를 시작할 수 없습니다. (App Installer 프로토콜 비활성화/정책 차단 가능)');
-      return false;
-    } catch (_) {
-      return false;
-    }
-    return true;
-  }
-
-  static Future<bool> _openAppInstallerFromDownloadedFile(BuildContext context) async {
-    try {
-      final client = http.Client();
-      try {
-        final resp = await client.get(
-          Uri.parse(_appInstallerSourceRawMain),
-          headers: {'User-Agent': 'Yggdrasill-Updater'},
-        );
-        if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
-          return false;
-        }
-        // 간단 무결성: XML 시작 확인
-        final head = utf8.decode(resp.bodyBytes.take(64).toList(), allowMalformed: true);
-        if (!head.contains('<AppInstaller') && !head.contains('<?xml')) {
-          return false;
-        }
-        final tempDir = await getTemporaryDirectory();
-        final filePath = p.join(tempDir.path, 'Yggdrasill.appinstaller');
-        final f = File(filePath);
-        await f.writeAsBytes(resp.bodyBytes, flush: true);
-        if (!await f.exists()) return false;
-
-        // 파일 연결(기본 App Installer)로 실행: ms-appinstaller 프로토콜을 거치지 않는다.
-        await Process.start('explorer.exe', [filePath]);
-        _showSnack(context, 'App Installer를 열었습니다. 뜨는 창에서 업데이트를 진행해주세요.');
-        return true;
-      } finally {
-        client.close();
-      }
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<void> _updateUsingZipForArm64(BuildContext context, {String? tag}) async {
+  static Future<void> _updateUsingZip(BuildContext context, {String? tag}) async {
     _showSnack(context, '업데이트 파일을 확인 중입니다...');
     final client = http.Client();
     try {
       Uri? found;
       http.StreamedResponse? streamResp;
-      // 1) ARM64 전용 ZIP 우선 시도
-      for (final url in _arm64ZipCandidates) {
+      final arch = _detectWindowsArch();
+      final List<String> candidates = <String>[
+        // x64는 포터블 ZIP이 1순위
+        ..._x64ZipFallbackCandidates,
+        // ARM64 장비는 전용 ZIP을 먼저 시도 후 x64 폴백으로
+        if (arch == _WinArch.arm64) ..._arm64ZipCandidates,
+      ];
+      for (final url in candidates) {
         try {
           final req = http.Request('GET', Uri.parse(url));
           final resp = await client.send(req);
@@ -241,22 +127,6 @@ class UpdateService {
           }
         } catch (_) {}
       }
-      // 2) 실패 시 x64 포터블 ZIP 폴백 시도 (Windows on ARM의 x64 에뮬레이션)
-      if (found == null) {
-        for (final url in _x64ZipFallbackCandidates) {
-          try {
-            final req = http.Request('GET', Uri.parse(url));
-            final resp = await client.send(req);
-            if (resp.statusCode == 200) {
-              found = Uri.parse(url);
-              streamResp = resp;
-              break;
-            } else {
-              await resp.stream.drain();
-            }
-          } catch (_) {}
-        }
-      }
       if (found == null || streamResp == null) {
         // 최종 폴백: 릴리스 페이지 열기
         _showSnack(context, '업데이트 패키지를 찾을 수 없습니다. 릴리스 페이지를 엽니다.');
@@ -268,7 +138,7 @@ class UpdateService {
       }
 
       final tempDir = await getTemporaryDirectory();
-      final zipPath = p.join(tempDir.path, 'ygg_update_arm64.zip');
+      final zipPath = p.join(tempDir.path, 'ygg_update.zip');
       final zipFile = File(zipPath);
       final sink = zipFile.openWrite();
       await streamResp.stream.pipe(sink);
@@ -288,6 +158,9 @@ class UpdateService {
       await File(ps1).writeAsString(_psScriptContent);
 
       // 스크립트 실행 (현재 프로세스 종료 후 교체 및 재실행)
+      if (_isMsixInstall()) {
+        _showSnack(context, 'MSIX 설치본은 포터블로 전환하여 업데이트합니다. (최초 1회)');
+      }
       await Process.start('powershell.exe', [
         '-NoProfile',
         '-ExecutionPolicy',

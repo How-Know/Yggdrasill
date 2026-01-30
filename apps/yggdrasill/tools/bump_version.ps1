@@ -5,6 +5,8 @@ param(
   [int]$Build = 0,
   # 펌웨어를 이번 릴리스에서 배포하지 않을 때(=version.h 변경도 원치 않을 때) 사용
   [switch]$SkipFirmwareVersionUpdate = $false,
+  # MSIX/AppInstaller 배포를 더 이상 하지 않을 때(appinstaller 갱신을 원치 않을 때) 사용
+  [switch]$SkipAppInstallerUpdate = $false,
   [switch]$NoGit = $false
 )
 $ErrorActionPreference = 'Stop'
@@ -42,15 +44,19 @@ $pubRaw = [regex]::Replace($pubRaw, 'msix_version:\s*[0-9]+(?:\.[0-9]+){2,3}', "
 Set-Content 'pubspec.yaml' $pubRaw -Encoding UTF8
 Ok 'pubspec.yaml updated'
 
-foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appinstaller')){
-  if(!(Test-Path $aiPath)){ continue }
-  $oldMsix = ($oldVer + '.' + $oldBuild)
-  $newMsix = ($ver + '.' + $new)
-  $ai = Get-Content $aiPath -Raw
-  $ai = [regex]::Replace($ai, 'Version="' + [regex]::Escape($oldMsix) + '"', 'Version="' + $newMsix + '"')
-  $ai = [regex]::Replace($ai, 'releases/download/v' + [regex]::Escape($oldMsix) + '/mneme_flutter.msix', 'releases/download/v' + $newMsix + '/mneme_flutter.msix')
-  Set-Content $aiPath $ai -Encoding UTF8
-  Ok "$aiPath updated"
+if($SkipAppInstallerUpdate){
+  Info "Skip appinstaller update (-SkipAppInstallerUpdate)"
+} else {
+  foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appinstaller')){
+    if(!(Test-Path $aiPath)){ continue }
+    $oldMsix = ($oldVer + '.' + $oldBuild)
+    $newMsix = ($ver + '.' + $new)
+    $ai = Get-Content $aiPath -Raw
+    $ai = [regex]::Replace($ai, 'Version="' + [regex]::Escape($oldMsix) + '"', 'Version="' + $newMsix + '"')
+    $ai = [regex]::Replace($ai, 'releases/download/v' + [regex]::Escape($oldMsix) + '/mneme_flutter.msix', 'releases/download/v' + $newMsix + '/mneme_flutter.msix')
+    Set-Content $aiPath $ai -Encoding UTF8
+    Ok "$aiPath updated"
+  }
 }
 
 # M5Stack firmware version header 동기화 (설정창 표시 + OTA 비교에 사용됨)

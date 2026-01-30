@@ -2,7 +2,9 @@ param(
   [Parameter(Mandatory=$true)][string]$Tag,           # e.g. v1.0.3.7
   [string]$Repo = 'How-Know/Yggdrasill',
   # 펌웨어를 이번 릴리스에서 배포하지 않을 때(자산 체크 스킵)
-  [switch]$SkipFirmware = $false
+  [switch]$SkipFirmware = $false,
+  # 포터블 ZIP 배포만 하는 릴리스(MSIX/AppInstaller/Installer.zip 체크 스킵)
+  [switch]$PortableOnly = $false
 )
 
 function Fail($msg){ Write-Host "[FAIL] $msg" -ForegroundColor Red; exit 1 }
@@ -11,7 +13,7 @@ function Ok($msg){ Write-Host "[OK] $msg" -ForegroundColor Green }
 
 if(-not (Get-Command gh -ErrorAction SilentlyContinue)) { Fail 'gh CLI가 필요합니다. https://cli.github.com/' }
 
-# 1) pubspec/msix/appinstaller 버전 동기화 확인
+# 1) pubspec 버전 동기화 확인
 $pub = Get-Content ..\pubspec.yaml -Raw
 if($pub -notmatch 'version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)'){ Fail 'pubspec.yaml version 형식 인식 실패' }
 $vMatch = [regex]::Match($pub, 'version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)')
@@ -22,35 +24,43 @@ if($pub -notmatch 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})'){ Fail 'pubspec.ya
 $msix = [regex]::Match($pub, 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Groups[1].Value
 if($msix -ne $expectedMsix){ Fail "msix_version($msix) != expected($expectedMsix) from version/build" } else { Ok "pubspec ok: version=$ver+$build, msix_version=$msix" }
 
-$ai = Get-Content ..\dist\Yggdrasill.appinstaller -Raw
-if($ai -notmatch 'Version="([0-9]+(?:\.[0-9]+){2,3})"'){ Fail 'appinstaller Version 인식 실패' }
-$aiVer = [regex]::Match($ai, 'Version="([0-9]+(?:\.[0-9]+){2,3})"').Groups[1].Value
-if($aiVer -ne $expectedMsix){ Fail "appinstaller Version($aiVer) != expected($expectedMsix)" } else { Ok "appinstaller Version=$aiVer" }
-
-# MSIX Uri는 태그 고정(/download/vX.Y.Z/)를 권장, 루트 AppInstaller Uri는 /latest/ 사용 허용
-if($ai -notmatch 'releases\/(download\/v([0-9]+(?:\.[0-9]+){2,3})|latest\/download)\/mneme_flutter.msix'){ Fail 'appinstaller Uri MSIX 경로 인식 실패' }
-$m = [regex]::Match($ai, 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix')
-if($m.Success){
-  $aiTag = $m.Groups[1].Value
-  if("v$aiTag" -ne $Tag){ Fail "appinstaller Uri tag(v$aiTag) != 입력 Tag($Tag)" } else { Ok "appinstaller Uri tag=v$aiTag" }
+if($PortableOnly){
+  Info 'PortableOnly: appinstaller/msix checks skipped'
 } else {
-  Info 'appinstaller MSIX Uri가 latest 경로입니다.'
-}
+  $ai = Get-Content ..\dist\Yggdrasill.appinstaller -Raw
+  if($ai -notmatch 'Version="([0-9]+(?:\.[0-9]+){2,3})"'){ Fail 'appinstaller Version 인식 실패' }
+  $aiVer = [regex]::Match($ai, 'Version="([0-9]+(?:\.[0-9]+){2,3})"').Groups[1].Value
+  if($aiVer -ne $expectedMsix){ Fail "appinstaller Version($aiVer) != expected($expectedMsix)" } else { Ok "appinstaller Version=$aiVer" }
 
-# UpdateSettings 확인 (속성 또는 요소형 모두 허용)
-if($ai -notmatch '<UpdateSettings>'){ Fail 'appinstaller에 <UpdateSettings> 블록이 없습니다.' }
-if($ai -notmatch '<OnLaunch\s+HoursBetweenUpdateChecks="0"'){ Fail 'OnLaunch HoursBetweenUpdateChecks=0 누락' } else { Ok 'OnLaunch=0 확인' }
-if($ai -match 'ShowPrompt="true"|<ShowPrompt\s*/>'){ Ok 'ShowPrompt 확인' } else { Info 'ShowPrompt 없음(선택)' }
-if($ai -match 'UpdateBlocksActivation="true"|<UpdateBlocksActivation\s*/>'){ Ok 'BlocksActivation 확인' } else { Info 'BlocksActivation 없음(선택)' }
+  # MSIX Uri는 태그 고정(/download/vX.Y.Z/)를 권장, 루트 AppInstaller Uri는 /latest/ 사용 허용
+  if($ai -notmatch 'releases\/(download\/v([0-9]+(?:\.[0-9]+){2,3})|latest\/download)\/mneme_flutter.msix'){ Fail 'appinstaller Uri MSIX 경로 인식 실패' }
+  $m = [regex]::Match($ai, 'releases\/download\/v([0-9]+(?:\.[0-9]+){2,3})\/mneme_flutter.msix')
+  if($m.Success){
+    $aiTag = $m.Groups[1].Value
+    if("v$aiTag" -ne $Tag){ Fail "appinstaller Uri tag(v$aiTag) != 입력 Tag($Tag)" } else { Ok "appinstaller Uri tag=v$aiTag" }
+  } else {
+    Info 'appinstaller MSIX Uri가 latest 경로입니다.'
+  }
+
+  # UpdateSettings 확인 (속성 또는 요소형 모두 허용)
+  if($ai -notmatch '<UpdateSettings>'){ Fail 'appinstaller에 <UpdateSettings> 블록이 없습니다.' }
+  if($ai -notmatch '<OnLaunch\s+HoursBetweenUpdateChecks="0"'){ Fail 'OnLaunch HoursBetweenUpdateChecks=0 누락' } else { Ok 'OnLaunch=0 확인' }
+  if($ai -match 'ShowPrompt="true"|<ShowPrompt\s*/>'){ Ok 'ShowPrompt 확인' } else { Info 'ShowPrompt 없음(선택)' }
+  if($ai -match 'UpdateBlocksActivation="true"|<UpdateBlocksActivation\s*/>'){ Ok 'BlocksActivation 확인' } else { Info 'BlocksActivation 없음(선택)' }
+}
 
 # 2) 릴리스 자산 확인
 Info "릴리스 자산 확인 중: $Repo $Tag"
 $json = gh release view $Tag -R $Repo --json assets 2>$null | ConvertFrom-Json
 if(-not $json){ Fail '릴리스를 찾지 못했습니다.' }
 $names = $json.assets.name
-if($names -notcontains 'mneme_flutter.msix'){ Fail 'MSIX 자산이 없습니다.' } else { Ok 'MSIX found' }
 if(($names | Where-Object { $_ -match 'Yggdrasill_portable_x64\.zip' }).Count -eq 0){ Fail 'x64 포터블 ZIP이 없습니다.' } else { Ok 'x64 ZIP found' }
-if(($names | Where-Object { $_ -match 'Yggdrasill_Installer\.zip' }).Count -eq 0){ Fail 'Installer ZIP이 없습니다.' } else { Ok 'Installer ZIP found' }
+if(-not $PortableOnly){
+  if($names -notcontains 'mneme_flutter.msix'){ Fail 'MSIX 자산이 없습니다.' } else { Ok 'MSIX found' }
+  if(($names | Where-Object { $_ -match 'Yggdrasill_Installer\.zip' }).Count -eq 0){ Fail 'Installer ZIP이 없습니다.' } else { Ok 'Installer ZIP found' }
+} else {
+  Info 'PortableOnly: MSIX/Installer ZIP checks skipped'
+}
 if($SkipFirmware){
   Info 'Skip M5Stack firmware asset check (-SkipFirmware)'
 } else {
