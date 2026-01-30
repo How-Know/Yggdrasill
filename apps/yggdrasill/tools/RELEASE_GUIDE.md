@@ -96,6 +96,23 @@ M5Stack(Core2) 펌웨어는 GitHub Releases의 `releases/latest`를 조회하여
 - **M5 자산 포함 확인**
   - 릴리스 자산에 반드시 `m5stack-core2_firmware.bin`이 포함되어야 합니다. (`verify_release.ps1`에서 체크)
 
+### 펌웨어 배포를 "스킵"하는 릴리스(Flutter 앱만 배포)
+펌웨어 변경이 없고 이번 릴리스에서 펌웨어 배포를 하지 않는 경우, 아래 옵션으로 **펌웨어 버전.h 갱신/펌웨어 빌드/자산 체크를 모두 스킵**할 수 있습니다.
+
+```powershell
+cd apps\yggdrasill
+./tools/bump_version.ps1 -SkipFirmwareVersionUpdate
+
+$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
+
+./tools/build_msix_with_defines.ps1 -ReleaseTag v$tag -SkipFirmware
+
+gh release edit v$tag -R How-Know/Yggdrasill --draft=false
+cd tools
+./verify_release.ps1 -Tag v$tag -SkipFirmware
+```
+
 ### PowerShell 스크립트 실행 팁(Windows)
 - 작업 디렉토리 꼬임으로 `./tools/*.ps1`가 안 잡히는 경우가 있으니, 확실하게 실행하려면:
 ```powershell

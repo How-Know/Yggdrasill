@@ -3,6 +3,8 @@ param(
   # -BaseVersion 지정 시: x.y.z 버전을 지정한 값으로 "점프"하고 build는 기본 1로 설정(또는 -Build로 지정)
   [string]$BaseVersion = '',
   [int]$Build = 0,
+  # 펌웨어를 이번 릴리스에서 배포하지 않을 때(=version.h 변경도 원치 않을 때) 사용
+  [switch]$SkipFirmwareVersionUpdate = $false,
   [switch]$NoGit = $false
 )
 $ErrorActionPreference = 'Stop'
@@ -53,7 +55,9 @@ foreach($aiPath in @('dist/Yggdrasill.appinstaller','dist/Yggdrasill_utf8.appins
 
 # M5Stack firmware version header 동기화 (설정창 표시 + OTA 비교에 사용됨)
 $fwVerPath = Join-Path (Resolve-Path (Join-Path (Get-Location) '..\..')) 'firmware\m5stack\src\version.h'
-if(Test-Path $fwVerPath){
+if($SkipFirmwareVersionUpdate){
+  Info "Skip firmware version.h update (-SkipFirmwareVersionUpdate)"
+} elseif(Test-Path $fwVerPath){
   $newFwVer = ($ver + '.' + $new)
   $fwLines = Get-Content $fwVerPath
   $updated = $false

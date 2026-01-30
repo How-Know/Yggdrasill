@@ -1,7 +1,9 @@
 # requires: gh CLI logged in
 param(
   [string]$Repo = 'How-Know/Yggdrasill',
-  [string]$ReleaseTag = 'v1.0.3'
+  [string]$ReleaseTag = 'v1.0.3',
+  # 펌웨어를 이번 릴리스에서 배포하지 않을 때(빌드/자산 업로드 스킵)
+  [switch]$SkipFirmware = $false
 )
 $ErrorActionPreference = 'Stop'
 Push-Location (Split-Path $MyInvocation.MyCommand.Path -Parent) | Out-Null
@@ -35,39 +37,43 @@ if(-not (Test-Path $dist)) { New-Item -ItemType Directory $dist | Out-Null }
 Copy-Item (Join-Path $releaseDir 'mneme_flutter.msix') (Join-Path $dist 'mneme_flutter.msix') -Force
 
 # Build M5Stack firmware and copy artifact into dist (release asset)
-try{
-  $repoRoot = Resolve-Path (Join-Path (Get-Location) '..\..')  # apps/yggdrasill -> repo root
-  $m5Dir = Join-Path $repoRoot 'firmware\m5stack'
-  if(Test-Path $m5Dir){
-    Write-Host "[INFO] Building M5Stack firmware (PlatformIO)..." -ForegroundColor Cyan
-    $pioExe = $null
-    $pioCmd = Get-Command pio -ErrorAction SilentlyContinue
-    if($pioCmd){ $pioExe = $pioCmd.Source }
-    if(-not $pioExe){
-      $guess = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
-      if(Test-Path $guess){ $pioExe = $guess }
-    }
-    if(-not $pioExe){
-      throw "PlatformIO(pio)를 찾지 못했습니다. (PATH 또는 $env:USERPROFILE\\.platformio\\penv\\Scripts\\pio.exe 확인)"
-    } else {
-      Push-Location $m5Dir
-      $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
-      # 실패 시 이전 산출물 복사되는 문제 방지: 기존 파일 제거
-      if(Test-Path $fw){ Remove-Item $fw -Force -ErrorAction SilentlyContinue }
-      & $pioExe run -e m5stack-core2 | Out-Host
-      if($LASTEXITCODE -ne 0){ throw "pio build failed (exit=$LASTEXITCODE)" }
-      if(Test-Path $fw){
-        $out = Join-Path $dist 'm5stack-core2_firmware.bin'
-        Copy-Item $fw $out -Force
-        Write-Host "[OK] M5Stack firmware copied to $out" -ForegroundColor Green
-      } else {
-        throw "M5Stack firmware.bin 산출물을 찾지 못했습니다: $fw"
+if($SkipFirmware){
+  Write-Host "[INFO] Skip M5Stack firmware build/upload (-SkipFirmware)" -ForegroundColor Cyan
+} else {
+  try{
+    $repoRoot = Resolve-Path (Join-Path (Get-Location) '..\..')  # apps/yggdrasill -> repo root
+    $m5Dir = Join-Path $repoRoot 'firmware\m5stack'
+    if(Test-Path $m5Dir){
+      Write-Host "[INFO] Building M5Stack firmware (PlatformIO)..." -ForegroundColor Cyan
+      $pioExe = $null
+      $pioCmd = Get-Command pio -ErrorAction SilentlyContinue
+      if($pioCmd){ $pioExe = $pioCmd.Source }
+      if(-not $pioExe){
+        $guess = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
+        if(Test-Path $guess){ $pioExe = $guess }
       }
-      Pop-Location
+      if(-not $pioExe){
+        throw "PlatformIO(pio)를 찾지 못했습니다. (PATH 또는 $env:USERPROFILE\\.platformio\\penv\\Scripts\\pio.exe 확인)"
+      } else {
+        Push-Location $m5Dir
+        $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
+        # 실패 시 이전 산출물 복사되는 문제 방지: 기존 파일 제거
+        if(Test-Path $fw){ Remove-Item $fw -Force -ErrorAction SilentlyContinue }
+        & $pioExe run -e m5stack-core2 | Out-Host
+        if($LASTEXITCODE -ne 0){ throw "pio build failed (exit=$LASTEXITCODE)" }
+        if(Test-Path $fw){
+          $out = Join-Path $dist 'm5stack-core2_firmware.bin'
+          Copy-Item $fw $out -Force
+          Write-Host "[OK] M5Stack firmware copied to $out" -ForegroundColor Green
+        } else {
+          throw "M5Stack firmware.bin 산출물을 찾지 못했습니다: $fw"
+        }
+        Pop-Location
+      }
     }
+  } catch {
+    throw
   }
-} catch {
-  throw
 }
 
 # Create portable ZIP (x64) from Release folder
@@ -122,7 +128,9 @@ if(Test-Path (Join-Path $dist 'Yggdrasill.appinstaller')){ $bundleFiles += (Join
 if(Test-Path (Join-Path $dist 'Install-Yggdrasill.ps1')){ $bundleFiles += (Join-Path $dist 'Install-Yggdrasill.ps1') }
 if(Test-Path $howto){ $bundleFiles += $howto }
 # (선택) 펌웨어는 설치 ZIP에 꼭 필요하진 않지만, 같이 배포하려면 포함 가능
-if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $bundleFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
+if(-not $SkipFirmware){
+  if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $bundleFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
+}
 if($bundleFiles.Count -gt 0){
   try{ Compress-Archive -Path $bundleFiles -DestinationPath $installerZip -Force } catch { }
 }
@@ -132,7 +140,9 @@ if(Get-Command gh -ErrorAction SilentlyContinue) {
   $uploadFiles = @()
   $uploadFiles += (Join-Path $dist 'mneme_flutter.msix')
   $uploadFiles += (Join-Path $dist 'Yggdrasill.appinstaller')
-  if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $uploadFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
+  if(-not $SkipFirmware){
+    if(Test-Path (Join-Path $dist 'm5stack-core2_firmware.bin')){ $uploadFiles += (Join-Path $dist 'm5stack-core2_firmware.bin') }
+  }
   if(Test-Path (Join-Path $dist 'Yggdrasill_portable_x64.zip')){ $uploadFiles += (Join-Path $dist 'Yggdrasill_portable_x64.zip') }
   if(Test-Path (Join-Path $dist 'howknow_codesign_new.cer')){ $uploadFiles += (Join-Path $dist 'howknow_codesign_new.cer') }
   if(Test-Path $installerZip){ $uploadFiles += $installerZip }
