@@ -98,6 +98,39 @@ Future<void> _guardStartupWindowState({
   }
 }
 
+// 첫 프레임 이후에 전체화면/최대화를 적용 (Show() 복원 이후 시점)
+Future<void> _applyStartupWindowState({
+  required bool startFullscreen,
+  required bool startMaximized,
+}) async {
+  if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
+  if (!startFullscreen && !startMaximized) return;
+
+  // Show()가 완료된 뒤에 적용되도록 약간 지연
+  await Future.delayed(const Duration(milliseconds: 60));
+  try {
+    final isFull = await windowManager.isFullScreen();
+    final isMax = await windowManager.isMaximized();
+
+    // 설정은 상호배타지만, 데이터 꼬임 대비: fullscreen 우선
+    if (startFullscreen) {
+      if (!isFull) {
+        try {
+          await windowManager.setFullScreen(true);
+        } catch (_) {
+          if (!isMax) await windowManager.maximize();
+        }
+      }
+    } else if (startMaximized) {
+      if (!isMax) {
+        await windowManager.maximize();
+      }
+    }
+  } catch (_) {
+    // ignore: 레이스/플러그인 상태에 따라 호출이 실패할 수 있음.
+  }
+}
+
 // 시험명 목록과 선택된 학교/학년 매핑(메모리 보관)
 final ValueNotifier<List<String>> _examNames = ValueNotifier<List<String>>(<String>[]);
 // examName -> (schoolKey -> set of grades)
@@ -390,28 +423,10 @@ void main() async {
   );
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
-    if (fullscreen || maximizeFlag) {
-      // 일부 플랫폼에서 show 직후 maximize 타이밍 이슈가 있어 약간 지연
-      await Future.delayed(const Duration(milliseconds: 60));
-      if (fullscreen) {
-        try {
-          await windowManager.setFullScreen(true);
-        } catch (_) {
-          await windowManager.maximize();
-        }
-      } else {
-        await windowManager.maximize();
-      }
-    } else {
+    if (!(fullscreen || maximizeFlag)) {
       await windowManager.center();
     }
     await windowManager.focus();
-
-    // ✅ 로딩 중 "작은 창으로 복귀" 레이스 방지: 시작 상태를 몇 초간 재확인/재적용
-    unawaited(_guardStartupWindowState(
-      startFullscreen: fullscreen,
-      startMaximized: maximizeFlag,
-    ));
   });
   // 무인 자동 업데이트 체크(성공 시 프로세스 종료/재실행 처리)
   try { await UpdateService.checkAndUpdateSilently(rootNavigatorKey.currentContext!); } catch (_) {}
@@ -445,7 +460,7 @@ void main() async {
   if (showUpdateSnack) {
     await sp.remove('show_update_snack');
   }
-  runApp(MyApp(maximizeOnStart: fullscreen || maximizeFlag));
+  runApp(MyApp(startFullscreen: fullscreen, startMaximized: maximizeFlag));
   if (showUpdateSnack) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       rootScaffoldMessengerKey.currentState?.showSnackBar(
@@ -459,9 +474,39 @@ void main() async {
   }
 }
 
-class MyApp extends StatelessWidget {
-  final bool maximizeOnStart;
-  const MyApp({super.key, required this.maximizeOnStart});
+class MyApp extends StatefulWidget {
+  final bool startFullscreen;
+  final bool startMaximized;
+  const MyApp({super.key, required this.startFullscreen, required this.startMaximized});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    _scheduleStartupWindowState();
+  }
+
+  void _scheduleStartupWindowState() {
+    if (!widget.startFullscreen && !widget.startMaximized) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_applyAndGuardStartupWindowState());
+    });
+  }
+
+  Future<void> _applyAndGuardStartupWindowState() async {
+    await _applyStartupWindowState(
+      startFullscreen: widget.startFullscreen,
+      startMaximized: widget.startMaximized,
+    );
+    unawaited(_guardStartupWindowState(
+      startFullscreen: widget.startFullscreen,
+      startMaximized: widget.startMaximized,
+    ));
+  }
 
   @override
   Widget build(BuildContext context) {
