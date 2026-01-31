@@ -348,7 +348,23 @@ try {
   "started $(Get-Date -Format o)" | Out-File -FilePath $SentinelPath -Encoding UTF8 -Force
 
   $procName = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)
-  try { Wait-Process -Name $procName -Timeout 60 } catch {}
+  # 앱 프로세스 종료 대기 + 필요 시 강제 종료 (DLL 잠김 방지)
+  $waitOk = $false
+  try {
+    Wait-Process -Name $procName -Timeout 25
+    $waitOk = $true
+  } catch {
+    $waitOk = $false
+  }
+  "Wait-Process($procName) ok=$waitOk" | Out-File -FilePath $log -Encoding UTF8 -Append
+  try {
+    $still = Get-Process -Name $procName -ErrorAction SilentlyContinue
+    if ($still) {
+      "Process still running -> Stop-Process -Force ($procName)" | Out-File -FilePath $log -Encoding UTF8 -Append
+      Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
+      try { Wait-Process -Name $procName -Timeout 10 } catch {}
+    }
+  } catch {}
 
   $timestamp = Get-Date -Format yyyyMMddHHmmss
   $backupDir = Join-Path $InstallDir ("backup_$timestamp")
@@ -373,7 +389,14 @@ try {
 
   # 설치 경로 보장
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-  Copy-Item -Path (Join-Path $srcDir '*') -Destination $InstallDir -Recurse -Force
+  # 파일 잠김(예: app_links_plugin.dll) 대비: robocopy로 재시도/복사
+  $srcGlob = (Join-Path $srcDir '*')
+  "Copy using robocopy: $srcDir -> $InstallDir" | Out-File -FilePath $log -Encoding UTF8 -Append
+  & robocopy $srcDir $InstallDir /E /R:25 /W:1 /NP /NFL /NDL /NJH /NJS
+  $rc = $LASTEXITCODE
+  "robocopy exitCode=$rc" | Out-File -FilePath $log -Encoding UTF8 -Append
+  # robocopy exit code: 0-7 = success(또는 일부 차이/스킵), 8+ = failure
+  if ($rc -ge 8) { throw "robocopy failed (exitCode=$rc)" }
 
   # data 복원
   $bakData = Join-Path $backupDir 'data'
