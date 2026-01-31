@@ -183,16 +183,33 @@ class UpdateService {
       // PowerShell 스크립트 작성
       final ps1 = p.join(tempDir.path, 'ygg_do_update.ps1');
       await File(ps1).writeAsString(_psScriptContent);
+      final sentinelPath = p.join(tempDir.path, 'ygg_update_started.txt');
+      try { await File(sentinelPath).delete(); } catch (_) {}
+      final launcherLogPath = p.join(Directory.systemTemp.path, 'ygg_update_launcher_log.txt');
+      try {
+        final b = StringBuffer()
+          ..writeln('=== Yggdrasill updater launcher ${(DateTime.now()).toIso8601String()} ===')
+          ..writeln('ps1=$ps1')
+          ..writeln('zipPath=$zipPath')
+          ..writeln('installDir=$exeDir')
+          ..writeln('exeName=$exeName')
+          ..writeln('tag=${tag ?? ''}')
+          ..writeln('tempDir=${tempDir.path}')
+          ..writeln('systemTemp=${Directory.systemTemp.path}');
+        await File(launcherLogPath).writeAsString(b.toString(), mode: FileMode.append);
+      } catch (_) {}
 
       // 스크립트 실행 (현재 프로세스 종료 후 교체 및 재실행)
       if (_isMsixInstall()) {
         _showSnack(context, 'MSIX 설치본은 포터블로 전환하여 업데이트합니다. (최초 1회)');
       }
       final psExe = (await _resolvePowerShellExe()) ?? 'powershell.exe';
-      await Process.start(psExe, [
+      final args = <String>[
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
+        '-WindowStyle',
+        'Hidden',
         '-File',
         ps1,
         '-ZipPath',
@@ -203,7 +220,26 @@ class UpdateService {
         exeName,
         '-Tag',
         (tag ?? ''),
-      ], mode: ProcessStartMode.detached);
+        '-SentinelPath',
+        sentinelPath,
+      ];
+      try {
+        await File(launcherLogPath).writeAsString('psExe=$psExe\nargs=${args.join(' ')}\n', mode: FileMode.append);
+      } catch (_) {}
+      final proc = await Process.start(psExe, args, mode: ProcessStartMode.normal);
+
+      // PowerShell이 실제로 시작됐는지(=sentinel 파일 생성) 확인 후에만 앱 종료
+      final startedDeadline = DateTime.now().add(const Duration(seconds: 6));
+      while (DateTime.now().isBefore(startedDeadline)) {
+        if (await File(sentinelPath).exists()) break;
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+      if (!await File(sentinelPath).exists()) {
+        try { proc.kill(); } catch (_) {}
+        _setProgress(const UpdateInfo(phase: UpdatePhase.error, message: '업데이트 스크립트를 시작하지 못했습니다.'));
+        _showSnack(context, '업데이트 실행이 차단됐습니다. (PowerShell/보안 정책) 로그: $launcherLogPath');
+        return;
+      }
 
       _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작합니다.', tag: tag));
       _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
@@ -297,6 +333,7 @@ param(
   [Parameter(Mandatory=$true)][string]$ZipPath,
   [Parameter(Mandatory=$true)][string]$InstallDir,
   [Parameter(Mandatory=$true)][string]$ExeName,
+  [Parameter(Mandatory=$true)][string]$SentinelPath,
   [Parameter(Mandatory=$false)][string]$Tag = ''
 )
 
@@ -306,7 +343,9 @@ try {
   "ZipPath=$ZipPath" | Out-File -FilePath $log -Encoding UTF8 -Append
   "InstallDir=$InstallDir" | Out-File -FilePath $log -Encoding UTF8 -Append
   "ExeName=$ExeName" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "SentinelPath=$SentinelPath" | Out-File -FilePath $log -Encoding UTF8 -Append
   "Tag=$Tag" | Out-File -FilePath $log -Encoding UTF8 -Append
+  "started $(Get-Date -Format o)" | Out-File -FilePath $SentinelPath -Encoding UTF8 -Force
 
   $procName = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)
   try { Wait-Process -Name $procName -Timeout 60 } catch {}
