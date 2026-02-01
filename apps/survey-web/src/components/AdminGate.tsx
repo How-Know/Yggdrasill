@@ -76,11 +76,6 @@ export default function AdminGate({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    setEmail(''); setCode(''); setPhase('login');
-  }
-
   if (phase !== 'ok') {
     return (
       <div style={{ maxWidth: 420, margin: '40px auto', background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 12, padding: 20 }}>
@@ -107,29 +102,7 @@ export default function AdminGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return (
-    <div>
-      {/* ✅ 문서 플로우를 늘리지 않도록 fixed 오버레이로 배치 (스크롤 2개 방지) */}
-      <button
-        onClick={signOut}
-        style={{
-          position: 'fixed',
-          top: 12,
-          right: 24,
-          zIndex: 2000,
-          background: 'transparent',
-          color: tokens.textDim,
-          border: `1px solid ${tokens.border}`,
-          borderRadius: 8,
-          padding: '6px 10px',
-          cursor: 'pointer',
-        }}
-      >
-        로그아웃
-      </button>
-      {children}
-    </div>
-  );
+  return <>{children}</>;
 }
 
 
