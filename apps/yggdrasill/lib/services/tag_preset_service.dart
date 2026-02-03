@@ -5,6 +5,7 @@ import 'runtime_flags.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'tenant_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class TagPreset {
   final String id;
@@ -39,15 +40,72 @@ class TagPresetService {
   // - preferSupabaseRead: Supabase에서 레코드가 있으면 우선 사용하고, 없으면 SQLite로 폴백합니다.
   static bool dualWrite = true;
   static bool preferSupabaseRead = true;
+  static const String _pendingSyncKey = 'tag_presets_pending_sync';
+  bool _syncInFlight = false;
 
   static void configure({bool? dualWriteOn, bool? preferSupabase}) {
     if (dualWriteOn != null) dualWrite = dualWriteOn;
     if (preferSupabase != null) preferSupabaseRead = preferSupabase;
   }
 
+  Future<void> _setPendingSync(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_pendingSyncKey, value);
+    } catch (_) {}
+  }
+
+  Future<bool> _isPendingSync() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_pendingSyncKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _pushToServer(List<TagPreset> presets) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = presets.map((p) => {
+        'id': p.id,
+        'academy_id': academyId,
+        'name': p.name,
+        'color': p.color.value,
+        'icon_code': p.icon.codePoint,
+        'order_index': p.orderIndex,
+      }).toList();
+      // ignore: avoid_print
+      print('[TagPreset] pushToServer upsert count=' + rows.length.toString());
+      await supa.from('tag_presets').upsert(rows, onConflict: 'id');
+      return true;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[TagPreset][ERROR] pushToServer failed: $e\n$st');
+      return false;
+    }
+  }
+
+  Future<void> _trySyncPending(List<TagPreset> local) async {
+    if (_syncInFlight) return;
+    _syncInFlight = true;
+    try {
+      if (local.isEmpty) {
+        await _setPendingSync(false);
+        return;
+      }
+      final ok = await _pushToServer(local);
+      await _setPendingSync(!ok);
+    } finally {
+      _syncInFlight = false;
+    }
+  }
+
   Future<List<TagPreset>> loadPresets() async {
     // 1) Supabase에서 우선 조회(레코드가 있으면 그쪽 사용)
-    if (preferSupabaseRead) {
+    final hasPending = await _isPendingSync();
+    if (preferSupabaseRead && !hasPending) {
       try {
         // ignore: avoid_print
         print('[TagPreset] loadPresets: source=Supabase preferSupabaseRead=true');
@@ -92,6 +150,9 @@ class TagPresetService {
       return defaults;
     }
     final list = rows.map(TagPreset.fromRow).toList();
+    if (dualWrite && preferSupabaseRead && hasPending) {
+      await _trySyncPending(list);
+    }
     // 서버 백필(초기 1회): 서버가 비어있고 로컬에 데이터가 있으면 업로드
     if (dualWrite && preferSupabaseRead) {
       try {
@@ -133,21 +194,8 @@ class TagPresetService {
     });
 
     if (dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        final rows = presets.map((p) => {
-          'id': p.id,
-          'academy_id': academyId,
-          'name': p.name,
-          'color': p.color.value,
-          'icon_code': p.icon.codePoint,
-          'order_index': p.orderIndex,
-        }).toList();
-        // ignore: avoid_print
-        print('[TagPreset] saveAll dualWrite -> supabase upsert count=' + rows.length.toString());
-        await supa.from('tag_presets').upsert(rows, onConflict: 'id');
-      } catch (_) {}
+      final ok = await _pushToServer(presets);
+      await _setPendingSync(!ok);
     }
   }
 
@@ -156,20 +204,8 @@ class TagPresetService {
     await db.insert('tag_presets', preset.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
 
     if (dualWrite) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        // ignore: avoid_print
-        print('[TagPreset] upsert dualWrite -> supabase id=' + preset.id);
-        await supa.from('tag_presets').upsert({
-          'id': preset.id,
-          'academy_id': academyId,
-          'name': preset.name,
-          'color': preset.color.value,
-          'icon_code': preset.icon.codePoint,
-          'order_index': preset.orderIndex,
-        }, onConflict: 'id');
-      } catch (_) {}
+      final ok = await _pushToServer([preset]);
+      await _setPendingSync(!ok);
     }
   }
 
@@ -183,7 +219,12 @@ class TagPresetService {
         // ignore: avoid_print
         print('[TagPreset] delete dualWrite -> supabase id=' + id);
         await supa.from('tag_presets').delete().eq('id', id);
-      } catch (_) {}
+        await _setPendingSync(false);
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[TagPreset][ERROR] delete failed: $e\n$st');
+        await _setPendingSync(true);
+      }
     }
   }
 }

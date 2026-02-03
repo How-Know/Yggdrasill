@@ -1,7 +1,8 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../services/tag_preset_service.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../widgets/dialog_tokens.dart';
 
 class TagPresetDialog extends StatefulWidget {
   const TagPresetDialog({super.key});
@@ -13,6 +14,29 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
   late Future<void> _initFuture;
   List<TagPreset> _presets = const [];
   bool _loading = true;
+  static const List<Color> _palette = [
+    Color(0xFFEF5350),
+    Color(0xFFAB47BC),
+    Color(0xFF7E57C2),
+    Color(0xFF5C6BC0),
+    Color(0xFF42A5F5),
+    Color(0xFF26A69A),
+    Color(0xFF66BB6A),
+    Color(0xFFFFCA28),
+    Color(0xFFF57C00),
+    Color(0xFF8D6E63),
+    Color(0xFFBDBDBD),
+    Color(0xFF90A4AE),
+  ];
+  static const List<IconData> _icons = [
+    Icons.bedtime,
+    Icons.phone_iphone,
+    Icons.edit_note,
+    Icons.record_voice_over,
+    Icons.gesture,
+    Icons.flag,
+    Icons.timer,
+  ];
 
   @override
   void initState() {
@@ -29,107 +53,48 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
     });
   }
 
-  Future<void> _addPreset() async {
-    final nameController = ImeAwareTextEditingController();
-    Color selected = const Color(0xFF1976D2);
-    IconData icon = Icons.edit_note;
-    final palette = [
-      const Color(0xFFEF5350), const Color(0xFFAB47BC), const Color(0xFF7E57C2), const Color(0xFF5C6BC0),
-      const Color(0xFF42A5F5), const Color(0xFF26A69A), const Color(0xFF66BB6A), const Color(0xFFFFCA28),
-      const Color(0xFFF57C00), const Color(0xFF8D6E63), const Color(0xFFBDBDBD), const Color(0xFF90A4AE),
-    ];
-    final icons = [
-      Icons.bedtime, Icons.phone_iphone, Icons.edit_note, Icons.record_voice_over, Icons.gesture, Icons.flag, Icons.timer,
-    ];
-    final preset = await showDialog<TagPreset>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          title: const Text('태그 프리셋 추가', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: 520,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('이름', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: '예: 기록',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    filled: true,
-                    fillColor: Color(0xFF2A2A2A),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text('색상', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final c in palette)
-                      GestureDetector(
-                        onTap: () => setLocal(() => selected = c),
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: c,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: c == selected ? Colors.white : Colors.white24, width: c == selected ? 2 : 1),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const Text('아이콘', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final ic in icons)
-                      GestureDetector(
-                        onTap: () => setLocal(() => icon = ic),
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2A2A2A),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: ic == icon ? Colors.white : Colors.white24),
-                          ),
-                          child: Icon(ic, color: ic == icon ? Colors.white : Colors.white70, size: 20),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-            ElevatedButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                if (name.isEmpty) return;
-                Navigator.of(ctx).pop(TagPreset(id: const Uuid().v4(), name: name, color: selected, icon: icon, orderIndex: 9999));
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-              child: const Text('추가'),
-            ),
-          ],
-        ),
+  InputDecoration _fieldDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: kDlgTextSub),
+      filled: true,
+      fillColor: kDlgFieldBg,
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: kDlgBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: kDlgAccent),
       ),
     );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        text,
+        style: const TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Future<TagPreset?> _showPresetEditor({TagPreset? original}) async {
+    return showDialog<TagPreset>(
+      context: context,
+      builder: (_) => _TagPresetEditorDialog(
+        original: original,
+        fieldDecorationBuilder: _fieldDecoration,
+        sectionLabelBuilder: _sectionLabel,
+        palette: _palette,
+        icons: _icons,
+      ),
+    );
+  }
+
+  Future<void> _addPreset() async {
+    final preset = await _showPresetEditor();
     if (preset != null) {
       final updated = <TagPreset>[..._presets, preset]
           .asMap()
@@ -147,198 +112,292 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       title: Row(
         children: [
-          const Text('태그 프리셋 관리', style: TextStyle(color: Colors.white70)),
+          const Text('태그 프리셋 관리', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           const Spacer(),
-          IconButton(onPressed: _addPreset, icon: const Icon(Icons.add, color: Colors.white70)),
+          IconButton(
+            tooltip: '추가',
+            onPressed: _addPreset,
+            icon: const Icon(Icons.add, color: kDlgTextSub),
+          ),
         ],
       ),
       content: SizedBox(
-        width: 560,
-        height: 480,
+        width: 496,
+        height: 416,
         child: _loading
-            ? const Center(child: CircularProgressIndicator(color: Colors.white70))
+            ? const Center(child: CircularProgressIndicator(color: kDlgTextSub))
             : ReorderableListView.builder(
-              itemCount: _presets.length,
-              buildDefaultDragHandles: false,
-              onReorder: (o, n) async {
-                final list = [..._presets];
-                final item = list.removeAt(o);
-                list.insert(n > o ? n - 1 : n, item);
-                final normalized = <TagPreset>[];
-                for (int i = 0; i < list.length; i++) {
-                  normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
-                }
-                await TagPresetService.instance.saveAll(normalized);
-                setState(() {
-                  _presets = normalized;
-                });
-              },
-              proxyDecorator: (child, index, animation) {
-                return Material(
-                  color: const Color(0xFF232326),
-                  elevation: 4,
-                  borderRadius: BorderRadius.circular(8),
-                  child: child,
-                );
-              },
-              itemBuilder: (context, i) {
-                final p = _presets[i];
-                return ListTile(
-                  key: ValueKey(p.id),
-                  leading: CircleAvatar(backgroundColor: p.color, child: Icon(p.icon, color: Colors.white)),
-                  title: Text(p.name, style: const TextStyle(color: Colors.white70)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: '수정',
-                        onPressed: () async {
-                          final edited = await _editPreset(context, p);
-                          if (edited != null) {
-                            await TagPresetService.instance.upsert(edited);
-                            setState(() {
-                              _presets = _presets.map((e) => e.id == edited.id ? edited : e).toList();
-                            });
-                          }
-                        },
-                        icon: const Icon(Icons.edit, color: Colors.white60),
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        onPressed: () async {
-                          await TagPresetService.instance.delete(p.id);
-                          final list = [..._presets]..removeWhere((e) => e.id == p.id);
-                          final normalized = <TagPreset>[];
-                          for (int i = 0; i < list.length; i++) {
-                            normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
-                          }
-                          await TagPresetService.instance.saveAll(normalized);
-                          setState(() {
-                            _presets = normalized;
-                          });
-                        },
-                        icon: const Icon(Icons.delete, color: Colors.white54),
-                      ),
-                      const SizedBox(width: 12),
-                      ReorderableDragStartListener(
-                        index: i,
-                        child: Icon(Icons.drag_handle, color: Colors.grey.shade500),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
-      ],
-    );
-  }
-
-  Future<TagPreset?> _editPreset(BuildContext context, TagPreset original) async {
-    final nameController = ImeAwareTextEditingController(text: original.name);
-    Color selected = original.color;
-    IconData icon = original.icon;
-    final palette = [
-      const Color(0xFFEF5350), const Color(0xFFAB47BC), const Color(0xFF7E57C2), const Color(0xFF5C6BC0),
-      const Color(0xFF42A5F5), const Color(0xFF26A69A), const Color(0xFF66BB6A), const Color(0xFFFFCA28),
-      const Color(0xFFF57C00), const Color(0xFF8D6E63), const Color(0xFFBDBDBD), const Color(0xFF90A4AE),
-    ];
-    final icons = [
-      Icons.bedtime, Icons.phone_iphone, Icons.edit_note, Icons.record_voice_over, Icons.gesture, Icons.flag, Icons.timer,
-    ];
-    return showDialog<TagPreset>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          title: const Text('태그 프리셋 수정', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: 520,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('이름', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: '예: 기록',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    filled: true,
-                    fillColor: Color(0xFF2A2A2A),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text('색상', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final c in palette)
-                      GestureDetector(
-                        onTap: () => setLocal(() => selected = c),
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: c,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: c == selected ? Colors.white : Colors.white24, width: c == selected ? 2 : 1),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const Text('아이콘', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final ic in icons)
-                      GestureDetector(
-                        onTap: () => setLocal(() => icon = ic),
-                        child: Container(
+                itemCount: _presets.length,
+                buildDefaultDragHandles: false,
+                onReorder: (o, n) async {
+                  final list = [..._presets];
+                  final item = list.removeAt(o);
+                  list.insert(n > o ? n - 1 : n, item);
+                  final normalized = <TagPreset>[];
+                  for (int i = 0; i < list.length; i++) {
+                    normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
+                  }
+                  await TagPresetService.instance.saveAll(normalized);
+                  setState(() {
+                    _presets = normalized;
+                  });
+                },
+                proxyDecorator: (child, index, animation) {
+                  return Material(
+                    color: kDlgPanelBg,
+                    elevation: 4,
+                    borderRadius: BorderRadius.circular(10),
+                    child: child,
+                  );
+                },
+                itemBuilder: (context, i) {
+                  final p = _presets[i];
+                  return Container(
+                    key: ValueKey(p.id),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: kDlgFieldBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: kDlgBorder),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
                           width: 36,
                           height: 36,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF2A2A2A),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: ic == icon ? Colors.white : Colors.white24),
+                            color: Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: p.color, width: 1.2),
                           ),
-                          child: Icon(ic, color: ic == icon ? Colors.white : Colors.white70, size: 20),
+                          child: Icon(p.icon, color: p.color, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            p.name,
+                            style: const TextStyle(color: kDlgText, fontSize: 16, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '수정',
+                          onPressed: () async {
+                            final edited = await _showPresetEditor(original: p);
+                            if (edited != null) {
+                                final next = _presets.map((e) => e.id == edited.id ? edited : e).toList();
+                                final normalized = <TagPreset>[];
+                                for (int i = 0; i < next.length; i++) {
+                                  normalized.add(TagPreset(
+                                    id: next[i].id,
+                                    name: next[i].name,
+                                    color: next[i].color,
+                                    icon: next[i].icon,
+                                    orderIndex: i,
+                                  ));
+                                }
+                                await TagPresetService.instance.saveAll(normalized);
+                                setState(() {
+                                  _presets = normalized;
+                                });
+                            }
+                          },
+                          icon: const Icon(Icons.edit, color: kDlgTextSub),
+                        ),
+                        IconButton(
+                          tooltip: '삭제',
+                          onPressed: () async {
+                            await TagPresetService.instance.delete(p.id);
+                            final list = [..._presets]..removeWhere((e) => e.id == p.id);
+                            final normalized = <TagPreset>[];
+                            for (int i = 0; i < list.length; i++) {
+                              normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
+                            }
+                            await TagPresetService.instance.saveAll(normalized);
+                            setState(() {
+                              _presets = normalized;
+                            });
+                          },
+                          icon: const Icon(Icons.delete, color: kDlgTextSub),
+                        ),
+                        const SizedBox(width: 6),
+                        ReorderableDragStartListener(
+                          index: i,
+                          child: Icon(Icons.drag_handle, color: Colors.grey.shade500),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('닫기'),
+        ),
+      ],
+    );
+  }
+}
+
+class _TagPresetEditorDialog extends StatefulWidget {
+  final TagPreset? original;
+  final InputDecoration Function(String) fieldDecorationBuilder;
+  final Widget Function(String) sectionLabelBuilder;
+  final List<Color> palette;
+  final List<IconData> icons;
+
+  const _TagPresetEditorDialog({
+    required this.original,
+    required this.fieldDecorationBuilder,
+    required this.sectionLabelBuilder,
+    required this.palette,
+    required this.icons,
+  });
+
+  @override
+  State<_TagPresetEditorDialog> createState() => _TagPresetEditorDialogState();
+}
+
+class _TagPresetEditorDialogState extends State<_TagPresetEditorDialog> {
+  late final ImeAwareTextEditingController _nameController;
+  late String _draftName;
+  late Color _selected;
+  late IconData _icon;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = ImeAwareTextEditingController(text: widget.original?.name ?? '');
+    _draftName = _nameController.text;
+    _selected = widget.original?.color ?? const Color(0xFF1976D2);
+    _icon = widget.original?.icon ?? Icons.edit_note;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _handleSave() {
+    FocusScope.of(context).unfocus();
+    _nameController.value = _nameController.value.copyWith(composing: TextRange.empty);
+    final name = (_draftName.trim().isEmpty ? _nameController.text.trim() : _draftName.trim());
+    if (name.isEmpty) return;
+    Navigator.of(context).pop(TagPreset(
+      id: widget.original?.id ?? const Uuid().v4(),
+      name: name,
+      color: _selected,
+      icon: _icon,
+      orderIndex: widget.original?.orderIndex ?? 9999,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = widget.original == null ? '태그 프리셋 추가' : '태그 프리셋 수정';
+    return AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Text(
+        title,
+        style: const TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+      ),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              widget.sectionLabelBuilder('이름'),
+              TextField(
+                controller: _nameController,
+                onChanged: (value) => _draftName = value,
+                style: const TextStyle(color: kDlgText),
+                decoration: widget.fieldDecorationBuilder('예: 기록'),
+              ),
+              const SizedBox(height: 14),
+              widget.sectionLabelBuilder('색상'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final c in widget.palette)
+                    GestureDetector(
+                      onTap: () => setState(() => _selected = c),
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: c,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: c == _selected ? Colors.white : Colors.white24,
+                            width: c == _selected ? 2 : 1,
+                          ),
                         ),
                       ),
-                  ],
-                ),
-              ],
-            ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              widget.sectionLabelBuilder('아이콘'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final ic in widget.icons)
+                    GestureDetector(
+                      onTap: () => setState(() => _icon = ic),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: kDlgFieldBg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: ic == _icon ? Colors.white : Colors.white24),
+                        ),
+                        child: Icon(ic, color: ic == _icon ? Colors.white : Colors.white70, size: 20),
+                      ),
+                    ),
+                ],
+              ),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-            ElevatedButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                if (name.isEmpty) return;
-                Navigator.of(ctx).pop(TagPreset(id: original.id, name: name, color: selected, icon: icon, orderIndex: original.orderIndex));
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-              child: const Text('저장'),
-            ),
-          ],
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: _handleSave,
+          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+          child: const Text('저장', style: TextStyle(color: Colors.white)),
+        ),
+      ],
     );
   }
 }

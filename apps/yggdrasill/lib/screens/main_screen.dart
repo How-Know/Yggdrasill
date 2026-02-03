@@ -2037,6 +2037,7 @@ extension on _MainScreenState {
         note: note?.trim(),
       ));
       _applyWorkingTags();
+      _removeClassTagOverlay();
     }
 
     void _removeAppliedAt(void Function(void Function()) setLocal, int index) {
