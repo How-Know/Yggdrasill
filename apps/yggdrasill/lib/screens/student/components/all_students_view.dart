@@ -12,7 +12,7 @@ import '../../../models/session_override.dart';
 import '../../../widgets/student_card.dart';
 import '../../../models/group_info.dart';
 import '../../../widgets/student_registration_dialog.dart';
-import '../student_course_detail_screen.dart';
+import '../student_profile_page.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
@@ -21,6 +21,7 @@ import '../../../models/student_time_block.dart';
 import '../../../widgets/dark_panel_route.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import '../../../utils/attendance_judgement.dart';
+import 'student_promotion_dialog.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
@@ -836,6 +837,29 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 width: 48,
                                 height: 48,
                                 child: IconButton(
+                                  tooltip: '학년 올리기',
+                                  onPressed: () {
+                                    showDialog<bool>(
+                                      context: context,
+                                      barrierDismissible: false,
+                                      builder: (context) => StudentPromotionDialog(
+                                        students: DataManager.instance.students,
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(Symbols.exposure_plus_1,
+                                      color: Colors.white70, size: 26),
+                                  splashRadius: 22,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                      minWidth: 32, minHeight: 32),
+                                ),
+                              ),
+                              const SizedBox(width: 1.4),
+                              SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: IconButton(
                                   tooltip: '엑셀 내보내기(준비중)',
                                   onPressed: () {
                                     // TODO: 학생현황 엑셀 내보내기 기능 연결
@@ -1491,8 +1515,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             onOpenStudentPage: (s) {
                               Navigator.of(context).push(
                                 DarkPanelRoute(
-                                  child: StudentCourseDetailScreen(
-                                      studentWithInfo: s),
+                                  child: StudentProfilePage(studentWithInfo: s),
                                 ),
                               );
                             },
@@ -1512,14 +1535,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                           },
                           onDelete: widget.onDeleteStudent,
                           onUpdate: widget.onStudentUpdated,
-                          onOpenStudentPage: (s) {
-                            Navigator.of(context).push(
-                              DarkPanelRoute(
-                                child: StudentCourseDetailScreen(
-                                    studentWithInfo: s),
-                              ),
-                            );
-                          },
+                        onOpenStudentPage: (s) {
+                          Navigator.of(context).push(
+                            DarkPanelRoute(
+                              child: StudentProfilePage(studentWithInfo: s),
+                            ),
+                          );
+                        },
                           enableLongPressDrag: false,
                         ),
                       ),
@@ -1535,8 +1557,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onOpenStudentPage: (s) {
                           Navigator.of(context).push(
                             DarkPanelRoute(
-                              child:
-                                  StudentCourseDetailScreen(studentWithInfo: s),
+                              child: StudentProfilePage(studentWithInfo: s),
                             ),
                           );
                         },
@@ -1568,7 +1589,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               title,
               style: const TextStyle(
                 color: _studentListPrimaryTextColor,
-                fontSize: 28,
+                fontSize: 30,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -1577,7 +1598,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               '$totalCount명',
               style: const TextStyle(
                 color: _studentListMutedTextColor,
-                fontSize: 20,
+                fontSize: 22,
               ),
             ),
           ],
@@ -1661,8 +1682,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 onOpenStudentPage: (s) {
                                   Navigator.of(context).push(
                                     DarkPanelRoute(
-                                      child: StudentCourseDetailScreen(
-                                          studentWithInfo: s),
+                                      child: StudentProfilePage(studentWithInfo: s),
                                     ),
                                   );
                                 },

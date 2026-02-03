@@ -466,14 +466,24 @@ export default function ResultsPage() {
     });
   }, [itemStats]);
 
+  function arrayToBase64(arr: ArrayBuffer): string {
+    const bytes = new Uint8Array(arr);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
   function exportItemStats() {
-    if (!itemStats.length) {
+    if (!filteredItemStats.length) {
       alert('내보낼 Item_Stats 데이터가 없습니다.');
       return;
     }
     const asOfDate = itemStatsMeta?.asOfDate ?? new Date().toISOString();
     const cumulativeN = itemStatsMeta?.cumulativeParticipants ?? 0;
-    const rows = itemStats.map((item) => ({
+    const rows = filteredItemStats.map((item) => ({
       as_of_date: asOfDate,
       cumulative_n: cumulativeN,
       question_id: item.questionId,
@@ -492,7 +502,35 @@ export default function ResultsPage() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Item_Stats');
     const fileStamp = asOfDate.replace(/[:T]/g, '-').slice(0, 19);
-    XLSX.writeFile(wb, `item_stats_${fileStamp}.xlsx`);
+    const filename = `item_stats_${fileStamp}.xlsx`;
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+
+    // ✅ WebView2(관리자앱)에서는 브라우저 다운로드가 막힐 수 있어 host로 전달
+    const host = (window as any)?.chrome?.webview;
+    if (host?.postMessage) {
+      try {
+        host.postMessage({
+          type: 'download_file',
+          filename,
+          mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          base64: arrayToBase64(out),
+        });
+        return;
+      } catch (e: any) {
+        console.warn('[export] host postMessage failed', e);
+      }
+    }
+
+    // 브라우저 환경: Blob 다운로드
+    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   const itemGridTemplate = '0.9fr 0.6fr 0.6fr 3.2fr 0.6fr 0.8fr 0.8fr 0.8fr 0.8fr 1fr';
