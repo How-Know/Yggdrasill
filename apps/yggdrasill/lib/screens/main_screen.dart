@@ -92,6 +92,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 출석/하원 상태 관리
   final Set<String> _attendedSetIds = {}; // 출석한 setId
   final Set<String> _leavedSetIds = {};   // 하원한 setId
+  double _sideSheetWidth = 0.0;
+  final GlobalKey _sideSheetKey = GlobalKey();
+  Offset? _lastTagTapPosition;
 
   // 오늘 등원해야 하는 학생(setId별) 리스트 추출
   List<_AttendanceTarget> getTodayAttendanceTargets([
@@ -354,6 +357,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
+  OverlayEntry? _classTagOverlay;
+  void _removeClassTagOverlay() {
+    _classTagOverlay?.remove();
+    _classTagOverlay = null;
+  }
+  Rect? _getSideSheetRect() {
+    final ctx = _sideSheetKey.currentContext;
+    if (ctx == null) return null;
+    final box = ctx.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final pos = box.localToGlobal(Offset.zero);
+    return pos & box.size;
+  }
   void _showTooltip(Offset position, String text) {
     // print('[DEBUG] _showTooltip called: position= [38;5;246m$position [0m, text=$text');
     _removeTooltip();
@@ -883,6 +899,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final maxWidth = screenWidth * baseRatio;
               // progress로 내부 콘텐츠는 제어하되, Container 자체는 닫힌 상태에서 0px로 만들어 여백이 생기지 않게 처리
               final containerWidth = progress == 0 ? 0.0 : (maxWidth * progress).clamp(0.0, maxWidth);
+              _sideSheetWidth = containerWidth;
               
               // 파생 리스트 로그는 ValueListenableBuilder 내부에서 출력합니다.
 
@@ -900,6 +917,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   duration: const Duration(milliseconds: 160),
                   curve: Curves.easeInOut,
                   width: containerWidth,
+                  key: _sideSheetKey,
                   color: const Color(0xFF0B1112),
                 );
               }
@@ -966,6 +984,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         duration: const Duration(milliseconds: 160),
                         curve: Curves.easeInOut,
                         width: containerWidth,
+                        key: _sideSheetKey,
                         color: const Color(0xFF0B1112),
                         child: Stack(
                           fit: StackFit.expand,
@@ -1028,6 +1047,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                   ],
                                 ),
                               ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 24.0),
+                                child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
+                              ),
                               // 출석 박스
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
@@ -1040,7 +1063,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
                                   ),
                                   // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
-                                  padding: const EdgeInsets.fromLTRB(0, 0, 16.0, 24.0),
+                                  padding: const EdgeInsets.fromLTRB(0, 22.0, 16.0, 24.0),
                                   child: Scrollbar(
                                     controller: _attendedScrollCtrl,
                                     thumbVisibility: true,
@@ -1235,7 +1258,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             t.student.name,
             style: TextStyle(
               color: textColor,
-              fontSize: 16,
+              fontSize: 19,
               fontWeight: FontWeight.w500,
               decoration: underlineColor != null ? TextDecoration.underline : null,
               decorationColor: underlineColor,
@@ -1269,7 +1292,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             t.student.name,
             style: TextStyle(
               color: textColor,
-              fontSize: 16,
+              fontSize: 19,
               fontWeight: FontWeight.w500,
               decoration: underlineColor != null ? TextDecoration.underline : null,
               decorationColor: underlineColor,
@@ -1290,11 +1313,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 : const Color(0xFF4CAF50))
             : (classColor ?? Colors.grey);
         textColor = (!isSpecialOverride && classColor != null) ? classColor : Colors.white70;
+        const double waitingNameSize = 16;
         nameWidget = Text(
           t.student.name,
           style: TextStyle(
             color: textColor,
-            fontSize: 16,
+            fontSize: waitingNameSize,
             fontWeight: FontWeight.w500,
             // waiting에서는 underline을 쓰지 않고(이질감/중복) 테두리/이름색 규칙으로만 표현한다.
           ),
@@ -1355,51 +1379,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       );
     }
-    final Widget attendedChild = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        nameWidget,
-        const SizedBox(width: 8),
-        // 버튼 내부로 이동한 태그 추가 아이콘
-        Tooltip(
-          message: '태그 추가',
-          child: IconButton(
-            onPressed: () => _openClassTagDialog(t),
-            icon: const Icon(Icons.circle_outlined, color: Color(0xFFEAF2F2)),
-            iconSize: 14,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-          ),
-        ),
-        const SizedBox(width: 4),
-        // 버튼 내부로 이동한 과제 추가 아이콘
-        Tooltip(
-          message: '과제 추가',
-          child: IconButton(
-            onPressed: () async {
-              // 빠른 추가: 제목/색상 간단 입력 다이얼로그 호출 대신 학습 화면과 동일 다이얼로그 재사용
-              final item = await showDialog<dynamic>(
-                context: context,
-                builder: (ctx) => HomeworkQuickAddProxyDialog(studentId: t.student.id, initialTitle: '', initialColor: const Color(0xFF1976D2)),
-              );
-              if (item is Map<String, dynamic>) {
-                // 전달된 studentId, title, body, color 사용
-                if (item['studentId'] == t.student.id) {
-                  // LearningScreen의 스토어를 통해 추가 (전역 스토어 사용)
-                  HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
-                  // 출석 중에 추가된 과제는 오늘 내로 하원 시 숙제로 전환되도록 firstStartedAt가 설정될 수 있음
-                  setState(() {});
-                }
-              }
-            },
-            icon: const Icon(Icons.add_rounded, color: Color(0xFFEAF2F2)),
-            iconSize: 16,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-          ),
-        ),
-      ],
-    );
+    final Widget attendedChild = nameWidget;
     final Widget cardChild = nameWidget; // 기본은 이름만 사용 (waiting/leaved)
     if (status == 'attended') {
       // 출석(파란 네모) 카드: 가로 스크롤로 과제칩 표시(줄바꿈 없음)
@@ -1407,8 +1387,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         key: key,
         mainAxisSize: MainAxisSize.max,
         children: [
-          GestureDetector(
-            onTap: () async {
+          Dismissible(
+            key: ValueKey('attended_swipe_${t.setId}'),
+            direction: DismissDirection.startToEnd,
+            confirmDismiss: (_) async {
               final now = DateTime.now();
               setState(() {
                 _leavedSetIds.add(t.setId);
@@ -1435,18 +1417,64 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               } catch (e) {
                 print('[ERROR] 출석 기록 동기화 실패: $e');
               }
+              return false;
             },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              margin: EdgeInsets.zero,
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              decoration: BoxDecoration(
-              // 등원 완료(출석) 카드: 내부 배경색 없이 통일
-              color: Colors.transparent,
-                border: Border.all(color: borderColor, width: 1.5),
-              borderRadius: BorderRadius.circular(12),
+            background: Container(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.only(left: 16),
+              child: const Icon(Icons.arrow_forward_rounded, color: Colors.white54, size: 18),
+            ),
+            child: GestureDetector(
+              onTapDown: (details) {
+                _lastTagTapPosition = details.globalPosition;
+              },
+              onTap: () => _openClassTagDialog(t, anchor: _lastTagTapPosition),
+              onLongPress: () async {
+                _removeClassTagOverlay();
+                setState(() {
+                  _attendedSetIds.remove(t.setId);
+                  _leavedSetIds.remove(t.setId);
+                  _attendTimes.remove(t.setId);
+                  _leaveTimes.remove(t.setId);
+                  _sideSheetDataDirty = true;
+                });
+                try {
+                  final classDateTime = t.classDateTime;
+                  final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
+                  if (existing?.id != null) {
+                    await DataManager.instance.deleteAttendanceRecord(existing!.id!);
+                  }
+                  await DataManager.instance.saveOrUpdateAttendance(
+                    studentId: t.student.id,
+                    classDateTime: classDateTime,
+                    classEndTime: existing?.classEndTime ?? classDateTime.add(t.duration),
+                    className: existing?.className ?? t.classInfo?.name ?? '수업',
+                    isPresent: false,
+                    arrivalTime: null,
+                    departureTime: null,
+                    setId: t.setId,
+                    sessionTypeId: existing?.sessionTypeId ?? t.classInfo?.id,
+                    cycle: existing?.cycle,
+                    sessionOrder: existing?.sessionOrder,
+                    isPlanned: true,
+                    snapshotId: existing?.snapshotId,
+                    batchSessionId: existing?.batchSessionId,
+                  );
+                } catch (e) {
+                  print('[ERROR] 출석 기록 원복 실패: $e');
+                }
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: EdgeInsets.zero,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  // 등원 완료(출석) 카드: 테두리 제거
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: attendedChild,
               ),
-              child: attendedChild,
             ),
           ),
           const SizedBox(width: 10),
@@ -1543,7 +1571,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final nameStyle = TextStyle(
       color: status == 'attended' ? const Color(0xFFEAF2F2) : Colors.white70,
       // 기존 출석카드와 크기 통일
-      fontSize: 16,
+      fontSize: status == 'attended' ? 19 : 16,
       fontWeight: FontWeight.w500,
     );
 
@@ -1963,7 +1991,7 @@ extension on _MainScreenState {
   }
 
   // 임시 A/B 버튼 핸들러 제거됨
-  Future<void> _openClassTagDialog(_AttendanceTarget target) async {
+  Future<void> _openClassTagDialog(_AttendanceTarget target, {Offset? anchor}) async {
     final List<_ClassTagEvent> initialApplied = List<_ClassTagEvent>.from(_classTagEventsBySetId[target.setId] ?? const []);
     List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(initialApplied);
     // 프리셋에서 즉시 로드하여 사용 가능한 태그 구성
@@ -1972,169 +2000,12 @@ extension on _MainScreenState {
         .map((p) => _ClassTag(name: p.name, color: p.color, icon: p.icon))
         .toList();
 
-    _ClassTag? newTag;
-
-    List<_ClassTagEvent>? result = await showDialog<List<_ClassTagEvent>>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            Future<void> _handleTagPressed(_ClassTag tag) async {
-              final now = DateTime.now();
-              String? note;
-              if (tag.name == '기록') {
-                note = await _openRecordNoteDialog(ctx);
-                if (note == null || note.trim().isEmpty) return;
-              }
-              // 즉시 메모리 반영
-              setLocal(() {
-                workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now, note: note?.trim()));
-              });
-              // 즉시 서버/로컬 저장 (학생ID 포함)
-              TagStore.instance.appendEvent(target.setId, target.student.id, TagEvent(
-                tagName: tag.name,
-                colorValue: tag.color.value,
-                iconCodePoint: tag.icon.codePoint,
-                timestamp: now,
-                note: note?.trim(),
-              ));
-            }
-
-            Widget _buildAvailableTagChip(_ClassTag tag) {
-              return ActionChip(
-                onPressed: () => _handleTagPressed(tag),
-                backgroundColor: const Color(0xFF2A2A2A),
-                label: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(tag.icon, color: tag.color, size: 18),
-                    const SizedBox(width: 6),
-                    Text(tag.name, style: const TextStyle(color: Colors.white70)),
-                  ],
-                ),
-                shape: StadiumBorder(side: BorderSide(color: tag.color.withOpacity(0.6), width: 1.0)),
-              );
-            }
-
-            return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              title: const Text('수업 태그', style: TextStyle(color: Colors.white, fontSize: 20)),
-              content: SizedBox(
-                width: 560,
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(target.student.name + ' · ' + _getTodayDateString(), style: const TextStyle(color: Colors.white54, fontSize: 13)),
-                      const SizedBox(height: 12),
-                      const Text('적용된 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      if (workingApplied.isEmpty)
-                        const Text('아직 추가된 태그가 없습니다.', style: TextStyle(color: Colors.white38))
-                      else
-                        Column(
-                          children: [
-                            for (int i = workingApplied.length - 1; i >= 0; i--) ...[
-                              Builder(builder: (context) {
-                                final e = workingApplied[i];
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF22262C),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: e.tag.color.withOpacity(0.35), width: 1),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(e.tag.icon, color: e.tag.color, size: 18),
-                                          const SizedBox(width: 8),
-                                          Text(e.tag.name, style: const TextStyle(color: Colors.white70)),
-                                          if (e.note != null && e.note!.isNotEmpty) ...[
-                                            const SizedBox(width: 8),
-                                            Text(e.note!, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                                          ],
-                                        ],
-                                      ),
-                                      const Spacer(),
-                                      Text(_formatTime(e.timestamp), style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                                      const SizedBox(width: 8),
-                                      InkWell(
-                                        onTap: () {
-                                          setLocal(() {
-                                            workingApplied.removeAt(i);
-                                          });
-                                        },
-                                        child: const Icon(Icons.close, color: Colors.white54, size: 16),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                            ],
-                          ],
-                        ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const Text('추가 가능한 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
-                          const Spacer(),
-                          // '새 태그 만들기' 버튼 제거: 태그 프리셋 관리에서 추가하도록 유도
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: '태그 관리',
-                            onPressed: () async {
-                          await showDialog(
-                                context: context,
-                                builder: (_) => const TagPresetDialog(),
-                              );
-                          // 태그 프리셋 변경 즉시 반영: 프리셋 재로드 후 갱신
-                          final refreshed = await TagPresetService.instance.loadPresets();
-                          setLocal(() {
-                            workingAvailable = refreshed
-                                .map((p) => _ClassTag(name: p.name, color: p.color, icon: p.icon))
-                                .toList();
-                          });
-                            },
-                            icon: const Icon(Icons.style, color: Colors.white70),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: workingAvailable.map(_buildAvailableTagChip).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(workingApplied),
-                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (result != null) {
+    void _applyWorkingTags() {
       setState(() {
-        _classTagEventsBySetId[target.setId] = result!;
+        _classTagEventsBySetId[target.setId] =
+            List<_ClassTagEvent>.from(workingApplied);
       });
-      // 동기화: 학습 > 기록 타임라인에서 표시되도록 전역 TagStore에 반영
-      final events = result!.map((e) => TagEvent(
+      final events = workingApplied.map((e) => TagEvent(
         tagName: e.tag.name,
         colorValue: e.tag.color.value,
         iconCodePoint: e.tag.icon.codePoint,
@@ -2143,6 +2014,186 @@ extension on _MainScreenState {
       )).toList();
       TagStore.instance.setEventsForSet(target.setId, target.student.id, events);
     }
+
+    Future<void> _handleTagPressed(
+      BuildContext overlayCtx,
+      void Function(void Function()) setLocal,
+      _ClassTag tag,
+    ) async {
+      final now = DateTime.now();
+      String? note;
+      if (tag.name == '기록') {
+        note = await _openRecordNoteDialog(overlayCtx);
+        if (note == null || note.trim().isEmpty) return;
+      }
+      setLocal(() {
+        workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now, note: note?.trim()));
+      });
+      TagStore.instance.appendEvent(target.setId, target.student.id, TagEvent(
+        tagName: tag.name,
+        colorValue: tag.color.value,
+        iconCodePoint: tag.icon.codePoint,
+        timestamp: now,
+        note: note?.trim(),
+      ));
+      _applyWorkingTags();
+    }
+
+    void _removeAppliedAt(void Function(void Function()) setLocal, int index) {
+      setLocal(() {
+        workingApplied.removeAt(index);
+      });
+      _applyWorkingTags();
+    }
+
+    _removeClassTagOverlay();
+    final overlay = Overlay.of(context);
+    final screenW = MediaQuery.of(context).size.width;
+    final screenH = MediaQuery.of(context).size.height;
+    final rect = _getSideSheetRect();
+    final sheetWidth = rect?.width ?? _sideSheetWidth;
+    final leftEdge = rect?.right ?? sheetWidth;
+    final baseWidth = (sheetWidth - 24).clamp(260.0, 420.0).toDouble();
+    final available = (screenW - leftEdge).clamp(160.0, screenW).toDouble();
+    final panelWidth = ((baseWidth > available ? available : baseWidth) * 0.7)
+        .clamp(160.0, available)
+        .toDouble();
+    const double headerOffset = 14.0;
+    final anchorPos = anchor ?? Offset(leftEdge, 120);
+    final double top = (anchorPos.dy - headerOffset).clamp(0.0, screenH);
+    _classTagOverlay = OverlayEntry(
+      builder: (overlayCtx) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _removeClassTagOverlay,
+                behavior: HitTestBehavior.opaque,
+                child: Container(color: Colors.black.withOpacity(0.25)),
+              ),
+            ),
+            Positioned(
+              left: leftEdge + 10,
+              top: top,
+              width: panelWidth,
+              child: Material(
+                color: Colors.transparent,
+                child: StatefulBuilder(
+                  builder: (ctx, setLocal) {
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0B1112),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF223131)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black54,
+                            blurRadius: 14,
+                            offset: Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${target.student.name} · ${_getTodayDateString()}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: _removeClassTagOverlay,
+                                icon: const Icon(Icons.close, color: Colors.white54, size: 18),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: workingAvailable.map((tag) {
+                              return ActionChip(
+                                onPressed: () => _handleTagPressed(ctx, setLocal, tag),
+                                backgroundColor: const Color(0xFF0B1112),
+                                label: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(tag.icon, color: tag.color, size: 16),
+                                    const SizedBox(width: 6),
+                                    Text(tag.name, style: const TextStyle(color: Colors.white)),
+                                  ],
+                                ),
+                                shape: const StadiumBorder(
+                                  side: BorderSide(color: Color(0xFF3A3F44), width: 1.0),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 14),
+                          const Text('적용된 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 8),
+                          if (workingApplied.isEmpty)
+                            const Text('아직 추가된 태그가 없습니다.', style: TextStyle(color: Colors.white38))
+                          else
+                            Column(
+                              children: [
+                                for (int i = workingApplied.length - 1; i >= 0; i--) ...[
+                                  Builder(builder: (context) {
+                                    final e = workingApplied[i];
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 8),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF22262C),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: const Color(0xFF3A3F44), width: 1),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(e.tag.icon, color: e.tag.color, size: 16),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              e.note != null && e.note!.isNotEmpty
+                                                  ? '${e.tag.name} · ${e.note}'
+                                                  : e.tag.name,
+                                              style: const TextStyle(color: Colors.white70),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(_formatTime(e.timestamp), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                          const SizedBox(width: 6),
+                                          InkWell(
+                                            onTap: () => _removeAppliedAt(setLocal, i),
+                                            child: const Icon(Icons.close, color: Colors.white54, size: 14),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ],
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    overlay.insert(_classTagOverlay!);
   }
 
   Future<_ClassTag?> _createNewClassTag(BuildContext context) async {
