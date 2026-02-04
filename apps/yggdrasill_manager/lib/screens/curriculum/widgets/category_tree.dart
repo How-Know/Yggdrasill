@@ -6,6 +6,12 @@ import '../../../widgets/app_navigation_bar.dart';
 
 const double kTreeIndentStep = 18.0;
 const double kTreeConnectorWidth = 12.0;
+const double kTreeArrowSize = 16.0;
+const double kTreeArrowGap = 6.0;
+const double kTreeArrowOffsetX = 0.0;
+const double kTreeRowPaddingX = 8.0;
+const double kTreeLineWidth = 2.0;
+const double kTreeCornerRadius = 10.0;
 const Color kTreeLineColor = Color(0xFF2A2A2A);
 const Color kTreeAccentColor = kNavAccent;
 
@@ -185,11 +191,16 @@ class _CategoryTreeState extends State<CategoryTree> {
     final isExpanded = _expandedIds.contains(node.id);
     final isSelected = _selectedCategoryId == node.id;
     final hasExpandable = node.children.isNotEmpty || node.concepts.isNotEmpty;
-    final lineX = depth > 0
-        ? ((depth - 1) * kTreeIndentStep) + (kTreeIndentStep / 2)
+    final baseLineX = ((depth > 0 ? depth - 1 : 0) * kTreeIndentStep) +
+        (kTreeIndentStep / 2);
+    final lineEndX = baseLineX + kTreeConnectorWidth;
+    final arrowCenterOffset = kTreeArrowSize / 2;
+    final leftInset = depth >= 0
+        ? lineEndX -
+            kTreeRowPaddingX -
+            arrowCenterOffset +
+            kTreeArrowOffsetX
         : 0.0;
-    final leftInset =
-        depth > 0 ? lineX + kTreeConnectorWidth + 6 : 0.0;
     final textColor = isSelected ? kTreeAccentColor : Colors.white;
     final iconColor = isSelected ? kTreeAccentColor : Colors.white70;
 
@@ -241,8 +252,10 @@ class _CategoryTreeState extends State<CategoryTree> {
                     data: _DragFolderPayload(node),
                     feedback: _DragFolderFeedback(name: node.name),
                     child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: kTreeRowPaddingX,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.transparent,
                         borderRadius: BorderRadius.circular(8),
@@ -372,8 +385,15 @@ class _CategoryTreeState extends State<CategoryTree> {
     final lineX = depth > 0
         ? ((depth - 1) * kTreeIndentStep) + (kTreeIndentStep / 2)
         : 0.0;
-    final leftInset =
-        depth > 0 ? lineX + kTreeConnectorWidth + 6 : 0.0;
+    final baseLineX = ((depth > 0 ? depth - 1 : 0) * kTreeIndentStep) +
+        (kTreeIndentStep / 2);
+    final lineEndX = baseLineX + kTreeConnectorWidth;
+    final leftInset = depth > 0
+        ? lineEndX +
+            (kTreeArrowSize / 2) +
+            kTreeArrowGap +
+            kTreeArrowOffsetX
+        : 0.0;
     final chips = <Widget>[];
 
     for (var i = 0; i < node.concepts.length; i++) {
@@ -800,7 +820,7 @@ class _TreeIndentPainter extends CustomPainter {
     if (depth <= 0) return;
     final paint = Paint()
       ..color = lineColor
-      ..strokeWidth = 1
+      ..strokeWidth = kTreeLineWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
@@ -814,17 +834,18 @@ class _TreeIndentPainter extends CustomPainter {
 
     // parent column (depth - 1): always connect to parent
     final elbowX = ((depth - 1) * indentStep) + (indentStep / 2);
-    canvas.drawLine(Offset(elbowX, 0), Offset(elbowX, centerY), paint);
-    final parentHasNext =
-        ancestorHasNext.isNotEmpty ? ancestorHasNext.last : false;
-    if (hasNextSibling || parentHasNext) {
+    final rawRadius =
+        kTreeCornerRadius > connectorWidth ? connectorWidth : kTreeCornerRadius;
+    final radius = rawRadius > centerY ? centerY : rawRadius;
+    final elbowPath = Path()
+      ..moveTo(elbowX, 0)
+      ..lineTo(elbowX, centerY - radius)
+      ..quadraticBezierTo(elbowX, centerY, elbowX + radius, centerY)
+      ..lineTo(elbowX + connectorWidth, centerY);
+    canvas.drawPath(elbowPath, paint);
+    if (hasNextSibling) {
       canvas.drawLine(Offset(elbowX, centerY), Offset(elbowX, size.height), paint);
     }
-
-    final path = Path()
-      ..moveTo(elbowX, centerY)
-      ..lineTo(elbowX + connectorWidth, centerY);
-    canvas.drawPath(path, paint);
   }
 
   @override
