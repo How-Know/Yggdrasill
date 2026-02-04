@@ -10,6 +10,7 @@ import '../../../services/ai_summary.dart';
 import '../../../main.dart'; // rootNavigatorKey
 import '../../../services/exam_mode.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../../widgets/dialog_tokens.dart';
 
 class ScheduleView extends StatefulWidget {
   final DateTime selectedDate;
@@ -142,6 +143,7 @@ class _ScheduleViewState extends State<ScheduleView> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
+        Positioned.fill(child: Container(color: kDlgBg)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Row(
@@ -171,14 +173,18 @@ class _ScheduleViewState extends State<ScheduleView> {
                   padding: const EdgeInsets.only(top: 8.0),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline, color: Colors.white60, size: 16),
+                      const Icon(Icons.info_outline, color: kDlgTextSub, size: 16),
                       const SizedBox(width: 6),
                       const Expanded(
-                        child: Text('셀을 클릭하여 날짜를 선택하세요. 범위를 선택하려면 시작 날짜 클릭 후 종료 날짜를 클릭하세요.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                        child: Text(
+                          '셀을 클릭하여 날짜를 선택하세요. 범위를 선택하려면 시작 날짜 클릭 후 종료 날짜를 클릭하세요.',
+                          style: TextStyle(color: kDlgTextSub, fontSize: 12),
+                        ),
                       ),
                       TextButton(
                         onPressed: () => setState(() { _isAddMode = false; _rangeStart = null; }),
-                        child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                        style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                        child: const Text('취소'),
                       ),
                     ],
                   ),
@@ -189,8 +195,9 @@ class _ScheduleViewState extends State<ScheduleView> {
                 child: Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
+                    color: kDlgPanelBg,
                     borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: kDlgBorder),
                   ),
                   child: const _ScheduleTimeline(),
                 ),
@@ -209,8 +216,9 @@ class _ScheduleViewState extends State<ScheduleView> {
                   margin: const EdgeInsets.only(top: 8, bottom: 12),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
+                    color: kDlgPanelBg,
                     borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: kDlgBorder),
                   ),
               child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -219,7 +227,7 @@ class _ScheduleViewState extends State<ScheduleView> {
                         children: [
               Text(
                 _formatDateYMD(widget.selectedDate),
-                style: const TextStyle(color: Colors.white70, fontSize: 19, fontWeight: FontWeight.w500),
+                style: const TextStyle(color: kDlgTextSub, fontSize: 19, fontWeight: FontWeight.w600),
               ),
                           const Spacer(),
                        SizedBox(
@@ -233,16 +241,16 @@ class _ScheduleViewState extends State<ScheduleView> {
                                 },
                                 child: Ink(
                                   decoration: ShapeDecoration(
-                                    color: const Color(0xFF1976D2),
+                                    color: kDlgAccent,
                                     shape: StadiumBorder(side: BorderSide(color: Colors.transparent, width: 0)),
                                   ),
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                   child: const Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.add, color: Colors.white, size: 20),
+                                      Icon(Icons.add, color: kDlgText, size: 20),
                                       SizedBox(width: 8),
-                                      Text('일정 추가', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                                      Text('일정 추가', style: TextStyle(color: kDlgText, fontSize: 15, fontWeight: FontWeight.w600)),
                                     ],
                                   ),
                                 ),
@@ -258,9 +266,9 @@ class _ScheduleViewState extends State<ScheduleView> {
                                 setState(() => _isExamPeriodMode = val);
                                 ExamModeService.instance.isOn.value = val; // 전역 반영
                               },
-                              activeColor: const Color(0xFF1976D2),
-                              inactiveThumbColor: Colors.white,
-                              inactiveTrackColor: Colors.white24,
+                              activeColor: kDlgAccent,
+                              inactiveThumbColor: kDlgTextSub,
+                              inactiveTrackColor: kDlgBorder,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
                           ),
@@ -274,12 +282,12 @@ class _ScheduleViewState extends State<ScheduleView> {
                             final items = ScheduleStore.instance.eventsOn(widget.selectedDate);
                             if (items.isEmpty) {
                               return const Center(
-                                child: Text('해당 날짜의 일정이 없습니다.', style: TextStyle(color: Colors.white38)),
+                                child: Text('해당 날짜의 일정이 없습니다.', style: TextStyle(color: kDlgTextSub)),
                               );
                             }
                               return ListView.separated(
                               itemCount: items.length,
-                                separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
+                                separatorBuilder: (_, __) => const Divider(color: kDlgBorder, height: 12),
                               itemBuilder: (context, i) {
                                 final e = items[i];
                                   return _EventTile(event: e);
@@ -297,13 +305,14 @@ class _ScheduleViewState extends State<ScheduleView> {
                   margin: const EdgeInsets.only(bottom: 0),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF18181A),
+                    color: kDlgPanelBg,
                     borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: kDlgBorder),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Todo 리스트', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700)),
+                      const Text('Todo 리스트', style: TextStyle(color: kDlgText, fontSize: 21, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
                       Row(
                         children: [
@@ -327,10 +336,10 @@ class _ScheduleViewState extends State<ScheduleView> {
                           const Spacer(),
                           TextButton.icon(
                             style: TextButton.styleFrom(
-                              backgroundColor: Colors.white12,
-                              foregroundColor: Colors.white70,
+                              backgroundColor: kDlgPanelBg,
+                              foregroundColor: kDlgTextSub,
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              shape: const StadiumBorder(),
+                              shape: const StadiumBorder(side: BorderSide(color: kDlgBorder)),
                             ),
                             onPressed: () => _openMemoAddDialog(context),
                             icon: const Icon(Icons.add, size: 18),
@@ -350,11 +359,11 @@ class _ScheduleViewState extends State<ScheduleView> {
                                 list = list.where((m) => m.dismissed).toList();
                               }
                             if (list.isEmpty) {
-                              return const Center(child: Text('할 일이 없습니다.', style: TextStyle(color: Colors.white38)));
+                              return const Center(child: Text('할 일이 없습니다.', style: TextStyle(color: kDlgTextSub)));
                             }
                             return ListView.separated(
                               itemCount: list.length,
-                              separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
+                              separatorBuilder: (_, __) => const Divider(color: kDlgBorder, height: 12),
                               itemBuilder: (context, index) {
                                 final m = list[index];
                                 final title = m.summary.isNotEmpty ? m.summary : (m.original.length > 20 ? m.original.substring(0, 20) + '…' : m.original);
@@ -370,16 +379,16 @@ class _ScheduleViewState extends State<ScheduleView> {
                                             await DataManager.instance.updateMemo(updated);
                                             setRowState(() {});
                                           },
-                                          checkColor: Colors.white,
-                                          activeColor: const Color(0xFF1976D2),
+                                          checkColor: kDlgText,
+                                          activeColor: kDlgAccent,
                                         );
                                       }),
                                     const SizedBox(width: 8),
                                     Expanded(
-                                      child: Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+                                      child: Text(title, style: const TextStyle(color: kDlgTextSub, fontSize: 15)),
                                     ),
                                     IconButton(
-                                      icon: const Icon(Icons.edit, color: Colors.white54, size: 18),
+                                      icon: const Icon(Icons.edit, color: kDlgTextSub, size: 18),
                                       onPressed: () async {
                                         await _openMemoAddDialog(context, initial: m.original);
                                       },
@@ -509,6 +518,28 @@ List<Memo> _expandMemosNextMonths(List<Memo> memos, {int months = 3}) {
   return expanded;
 }
 
+InputDecoration _scheduleFieldDecoration({
+  String? labelText,
+  String? hintText,
+}) {
+  return InputDecoration(
+    labelText: labelText,
+    hintText: hintText,
+    labelStyle: const TextStyle(color: kDlgTextSub),
+    hintStyle: const TextStyle(color: kDlgTextSub),
+    filled: true,
+    fillColor: kDlgFieldBg,
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: kDlgBorder),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: kDlgAccent),
+    ),
+  );
+}
+
 Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
   final textCtrl = ImeAwareTextEditingController(text: initial ?? '');
   String recurrenceType = 'none'; // none/daily/weekly/monthly/selected_weekdays
@@ -521,9 +552,15 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
     builder: (context) {
       return StatefulBuilder(builder: (context, setState) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('메모 추가', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text('메모 추가', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -532,23 +569,18 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                 children: [
                   TextField(
                     controller: textCtrl,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: kDlgText),
                     minLines: 3,
                     maxLines: 5,
-                    decoration: const InputDecoration(
-                      hintText: '할 일을 입력하세요',
-                      hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                    decoration: _scheduleFieldDecoration(hintText: '할 일을 입력하세요'),
                   ),
                   const SizedBox(height: 16),
-                  const Text('반복', style: TextStyle(color: Colors.white70)),
+                  const Text('반복', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2A2A2A),
-                      border: Border.all(color: Colors.white24),
+                      color: kDlgFieldBg,
+                      border: Border.all(color: kDlgBorder),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -556,8 +588,8 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                       value: recurrenceType,
                       isExpanded: true,
                       underline: const SizedBox(),
-                      dropdownColor: const Color(0xFF2A2A2A),
-                      style: const TextStyle(color: Colors.white),
+                      dropdownColor: kDlgPanelBg,
+                      style: const TextStyle(color: kDlgText),
                       items: const [
                         DropdownMenuItem(value: 'none', child: Text('없음')),
                         DropdownMenuItem(value: 'daily', child: Text('매일')),
@@ -578,10 +610,10 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                         return ChoiceChip(
                           label: Text(names[d-1]),
                           selected: sel,
-                          labelStyle: TextStyle(color: sel ? Colors.white : Colors.white70, fontSize: 13),
-                          selectedColor: const Color(0xFF1976D2),
-                          backgroundColor: const Color(0xFF2A2A2A),
-                          side: BorderSide(color: sel ? Colors.transparent : Colors.white24),
+                          labelStyle: TextStyle(color: sel ? kDlgText : kDlgTextSub, fontSize: 13),
+                          selectedColor: kDlgAccent.withOpacity(0.18),
+                          backgroundColor: kDlgPanelBg,
+                          side: BorderSide(color: sel ? kDlgAccent : kDlgBorder),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           onSelected: (v) => setState(() { if (v) selectedWeekdays.add(d); else selectedWeekdays.remove(d); }),
                         );
@@ -589,7 +621,7 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                     ),
                   ],
                   const SizedBox(height: 12),
-                  const Text('종료', style: TextStyle(color: Colors.white70)),
+                  const Text('종료', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -603,25 +635,18 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                           );
                           if (picked != null) setState(() => endDate = picked);
                         },
-                        icon: const Icon(Icons.event, color: Colors.white70, size: 18),
-                        label: Text(endDate == null ? '종료일(선택)' : '${endDate!.year}.${endDate!.month}.${endDate!.day}', style: const TextStyle(color: Colors.white70)),
-                        style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white24)),
+                        icon: const Icon(Icons.event, color: kDlgTextSub, size: 18),
+                        label: Text(endDate == null ? '종료일(선택)' : '${endDate!.year}.${endDate!.month}.${endDate!.day}', style: const TextStyle(color: kDlgTextSub)),
+                        style: OutlinedButton.styleFrom(side: const BorderSide(color: kDlgBorder)),
                       ),
                       const SizedBox(width: 10),
                       SizedBox(
                         width: 110,
                         child: TextField(
                           controller: countCtrl,
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(color: kDlgText),
                           keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            labelText: '횟수(선택)',
-                            labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true,
-                            fillColor: const Color(0xFF2A2A2A),
-                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24), borderRadius: BorderRadius.circular(8)),
-                            focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFF1976D2)), borderRadius: BorderRadius.circular(8)),
-                          ),
+                          decoration: _scheduleFieldDecoration(labelText: '횟수(선택)'),
                         ),
                       ),
                     ],
@@ -631,7 +656,11 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(context, {
                 'text': textCtrl.text.trim(),
@@ -640,7 +669,7 @@ Future<void> _openMemoAddDialog(BuildContext context, {String? initial}) async {
                 'endDate': endDate,
                 'count': int.tryParse(countCtrl.text.trim()),
               }),
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
               child: const Text('추가'),
             ),
           ],
@@ -677,31 +706,33 @@ Future<String?> _showNoteDialog(BuildContext context) async {
     context: context,
     builder: (context) {
       return AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('메모 입력', style: TextStyle(color: Colors.white)),
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: kDlgBorder),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text('메모 입력', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: SizedBox(
           width: 460,
           child: TextField(
             controller: controller,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: kDlgText),
             minLines: 3,
             maxLines: 5,
-            decoration: const InputDecoration(
-              hintText: '메모를 입력하세요 (선택)',
-              hintStyle: TextStyle(color: Colors.white38),
-              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-            ),
+            decoration: _scheduleFieldDecoration(hintText: '메모를 입력하세요 (선택)'),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('건너뛰기', style: TextStyle(color: Colors.white70)),
+            style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+            child: const Text('건너뛰기'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
             onPressed: () => Navigator.pop(context, controller.text.trim()),
             child: const Text('확인'),
           ),
@@ -728,16 +759,22 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
     builder: (context) {
       return StatefulBuilder(builder: (context, setState) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('아이콘/색상/태그 선택', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text('아이콘/색상/태그 선택', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('아이콘', style: TextStyle(color: Colors.white70)),
+                const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 LayoutBuilder(builder: (context, constraints) {
                   final items = const [
@@ -765,16 +802,16 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                           width: cellWidth,
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
-                            color: selected ? Colors.white10 : Colors.transparent,
-                            border: Border.all(color: selected ? Colors.white : Colors.white24),
+                            color: selected ? kDlgPanelBg : Colors.transparent,
+                            border: Border.all(color: selected ? kDlgAccent : kDlgBorder),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(icon, color: Colors.white70, size: 24),
+                              Icon(icon, color: selected ? kDlgText : kDlgTextSub, size: 24),
                               const SizedBox(height: 6),
-                              Text(label, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                              Text(label, style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -783,7 +820,7 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                   );
                 }),
                 const SizedBox(height: 12),
-                const Text('색상', style: TextStyle(color: Colors.white70)),
+                const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
@@ -800,27 +837,22 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                               decoration: BoxDecoration(
                                 color: Color(c),
                                 shape: BoxShape.circle,
-                                border: Border.all(color: (color == c) ? Colors.white : Colors.transparent, width: 2),
+                                border: Border.all(color: (color == c) ? kDlgText : Colors.transparent, width: 2),
                               ),
                             ),
                           ))
                       .toList(),
                 ),
                 const SizedBox(height: 12),
-                const Text('태그', style: TextStyle(color: Colors.white70)),
+                const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
                 Row(
                   children: [
                     Expanded(
                       child: TextField(
                         controller: tagCtrl,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          hintText: '태그 입력 후 추가',
-                          hintStyle: TextStyle(color: Colors.white38),
-                          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                        ),
+                        style: const TextStyle(color: kDlgText),
+                        decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                         onSubmitted: (_) {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -834,7 +866,7 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                      style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                       onPressed: () {
                         final t = tagCtrl.text.trim();
                         if (t.isNotEmpty) {
@@ -856,18 +888,18 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
                       .map((t) => Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF2A2A2A),
+                              color: kDlgPanelBg,
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white24),
+                              border: Border.all(color: kDlgBorder),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text('#$t', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
                                 const SizedBox(width: 6),
                                 GestureDetector(
                                   onTap: () => setState(() => tags.remove(t)),
-                                  child: const Icon(Icons.close, size: 14, color: Colors.white60),
+                                  child: const Icon(Icons.close, size: 14, color: kDlgTextSub),
                                 ),
                               ],
                             ),
@@ -880,10 +912,11 @@ Future<_MetaResult?> _showMetaDialog(BuildContext context) async {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
               onPressed: () => Navigator.pop(context, _MetaResult(iconKey: iconKey, color: color, tags: tags)),
               child: const Text('다음'),
             ),
@@ -902,9 +935,9 @@ class _IconOption extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, color: Colors.white70, size: 18),
+        Icon(icon, color: kDlgTextSub, size: 18),
         const SizedBox(width: 8),
-        Text(label),
+        Text(label, style: const TextStyle(color: kDlgTextSub)),
       ],
     );
   }
@@ -918,7 +951,7 @@ class _EventTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = event.color != null ? Color(event.color!) : const Color(0xFF1976D2);
+    final color = event.color != null ? Color(event.color!) : kDlgAccent;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
       child: Row(
@@ -929,26 +962,26 @@ class _EventTile extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 10),
-          Icon(_iconFromKey(event.iconKey), color: Colors.white70, size: 18),
+          Icon(_iconFromKey(event.iconKey), color: kDlgTextSub, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(event.title, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                Text(event.title, style: const TextStyle(color: kDlgText, fontSize: 15, fontWeight: FontWeight.w600)),
                 if (event.note != null && event.note!.trim().isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
                       _oneSentence(event.note!.trim()),
-                      style: const TextStyle(color: Colors.white60, fontSize: 13),
+                      style: const TextStyle(color: kDlgTextSub, fontSize: 13),
                     ),
                   ),
                 if (event.note != null && event.note!.trim().isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Text(
                     event.note!.trim(),
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    style: const TextStyle(color: kDlgTextSub, fontSize: 13),
                   ),
                 ],
                 if (event.tags.isNotEmpty)
@@ -961,10 +994,11 @@ class _EventTile extends StatelessWidget {
                           .map((t) => Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
-                                  color: Colors.white10,
+                                  color: kDlgPanelBg,
                                   borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: kDlgBorder),
                                 ),
-                                child: Text('#$t', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                child: Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
                               ))
                           .toList(),
                     ),
@@ -974,7 +1008,7 @@ class _EventTile extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           IconButton(
-            icon: const Icon(Icons.edit, color: Colors.white60, size: 18),
+            icon: const Icon(Icons.edit, color: kDlgTextSub, size: 18),
             onPressed: () async {
               final updated = await _showEditDialog(context, event);
               if (updated != null) {
@@ -983,13 +1017,13 @@ class _EventTile extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.white60, size: 18),
+            icon: const Icon(Icons.delete_outline, color: kDlgTextSub, size: 18),
             onPressed: () async => ScheduleStore.instance.deleteEvent(event.id),
           ),
           if (showGroupActions && event.groupId != null)
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.white60, size: 18),
-              color: const Color(0xFF2A2A2A),
+              icon: const Icon(Icons.more_vert, color: kDlgTextSub, size: 18),
+              color: kDlgPanelBg,
               onSelected: (value) async {
                 if (value == 'edit_group') {
                   final res = await _showEditGroupDialog(context, event);
@@ -1023,8 +1057,8 @@ class _EventTile extends StatelessWidget {
                 }
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'edit_group', child: Text('반복 묶음 편집', style: TextStyle(color: Colors.white70))),
-                const PopupMenuItem(value: 'delete_group', child: Text('반복 묶음 삭제', style: TextStyle(color: Colors.white70))),
+                const PopupMenuItem(value: 'edit_group', child: Text('반복 묶음 편집', style: TextStyle(color: kDlgTextSub))),
+                const PopupMenuItem(value: 'delete_group', child: Text('반복 묶음 삭제', style: TextStyle(color: kDlgTextSub))),
               ],
             ),
         ],
@@ -1079,9 +1113,15 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
     builder: (context) {
       return StatefulBuilder(builder: (context, setState) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('일정 편집', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text('일정 편집', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -1090,25 +1130,15 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                 children: [
                   TextField(
                     controller: titleCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: '제목',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                    style: const TextStyle(color: kDlgText),
+                    decoration: _scheduleFieldDecoration(labelText: '제목'),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: noteCtrl,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: kDlgText),
                     maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: '메모',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                    decoration: _scheduleFieldDecoration(labelText: '메모'),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -1133,12 +1163,12 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('아이콘', style: TextStyle(color: Colors.white70)),
+                      const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       DropdownButton<String?>(
                         value: iconKey,
-                        dropdownColor: const Color(0xFF2A2A2A),
-                        style: const TextStyle(color: Colors.white),
+                        dropdownColor: kDlgPanelBg,
+                        style: const TextStyle(color: kDlgText),
                         items: const [
                           DropdownMenuItem(value: 'holiday', child: Text('휴강')),
                           DropdownMenuItem(value: 'exam', child: Text('시험')),
@@ -1152,14 +1182,14 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                         onChanged: (v) => setState(() => iconKey = v),
                       ),
                       const SizedBox(width: 16),
-                      Icon(previewIcon(), color: Colors.white70),
+                      Icon(previewIcon(), color: kDlgTextSub),
                     ],
                   ),
                   const SizedBox(height: 12),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text('색상', style: TextStyle(color: Colors.white70)),
+                      const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       GestureDetector(
                         onTap: () async {
@@ -1176,8 +1206,12 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                             context: context,
                             builder: (context) {
                               return AlertDialog(
-                                backgroundColor: const Color(0xFF1F1F1F),
-                                title: const Text('색상 선택', style: TextStyle(color: Colors.white)),
+                                backgroundColor: kDlgBg,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                  side: const BorderSide(color: kDlgBorder),
+                                ),
+                                title: const Text('색상 선택', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w800)),
                                 content: Wrap(
                                   spacing: 10,
                                   runSpacing: 10,
@@ -1201,29 +1235,24 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                           width: 24,
                           height: 24,
                           decoration: BoxDecoration(
-                            color: color != null ? Color(color!) : Colors.white12,
+                            color: color != null ? Color(color!) : kDlgPanelBg,
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white24),
+                            border: Border.all(color: kDlgBorder),
                           ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('태그', style: TextStyle(color: Colors.white70)),
+                  const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: tagCtrl,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: '태그 입력 후 추가',
-                            hintStyle: TextStyle(color: Colors.white38),
-                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                          ),
+                          style: const TextStyle(color: kDlgText),
+                          decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                           onSubmitted: (_) {
                             final t = tagCtrl.text.trim();
                             if (t.isNotEmpty) {
@@ -1237,7 +1266,7 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                        style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                         onPressed: () {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -1259,18 +1288,18 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
                         .map((t) => Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF2A2A2A),
+                              color: kDlgPanelBg,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: Colors.white24),
+                              border: Border.all(color: kDlgBorder),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Text('#$t', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                Text('#$t', style: const TextStyle(color: kDlgTextSub, fontSize: 12)),
                                   const SizedBox(width: 6),
                                   GestureDetector(
                                     onTap: () => setState(() => tags.remove(t)),
-                                    child: const Icon(Icons.close, size: 14, color: Colors.white60),
+                                  child: const Icon(Icons.close, size: 14, color: kDlgTextSub),
                                   ),
                                 ],
                               ),
@@ -1284,10 +1313,11 @@ Future<ScheduleEvent?> _showEditDialog(BuildContext context, ScheduleEvent event
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
               onPressed: () {
                 Navigator.pop(
                   context,
@@ -1337,9 +1367,15 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
     builder: (context) {
       return StatefulBuilder(builder: (context, setState) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('반복 묶음 편집', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text('반복 묶음 편집', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
@@ -1348,35 +1384,25 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                 children: [
                   TextField(
                     controller: titleCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: '제목',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                    style: const TextStyle(color: kDlgText),
+                    decoration: _scheduleFieldDecoration(labelText: '제목'),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: noteCtrl,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: kDlgText),
                     maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: '요약/본문',
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                    decoration: _scheduleFieldDecoration(labelText: '요약/본문'),
                   ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('아이콘', style: TextStyle(color: Colors.white70)),
+                      const Text('아이콘', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       DropdownButton<String?>(
                         value: iconKey,
-                        dropdownColor: const Color(0xFF2A2A2A),
-                        style: const TextStyle(color: Colors.white),
+                        dropdownColor: kDlgPanelBg,
+                        style: const TextStyle(color: kDlgText),
                         items: const [
                           DropdownMenuItem(value: 'holiday', child: Text('휴강')),
                           DropdownMenuItem(value: 'exam', child: Text('시험')),
@@ -1394,7 +1420,7 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Text('색상', style: TextStyle(color: Colors.white70)),
+                      const Text('색상', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                       const SizedBox(width: 12),
                       GestureDetector(
                         onTap: () async {
@@ -1403,8 +1429,12 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                             context: context,
                             builder: (context) {
                               return AlertDialog(
-                                backgroundColor: const Color(0xFF1F1F1F),
-                                title: const Text('색상 선택', style: TextStyle(color: Colors.white)),
+                                backgroundColor: kDlgBg,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                  side: const BorderSide(color: kDlgBorder),
+                                ),
+                                title: const Text('색상 선택', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w800)),
                                 content: Wrap(
                                   spacing: 10,
                                   runSpacing: 10,
@@ -1422,29 +1452,24 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                           width: 24,
                           height: 24,
                           decoration: BoxDecoration(
-                            color: color != null ? Color(color!) : Colors.white12,
+                            color: color != null ? Color(color!) : kDlgPanelBg,
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white24),
+                            border: Border.all(color: kDlgBorder),
                           ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('태그', style: TextStyle(color: Colors.white70)),
+                  const Text('태그', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: tagCtrl,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: '태그 입력 후 추가',
-                            hintStyle: TextStyle(color: Colors.white38),
-                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-                          ),
+                          style: const TextStyle(color: kDlgText),
+                          decoration: _scheduleFieldDecoration(hintText: '태그 입력 후 추가'),
                           onSubmitted: (_) {
                             final t = tagCtrl.text.trim();
                             if (t.isNotEmpty) {
@@ -1458,7 +1483,7 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+                        style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                         onPressed: () {
                           final t = tagCtrl.text.trim();
                           if (t.isNotEmpty) {
@@ -1478,9 +1503,9 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
                     runSpacing: 6,
                     children: tags
                         .map((t) => Chip(
-                              label: Text(t, style: const TextStyle(color: Colors.white70)),
-                              backgroundColor: Colors.white12,
-                              deleteIcon: const Icon(Icons.close, size: 16, color: Colors.white54),
+                              label: Text(t, style: const TextStyle(color: kDlgTextSub)),
+                              backgroundColor: kDlgPanelBg,
+                              deleteIcon: const Icon(Icons.close, size: 16, color: kDlgTextSub),
                               onDeleted: () => setState(() => tags.remove(t)),
                             ))
                         .toList(),
@@ -1492,10 +1517,11 @@ Future<_GroupEditResult?> _showEditGroupDialog(BuildContext context, ScheduleEve
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
               onPressed: () {
                 Navigator.pop(
                   context,
@@ -1534,16 +1560,17 @@ class _TimeField extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.white24),
+          color: kDlgFieldBg,
+          border: Border.all(color: kDlgBorder),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: const TextStyle(color: Colors.white70)),
+            Text(label, style: const TextStyle(color: kDlgTextSub)),
             Text(
               time == null ? '-' : '${time!.hour.toString().padLeft(2, '0')}:${time!.minute.toString().padLeft(2, '0')}',
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: kDlgText),
             ),
           ],
         ),
@@ -1584,10 +1611,10 @@ class _MonthlyCalendar extends StatelessWidget {
       return DateTime(month.year, month.month, 1 + dayOffset);
     });
 
-    const textStyleDim = TextStyle(color: Colors.white30, fontSize: 21, fontWeight: FontWeight.w600);
-    const textStyleNorm = TextStyle(color: Colors.white70, fontSize: 21, fontWeight: FontWeight.w700);
-    const dowStyle = TextStyle(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600);
-    const monthTitleStyle = TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700);
+    const textStyleDim = TextStyle(color: kDlgTextSub, fontSize: 21, fontWeight: FontWeight.w500);
+    const textStyleNorm = TextStyle(color: kDlgText, fontSize: 21, fontWeight: FontWeight.w700);
+    const dowStyle = TextStyle(color: kDlgTextSub, fontSize: 23, fontWeight: FontWeight.w600);
+    const monthTitleStyle = TextStyle(color: kDlgText, fontSize: 33, fontWeight: FontWeight.w700);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1597,7 +1624,8 @@ class _MonthlyCalendar extends StatelessWidget {
             IconButton(
               tooltip: '이전 달',
               onPressed: () => onSelect?.call(DateTime(month.year, month.month - 1, selectedDate.day.clamp(1, 28))),
-              icon: const Icon(Icons.chevron_left, color: Colors.white70),
+              icon: const Icon(Icons.chevron_left, color: kDlgTextSub),
+              iconSize: 32,
             ),
             Expanded(
               child: GestureDetector(
@@ -1614,87 +1642,99 @@ class _MonthlyCalendar extends StatelessWidget {
             IconButton(
               tooltip: '다음 달',
               onPressed: () => onSelect?.call(DateTime(month.year, month.month + 1, selectedDate.day.clamp(1, 28))),
-              icon: const Icon(Icons.chevron_right, color: Colors.white70),
+              icon: const Icon(Icons.chevron_right, color: kDlgTextSub),
+              iconSize: 32,
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: const [
-            Expanded(child: Center(child: Text('월', style: dowStyle))),
-            Expanded(child: Center(child: Text('화', style: dowStyle))),
-            Expanded(child: Center(child: Text('수', style: dowStyle))),
-            Expanded(child: Center(child: Text('목', style: dowStyle))),
-            Expanded(child: Center(child: Text('금', style: dowStyle))),
-            Expanded(child: Center(child: Text('토', style: TextStyle(color: Color(0xFF64A6DD), fontSize: 15, fontWeight: FontWeight.w600)))),
-            Expanded(child: Center(child: Text('일', style: TextStyle(color: Color(0xFFEF6E6E), fontSize: 15, fontWeight: FontWeight.w600)))),
-          ],
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            children: const [
+              Expanded(child: Center(child: Text('월', style: dowStyle))),
+              Expanded(child: Center(child: Text('화', style: dowStyle))),
+              Expanded(child: Center(child: Text('수', style: dowStyle))),
+              Expanded(child: Center(child: Text('목', style: dowStyle))),
+              Expanded(child: Center(child: Text('금', style: dowStyle))),
+              Expanded(child: Center(child: Text('토', style: TextStyle(color: Color(0xFF6FA6DD), fontSize: 23, fontWeight: FontWeight.w600)))),
+              Expanded(child: Center(child: Text('일', style: TextStyle(color: Color(0xFFE07B7B), fontSize: 23, fontWeight: FontWeight.w600)))),
+            ],
+          ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 16),
         Expanded(
-          child: GridView.builder(
-            physics: const ClampingScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 7,
-              mainAxisSpacing: 6,
-              crossAxisSpacing: 6,
-            ),
-            itemCount: totalCells,
-            itemBuilder: (context, index) {
-              final date = cells[index];
-              final isCurrentMonth = date.month == month.month;
-              final isSelected = date.year == selectedDate.year && date.month == selectedDate.month && date.day == selectedDate.day;
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const int rowCount = 6;
+              const double dividerHeight = 1;
+              final double totalDivider = dividerHeight * (rowCount - 1);
+              final double rowHeight = (constraints.maxHeight - totalDivider) / rowCount;
+
+              Widget buildDayCell(DateTime date) {
+                final isCurrentMonth = date.month == month.month;
+                final isSelected = date.year == selectedDate.year && date.month == selectedDate.month && date.day == selectedDate.day;
                 final textStyle = isCurrentMonth ? textStyleNorm : textStyleDim;
-              final count = ScheduleStore.instance.eventsCountOn(date);
-              return MouseRegion(
-                onHover: (_) { if (addMode && onHoverDate != null) onHoverDate!(date); },
-                child: GestureDetector(
-                  onTap: () => onSelect?.call(date),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  decoration: BoxDecoration(
-                    color: isSelected ? const Color(0xFF1976D2).withOpacity(0.22) : Colors.transparent,
-                    border: Border.all(color: isSelected ? const Color(0xFF1976D2) : Colors.white12, width: isSelected ? 1.6 : 1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                   padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                  child: Stack(
-                    children: [
-                      Align(
-                        alignment: Alignment.topLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 5),
-                          child: _buildDayNumber(date, textStyle),
-                        ),
+                final count = ScheduleStore.instance.eventsCountOn(date);
+                return MouseRegion(
+                  onHover: (_) { if (addMode && onHoverDate != null) onHoverDate!(date); },
+                  child: GestureDetector(
+                    onTap: () => onSelect?.call(date),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? kDlgAccent.withOpacity(0.18) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      const SizedBox.shrink(),
-                      Positioned(
-                        left: 6,
-                        right: 6,
-                        top: 44,
-                        child: const SizedBox(height: 2),
-                      ),
-                      if (addMode && _inRange(date, previewStart, previewEnd))
-                        Positioned.fill(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1976D2).withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.4), width: 1),
-                            ),
+                      child: Stack(
+                        children: [
+                          Align(
+                            alignment: Alignment.topLeft,
+                            child: _buildDayNumber(date, textStyle),
                           ),
-                        ),
-                      if (count > 0)
-                        Positioned.fill(
-                          child: _DayEventsOverlay(date: date),
-                        ),
-                    ],
+                          if (addMode && _inRange(date, previewStart, previewEnd))
+                            Positioned.fill(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: kDlgAccent.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: kDlgAccent.withOpacity(0.4), width: 1),
+                                ),
+                              ),
+                            ),
+                          if (count > 0)
+                            Positioned.fill(
+                              child: _DayEventsOverlay(date: date),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-                ),
+                );
+              }
+
+              return Column(
+                children: List.generate(rowCount, (row) {
+                  final start = row * 7;
+                  final rowDates = cells.sublist(start, start + 7);
+                  return Column(
+                    children: [
+                      SizedBox(
+                        height: rowHeight,
+                        child: Row(
+                          children: rowDates.map((date) => Expanded(child: buildDayCell(date))).toList(),
+                        ),
+                      ),
+                      if (row != rowCount - 1)
+                        const Divider(height: dividerHeight, thickness: dividerHeight, color: kDlgBorder),
+                    ],
+                  );
+                }),
               );
             },
-            ),
+          ),
         ),
       ],
     );
@@ -1720,12 +1760,12 @@ class _EventBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFF1976D2),
+        color: kDlgAccent,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
         '$count',
-        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+        style: const TextStyle(color: kDlgText, fontSize: 12, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -1739,9 +1779,9 @@ class _TodoFilterButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderColor = selected ? const Color(0xFF1976D2) : Colors.white24;
-    final bgColor = const Color(0xFF2A2A2A); // 컨테이너 배경색
-    final fgColor = selected ? Colors.white : Colors.white70;
+    final borderColor = selected ? kDlgAccent : kDlgBorder;
+    final bgColor = kDlgPanelBg; // 컨테이너 배경색
+    final fgColor = selected ? kDlgText : kDlgTextSub;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
@@ -1775,7 +1815,7 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
   Widget build(BuildContext context) {
     final all = ScheduleStore.instance.events.value;
     if (all.isEmpty) {
-      return const Center(child: Text('표시할 일정이 없습니다.', style: TextStyle(color: Colors.white38)));
+      return const Center(child: Text('표시할 일정이 없습니다.', style: TextStyle(color: kDlgTextSub)));
     }
     final now = DateTime.now();
     final items = List<ScheduleEvent>.from(all)
@@ -1842,17 +1882,21 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
             final eventDate = DateTime(e.date.year, e.date.month, e.date.day);
             final isUpcoming = !eventDate.isBefore(today);
             final isCenter = i == localCenter;
+            final bool isPast = eventDate.isBefore(today);
+            final Color borderColor = e.tags.contains('KR_HOLIDAY')
+                ? const Color(0xFFE07B7B)
+                : (isCenter ? kDlgAccent : (isUpcoming ? kDlgBorder : kDlgBorder.withOpacity(0.6)));
+            final Color titleColor = isCenter ? kDlgText : (isUpcoming ? kDlgText : kDlgTextSub);
+            final Color subColor = isCenter ? kDlgTextSub : kDlgTextSub.withOpacity(isPast ? 0.7 : 0.9);
             return Container(
               width: cardWidth,
               margin: EdgeInsets.only(right: i == window.length - 1 ? 0 : gap),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF202024),
+                color: kDlgPanelBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: e.tags.contains('KR_HOLIDAY')
-                      ? const Color(0xFFF06666)
-                      : (isCenter ? const Color(0xFF4D95D8) : (isUpcoming ? const Color(0xFF64A6DD) : Colors.white12)),
+                  color: borderColor,
                   width: isCenter ? 3 : 2,
                 ),
               ),
@@ -1861,15 +1905,15 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
                 children: [
                   Row(
                     children: [
-                      Container(width: 6, height: 6, decoration: BoxDecoration(color: e.color != null ? Color(e.color!) : const Color(0xFF64A6DD), shape: BoxShape.circle)),
+                      Container(width: 6, height: 6, decoration: BoxDecoration(color: e.color != null ? Color(e.color!) : kDlgAccent, shape: BoxShape.circle)),
                       const SizedBox(width: 8),
-                      Text('${e.date.month}.${e.date.day}', style: TextStyle(color: isCenter ? Colors.white : (isUpcoming ? Colors.white70 : Colors.white38), fontWeight: FontWeight.w600)),
+                      Text('${e.date.month}.${e.date.day}', style: TextStyle(color: subColor, fontWeight: FontWeight.w600)),
                       const Spacer(),
-                      Icon(_iconFromKey(e.iconKey), color: isCenter ? Colors.white70 : Colors.white38, size: 16),
+                      Icon(_iconFromKey(e.iconKey), color: subColor, size: 16),
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text(_singleWord(e.title), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isCenter ? Colors.white : (isUpcoming ? Colors.white : Colors.white38), fontSize: 14, fontWeight: FontWeight.w700)),
+                  Text(_singleWord(e.title), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: titleColor, fontSize: 14, fontWeight: FontWeight.w700)),
                   if (e.note != null && e.note!.trim().isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -1877,7 +1921,7 @@ class _ScheduleTimelineState extends State<_ScheduleTimeline> {
                         _clipToChars(_oneSentence(e.note!.trim()), 60),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: isCenter ? Colors.white70 : (isUpcoming ? Colors.white70 : Colors.white38), fontSize: 12),
+                        style: TextStyle(color: subColor, fontSize: 12),
                       ),
                     ),
                 ],
@@ -1930,7 +1974,7 @@ class _DayEventsOverlay extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 2),
                     child: GestureDetector(
                       onTap: () => _showDayEventsModal(date),
-                      child: const Icon(Icons.more_horiz, color: Colors.white38, size: 16),
+                      child: const Icon(Icons.more_horiz, color: kDlgTextSub, size: 16),
                     ),
                   ),
                 ),
@@ -1952,10 +1996,10 @@ class _EventStripe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color indicatorColor = iconKey == 'holiday'
-        ? const Color(0xFFF06666)
-        : (color != null ? Color(color!) : const Color(0xFF64A6DD));
+        ? const Color(0xFFE07B7B)
+        : (color != null ? Color(color!) : kDlgAccent);
     final BoxDecoration? holidayDeco = iconKey == 'holiday'
-        ? BoxDecoration(color: const Color(0x22F06666), borderRadius: BorderRadius.circular(6))
+        ? BoxDecoration(color: const Color(0x22E07B7B), borderRadius: BorderRadius.circular(6))
         : null;
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
@@ -1976,7 +2020,7 @@ class _EventStripe extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kDlgText, fontSize: 13, fontWeight: FontWeight.w700)),
                     if (subtitle != null && subtitle!.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -1984,7 +2028,7 @@ class _EventStripe extends StatelessWidget {
                           subtitle!,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white60, fontSize: 12),
+                          style: const TextStyle(color: kDlgTextSub, fontSize: 12),
                         ),
                       ),
                   ],
@@ -2056,12 +2100,12 @@ String _formatDateYMD(DateTime d) {
 }
 
 Widget _buildDayNumber(DateTime date, TextStyle base) {
-  Color color = base.color ?? Colors.white70;
+  Color color = base.color ?? kDlgTextSub;
   // 월=1..일=7
   if (date.weekday == DateTime.saturday) {
-    color = const Color(0xFF4D95D8); // 살짝 채도/명도 업
+    color = const Color(0xFF7FB2E5); // 살짝 채도/명도 업
   } else if (date.weekday == DateTime.sunday) {
-    color = const Color(0xFFF06666); // 살짝 채도/명도 업
+    color = const Color(0xFFE07B7B); // 살짝 채도/명도 업
   }
   return Text('${date.day}', style: base.copyWith(color: color));
 }
@@ -2084,24 +2128,31 @@ Future<void> _showDayEventsModal(DateTime date) async {
     context: context,
     builder: (context) {
       return AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('${date.year}.${date.month}.${date.day} 일정', style: const TextStyle(color: Colors.white)),
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: kDlgBorder),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: Text('${date.year}.${date.month}.${date.day} 일정', style: const TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: SizedBox(
           width: 560,
           height: 420,
           child: items.isEmpty
-              ? const Center(child: Text('일정이 없습니다.', style: TextStyle(color: Colors.white54)))
+              ? const Center(child: Text('일정이 없습니다.', style: TextStyle(color: kDlgTextSub)))
               : ListView.separated(
                   itemCount: items.length,
-                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  separatorBuilder: (_, __) => const Divider(color: kDlgBorder),
                   itemBuilder: (context, idx) => _EventTile(event: items[idx], showGroupActions: true),
                 ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+            style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+            child: const Text('닫기'),
           ),
         ],
       );
@@ -2131,9 +2182,15 @@ class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: const Text('년/월 선택', style: TextStyle(color: Colors.white)),
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: const Text('년/월 선택', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
       content: SizedBox(
         width: 420,
         child: Row(
@@ -2143,12 +2200,12 @@ class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('연도', style: TextStyle(color: Colors.white70)),
+                  const Text('연도', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   DropdownButton<int>(
                     value: _year,
-                    dropdownColor: const Color(0xFF2A2A2A),
-                    style: const TextStyle(color: Colors.white),
+                    dropdownColor: kDlgPanelBg,
+                    style: const TextStyle(color: kDlgText),
                     items: List.generate(25, (i) => _year - 12 + i)
                         .map((y) => DropdownMenuItem(value: y, child: Text('$y년')))
                         .toList(),
@@ -2163,12 +2220,12 @@ class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('월', style: TextStyle(color: Colors.white70)),
+                  const Text('월', style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   DropdownButton<int>(
                     value: _month,
-                    dropdownColor: const Color(0xFF2A2A2A),
-                    style: const TextStyle(color: Colors.white),
+                    dropdownColor: kDlgPanelBg,
+                    style: const TextStyle(color: kDlgText),
                     items: List.generate(12, (i) => i + 1)
                         .map((m) => DropdownMenuItem(value: m, child: Text('$m월')))
                         .toList(),
@@ -2183,10 +2240,11 @@ class _MonthYearPickerDialogState extends State<_MonthYearPickerDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('취소', style: TextStyle(color: Colors.white70)),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('취소'),
         ),
         FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
           onPressed: () => Navigator.pop(context, DateTime(_year, _month, 1)),
           child: const Text('이동'),
         ),

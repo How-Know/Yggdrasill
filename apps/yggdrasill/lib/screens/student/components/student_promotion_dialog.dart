@@ -30,6 +30,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
   final Set<String> _selectedStudentIds = <String>{};
   final Map<String, String> _newSchoolByStudentId = <String, String>{};
   final Map<String, TextEditingController> _schoolControllers = {};
+  final List<String> _transitionOrderIds = <String>[];
 
   @override
   void initState() {
@@ -51,6 +52,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_draftKey);
       if (raw == null || raw.trim().isEmpty) {
+        _rebuildTransitionOrder();
         if (mounted) setState(() => _loadingDraft = false);
         return;
       }
@@ -72,6 +74,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
         ..addAll(schoolMap.map((k, v) => MapEntry(k, v.toString())));
 
       _resetSchoolControllers();
+      _rebuildTransitionOrder();
     } catch (_) {
       // ignore: draft 파싱 실패 시 빈 상태로 유지
     } finally {
@@ -103,6 +106,53 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
   }
 
   String _gradeKey(EducationLevel level, int grade) => '${level.index}:$grade';
+
+  int _levelOrder(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary:
+        return 0;
+      case EducationLevel.middle:
+        return 1;
+      case EducationLevel.high:
+        return 2;
+    }
+  }
+
+  bool _hasEnteredSchool(String studentId) {
+    return (_newSchoolByStudentId[studentId] ?? '').trim().isNotEmpty;
+  }
+
+  void _rebuildTransitionOrder([List<StudentWithInfo>? scopeStudents]) {
+    final scope = scopeStudents ?? _scopeStudents();
+    final transitions = _transitionStudents(scope);
+    final ordered = List<StudentWithInfo>.from(transitions)
+      ..sort((a, b) {
+        final aEntered = _hasEnteredSchool(a.student.id);
+        final bEntered = _hasEnteredSchool(b.student.id);
+        if (aEntered != bEntered) return aEntered ? 1 : -1;
+        final levelCompare = _levelOrder(a.student.educationLevel)
+            .compareTo(_levelOrder(b.student.educationLevel));
+        if (levelCompare != 0) return levelCompare;
+        return a.student.name.compareTo(b.student.name);
+      });
+    _transitionOrderIds
+      ..clear()
+      ..addAll(ordered.map((s) => s.student.id));
+  }
+
+  List<StudentWithInfo> _applyTransitionOrder(List<StudentWithInfo> transitions) {
+    if (_transitionOrderIds.isEmpty) return transitions;
+    final byId = <String, StudentWithInfo>{
+      for (final s in transitions) s.student.id: s,
+    };
+    final ordered = <StudentWithInfo>[];
+    for (final id in _transitionOrderIds) {
+      final s = byId.remove(id);
+      if (s != null) ordered.add(s);
+    }
+    ordered.addAll(byId.values);
+    return ordered;
+  }
 
   String _gradeLabel(EducationLevel level, int grade) {
     if (level == EducationLevel.high && grade == 4) return 'N수';
@@ -277,7 +327,10 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
           selectedIndex: _useCustomScope ? 1 : 0,
           tabs: const ['전체', '세부선택'],
           onTabSelected: (idx) {
-            setState(() => _useCustomScope = idx == 1);
+            setState(() {
+              _useCustomScope = idx == 1;
+              _rebuildTransitionOrder();
+            });
           },
         ),
         const Spacer(),
@@ -309,6 +362,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
                   } else {
                     _selectedGradeKeys.add(key);
                   }
+                  _rebuildTransitionOrder();
                 });
               },
               borderRadius: BorderRadius.circular(999),
@@ -324,6 +378,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
                         } else {
                           _selectedGradeKeys.remove(key);
                         }
+                      _rebuildTransitionOrder();
                       });
                     },
                     activeColor: kDlgAccent,
@@ -373,6 +428,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
                       } else {
                         _selectedStudentIds.remove(s.student.id);
                       }
+                      _rebuildTransitionOrder();
                     });
                   },
                   title: Text(
@@ -406,13 +462,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
         .where((s) => _enteredSchoolFor(s.student.id).trim().isNotEmpty)
         .length;
     final int totalCount = transitions.length;
-    final List<StudentWithInfo> ordered = List<StudentWithInfo>.from(transitions)
-      ..sort((a, b) {
-        final aEntered = _enteredSchoolFor(a.student.id).trim().isNotEmpty;
-        final bEntered = _enteredSchoolFor(b.student.id).trim().isNotEmpty;
-        if (aEntered != bEntered) return aEntered ? 1 : -1;
-        return a.student.name.compareTo(b.student.name);
-      });
+    final List<StudentWithInfo> ordered = _applyTransitionOrder(transitions);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -461,6 +511,7 @@ class _StudentPromotionDialogState extends State<StudentPromotionDialog> {
                     _newSchoolByStudentId[s.student.id] ?? '',
                   );
                   return Padding(
+                    key: ValueKey(s.student.id),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     child: Row(
                       children: [
