@@ -14,16 +14,22 @@
 cd apps\yggdrasill
 ./tools/bump_version.ps1 -SkipFirmwareVersionUpdate -SkipAppInstallerUpdate
 
-$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
-gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
+$ver = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+$tag = "v$ver"
+
+# 태그 생성/푸시(중요: 태그가 없으면 gh release create가 untagged 릴리스를 만들 수 있음)
+if(-not (git show-ref --tags $tag 2>$null)) { git tag $tag }
+git push origin $tag
 
 # 포터블 ZIP 생성 및 업로드(필수)
-./tools/build_msix_with_defines.ps1 -ReleaseTag v$tag -PortableOnly
+gh release delete $tag -R How-Know/Yggdrasill --yes 2>$null
+gh release create $tag -R How-Know/Yggdrasill -t $tag -n "Yggdrasill $tag" -d
+./tools/build_msix_with_defines.ps1 -ReleaseTag $tag -PortableOnly -SkipFirmware
 
 # 릴리스 공개 + 검증
-gh release edit v$tag -R How-Know/Yggdrasill --draft=false
+gh release edit $tag -R How-Know/Yggdrasill --draft=false
 cd tools
-./verify_release.ps1 -Tag v$tag -PortableOnly
+./verify_release.ps1 -Tag $tag -PortableOnly -SkipFirmware
 ```
 
 ### 안정 단계별 실행(문제 발생 시)
@@ -34,19 +40,25 @@ cd apps\yggdrasill
 ```
 2) Windows 빌드 + 포터블 ZIP 생성/업로드
 ```powershell
-$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
-./tools/build_msix_with_defines.ps1 -ReleaseTag v$tag -PortableOnly
+$ver = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+$tag = "v$ver"
+./tools/build_msix_with_defines.ps1 -ReleaseTag $tag -PortableOnly -SkipFirmware
 ```
 3) GitHub 릴리스 생성/공개
 ```powershell
-$tag = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
-gh release create v$tag -R How-Know/Yggdrasill -t v$tag -n "Yggdrasill v$tag" -d
-gh release edit v$tag -R How-Know/Yggdrasill --draft=false
+$ver = (Get-Content pubspec.yaml -Raw | Select-String 'msix_version:\s*([0-9]+(?:\.[0-9]+){2,3})').Matches.Groups[1].Value
+$tag = "v$ver"
+if(-not (git show-ref --tags $tag 2>$null)) { git tag $tag }
+git push origin $tag
+
+gh release delete $tag -R How-Know/Yggdrasill --yes 2>$null
+gh release create $tag -R How-Know/Yggdrasill -t $tag -n "Yggdrasill $tag" -d
+gh release edit $tag -R How-Know/Yggdrasill --draft=false
 ```
 4) 검증
 ```powershell
 cd tools
-./verify_release.ps1 -Tag v$tag -PortableOnly
+./verify_release.ps1 -Tag $tag -PortableOnly -SkipFirmware
 ```
 
 ### 업데이트 정책(포터블 자체 업데이터)
@@ -59,7 +71,10 @@ cd tools
 Set-Content apps\yggdrasill\pubspec.yaml (Get-Content apps\yggdrasill\pubspec.yaml -Raw) -Encoding UTF8
 ```
 - 릴리스 생성 오류(원라이너 실패): 위의 "안정 단계별 실행"으로 분리 실행
-- "release not found": 릴리스 create가 실패한 상태 → 다시 4) 실행
+- "release not found": 릴리스 create가 실패한 상태 → 3)부터 재실행
+- `gh release create` 출력 URL이 `untagged-...`로 보이는 경우:
+  - 태그가 원격에 실제로 존재하는지부터 확인: `git push origin vX.Y.Z.N`
+  - 그 다음 릴리스를 삭제/재생성 후 재확인: `gh release delete vX.Y.Z.N --yes` → `gh release create vX.Y.Z.N ...`
 - gh CLI 미설치: https://cli.github.com 설치 후 `gh auth login`
 - ARM64 장비: ARM64 ZIP이 없으면 x64 포터블 ZIP로 자동 폴백됩니다.
 

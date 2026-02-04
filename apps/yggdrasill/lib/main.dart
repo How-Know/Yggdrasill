@@ -665,65 +665,103 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
     final showChecking = _info.phase == UpdatePhase.checking || _info.phase == UpdatePhase.downloading;
     final showReady = _info.phase == UpdatePhase.readyToApply;
     if (!showChecking && !showReady) return const SizedBox.shrink();
-    // 네비게이션바/앱 전체 톤에 맞춘 카드
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final title = showChecking
+        ? (_info.phase == UpdatePhase.checking ? '업데이트 확인 중' : '업데이트 다운로드 중')
+        : '업데이트 적용 준비 완료';
+    final subtitle = _info.message ??
+        (showChecking
+            ? (_info.phase == UpdatePhase.checking ? '최신 버전을 확인하고 있어요.' : '업데이트 파일을 내려받고 있어요.')
+            : '잠시 후 앱이 자동으로 재시작됩니다.');
+
+    // 안내 배너: 앱의 다크 톤/타이포/컬러 규칙에 맞춘 비침투(non-blocking) UI
     return IgnorePointer(
       ignoring: true,
       child: Align(
         alignment: Alignment.topCenter,
         child: Padding(
           padding: const EdgeInsets.only(top: 18),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 520),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1F1F1F),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF2A2A2A)),
-              boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12, spreadRadius: 0, offset: Offset(0,4))],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F467D),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.apps, color: Colors.white, size: 22),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1F1F1F),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF2A2A2A)),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black54, blurRadius: 14, spreadRadius: 0, offset: Offset(0, 6)),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(children:[
-                        const Text('Yggdrasill', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
-                        const SizedBox(width: 8),
-                        if(_version.isNotEmpty) Text('v$_version', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                      ]),
-                      const SizedBox(height: 4),
-                      if(showChecking) ...[
-                        Text(_info.message ?? (_info.phase==UpdatePhase.checking? '업데이트 확인 중...' : '업데이트 다운로드 중...'), style: const TextStyle(color: Colors.white70)),
-                        const SizedBox(height: 6),
-                        const LinearProgressIndicator(minHeight: 4, color: Color(0xFF1976D2), backgroundColor: Color(0xFF2A2A2A)),
-                      ] else ...[
-                        Text(_info.message ?? '업데이트 준비 완료. 재시작하여 적용합니다.', style: const TextStyle(color: Colors.white70)),
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-                            onPressed: () => UpdateServiceActions.restartApp(),
-                            child: const Text('지금 재시작'),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: primary.withOpacity(0.22),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: primary.withOpacity(0.35)),
+                      ),
+                      child: Icon(
+                        showChecking ? Icons.system_update_alt : Icons.check_circle,
+                        color: primary,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+                              const SizedBox(width: 8),
+                              if (_version.isNotEmpty)
+                                Text('v$_version', style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w700)),
+                              if ((_info.tag ?? '').isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF2A2A2A),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(color: Colors.white12),
+                                  ),
+                                  child: Text(
+                                    _info.tag!,
+                                    style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w800),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                        ),
-                      ],
-                    ],
-                  ),
+                          const SizedBox(height: 6),
+                          Text(
+                            subtitle,
+                            style: const TextStyle(color: Colors.white70, height: 1.25, fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 10),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              minHeight: 4.5,
+                              color: primary,
+                              backgroundColor: const Color(0xFF2A2A2A),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
