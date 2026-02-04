@@ -30,6 +30,7 @@ import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
+import '../widgets/dialog_tokens.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -1906,6 +1907,12 @@ String _getTodayDateString() {
   return '${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
 } 
 
+String _getTodayDateShortString() {
+  final now = DateTime.now();
+  final week = ['월', '화', '수', '목', '금', '토', '일'];
+  return '${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
+}
+
 // 수업 태그 정의(메모리 전용)
 class _ClassTag {
   final String name;
@@ -1996,7 +2003,14 @@ extension on _MainScreenState {
     List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(initialApplied);
     // 프리셋에서 즉시 로드하여 사용 가능한 태그 구성
     final presets = await TagPresetService.instance.loadPresets();
+    final recordPreset = presets.firstWhereOrNull((p) => p.name.trim() == '기록');
+    final recordTag = _ClassTag(
+      name: '기록',
+      color: recordPreset?.color ?? const Color(0xFF1976D2),
+      icon: recordPreset?.icon ?? Icons.edit_note,
+    );
     List<_ClassTag> workingAvailable = presets
+        .where((p) => p.name.trim() != '기록')
         .map((p) => _ClassTag(name: p.name, color: p.color, icon: p.icon))
         .toList();
 
@@ -2021,23 +2035,36 @@ extension on _MainScreenState {
       _ClassTag tag,
     ) async {
       final now = DateTime.now();
-      String? note;
-      if (tag.name == '기록') {
-        note = await _openRecordNoteDialog(overlayCtx);
-        if (note == null || note.trim().isEmpty) return;
-      }
       setLocal(() {
-        workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now, note: note?.trim()));
+        workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now));
       });
       TagStore.instance.appendEvent(target.setId, target.student.id, TagEvent(
         tagName: tag.name,
         colorValue: tag.color.value,
         iconCodePoint: tag.icon.codePoint,
         timestamp: now,
-        note: note?.trim(),
+        note: null,
       ));
       _applyWorkingTags();
       _removeClassTagOverlay();
+    }
+
+    Future<void> _handleRecordPressed() async {
+      _removeClassTagOverlay();
+      await Future<void>.delayed(Duration.zero);
+      final note = await _openRecordNoteDialog(context);
+      if (note == null || note.trim().isEmpty) return;
+      final trimmed = note.trim();
+      final now = DateTime.now();
+      workingApplied.add(_ClassTagEvent(tag: recordTag, timestamp: now, note: trimmed));
+      TagStore.instance.appendEvent(target.setId, target.student.id, TagEvent(
+        tagName: recordTag.name,
+        colorValue: recordTag.color.value,
+        iconCodePoint: recordTag.icon.codePoint,
+        timestamp: now,
+        note: trimmed,
+      ));
+      _applyWorkingTags();
     }
 
     void _removeAppliedAt(void Function(void Function()) setLocal, int index) {
@@ -2103,8 +2130,8 @@ extension on _MainScreenState {
                             children: [
                               Expanded(
                                 child: Text(
-                                  '${target.student.name} · ${_getTodayDateString()}',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                                  '${target.student.name} · ${_getTodayDateShortString()}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
                                 ),
                               ),
                               IconButton(
@@ -2114,6 +2141,23 @@ extension on _MainScreenState {
                                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                               ),
                             ],
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 35.2,
+                            child: FilledButton.icon(
+                              onPressed: _handleRecordPressed,
+                              icon: const Icon(Icons.edit_note, size: 16, color: Colors.white),
+                              label: const Text('기록', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF33A373),
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                minimumSize: const Size.fromHeight(35.2),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: const StadiumBorder(),
+                              ),
+                            ),
                           ),
                           const SizedBox(height: 10),
                           Wrap(
@@ -2137,8 +2181,8 @@ extension on _MainScreenState {
                               );
                             }).toList(),
                           ),
-                          const SizedBox(height: 14),
-                          const Text('적용된 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 10),
+                          const Divider(color: Color(0xFF223131), height: 12, thickness: 1),
                           const SizedBox(height: 8),
                           if (workingApplied.isEmpty)
                             const Text('아직 추가된 태그가 없습니다.', style: TextStyle(color: Colors.white38))
@@ -2322,44 +2366,106 @@ extension on _MainScreenState {
   }
 
   Future<String?> _openRecordNoteDialog(BuildContext context) async {
-    final TextEditingController controller = ImeAwareTextEditingController();
     return showDialog<String?>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF0B1112),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('기록 입력', style: TextStyle(color: Colors.white, fontSize: 20)),
-          content: SizedBox(
-            width: 520,
-            child: TextField(
-              controller: controller,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                hintText: '수업 중 있었던 일을 간단히 적어주세요',
-                hintStyle: TextStyle(color: Colors.white38),
-                filled: true,
-                fillColor: Color(0xFF2A2A2A),
-                border: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
-              ),
-              style: const TextStyle(color: Colors.white),
+      builder: (_) => const _RecordNoteDialog(),
+    );
+  }
+}
+
+class _RecordNoteDialog extends StatefulWidget {
+  const _RecordNoteDialog();
+
+  @override
+  State<_RecordNoteDialog> createState() => _RecordNoteDialogState();
+}
+
+class _RecordNoteDialogState extends State<_RecordNoteDialog> {
+  late final ImeAwareTextEditingController _controller;
+  late final FocusNode _focusNode;
+  bool _didRequestFocus = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ImeAwareTextEditingController();
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didRequestFocus) return;
+    _didRequestFocus = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route?.isCurrent != true) return;
+      _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleSave() {
+    FocusScope.of(context).unfocus();
+    _controller.value = _controller.value.copyWith(composing: TextRange.empty);
+    final text = _controller.text.trim();
+    Navigator.of(context).pop(text.isEmpty ? null : text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kDlgBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: const Text('기록 입력', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+      content: SizedBox(
+        width: 520,
+        child: TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          maxLines: 4,
+          decoration: InputDecoration(
+            hintText: '수업 중 있었던 일을 간단히 적어주세요',
+            hintStyle: const TextStyle(color: kDlgTextSub),
+            filled: true,
+            fillColor: kDlgFieldBg,
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: kDlgBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: kDlgAccent),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-              child: const Text('저장'),
-            ),
-          ],
-        );
-      },
+          style: const TextStyle(color: kDlgText),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('취소'),
+        ),
+        ElevatedButton(
+          onPressed: _handleSave,
+          style: ElevatedButton.styleFrom(backgroundColor: kDlgAccent, foregroundColor: Colors.white),
+          child: const Text('저장'),
+        ),
+      ],
     );
   }
 }

@@ -637,6 +637,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Future<void> _loadData() async {
     await DataManager.instance.loadGroups();
+    if (!mounted) return;
     setState(() {
       _groups = List.from(DataManager.instance.groups);
     });
@@ -644,6 +645,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   Future<void> _loadOperatingHours() async {
     final hours = await DataManager.instance.getOperatingHours();
+    if (!mounted) return;
     setState(() {
       _operatingHours = hours;
     });

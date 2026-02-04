@@ -15,6 +15,9 @@ class TagPreset {
   final int orderIndex;
   const TagPreset({required this.id, required this.name, required this.color, required this.icon, required this.orderIndex});
 
+  static int encodeColorValue(Color color) => color.value.toSigned(32);
+  static Color decodeColorValue(int value) => Color(value.toUnsigned(32));
+
   Map<String, dynamic> toRow() => {
     'id': id,
     'name': name,
@@ -26,7 +29,7 @@ class TagPreset {
   static TagPreset fromRow(Map<String, dynamic> r) => TagPreset(
     id: r['id'] as String,
     name: r['name'] as String,
-    color: Color(r['color'] as int),
+    color: decodeColorValue((r['color'] as int?) ?? 0xFF1976D2),
     icon: IconData(r['icon_code'] as int, fontFamily: 'MaterialIcons'),
     orderIndex: (r['order_index'] as int?) ?? 0,
   );
@@ -72,7 +75,7 @@ class TagPresetService {
         'id': p.id,
         'academy_id': academyId,
         'name': p.name,
-        'color': p.color.value,
+        'color': TagPreset.encodeColorValue(p.color),
         'icon_code': p.icon.codePoint,
         'order_index': p.orderIndex,
       }).toList();
@@ -119,11 +122,14 @@ class TagPresetService {
         final list = (data as List<dynamic>).map((r) => TagPreset(
           id: r['id'] as String,
           name: (r['name'] as String?) ?? '',
-          color: Color((r['color'] as int?) ?? 0xFF1976D2),
+          color: TagPreset.decodeColorValue((r['color'] as int?) ?? 0xFF1976D2),
           icon: IconData((r['icon_code'] as int?) ?? Icons.label.codePoint, fontFamily: 'MaterialIcons'),
           orderIndex: (r['order_index'] as int?) ?? 0,
         )).toList();
-        if (list.isNotEmpty) return list;
+        if (list.isNotEmpty) {
+          list.sort(_comparePresets);
+          return list;
+        }
       } catch (_) {
         // 폴백
       }
@@ -150,6 +156,7 @@ class TagPresetService {
       return defaults;
     }
     final list = rows.map(TagPreset.fromRow).toList();
+    list.sort(_comparePresets);
     if (dualWrite && preferSupabaseRead && hasPending) {
       await _trySyncPending(list);
     }
@@ -166,7 +173,7 @@ class TagPresetService {
             'id': p.id,
             'academy_id': academyId,
             'name': p.name,
-            'color': p.color.value,
+            'color': TagPreset.encodeColorValue(p.color),
             'icon_code': p.icon.codePoint,
             'order_index': p.orderIndex,
           }).toList();
@@ -181,7 +188,15 @@ class TagPresetService {
   Future<List<TagPreset>> loadPresetsLocalOnly() async {
     final db = await AcademyDbService.instance.db;
     final rows = await db.query('tag_presets', orderBy: 'order_index ASC');
-    return rows.map(TagPreset.fromRow).toList();
+    final list = rows.map(TagPreset.fromRow).toList();
+    list.sort(_comparePresets);
+    return list;
+  }
+
+  int _comparePresets(TagPreset a, TagPreset b) {
+    final diff = a.orderIndex.compareTo(b.orderIndex);
+    if (diff != 0) return diff;
+    return a.name.compareTo(b.name);
   }
 
   Future<void> saveAll(List<TagPreset> presets) async {

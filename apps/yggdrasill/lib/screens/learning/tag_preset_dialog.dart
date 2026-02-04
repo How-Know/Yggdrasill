@@ -80,6 +80,93 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
     );
   }
 
+  List<TagPreset> _normalizePresets(List<TagPreset> list) {
+    final normalized = <TagPreset>[];
+    for (int i = 0; i < list.length; i++) {
+      normalized.add(TagPreset(
+        id: list[i].id,
+        name: list[i].name,
+        color: list[i].color,
+        icon: list[i].icon,
+        orderIndex: i,
+      ));
+    }
+    return normalized;
+  }
+
+  Widget _buildPresetTile(TagPreset p, int index, {bool forProxy = false}) {
+    final content = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: kDlgFieldBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: p.color, width: 1.2),
+            ),
+            child: Icon(p.icon, color: p.color, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              p.name,
+              style: const TextStyle(color: kDlgText, fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+          ),
+          IconButton(
+            tooltip: '수정',
+            onPressed: forProxy
+                ? null
+                : () async {
+                    final edited = await _showPresetEditor(original: p);
+                    if (edited != null) {
+                      final next = _presets.map((e) => e.id == edited.id ? edited : e).toList();
+                      final normalized = _normalizePresets(next);
+                      await TagPresetService.instance.saveAll(normalized);
+                      if (!mounted) return;
+                      setState(() {
+                        _presets = normalized;
+                      });
+                    }
+                  },
+            icon: const Icon(Icons.edit, color: kDlgTextSub),
+          ),
+          IconButton(
+            tooltip: '삭제',
+            onPressed: forProxy
+                ? null
+                : () async {
+                    await TagPresetService.instance.delete(p.id);
+                    final list = [..._presets]..removeWhere((e) => e.id == p.id);
+                    final normalized = _normalizePresets(list);
+                    await TagPresetService.instance.saveAll(normalized);
+                    if (!mounted) return;
+                    setState(() {
+                      _presets = normalized;
+                    });
+                  },
+            icon: const Icon(Icons.delete, color: kDlgTextSub),
+          ),
+          const SizedBox(width: 6),
+          ReorderableDragStartListener(
+            index: index,
+            child: Icon(Icons.drag_handle, color: Colors.grey.shade500),
+          ),
+        ],
+      ),
+    );
+
+    return forProxy ? IgnorePointer(child: content) : content;
+  }
+
   Future<TagPreset?> _showPresetEditor({TagPreset? original}) async {
     return showDialog<TagPreset>(
       context: context,
@@ -136,107 +223,42 @@ class _TagPresetDialogState extends State<TagPresetDialog> {
         height: 416,
         child: _loading
             ? const Center(child: CircularProgressIndicator(color: kDlgTextSub))
-            : ReorderableListView.builder(
-                itemCount: _presets.length,
-                buildDefaultDragHandles: false,
-                onReorder: (o, n) async {
-                  final list = [..._presets];
-                  final item = list.removeAt(o);
-                  list.insert(n > o ? n - 1 : n, item);
-                  final normalized = <TagPreset>[];
-                  for (int i = 0; i < list.length; i++) {
-                    normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
-                  }
-                  await TagPresetService.instance.saveAll(normalized);
-                  setState(() {
-                    _presets = normalized;
-                  });
-                },
-                proxyDecorator: (child, index, animation) {
-                  return Material(
-                    color: kDlgPanelBg,
-                    elevation: 4,
-                    borderRadius: BorderRadius.circular(10),
-                    child: child,
-                  );
-                },
-                itemBuilder: (context, i) {
-                  final p = _presets[i];
-                  return Container(
-                    key: ValueKey(p.id),
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: kDlgFieldBg,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: kDlgBorder),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: p.color, width: 1.2),
-                          ),
-                          child: Icon(p.icon, color: p.color, size: 18),
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  final listWidth = constraints.maxWidth;
+                  return ReorderableListView.builder(
+                    itemCount: _presets.length,
+                    buildDefaultDragHandles: false,
+                    onReorder: (o, n) async {
+                      final list = [..._presets];
+                      final item = list.removeAt(o);
+                      list.insert(n > o ? n - 1 : n, item);
+                      final normalized = _normalizePresets(list);
+                      setState(() {
+                        _presets = normalized;
+                      });
+                      await TagPresetService.instance.saveAll(normalized);
+                    },
+                    proxyDecorator: (child, index, animation) {
+                      final preset = _presets[index];
+                      return Material(
+                        color: kDlgPanelBg,
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: listWidth,
+                          child: _buildPresetTile(preset, index, forProxy: true),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            p.name,
-                            style: const TextStyle(color: kDlgText, fontSize: 16, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: '수정',
-                          onPressed: () async {
-                            final edited = await _showPresetEditor(original: p);
-                            if (edited != null) {
-                                final next = _presets.map((e) => e.id == edited.id ? edited : e).toList();
-                                final normalized = <TagPreset>[];
-                                for (int i = 0; i < next.length; i++) {
-                                  normalized.add(TagPreset(
-                                    id: next[i].id,
-                                    name: next[i].name,
-                                    color: next[i].color,
-                                    icon: next[i].icon,
-                                    orderIndex: i,
-                                  ));
-                                }
-                                await TagPresetService.instance.saveAll(normalized);
-                                setState(() {
-                                  _presets = normalized;
-                                });
-                            }
-                          },
-                          icon: const Icon(Icons.edit, color: kDlgTextSub),
-                        ),
-                        IconButton(
-                          tooltip: '삭제',
-                          onPressed: () async {
-                            await TagPresetService.instance.delete(p.id);
-                            final list = [..._presets]..removeWhere((e) => e.id == p.id);
-                            final normalized = <TagPreset>[];
-                            for (int i = 0; i < list.length; i++) {
-                              normalized.add(TagPreset(id: list[i].id, name: list[i].name, color: list[i].color, icon: list[i].icon, orderIndex: i));
-                            }
-                            await TagPresetService.instance.saveAll(normalized);
-                            setState(() {
-                              _presets = normalized;
-                            });
-                          },
-                          icon: const Icon(Icons.delete, color: kDlgTextSub),
-                        ),
-                        const SizedBox(width: 6),
-                        ReorderableDragStartListener(
-                          index: i,
-                          child: Icon(Icons.drag_handle, color: Colors.grey.shade500),
-                        ),
-                      ],
-                    ),
+                      );
+                    },
+                    itemBuilder: (context, i) {
+                      final p = _presets[i];
+                      return Container(
+                        key: ValueKey(p.id),
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: _buildPresetTile(p, i),
+                      );
+                    },
                   );
                 },
               ),

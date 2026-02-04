@@ -260,7 +260,12 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
   void _notifyClosed() {
     if (_didNotifyClosed) return;
     _didNotifyClosed = true;
-    widget.onClose?.call();
+    final cb = widget.onClose;
+    if (cb == null) return;
+    // 다이얼로그 dispose 중 setState 호출 방지: 다음 프레임에 안전하게 실행
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      cb();
+    });
   }
 
   Widget _buildPaymentStudentCard(_PaymentItem item, {required bool isUnpaid}) {

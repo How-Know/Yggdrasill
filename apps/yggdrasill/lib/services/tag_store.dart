@@ -73,11 +73,7 @@ class TagStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final int epochMsUtc = event.timestamp.toUtc().millisecondsSinceEpoch;
-      final String id = const Uuid().v5(
-        Uuid.NAMESPACE_URL,
-        '$studentId|$epochMsUtc|${event.tagName}',
-      );
+      final String id = _eventId(studentId, event);
       final int colorSigned = (event.colorValue).toSigned(32);
       await supa.from('tag_events').upsert({
         'id': id,
@@ -98,11 +94,58 @@ class TagStore {
     }
   }
 
+  String _eventId(String studentId, TagEvent event) {
+    final int epochMsUtc = event.timestamp.toUtc().millisecondsSinceEpoch;
+    return const Uuid().v5(
+      Uuid.NAMESPACE_URL,
+      '$studentId|$epochMsUtc|${event.tagName}',
+    );
+  }
+
+  Future<void> _deleteFromSupabase(String studentId, TagEvent event) async {
+    try {
+      final supa = Supabase.instance.client;
+      final String id = _eventId(studentId, event);
+      await supa.from('tag_events').delete().eq('id', id);
+      // ignore: avoid_print
+      print('[TagEvents] delete ok id=' + id + ' student=' + studentId + ' tag=' + event.tagName);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[TagEvents][ERROR] delete failed: ' + e.toString() + '\n' + st.toString());
+    }
+  }
+
   void appendEvent(String setId, String studentId, TagEvent event) {
     final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
     list.add(event);
     // 서버 즉시 저장만 수행 (로컬 DB 비사용)
     _appendToSupabase(setId, studentId, event);
+  }
+
+  void updateEvent(String setId, String studentId, TagEvent event) {
+    final list = _eventsBySetId.putIfAbsent(setId, () => <TagEvent>[]);
+    final targetEpoch = event.timestamp.toUtc().millisecondsSinceEpoch;
+    final idx = list.indexWhere((e) =>
+        e.tagName == event.tagName &&
+        e.timestamp.toUtc().millisecondsSinceEpoch == targetEpoch);
+    if (idx == -1) {
+      list.add(event);
+    } else {
+      list[idx] = event;
+    }
+    _bump();
+    _appendToSupabase(setId, studentId, event);
+  }
+
+  void deleteEvent(String setId, String studentId, TagEvent event) {
+    final list = _eventsBySetId[setId];
+    if (list == null) return;
+    final targetEpoch = event.timestamp.toUtc().millisecondsSinceEpoch;
+    list.removeWhere((e) =>
+        e.tagName == event.tagName &&
+        e.timestamp.toUtc().millisecondsSinceEpoch == targetEpoch);
+    _bump();
+    _deleteFromSupabase(studentId, event);
   }
 
   Future<void> loadAllFromDb() async {
