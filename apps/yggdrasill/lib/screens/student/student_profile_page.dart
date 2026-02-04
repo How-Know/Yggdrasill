@@ -162,7 +162,7 @@ class _StudentProfileHeader extends StatelessWidget {
                 height: 40,
                 fontSize: 15,
                 selectedIndex: tabIndex,
-                tabs: const ['요약', '수업일지', '스탯'],
+            tabs: const ['요약', '수업 일지', '스탯'],
                 onTabSelected: onTabChanged,
               ),
               const SizedBox(width: 12),

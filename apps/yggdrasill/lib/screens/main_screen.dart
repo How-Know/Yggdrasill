@@ -31,6 +31,8 @@ import 'class_content_events_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/dark_panel_route.dart';
+import 'student/student_profile_page.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -359,9 +361,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // OverlayEntry 툴팁 상태
   OverlayEntry? _tooltipOverlay;
   OverlayEntry? _classTagOverlay;
+  final ValueNotifier<bool> _classTagBarrierActive = ValueNotifier<bool>(true);
+  Timer? _classTagBarrierTimer;
+  Timer? _attendedTapTimer;
+  DateTime? _lastAttendedTapAt;
+  String? _lastAttendedTapSetId;
+  static const Duration _doubleTapWindow = Duration(milliseconds: 260);
+  static const Duration _overlayOpenDelay = Duration(milliseconds: 140);
   void _removeClassTagOverlay() {
     _classTagOverlay?.remove();
     _classTagOverlay = null;
+    _classTagBarrierTimer?.cancel();
+    _classTagBarrierActive.value = true;
   }
   Rect? _getSideSheetRect() {
     final ctx = _sideSheetKey.currentContext;
@@ -411,6 +422,50 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
     overlay.insert(_tooltipOverlay!);
     // print('[DEBUG] _showTooltip OverlayEntry inserted');
+  }
+
+  void _armClassTagBarrier() {
+    _classTagBarrierTimer?.cancel();
+    _classTagBarrierActive.value = false;
+    _classTagBarrierTimer = Timer(_doubleTapWindow, () {
+      if (_classTagOverlay == null) return;
+      _classTagBarrierActive.value = true;
+    });
+  }
+
+  void _openStudentProfileFromAttendance(_AttendanceTarget target) {
+    final info = DataManager.instance.students.firstWhereOrNull(
+      (s) => s.student.id == target.student.id,
+    );
+    if (info == null) return;
+    Navigator.of(context).push(
+      DarkPanelRoute(
+        child: StudentProfilePage(studentWithInfo: info),
+      ),
+    );
+  }
+
+  void _handleAttendedCardTap(_AttendanceTarget target) {
+    final now = DateTime.now();
+    final last = _lastAttendedTapAt;
+    if (last != null &&
+        _lastAttendedTapSetId == target.setId &&
+        now.difference(last) <= _doubleTapWindow) {
+      _attendedTapTimer?.cancel();
+      _attendedTapTimer = null;
+      _lastAttendedTapAt = null;
+      _lastAttendedTapSetId = null;
+      _removeClassTagOverlay();
+      _openStudentProfileFromAttendance(target);
+      return;
+    }
+    _lastAttendedTapAt = now;
+    _lastAttendedTapSetId = target.setId;
+    _attendedTapTimer?.cancel();
+    _attendedTapTimer = Timer(_overlayOpenDelay, () {
+      if (!mounted) return;
+      _openClassTagDialog(target, anchor: _lastTagTapPosition);
+    });
   }
   void _removeTooltip() {
     // print('[DEBUG] _removeTooltip called');
@@ -573,6 +628,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   void dispose() {
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
     _removeTooltip();
+    _classTagBarrierTimer?.cancel();
+    _attendedTapTimer?.cancel();
+    _classTagBarrierActive.dispose();
     DataManager.instance.attendanceRecordsNotifier.removeListener(_markSideSheetDirty);
     _rotationAnimation.dispose();
     _fabController.dispose();
@@ -1005,7 +1063,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     ),
                                     const SizedBox(height: 6),
                                     Align(
-                                      alignment: Alignment.centerRight,
+                                      alignment: Alignment.center,
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
@@ -1246,26 +1304,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 'attended':
         borderColor = const Color(0xFF33A373);
         textColor = const Color(0xFFEAF2F2);
-        nameWidget = MouseRegion(
-          onEnter: (event) {
-            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-            final offset = overlay.globalToLocal(event.position);
-            final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
-            final tip = attendTime != null ? '등원: ' + _formatTime(attendTime) : '등원 시간 없음';
-            _showTooltip(offset, tip);
-          },
-          onExit: (_) => _removeTooltip(),
-          child: Text(
-            t.student.name,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 19,
-              fontWeight: FontWeight.w500,
-              decoration: underlineColor != null ? TextDecoration.underline : null,
-              decorationColor: underlineColor,
-              decorationThickness: underlineColor != null ? 2 : null,
-            ),
+        final DateTime? attendTime = arrival ?? _attendTimes[t.setId];
+        final String timeText = attendTime != null ? _formatTime(attendTime) : '--:--';
+        nameWidget = Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: t.student.name,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w500,
+                  decoration: underlineColor != null ? TextDecoration.underline : null,
+                  decorationColor: underlineColor,
+                  decorationThickness: underlineColor != null ? 2 : null,
+                ),
+              ),
+              TextSpan(
+                text: '  $timeText',
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
+          overflow: TextOverflow.ellipsis,
         );
         break;
       case 'leaved':
@@ -1429,7 +1494,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               onTapDown: (details) {
                 _lastTagTapPosition = details.globalPosition;
               },
-              onTap: () => _openClassTagDialog(t, anchor: _lastTagTapPosition),
+              onTap: () => _handleAttendedCardTap(t),
               onLongPress: () async {
                 _removeClassTagOverlay();
                 setState(() {
@@ -1468,7 +1533,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: EdgeInsets.zero,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                padding: const EdgeInsets.fromLTRB(0, 12, 18, 12),
                 decoration: BoxDecoration(
                   // 등원 완료(출석) 카드: 테두리 제거
                   color: Colors.transparent,
@@ -2089,15 +2154,24 @@ extension on _MainScreenState {
     const double headerOffset = 14.0;
     final anchorPos = anchor ?? Offset(leftEdge, 120);
     final double top = (anchorPos.dy - headerOffset).clamp(0.0, screenH);
+    _armClassTagBarrier();
     _classTagOverlay = OverlayEntry(
       builder: (overlayCtx) {
         return Stack(
           children: [
             Positioned.fill(
-              child: GestureDetector(
-                onTap: _removeClassTagOverlay,
-                behavior: HitTestBehavior.opaque,
-                child: Container(color: Colors.black.withOpacity(0.25)),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _classTagBarrierActive,
+                builder: (_, active, __) {
+                  return IgnorePointer(
+                    ignoring: !active,
+                    child: GestureDetector(
+                      onTap: _removeClassTagOverlay,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(color: Colors.transparent),
+                    ),
+                  );
+                },
               ),
             ),
             Positioned(
