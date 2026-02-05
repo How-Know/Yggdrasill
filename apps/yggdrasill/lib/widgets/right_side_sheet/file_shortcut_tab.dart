@@ -1444,10 +1444,12 @@ class _FileCard extends StatefulWidget {
 class _FileCardState extends State<_FileCard> {
   // 셀 선택 학생리스트 액션(수정/삭제)과 동일한 폭/패딩을 사용
   static const double _actionWidth = 140;
+  static const String _printTempPrefix = 'fs_print_';
   double _dx = 0.0; // negative = reveal actions
   bool _dragging = false;
   bool _printing = false;
   _FsPaperSize _paperSize = _FsPaperSize.followFile;
+  final TextEditingController _pageRangeCtrl = ImeAwareTextEditingController();
   final GlobalKey _paperAnchorKey = GlobalKey();
   OverlayEntry? _paperMenuEntry;
   Completer<_FsPaperSize?>? _paperMenuCompleter;
@@ -1468,6 +1470,7 @@ class _FileCardState extends State<_FileCard> {
   @override
   void dispose() {
     _dismissPaperMenu();
+    _pageRangeCtrl.dispose();
     super.dispose();
   }
 
@@ -1484,6 +1487,79 @@ class _FileCardState extends State<_FileCard> {
       case _FsPaperSize.k8:
         return '8K';
     }
+  }
+
+  Future<void> _cleanupOldPrintTemps({Duration maxAge = const Duration(days: 1)}) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final now = DateTime.now();
+      final entries = dir.listSync();
+      for (final e in entries) {
+        if (e is! File) continue;
+        final name = p.basename(e.path);
+        if (!name.startsWith(_printTempPrefix) || !name.toLowerCase().endsWith('.pdf')) continue;
+        final stat = e.statSync();
+        if (now.difference(stat.modified) > maxAge) {
+          try { e.deleteSync(); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _scheduleTempDelete(String path) {
+    Future<void>.delayed(const Duration(minutes: 10), () async {
+      try {
+        final f = File(path);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    });
+  }
+
+  List<int> _parsePageRange(String input, int pageCount) {
+    final cleaned = input.trim();
+    if (cleaned.isEmpty) {
+      return List<int>.generate(pageCount, (i) => i);
+    }
+    final normalized = cleaned
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll('~', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-');
+    final tokens = normalized.split(',');
+    final seen = <int>{};
+    final out = <int>[];
+    for (final raw in tokens) {
+      if (raw.isEmpty) continue;
+      if (raw.contains('-')) {
+        final parts = raw.split('-');
+        if (parts.length != 2) continue;
+        final start = int.tryParse(parts[0]);
+        final end = int.tryParse(parts[1]);
+        if (start == null || end == null) continue;
+        var a = start;
+        var b = end;
+        if (a > b) {
+          final tmp = a;
+          a = b;
+          b = tmp;
+        }
+        a = a.clamp(1, pageCount);
+        b = b.clamp(1, pageCount);
+        for (int i = a; i <= b; i++) {
+          final idx = i - 1;
+          if (seen.add(idx)) out.add(idx);
+        }
+      } else {
+        final v = int.tryParse(raw);
+        if (v == null) continue;
+        if (v < 1 || v > pageCount) continue;
+        final idx = v - 1;
+        if (seen.add(idx)) out.add(idx);
+      }
+    }
+    return out;
   }
 
   Future<void> _printHwpShellVerbBestEffort({
@@ -1633,6 +1709,7 @@ class _FileCardState extends State<_FileCard> {
   Future<String?> _buildPdfForPrint({
     required String inputPath,
     required _FsPaperSize paper,
+    String? pageRange,
   }) async {
     final inPath = inputPath.trim();
     if (inPath.isEmpty) return null;
@@ -1645,7 +1722,11 @@ class _FileCardState extends State<_FileCard> {
     } catch (_) {}
 
     try {
-      for (int i = 0; i < src.pages.count; i++) {
+      final pageCount = src.pages.count;
+      final indices = _parsePageRange(pageRange ?? '', pageCount);
+      if (indices.isEmpty) return null;
+      for (final i in indices) {
+        if (i < 0 || i >= pageCount) continue;
         final srcPage = src.pages[i];
         final srcSize = srcPage.size;
         final target = paper.orientedFor(srcSize);
@@ -1683,7 +1764,7 @@ class _FileCardState extends State<_FileCard> {
       final dir = await getTemporaryDirectory();
       final outPath = p.join(
         dir.path,
-        'fs_print_${DateTime.now().millisecondsSinceEpoch}_${paper.label()}.pdf',
+        '${_printTempPrefix}${DateTime.now().millisecondsSinceEpoch}_${paper.label()}.pdf',
       );
       await File(outPath).writeAsBytes(outBytes, flush: true);
       return outPath;
@@ -1700,6 +1781,7 @@ class _FileCardState extends State<_FileCard> {
     if (srcPath.isEmpty) return;
     setState(() => _printing = true);
     try {
+      unawaited(_cleanupOldPrintTemps());
       // HWP는 환경별로 자동화(숨김/키보드) 방식이 쉽게 깨질 수 있어,
       // 가장 안정적인 방식(Windows Shell Verb "Print")으로 위임한다.
       // -> "파일은 안 열리고, 인쇄 진행/대화창만 뜬 뒤 자동 인쇄"가 이 경로에서 동작하는 경우가 많다.
@@ -1708,14 +1790,31 @@ class _FileCardState extends State<_FileCard> {
         return;
       }
       String pathToPrint = srcPath;
+      String? tempToDelete;
       // 용지 크기 지정은 PDF에서만 적용(새 PDF 생성)
-      if (_paperSize != _FsPaperSize.followFile && file.kind == _FsFileKind.pdf) {
-        final out = await _buildPdfForPrint(inputPath: srcPath, paper: _paperSize);
-        if (out != null && out.trim().isNotEmpty) {
-          pathToPrint = out.trim();
+      if (file.kind == _FsFileKind.pdf) {
+        final rangeText = _pageRangeCtrl.text.trim();
+        if (_paperSize != _FsPaperSize.followFile || rangeText.isNotEmpty) {
+          final out = await _buildPdfForPrint(
+            inputPath: srcPath,
+            paper: _paperSize,
+            pageRange: rangeText,
+          );
+          if (out != null && out.trim().isNotEmpty) {
+            pathToPrint = out.trim();
+            tempToDelete = pathToPrint;
+          } else if (rangeText.isNotEmpty && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('페이지 범위를 확인하세요. (예: 10-15, 20)')),
+            );
+            return;
+          }
         }
       }
       await widget.onPrint(pathToPrint);
+      if (tempToDelete != null) {
+        _scheduleTempDelete(tempToDelete);
+      }
     } finally {
       if (mounted) setState(() => _printing = false);
     }
@@ -1841,6 +1940,34 @@ class _FileCardState extends State<_FileCard> {
                   )
                 else
                   const SizedBox.shrink(),
+                if (file.kind == _FsFileKind.pdf) ...[
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 110,
+                    height: 30,
+                    child: TextField(
+                      controller: _pageRangeCtrl,
+                      enabled: !_printing,
+                      style: const TextStyle(color: _rsText, fontSize: 12, fontWeight: FontWeight.w700),
+                      decoration: InputDecoration(
+                        hintText: '페이지 (예: 10-15)',
+                        hintStyle: const TextStyle(color: _rsTextSub, fontSize: 11),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: _rsBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: _rsAccent, width: 1.2),
+                        ),
+                        filled: true,
+                        fillColor: _rsPanelBg,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
                 const Spacer(),
                 buildKindBadge(),
               ],

@@ -7,6 +7,7 @@ import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -36,6 +37,7 @@ const Color _rsBorder = Color(0xFF223131);
 const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
+const bool _kShowBookPrintTestControls = false; // 임시 품질 점검용
 
 class _CourseOption {
   final String key;
@@ -108,6 +110,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   bool _isDropdownOpen = false;
   bool _resizeMode = false;
   bool _editMode = false;
+  bool _printPickMode = false;
 
   final List<_ResourceFolder> _folders = [];
   final List<_ResourceFile> _files = [];
@@ -615,6 +618,271 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       _selectedGradeIndex = 0;
     }
     if (mounted) setState(() {});
+  }
+
+  static const String _printTempPrefix = 'res_print_';
+
+  Future<void> _openPrintDialogForPath(String path) async {
+    final pth = path.trim();
+    if (pth.isEmpty) return;
+    try {
+      if (Platform.isWindows) {
+        final q = "'${pth.replaceAll("'", "''")}'";
+        await Process.start(
+          'powershell',
+          ['-NoProfile', '-Command', 'Start-Process -FilePath $q -Verb Print'],
+          runInShell: true,
+        );
+        return;
+      }
+    } catch (_) {
+      // fallthrough
+    }
+    await OpenFilex.open(pth);
+  }
+
+  List<int> _parsePageRange(String input, int pageCount) {
+    final cleaned = input.trim();
+    if (cleaned.isEmpty) {
+      return List<int>.generate(pageCount, (i) => i);
+    }
+    final normalized = cleaned
+        .replaceAll(RegExp(r'\\s+'), '')
+        .replaceAll('~', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-');
+    final tokens = normalized.split(',');
+    final seen = <int>{};
+    final out = <int>[];
+    for (final raw in tokens) {
+      if (raw.isEmpty) continue;
+      if (raw.contains('-')) {
+        final parts = raw.split('-');
+        if (parts.length != 2) continue;
+        final start = int.tryParse(parts[0]);
+        final end = int.tryParse(parts[1]);
+        if (start == null || end == null) continue;
+        var a = start;
+        var b = end;
+        if (a > b) {
+          final tmp = a;
+          a = b;
+          b = tmp;
+        }
+        a = a.clamp(1, pageCount);
+        b = b.clamp(1, pageCount);
+        for (int i = a; i <= b; i++) {
+          final idx = i - 1;
+          if (seen.add(idx)) out.add(idx);
+        }
+      } else {
+        final v = int.tryParse(raw);
+        if (v == null) continue;
+        if (v < 1 || v > pageCount) continue;
+        final idx = v - 1;
+        if (seen.add(idx)) out.add(idx);
+      }
+    }
+    return out;
+  }
+
+  Future<String?> _buildPdfForPrintRange({
+    required String inputPath,
+    required String pageRange,
+  }) async {
+    final inPath = inputPath.trim();
+    if (inPath.isEmpty) return null;
+    if (!inPath.toLowerCase().endsWith('.pdf')) return null;
+    final srcBytes = await File(inPath).readAsBytes();
+    final src = sf.PdfDocument(inputBytes: srcBytes);
+    final dst = sf.PdfDocument();
+    try {
+      try {
+        dst.pageSettings.margins.all = 0;
+      } catch (_) {}
+      final pageCount = src.pages.count;
+      final indices = _parsePageRange(pageRange, pageCount);
+      if (indices.isEmpty) return null;
+      for (final i in indices) {
+        if (i < 0 || i >= pageCount) continue;
+        final srcPage = src.pages[i];
+        final srcSize = srcPage.size;
+        try {
+          dst.pageSettings.size = srcSize;
+          dst.pageSettings.margins.all = 0;
+        } catch (_) {}
+        final tmpl = srcPage.createTemplate();
+        final newPage = dst.pages.add();
+        final tw = srcSize.width;
+        final th = srcSize.height;
+        final sw = srcSize.width;
+        final sh = srcSize.height;
+        if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) {
+          try {
+            newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+          } catch (_) {
+            newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+          }
+          continue;
+        }
+        // 채우기(cover) 느낌: 약간 확대해서 여백을 최소화
+        const double overscan = 1.02;
+        final scale = math.max(tw / sw, th / sh) * overscan;
+        final w = sw * scale;
+        final h = sh * scale;
+        final dx = (tw - w) / 2.0;
+        final dy = (th - h) / 2.0;
+        try {
+          newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
+        } catch (_) {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+        }
+      }
+      final outBytes = await dst.save();
+      final dir = await getTemporaryDirectory();
+      final outPath = p.join(
+        dir.path,
+        '${_printTempPrefix}${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      await File(outPath).writeAsBytes(outBytes, flush: true);
+      return outPath;
+    } finally {
+      src.dispose();
+      dst.dispose();
+    }
+  }
+
+  void _scheduleTempDelete(String path) {
+    Future<void>.delayed(const Duration(minutes: 10), () async {
+      try {
+        final f = File(path);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _printBookRange(_ResourceFile file, String range) async {
+    final grade = _effectiveGradeLabelForFile(file);
+    if (grade == null || grade.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과정이 없습니다.')),
+      );
+      return;
+    }
+    final raw = file.linksByGrade['${grade}#body']?.trim() ?? '';
+    if (raw.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('해당 과정에 본문 링크가 없습니다.')),
+      );
+      return;
+    }
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('URL 인쇄는 지원하지 않습니다. 파일 경로를 사용하세요.')),
+      );
+      return;
+    }
+    final isPdf = raw.toLowerCase().endsWith('.pdf');
+    final trimmedRange = range.trim();
+    if (trimmedRange.isNotEmpty && !isPdf) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('페이지 범위는 PDF에서만 지원합니다.')),
+      );
+      return;
+    }
+    String pathToPrint = raw;
+    if (isPdf && trimmedRange.isNotEmpty) {
+      final out = await _buildPdfForPrintRange(
+        inputPath: raw,
+        pageRange: trimmedRange,
+      );
+      if (out == null || out.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('페이지 범위를 확인하세요. (예: 10-15, 20)')),
+        );
+        return;
+      }
+      pathToPrint = out;
+      _scheduleTempDelete(pathToPrint);
+    }
+    await _openPrintDialogForPath(pathToPrint);
+  }
+
+  Future<void> _openHeaderPrintFlow() async {
+    if (_printPickMode) {
+      if (mounted) {
+        setState(() => _printPickMode = false);
+      }
+      return;
+    }
+    if (_currentCategory != 'textbook') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('교재 탭에서만 인쇄를 지원합니다.')),
+      );
+      return;
+    }
+    await _ensureGradesLoaded();
+    if (!mounted) return;
+    if (_grades.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과정이 없습니다. 오른쪽 슬라이드에서 과정을 먼저 추가하세요.')),
+      );
+      return;
+    }
+    final files = _childFilesOf(_selectedFolderIdForTree);
+    if (files.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('인쇄할 파일이 없습니다.')),
+      );
+      return;
+    }
+    final anyPrintable = files.any((f) {
+      final grade = _effectiveGradeLabelForFile(f);
+      final body = grade == null ? '' : (f.linksByGrade['$grade#body']?.trim() ?? '');
+      return body.isNotEmpty;
+    });
+    if (!anyPrintable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('인쇄 가능한 본문 링크가 없습니다.')),
+      );
+      return;
+    }
+    setState(() => _printPickMode = true);
+  }
+
+  Future<void> _handlePrintPick(_ResourceFile file) async {
+    if (!_printPickMode) return;
+    final grade = _effectiveGradeLabelForFile(file);
+    final body = grade == null ? '' : (file.linksByGrade['$grade#body']?.trim() ?? '');
+    if (grade == null || grade.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('과정이 없습니다.')),
+      );
+      return;
+    }
+    if (body.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('해당 과정에 본문 링크가 없습니다.')),
+      );
+      return;
+    }
+    if (mounted) setState(() => _printPickMode = false);
+    final range = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _PrintRangeDialog(file: file, gradeLabel: grade),
+    );
+    if (range == null) return;
+    await _printBookRange(file, range);
   }
 
   List<String> _linkedGradeLabelsForFile(_ResourceFile file) {
@@ -1426,6 +1694,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                       // 탭 변경 시 데이터 재로딩 및 트리 초기화
                       _expandedFolderIds.clear();
                       _selectedFolderIdForTree = _favoriteFileIds.isNotEmpty ? '__FAVORITES__' : null;
+                      _printPickMode = false;
                       // 이전 탭 데이터가 잠깐 보이는 플리커 방지: 즉시 클리어
                       _folders.clear();
                       _files.clear();
@@ -1449,6 +1718,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                             String folderName = '';
                             final addLabel = _currentCategory == 'textbook' ? '책 추가' : '파일 추가';
                             final nameLabel = _currentCategory == 'textbook' ? '책 이름' : '파일 이름';
+                            final isPrintMode = _printPickMode;
                             if (_selectedFolderIdForTree == '__FAVORITES__') {
                               folderName = '즐겨찾기';
                               desc = '';
@@ -1465,7 +1735,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                 children: [
                                   Text(
                                     folderName,
-                                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
+                                    style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800),
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -1478,22 +1748,37 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                   ),
                                   const SizedBox(width: 8),
                                   SizedBox(
-                                    height: 36,
+                                    height: 44,
+                                    child: OutlinedButton(
+                                      onPressed: _openHeaderPrintFlow,
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: isPrintMode ? Colors.white : Colors.white70,
+                                        side: BorderSide(color: isPrintMode ? _rsAccent : Colors.white24),
+                                        shape: const StadiumBorder(),
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        backgroundColor: isPrintMode ? const Color(0xFF132822) : Colors.transparent,
+                                      ),
+                                      child: const Icon(Icons.print, size: 20),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    height: 44,
                                     child: OutlinedButton.icon(
                                       onPressed: _openCourseEditDialog,
-                                      icon: const Icon(Icons.edit, size: 18),
-                                      label: const Text('과정 편집'),
+                                      icon: const Icon(Icons.edit, size: 20),
+                                      label: const Text('과정 편집', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                                       style: OutlinedButton.styleFrom(
                                         foregroundColor: Colors.white70,
                                         side: const BorderSide(color: Colors.white24),
                                         shape: const StadiumBorder(),
-                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
                                       ),
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   SizedBox(
-                                    height: 36,
+                                    height: 44,
                                     child: OutlinedButton.icon(
                                       onPressed: () async {
                                         // ignore: avoid_print
@@ -1542,13 +1827,13 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                         });
                                         await DataManager.instance.saveResourceFileLinks(created.id, links);
                                       },
-                                      icon: const Icon(Icons.add, size: 18),
-                                      label: Text(addLabel),
+                                      icon: const Icon(Icons.add, size: 20),
+                                      label: Text(addLabel, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                                       style: OutlinedButton.styleFrom(
                                         foregroundColor: Colors.white70,
                                         side: const BorderSide(color: Colors.white24),
                                         shape: const StadiumBorder(),
-                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
                                       ),
                                     ),
                                   ),
@@ -1576,6 +1861,51 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
               // 하단 플로팅 영역 확보 제거: 버튼을 컨테이너 내부로 재배치
             ],
           ),
+          if (_printPickMode)
+            Positioned(
+              top: 86,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _rsPanelBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _rsAccent.withOpacity(0.8)),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 10, offset: const Offset(0, 6)),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.print, size: 16, color: _rsAccent),
+                      const SizedBox(width: 6),
+                      const Text('인쇄할 파일을 고르세요', style: TextStyle(color: _rsText, fontSize: 13, fontWeight: FontWeight.w800)),
+                      const SizedBox(width: 8),
+                      InkWell(
+                        onTap: () {
+                          if (mounted) setState(() => _printPickMode = false);
+                        },
+                        borderRadius: BorderRadius.circular(999),
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.25),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _rsBorder),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.close, size: 12, color: _rsTextSub),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -2029,7 +2359,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         builder: (context, constraints) {
           final isTextbook = _currentCategory == 'textbook';
           final double gridCardWidth = isTextbook ? 240.0 : 290.0;
-          final double gridCardHeight = isTextbook ? (gridCardWidth * 1.414 * 0.9 + 120.0) : 170.0;
+          final double baseCardHeight = isTextbook ? (gridCardWidth * 1.414 * 0.9 + 115.0) : 170.0;
+          final bool showPrintTest = isTextbook && _kShowBookPrintTestControls;
+          final double printBarHeight = showPrintTest ? 36.0 : 0.0;
+          final double printBarGap = showPrintTest ? 8.0 : 0.0;
+          final double gridCardHeight = baseCardHeight + printBarGap + printBarHeight;
           final double spacing = isTextbook ? 22.4 : 16.0;
           final cols = (constraints.maxWidth / (gridCardWidth + spacing)).floor().clamp(1, 999);
           final double gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
@@ -2044,20 +2378,46 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               Expanded(
                 child: Align(
                   alignment: Alignment.topLeft,
-                  child: SizedBox(
-                    width: gridWidth,
-                    child: GridView.builder(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: cols,
-                        mainAxisSpacing: spacing,
-                        crossAxisSpacing: spacing,
-                        childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
-                      ),
-                      itemCount: files.length,
-                      itemBuilder: (context, index) {
+                  child: MouseRegion(
+                    cursor: _printPickMode ? SystemMouseCursors.copy : SystemMouseCursors.basic,
+                    child: SizedBox(
+                      width: gridWidth,
+                      child: GridView.builder(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: cols,
+                          mainAxisSpacing: spacing,
+                          crossAxisSpacing: spacing,
+                          childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
+                        ),
+                        itemCount: files.length,
+                        itemBuilder: (context, index) {
                     final fi = files[index];
                     // ignore: avoid_print
                     print('[GRID:item] idx=' + index.toString() + ' id=' + fi.id);
+                    Widget buildCardCell() {
+                      final card = SizedBox(
+                        width: gridCardWidth,
+                        height: baseCardHeight,
+                        child: _GridFileCard(file: fi),
+                      );
+                      if (!showPrintTest) return card;
+                      return SizedBox(
+                        width: gridCardWidth,
+                        height: gridCardHeight,
+                        child: Column(
+                          children: [
+                            card,
+                            SizedBox(height: printBarGap),
+                            _BookPrintTestBar(
+                              key: ValueKey('${fi.id}#print'),
+                              width: gridCardWidth,
+                              height: printBarHeight,
+                              onPrint: (range) => _printBookRange(fi, range),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
                     return LongPressDraggable<_ResourceFile>(
                       data: fi,
                       hapticFeedbackOnStart: true,
@@ -2065,12 +2425,12 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         opacity: 0.9,
                       child: Material(
                           color: Colors.transparent,
-                          child: SizedBox(width: gridCardWidth, height: gridCardHeight, child: _GridFileCard(file: fi)),
+                          child: buildCardCell(),
                         ),
                       ),
                       onDragStarted: () => setState(() { _draggingFileId = fi.id; }),
                       onDragEnd: (_) => setState(() { _draggingFileId = null; _reorderFileTargetId = null; }),
-                      childWhenDragging: AnimatedOpacity(duration: const Duration(milliseconds: 150), opacity: 0.25, child: _GridFileCard(file: fi)),
+                      childWhenDragging: AnimatedOpacity(duration: const Duration(milliseconds: 150), opacity: 0.25, child: buildCardCell()),
                       dragAnchorStrategy: pointerDragAnchorStrategy,
                       child: Row(
                         children: [
@@ -2137,7 +2497,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                 child: SizedBox(
                                   width: gridCardWidth,
                                   height: gridCardHeight,
-                                  child: _GridFileCard(file: fi),
+                                  child: buildCardCell(),
                                 ),
                               ),
                               // 좌/우 하이라이트는 오버레이로 표시하여 실제 레이아웃에 영향 없음
@@ -2175,6 +2535,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       ),
                     );
                   },
+                      ),
                     ),
                   ),
                 ),
@@ -3792,6 +4153,7 @@ class _GridFileCardState extends State<_GridFileCard> {
     final hasCover = coverPath != null && coverPath.isNotEmpty;
     final displayGrade = currentGrade ?? file.primaryGrade;
     final isTextbook = resState?._currentCategory == 'textbook';
+    final isPrintMode = resState?._printPickMode ?? false;
     void handleGradeDelta(int delta) {
       if (resState == null) return;
       resState._changeFileGradeByDelta(file, delta);
@@ -3809,185 +4171,195 @@ class _GridFileCardState extends State<_GridFileCard> {
       }
       state.setState(() {});
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            // ignore: avoid_print
-            print('[GridFileCard] tap id=' + file.id);
-            if (currentGrade == null) return;
-            final key = '${currentGrade}#body';
-            final link = file.linksByGrade[key]?.trim() ?? '';
-            if (link.isEmpty) return;
-            try {
-              if (link.startsWith('http://') || link.startsWith('https://')) {
-                final uri = Uri.parse(link);
-                await launchUrl(uri, mode: LaunchMode.platformDefault);
-              } else {
-                await OpenFilex.open(link);
+    return MouseRegion(
+      cursor: isPrintMode ? SystemMouseCursors.copy : SystemMouseCursors.click,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              // ignore: avoid_print
+              print('[GridFileCard] tap id=' + file.id);
+              if (isPrintMode) {
+                await resState?._handlePrintPick(file);
+                return;
               }
-            } catch (_) {}
-          },
-          splashColor: Colors.white.withOpacity(0.06),
-          highlightColor: Colors.white.withOpacity(0.03),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isTextbook ? _rsPanelBg : bg,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.05), width: 0.8),
-              boxShadow: [
-                if (hasForCurrent) ...[
-                  BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 12)),
-                  BoxShadow(color: Colors.white.withOpacity(0.03), blurRadius: 2, offset: const Offset(0, 1)),
-                ],
-              ],
-            ),
-            child: LayoutBuilder(
-              builder: (context, box) {
-                // ignore: avoid_print
-                print('[GridFileCard:layout] id=' + file.id + ' box=' + box.maxWidth.toStringAsFixed(1) + 'x' + box.maxHeight.toStringAsFixed(1) + ' model=' + file.size.toString());
-                if (!isTextbook) {
-                  return _buildWideMeta(context, hasForCurrent: hasForCurrent, currentGrade: currentGrade);
+              if (currentGrade == null) return;
+              final key = '${currentGrade}#body';
+              final link = file.linksByGrade[key]?.trim() ?? '';
+              if (link.isEmpty) return;
+              try {
+                if (link.startsWith('http://') || link.startsWith('https://')) {
+                  final uri = Uri.parse(link);
+                  await launchUrl(uri, mode: LaunchMode.platformDefault);
+                } else {
+                  await OpenFilex.open(link);
                 }
-                final metaMinHeight = 120.0;
-                final desiredCoverHeight = box.maxWidth * 1.414 * 0.9;
-                final coverHeight = math.min(desiredCoverHeight, math.max(0.0, box.maxHeight - metaMinHeight));
-                final isFav = resState?._favoriteFileIds.contains(file.id) ?? false;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: coverHeight,
-                      width: double.infinity,
-                      child: Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerSignal: (signal) {
-                          if (signal is PointerScrollEvent) {
-                            final dx = signal.scrollDelta.dx;
-                            final dy = signal.scrollDelta.dy;
-                            if (dx != 0 && dx.abs() >= dy.abs()) {
-                              handleGradeDelta(dx < 0 ? -1 : 1);
-                            }
-                          }
-                        },
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onHorizontalDragStart: (_) => _gradeDragDx = 0.0,
-                          onHorizontalDragUpdate: (d) => _handleGradeDragUpdate(d, handleGradeDelta),
-                          onHorizontalDragEnd: (_) => _gradeDragDx = 0.0,
-                          onHorizontalDragCancel: () => _gradeDragDx = 0.0,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: hasCover ? bg : const Color(0xFF2B2B2B),
-                              image: hasCover ? DecorationImage(image: FileImage(File(coverPath!)), fit: BoxFit.cover) : null,
-                            ),
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                if (!hasCover)
-                                  Center(
-                                    child: Icon(
-                                      file.icon ?? Icons.menu_book,
-                                      size: 36,
-                                      color: Colors.white60,
-                                    ),
-                                  ),
-                                if (hasCover && file.icon != null)
-                                  IgnorePointer(
-                                    child: Center(
-                                      child: Icon(
-                                        file.icon!,
-                                        size: 72,
-                                        color: Colors.white.withOpacity(0.18),
+              } catch (_) {}
+            },
+            splashColor: Colors.white.withOpacity(0.06),
+            highlightColor: Colors.white.withOpacity(0.03),
+            child: IgnorePointer(
+              ignoring: isPrintMode,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isTextbook ? _rsPanelBg : bg,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.05), width: 0.8),
+                  boxShadow: [
+                    if (hasForCurrent) ...[
+                      BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 12)),
+                      BoxShadow(color: Colors.white.withOpacity(0.03), blurRadius: 2, offset: const Offset(0, 1)),
+                    ],
+                  ],
+                ),
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    // ignore: avoid_print
+                    print('[GridFileCard:layout] id=' + file.id + ' box=' + box.maxWidth.toStringAsFixed(1) + 'x' + box.maxHeight.toStringAsFixed(1) + ' model=' + file.size.toString());
+                    if (!isTextbook) {
+                      return _buildWideMeta(context, hasForCurrent: hasForCurrent, currentGrade: currentGrade);
+                    }
+                    final metaMinHeight = 115.0;
+                    final desiredCoverHeight = box.maxWidth * 1.414 * 0.9;
+                    final coverHeight = math.min(desiredCoverHeight, math.max(0.0, box.maxHeight - metaMinHeight));
+                    final isFav = resState?._favoriteFileIds.contains(file.id) ?? false;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          height: coverHeight,
+                          width: double.infinity,
+                          child: Listener(
+                            behavior: HitTestBehavior.opaque,
+                            onPointerSignal: (signal) {
+                              if (signal is PointerScrollEvent) {
+                                final dx = signal.scrollDelta.dx;
+                                final dy = signal.scrollDelta.dy;
+                                if (dx != 0 && dx.abs() >= dy.abs()) {
+                                  handleGradeDelta(dx < 0 ? -1 : 1);
+                                }
+                              }
+                            },
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragStart: (_) => _gradeDragDx = 0.0,
+                              onHorizontalDragUpdate: (d) => _handleGradeDragUpdate(d, handleGradeDelta),
+                              onHorizontalDragEnd: (_) => _gradeDragDx = 0.0,
+                              onHorizontalDragCancel: () => _gradeDragDx = 0.0,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: hasCover ? bg : const Color(0xFF2B2B2B),
+                                  image: hasCover ? DecorationImage(image: FileImage(File(coverPath!)), fit: BoxFit.cover) : null,
+                                ),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    if (!hasCover)
+                                      Center(
+                                        child: Icon(
+                                          file.icon ?? Icons.menu_book,
+                                          size: 36,
+                                          color: Colors.white60,
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                Positioned(
-                                  top: 8,
-                                  right: 8,
-                                  child: InkWell(
-                                    onTap: toggleFavorite,
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withOpacity(0.45),
+                                    if (hasCover && file.icon != null)
+                                      IgnorePointer(
+                                        child: Center(
+                                          child: Icon(
+                                            file.icon!,
+                                            size: 72,
+                                            color: Colors.white.withOpacity(0.18),
+                                          ),
+                                        ),
+                                      ),
+                                    Positioned(
+                                      top: 8,
+                                      right: 8,
+                                      child: InkWell(
+                                        onTap: toggleFavorite,
                                         borderRadius: BorderRadius.circular(16),
-                                      ),
-                                      child: Icon(
-                                        Icons.bookmark,
-                                        size: 18,
-                                        color: isFav ? Colors.amber : Colors.white70,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withOpacity(0.45),
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Icon(
+                                            Icons.bookmark,
+                                            size: 18,
+                                            color: isFav ? Colors.amber : Colors.white70,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                                Positioned(
-                                  bottom: 8,
-                                  right: 8,
-                                  child: Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withOpacity(0.45),
-                                      shape: BoxShape.circle,
+                                    Positioned(
+                                      bottom: 8,
+                                      right: 8,
+                                      child: Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.45),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: _MoreMenuButton(file: file, compact: true, hitSize: 32),
+                                      ),
                                     ),
-                                    alignment: Alignment.center,
-                                    child: _MoreMenuButton(file: file, compact: true),
-                                  ),
+                                  ],
                                 ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        file.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(color: file.textColor ?? _rsText, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -0.2),
+                                      ),
+                                    ),
+                                    if (displayGrade != null) ...[
+                                      const SizedBox(width: 6),
+                                      _MiniPill(text: displayGrade, fontSize: 13, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5)),
+                                    ],
+                                  ],
+                                ),
+                                if ((file.description ?? '').isNotEmpty) ...[
+                                  const SizedBox(height: 1),
+                                  Text(file.description!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white60, fontSize: 14.5)),
+                                ],
+                                const Spacer(),
+                                Row(
+                                  children: [
+                                    _SmallLinkButtonPill(file: file, kind: 'ans', currentGrade: currentGrade),
+                                    const SizedBox(width: 6),
+                                    _SmallLinkButtonPill(file: file, kind: 'sol', currentGrade: currentGrade),
+                                    const SizedBox(width: 6),
+                                    Flexible(child: _BodyExtBadge(file: file, currentGrade: currentGrade)),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
                               ],
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    file.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(color: file.textColor ?? _rsText, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: -0.2),
-                                  ),
-                                ),
-                                if (displayGrade != null) ...[
-                                  const SizedBox(width: 6),
-                                  _MiniPill(text: displayGrade, fontSize: 11, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
-                                ],
-                              ],
-                            ),
-                            if ((file.description ?? '').isNotEmpty) ...[
-                              const SizedBox(height: 1),
-                              Text(file.description!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white60, fontSize: 12.5)),
-                            ],
-                            const Spacer(),
-                            Row(
-                              children: [
-                                _SmallLinkButtonPill(file: file, kind: 'ans', currentGrade: currentGrade),
-                                const SizedBox(width: 6),
-                                _SmallLinkButtonPill(file: file, kind: 'sol', currentGrade: currentGrade),
-                                const SizedBox(width: 6),
-                                Flexible(child: _BodyExtBadge(file: file, currentGrade: currentGrade)),
-                              ],
-                            ),
-                            const SizedBox(height: 5),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
+                      ],
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
@@ -4199,22 +4571,220 @@ class _BodyExtBadge extends StatelessWidget {
   }
 }
 
+class _BookPrintTestBar extends StatefulWidget {
+  final double width;
+  final double height;
+  final Future<void> Function(String range) onPrint;
+  const _BookPrintTestBar({
+    required this.width,
+    required this.height,
+    required this.onPrint,
+    super.key,
+  });
+
+  @override
+  State<_BookPrintTestBar> createState() => _BookPrintTestBarState();
+}
+
+class _BookPrintTestBarState extends State<_BookPrintTestBar> {
+  final TextEditingController _rangeCtrl = TextEditingController();
+  bool _printing = false;
+
+  @override
+  void dispose() {
+    _rangeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handlePrint() async {
+    if (_printing) return;
+    setState(() {
+      _printing = true;
+    });
+    try {
+      await widget.onPrint(_rangeCtrl.text.trim());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _printing = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inputHeight = math.min(28.0, widget.height - 8);
+    return SizedBox(
+      width: widget.width,
+      height: widget.height,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _rsBorder),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: inputHeight,
+                child: TextField(
+                  controller: _rangeCtrl,
+                  enabled: !_printing,
+                  onSubmitted: (_) => _handlePrint(),
+                  style: const TextStyle(color: _rsText, fontSize: 12),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    hintText: '페이지 (예: 10-15,20)',
+                    hintStyle: const TextStyle(color: _rsTextSub, fontSize: 11),
+                    filled: true,
+                    fillColor: const Color(0xFF151515),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _rsBorder)),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _rsBorder)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF3B84C9))),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              height: inputHeight,
+              child: FilledButton(
+                onPressed: _printing ? null : _handlePrint,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B84C9),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  minimumSize: const Size(0, 0),
+                ),
+                child: _printing
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('인쇄'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrintRangeDialog extends StatefulWidget {
+  final _ResourceFile file;
+  final String? gradeLabel;
+  const _PrintRangeDialog({required this.file, this.gradeLabel});
+
+  @override
+  State<_PrintRangeDialog> createState() => _PrintRangeDialogState();
+}
+
+class _PrintRangeDialogState extends State<_PrintRangeDialog> {
+  late final ImeAwareTextEditingController _rangeCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _rangeCtrl = ImeAwareTextEditingController(text: '');
+  }
+
+  @override
+  void dispose() {
+    _rangeCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gradeLabel = widget.gradeLabel;
+    return AlertDialog(
+      backgroundColor: _rsBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+      title: const Text('페이지 범위', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.file.name,
+              style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800),
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (gradeLabel != null && gradeLabel.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(gradeLabel, style: const TextStyle(color: _rsTextSub, fontSize: 12)),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: _rangeCtrl,
+              cursorColor: _rsAccent,
+              style: const TextStyle(color: _rsText, fontSize: 14),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                hintText: '예: 10-15,20 (비우면 전체 인쇄)',
+                hintStyle: const TextStyle(color: _rsTextSub, fontSize: 12),
+                filled: true,
+                fillColor: _rsFieldBg,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _rsBorder)),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _rsBorder)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: _rsAccent)),
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text('비우면 전체 인쇄', style: TextStyle(color: _rsTextSub, fontSize: 11)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소', style: TextStyle(color: _rsTextSub)),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_rangeCtrl.text.trim()),
+          style: FilledButton.styleFrom(backgroundColor: _rsAccent),
+          child: const Text('인쇄'),
+        ),
+      ],
+    );
+  }
+}
+
 class _MoreMenuButton extends StatelessWidget {
   final _ResourceFile file;
   final bool compact;
-  const _MoreMenuButton({required this.file, this.compact = false});
+  final double? hitSize;
+  const _MoreMenuButton({required this.file, this.compact = false, this.hitSize});
   @override
   Widget build(BuildContext context) {
     final iconWidget = Icon(Icons.more_horiz, size: 18, color: Colors.white.withOpacity(compact ? 0.75 : 0.6));
     final resourcesState = context.findAncestorStateOfType<_ResourcesScreenState>();
     final isTextbook = resourcesState?._currentCategory == 'textbook';
+    final double effectiveHitSize = hitSize ?? 32.0;
+    final Widget compactChild = SizedBox(
+      width: effectiveHitSize,
+      height: effectiveHitSize,
+      child: Center(child: iconWidget),
+    );
     return PopupMenuButton<String>(
       tooltip: '메뉴',
       position: PopupMenuPosition.under,
       offset: const Offset(8, -6),
       padding: compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 8),
       icon: compact ? null : iconWidget,
-      child: compact ? iconWidget : null,
+      child: compact ? compactChild : null,
       itemBuilder: (ctx) => <PopupMenuEntry<String>>[
         if (isTextbook) ...[
           PopupMenuItem<String>(
