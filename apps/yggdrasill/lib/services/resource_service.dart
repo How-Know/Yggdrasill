@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:postgrest/postgrest.dart' show PostgrestException;
 
 import 'academy_db.dart';
 import 'runtime_flags.dart';
@@ -9,6 +10,84 @@ import 'tenant_service.dart';
 class ResourceService {
   ResourceService._internal();
   static final ResourceService instance = ResourceService._internal();
+
+  static const String _resourceFileSelectBase =
+      'id,parent_id:folder_id,name,url,category,order_index';
+  static const String _resourceFileSelectExtended =
+      'id,parent_id:folder_id,name,url,category,order_index,icon_code,icon_image_path,description,text_color,color,grade,pos_x,pos_y,width,height';
+
+  bool _resourceFilesExtendedColumnsAvailable = true;
+
+  bool _isMissingColumnError(Object e) {
+    if (e is PostgrestException) {
+      return e.code == '42703' || e.code == 'PGRST204';
+    }
+    final msg = e.toString();
+    return msg.contains('does not exist') || msg.contains('schema cache');
+  }
+
+  Map<String, dynamic> _buildResourceFileUpsert(
+    Map<String, dynamic> row, {
+    required String academyId,
+    required bool extended,
+  }) {
+    final up = <String, dynamic>{
+      'id': row['id'],
+      'academy_id': academyId,
+    };
+    if (row.containsKey('parent_id')) up['folder_id'] = row['parent_id'];
+    if (row.containsKey('name')) up['name'] = row['name'];
+    if (row.containsKey('url')) up['url'] = row['url'];
+    if (row.containsKey('category')) up['category'] = row['category'];
+    if (row.containsKey('order_index')) up['order_index'] = row['order_index'];
+    if (extended) {
+      if (row.containsKey('icon_code')) up['icon_code'] = row['icon_code'];
+      if (row.containsKey('icon_image_path')) up['icon_image_path'] = row['icon_image_path'];
+      if (row.containsKey('description')) up['description'] = row['description'];
+      if (row.containsKey('text_color')) up['text_color'] = row['text_color'];
+      if (row.containsKey('color')) up['color'] = row['color'];
+      if (row.containsKey('grade')) up['grade'] = row['grade'];
+      if (row.containsKey('pos_x')) up['pos_x'] = row['pos_x'];
+      if (row.containsKey('pos_y')) up['pos_y'] = row['pos_y'];
+      if (row.containsKey('width')) up['width'] = row['width'];
+      if (row.containsKey('height')) up['height'] = row['height'];
+    }
+    return up;
+  }
+
+  List<Map<String, dynamic>> _mergeResourceFileRows(
+    List<Map<String, dynamic>> serverRows,
+    List<Map<String, dynamic>> localRows,
+  ) {
+    final localById = <String, Map<String, dynamic>>{};
+    for (final r in localRows) {
+      final id = (r['id'] as String?) ?? '';
+      if (id.isNotEmpty) localById[id] = r;
+    }
+    const extendedKeys = [
+      'icon_code',
+      'icon_image_path',
+      'description',
+      'text_color',
+      'color',
+      'grade',
+      'pos_x',
+      'pos_y',
+      'width',
+      'height',
+    ];
+    for (final row in serverRows) {
+      final id = (row['id'] as String?) ?? '';
+      final local = localById[id];
+      if (local == null) continue;
+      for (final k in extendedKeys) {
+        if (!row.containsKey(k) || row[k] == null) {
+          row[k] = local[k];
+        }
+      }
+    }
+    return serverRows;
+  }
 
   // ======== RESOURCES (FOLDERS/FILES) ========
   Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
@@ -136,16 +215,26 @@ class ResourceService {
             await TenantService.instance.getActiveAcademyId() ??
                 await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final up = {
-          'id': row['id'],
-          'academy_id': academyId,
-          'folder_id': row['parent_id'],
-          'name': row['name'],
-          'url': row['url'],
-          'category': row['category'],
-          'order_index': row['order_index'],
-        };
-        await supa.from('resource_files').upsert(up, onConflict: 'id');
+        final up = _buildResourceFileUpsert(
+          row,
+          academyId: academyId,
+          extended: _resourceFilesExtendedColumnsAvailable,
+        );
+        try {
+          await supa.from('resource_files').upsert(up, onConflict: 'id');
+        } on PostgrestException catch (e) {
+          if (_resourceFilesExtendedColumnsAvailable && _isMissingColumnError(e)) {
+            _resourceFilesExtendedColumnsAvailable = false;
+            final fallback = _buildResourceFileUpsert(
+              row,
+              academyId: academyId,
+              extended: false,
+            );
+            await supa.from('resource_files').upsert(fallback, onConflict: 'id');
+          } else {
+            rethrow;
+          }
+        }
       } catch (e, st) {
         print('[RES][file save] supabase upsert failed: $e\n$st');
       }
@@ -168,12 +257,33 @@ class ResourceService {
             await TenantService.instance.getActiveAcademyId() ??
                 await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final data = await supa
-            .from('resource_files')
-            .select('id,parent_id:folder_id,name,url,category,order_index')
-            .eq('academy_id', academyId)
-            .order('order_index');
-        return (data as List).cast<Map<String, dynamic>>();
+        List<dynamic> data;
+        bool usedExtended = _resourceFilesExtendedColumnsAvailable;
+        try {
+          data = await supa
+              .from('resource_files')
+              .select(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase)
+              .eq('academy_id', academyId)
+              .order('order_index');
+        } on PostgrestException catch (e) {
+          if (usedExtended && _isMissingColumnError(e)) {
+            _resourceFilesExtendedColumnsAvailable = false;
+            usedExtended = false;
+            data = await supa
+                .from('resource_files')
+                .select(_resourceFileSelectBase)
+                .eq('academy_id', academyId)
+                .order('order_index');
+          } else {
+            rethrow;
+          }
+        }
+        final rows = (data as List).cast<Map<String, dynamic>>();
+        if (!usedExtended && !RuntimeFlags.serverOnly) {
+          final local = await AcademyDbService.instance.loadResourceFiles();
+          return _mergeResourceFileRows(rows, local);
+        }
+        return rows;
       } catch (e, st) {
         print('[RES][files] server load failed: $e\n$st');
         if (RuntimeFlags.serverOnly) {
@@ -194,21 +304,40 @@ class ResourceService {
                 await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         List<dynamic> data;
-        if (category == 'textbook') {
-          data = await supa
+        bool usedExtended = _resourceFilesExtendedColumnsAvailable;
+        Future<List<dynamic>> runSelect(String cols) async {
+          if (category == 'textbook') {
+            return await supa
+                .from('resource_files')
+                .select(cols)
+                .eq('academy_id', academyId)
+                .or('category.is.null,category.eq.textbook')
+                .order('order_index');
+          }
+          return await supa
               .from('resource_files')
-              .select('id,parent_id:folder_id,name,url,category,order_index')
-              .eq('academy_id', academyId)
-              .or('category.is.null,category.eq.textbook')
-              .order('order_index');
-        } else {
-          data = await supa
-              .from('resource_files')
-              .select('id,parent_id:folder_id,name,url,category,order_index')
+              .select(cols)
               .match({'academy_id': academyId, 'category': category})
               .order('order_index');
         }
-        return (data as List).cast<Map<String, dynamic>>();
+
+        try {
+          data = await runSelect(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase);
+        } on PostgrestException catch (e) {
+          if (usedExtended && _isMissingColumnError(e)) {
+            _resourceFilesExtendedColumnsAvailable = false;
+            usedExtended = false;
+            data = await runSelect(_resourceFileSelectBase);
+          } else {
+            rethrow;
+          }
+        }
+        final rows = (data as List).cast<Map<String, dynamic>>();
+        if (!usedExtended && !RuntimeFlags.serverOnly) {
+          final local = await AcademyDbService.instance.loadResourceFilesForCategory(category);
+          return _mergeResourceFileRows(rows, local);
+        }
+        return rows;
       } catch (e, st) {
         print('[RES][filesByCat] server load failed: $e\n$st');
         if (RuntimeFlags.serverOnly) {

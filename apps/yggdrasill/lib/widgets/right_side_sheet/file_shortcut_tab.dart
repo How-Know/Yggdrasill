@@ -155,6 +155,8 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     unawaited(_init());
   }
 
+  // dispose는 아래에서 메모리 캐시와 함께 처리한다.
+
   Future<void> _init() async {
     // ✅ 서버 저장 없이 "마지막 선택 범주"를 로컬(SharedPreferences)에서 복원
     await _restoreLastSelectedCategoryFromPrefs();
@@ -333,6 +335,21 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     final folderId = _selectedFolderId;
     if (cat == null || folderId == null || folderId.trim().isEmpty) return null;
     return cat.folders.firstWhere((f) => f.id == folderId, orElse: () => const _FsFolder.none());
+  }
+
+  bool get canEdit {
+    final hasCategory = _effectiveCategoryId != null;
+    final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
+    return (_target == _FsTarget.category && hasCategory) ||
+        (_target == _FsTarget.folder && hasFolder);
+  }
+
+  bool get canDelete => canEdit;
+
+  bool get canAddFile {
+    final hasCategory = _effectiveCategoryId != null;
+    final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
+    return hasCategory && hasFolder;
   }
 
   Future<void> _bootstrapReload() async {
@@ -935,13 +952,8 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     final cat = _effectiveCategory;
     final folders = cat?.folders ?? const <_FsFolder>[];
 
-    final hasCategory = cat != null;
-    final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
     final bootEmpty = _booting && _categories.isEmpty;
-
-    final canEdit = (_target == _FsTarget.category && hasCategory) || (_target == _FsTarget.folder && hasFolder);
-    final canDelete = canEdit;
-    final canAddFile = hasCategory && hasFolder;
+    final hasCategory = cat != null;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
@@ -951,46 +963,6 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
           const Text(
             '파일 바로가기',
             style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
-          _ExplorerHeader(
-            leading: Row(
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '추가(범주/폴더)',
-                    icon: Icons.create_new_folder_outlined,
-                    onPressed: _loading ? null : () => unawaited(_onCreatePressed()),
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '수정(범주/폴더)',
-                    icon: Icons.drive_file_rename_outline,
-                    onPressed: (!_loading && canEdit) ? () => unawaited(_onEditPressed()) : null,
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '삭제(범주/폴더)',
-                    icon: Icons.delete_outline,
-                    onPressed: (!_loading && canDelete) ? () => unawaited(_onDeletePressed()) : null,
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '파일 추가',
-                    icon: Icons.note_add_outlined,
-                    onPressed: (!_loading && canAddFile) ? () => unawaited(_onAddFilePressed()) : null,
-                    showRightDivider: false,
-                  ),
-                ),
-              ],
-            ),
           ),
           const SizedBox(height: 12),
           _CategoryPickerRow(
@@ -1265,74 +1237,6 @@ class _FsCategory {
       name: name ?? this.name,
       order: order ?? this.order,
       folders: folders ?? this.folders,
-    );
-  }
-}
-
-class _ExplorerHeader extends StatelessWidget {
-  final Widget? leading;
-  final Widget? trailing;
-  const _ExplorerHeader({this.leading, this.trailing});
-
-  @override
-  Widget build(BuildContext context) {
-    final hasLeading = leading != null;
-    final hasTrailing = trailing != null;
-    return Container(
-      decoration: BoxDecoration(
-        color: _rsPanelBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _rsBorder),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      child: Row(
-        children: [
-          if (hasLeading) Expanded(child: leading!) else const Spacer(),
-          if (hasTrailing) ...[
-            if (hasLeading) const SizedBox(width: 6),
-            trailing!,
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ToolbarSegmentButton extends StatelessWidget {
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final bool showRightDivider;
-
-  const _ToolbarSegmentButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-    required this.showRightDivider,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onPressed != null;
-    final iconColor = enabled ? Colors.white70 : Colors.white24;
-    final border = showRightDivider ? Border(right: BorderSide(color: _rsBorder.withOpacity(0.9))) : null;
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 450),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          child: Container(
-            height: 44,
-            decoration: BoxDecoration(border: border),
-            child: Center(
-              child: Icon(icon, size: 20, color: iconColor),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

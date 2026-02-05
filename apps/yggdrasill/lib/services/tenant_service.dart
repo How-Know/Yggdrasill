@@ -6,12 +6,29 @@ class TenantService {
   static final TenantService instance = TenantService._();
 
   static const _prefsKey = 'active_academy_id';
+  static String _scopedPrefsKey(String uid) => 'active_academy_id_$uid';
 
   Future<String?> getActiveAcademyId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final id = prefs.getString(_prefsKey);
-      if (id != null && id.isNotEmpty) return id;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null || uid.isEmpty) {
+        final id = prefs.getString(_prefsKey);
+        if (id != null && id.isNotEmpty) return id;
+        return null;
+      }
+      final scoped = prefs.getString(_scopedPrefsKey(uid));
+      if (scoped != null && scoped.isNotEmpty) return scoped;
+
+      // Legacy migration: only accept if user is a member of that academy
+      final legacy = prefs.getString(_prefsKey);
+      if (legacy != null && legacy.isNotEmpty) {
+        final ok = await _hasMembership(uid, legacy);
+        if (ok) {
+          await prefs.setString(_scopedPrefsKey(uid), legacy);
+          return legacy;
+        }
+      }
       return null;
     } catch (_) {
       return null;
@@ -20,7 +37,24 @@ class TenantService {
 
   Future<void> setActiveAcademyId(String academyId) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefsKey, academyId);
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid != null && uid.isNotEmpty) {
+      await prefs.setString(_scopedPrefsKey(uid), academyId);
+    }
+  }
+
+  Future<bool> _hasMembership(String uid, String academyId) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('memberships')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('user_id', uid)
+          .limit(1);
+      return rows.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Ensure an academy exists for current user (as owner) and return its id.
