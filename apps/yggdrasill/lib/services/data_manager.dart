@@ -5491,6 +5491,19 @@ DateTime? _lastClassesOrderSaveStart;
       ResourceService.instance.saveResourceFile(row);
   Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) =>
       ResourceService.instance.saveResourceFileWithCategory(row, category);
+
+  Future<void> saveResourceFileOrders({
+    required String scopeType,
+    required String category,
+    required String? parentId,
+    required List<Map<String, dynamic>> rows,
+  }) =>
+      ResourceService.instance.saveResourceFileOrders(
+        scopeType: scopeType,
+        category: category,
+        parentId: parentId,
+        rows: rows,
+      );
   Future<List<Map<String, dynamic>>> loadResourceFiles() =>
       ResourceService.instance.loadResourceFiles();
   Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) =>

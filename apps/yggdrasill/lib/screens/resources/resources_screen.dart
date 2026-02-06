@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:flutter/gestures.dart';
 import '../../widgets/pill_tab_selector.dart';
+import '../../widgets/animated_reorderable_grid.dart';
 import '../../services/data_manager.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -111,10 +112,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   bool _resizeMode = false;
   bool _editMode = false;
   bool _printPickMode = false;
-  final List<GlobalKey> _gridViewportKeys = List<GlobalKey>.generate(3, (_) => GlobalKey());
   final List<ScrollController> _gridScrollCtrls = List<ScrollController>.generate(3, (_) => ScrollController());
-  int? _dragReorderIndex;
-  String? _dragReorderParentId;
 
   final List<_ResourceFolder> _folders = [];
   final List<_ResourceFile> _files = [];
@@ -140,7 +138,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   String? _selectedFolderIdForTree; // null = 루트
   final Set<String> _expandedFolderIds = <String>{};
   Set<String> _favoriteFileIds = <String>{};
-  String? _draggingFileId;
   String? _draggingFolderId;
   String? _dragIncomingParentId;
   String? _reorderTargetFolderId;
@@ -926,98 +923,27 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() => _fileGradeLabels[file.id] = nextLabel);
   }
 
-  int? _reorderFilesDuringDrag({
-    required _ResourceFile incoming,
-    required String? parentId,
-    required int targetIndex,
-  }) {
-    final sameParent = (incoming.parentId ?? '') == (parentId ?? '');
-    if (!sameParent) return null;
-    final siblings = _childFilesOf(parentId);
-    if (siblings.isEmpty) return null;
-    final fromIdx = siblings.indexWhere((x) => x.id == incoming.id);
-    if (fromIdx == -1) return null;
-    var toIdx = targetIndex.clamp(0, siblings.length - 1);
-    if (toIdx == fromIdx) return fromIdx;
-    final ordered = List<_ResourceFile>.from(siblings);
-    final moved = ordered.removeAt(fromIdx);
-    if (fromIdx < toIdx) toIdx -= 1;
-    ordered.insert(toIdx, moved);
-    bool changed = false;
-    for (int i = 0; i < ordered.length; i++) {
-      final gIdx = _files.indexWhere((x) => x.id == ordered[i].id);
-      if (gIdx != -1 && _files[gIdx].orderIndex != i) {
-        _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
-        changed = true;
-      }
-    }
-    if (changed) setState(() {});
-    return toIdx;
-  }
-
   Future<void> _persistFileOrderForParent(String? parentId) async {
+    if (parentId == '__FAVORITES__') return;
     final ordered = _childFilesOf(parentId);
+    final orderRows = <Map<String, dynamic>>[];
     for (int i = 0; i < ordered.length; i++) {
       final file = ordered[i];
       final gIdx = _files.indexWhere((x) => x.id == file.id);
       if (gIdx != -1 && _files[gIdx].orderIndex != i) {
         _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
       }
-      await DataManager.instance.saveResourceFile({'id': file.id, 'order_index': i});
+      orderRows.add({
+        'file_id': file.id,
+        'order_index': i,
+      });
     }
-  }
-
-  void _handleGridDragUpdate({
-    required Offset globalPosition,
-    required _ResourceFile incoming,
-    required int cols,
-    required double gridCardWidth,
-    required double gridCardHeight,
-    required double spacing,
-    required double gridWidth,
-    required GlobalKey viewportKey,
-    required ScrollController scrollCtrl,
-  }) {
-    if (_draggingFileId == null || incoming.id != _draggingFileId) return;
-    final parentId = incoming.parentId ?? _selectedFolderIdForTree;
-    final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final local = box.globalToLocal(globalPosition);
-    final maxX = math.max(0.0, gridWidth - 1);
-    final x = local.dx.clamp(0.0, maxX);
-    final scrollOffset = scrollCtrl.hasClients ? scrollCtrl.offset : 0.0;
-    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
-    final col = (x / (gridCardWidth + spacing)).floor().clamp(0, cols - 1);
-    final row = (y / (gridCardHeight + spacing)).floor();
-    final siblings = _childFilesOf(parentId);
-    if (siblings.isEmpty) return;
-    var targetIndex = row * cols + col;
-    if (targetIndex < 0) targetIndex = 0;
-    if (targetIndex > siblings.length - 1) targetIndex = siblings.length - 1;
-    if (_dragReorderIndex == targetIndex && _dragReorderParentId == parentId) return;
-    _dragReorderParentId = parentId;
-    final newIndex = _reorderFilesDuringDrag(
-      incoming: incoming,
+    await DataManager.instance.saveResourceFileOrders(
+      scopeType: 'resources',
+      category: _currentCategory,
       parentId: parentId,
-      targetIndex: targetIndex,
+      rows: orderRows,
     );
-    if (newIndex != null) {
-      _dragReorderIndex = newIndex;
-    }
-    _maybeAutoScroll(local.dy, box.size.height, scrollCtrl);
-  }
-
-  void _maybeAutoScroll(double localDy, double viewportHeight, ScrollController scrollCtrl) {
-    if (!scrollCtrl.hasClients) return;
-    const edge = 60.0;
-    const step = 18.0;
-    final offset = scrollCtrl.offset;
-    final max = scrollCtrl.position.maxScrollExtent;
-    if (localDy < edge && offset > 0) {
-      scrollCtrl.jumpTo(math.max(0.0, offset - step));
-    } else if (localDy > viewportHeight - edge && offset < max) {
-      scrollCtrl.jumpTo(math.min(max, offset + step));
-    }
   }
 
   Future<void> _loadGradeIcons() async {
@@ -1921,7 +1847,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                           'name': created.name,
                                           'description': created.description,
                                           'parent_id': created.parentId,
-                                          'order_index': created.orderIndex,
                                           'pos_x': created.position.dx,
                                           'pos_y': created.position.dy,
                                           'width': created.size.width,
@@ -1930,6 +1855,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                                           'icon_image_path': created.iconImagePath,
                                         });
                                         await DataManager.instance.saveResourceFileLinks(created.id, links);
+                                        await _persistFileOrderForParent(parentId);
                                       },
                                       icon: const Icon(Icons.add, size: 20),
                                       label: Text(addLabel, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -2361,13 +2287,18 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                     final incoming = details.data;
                                     final idx = _files.indexWhere((x) => x.id == incoming.id);
                                     if (idx != -1) {
+                                      final prevParent = _files[idx].parentId;
                                       final childList = _childFilesOf(f.id);
                                       final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
                                       setState(() {
                                         _files[idx] = _files[idx].copyWith(parentId: f.id, orderIndex: nextIndex);
                                         _fileDropTargetFolderId = null;
                                       });
-                                      await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id, 'order_index': nextIndex});
+                                      await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id});
+                                      await _persistFileOrderForParent(f.id);
+                                      if (prevParent != f.id) {
+                                        await _persistFileOrderForParent(prevParent);
+                                      }
                                     }
                                   },
                                   onLeave: (_) => setState(() { if (_fileDropTargetFolderId == f.id) _fileDropTargetFolderId = null; }),
@@ -2401,6 +2332,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         final incoming = details.data;
                         final idx = _files.indexWhere((x) => x.id == incoming.id);
                         if (idx != -1) {
+                          final prevParent = _files[idx].parentId;
                           // 새 부모 폴더의 마지막 인덱스 계산
                           final childList = _childFilesOf(f.id);
                           final nextIndex = childList.isEmpty ? 0 : (childList.map((e) => e.orderIndex ?? 0).reduce((a,b)=> a > b ? a : b) + 1);
@@ -2408,7 +2340,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                             _files[idx] = _files[idx].copyWith(parentId: f.id, orderIndex: nextIndex);
                             _fileDropTargetFolderId = null;
                           });
-                          await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id, 'order_index': nextIndex});
+                          await DataManager.instance.saveResourceFile({'id': incoming.id, 'parent_id': f.id});
+                          await _persistFileOrderForParent(f.id);
+                          if (prevParent != f.id) {
+                            await _persistFileOrderForParent(prevParent);
+                          }
                         }
                       },
                       onLeave: (_) => setState(() { if (_fileDropTargetFolderId == f.id) _fileDropTargetFolderId = null; }),
@@ -2453,12 +2389,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
   Widget _buildFolderContentGrid(int tabSlot) {
     final files = _childFilesOf(_selectedFolderIdForTree);
-    final gridViewportKey = _gridViewportKeys[tabSlot];
     final gridScrollCtrl = _gridScrollCtrls[tabSlot];
-    final selectedFolder = _folders.firstWhere(
-      (f) => f.id == _selectedFolderIdForTree,
-      orElse: () => _ResourceFolder(id: '', name: '', color: null, description: '', position: Offset.zero, size: const Size(0,0), shape: 'rect', parentId: null),
-    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(30, 4, 16, 16),
       child: LayoutBuilder(
@@ -2473,6 +2404,26 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           final double spacing = isTextbook ? 22.4 : 16.0;
           final cols = (constraints.maxWidth / (gridCardWidth + spacing)).floor().clamp(1, 999);
           final double gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
+          Widget buildCardCell(_ResourceFile fi) {
+            final card = SizedBox(
+              width: double.infinity,
+              height: baseCardHeight,
+              child: _GridFileCard(file: fi, resStateOverride: this),
+            );
+            if (!showPrintTest) return card;
+            return Column(
+              children: [
+                card,
+                SizedBox(height: printBarGap),
+                _BookPrintTestBar(
+                  key: ValueKey('${fi.id}#print'),
+                  width: gridCardWidth,
+                  height: printBarHeight,
+                  onPrint: (range) => _printBookRange(fi, range),
+                ),
+              ],
+            );
+          }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2483,91 +2434,40 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   child: MouseRegion(
                     cursor: _printPickMode ? SystemMouseCursors.copy : SystemMouseCursors.basic,
                     child: SizedBox(
-                      key: gridViewportKey,
                       width: gridWidth,
                       child: ScrollConfiguration(
                         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-                        child: GridView.builder(
-                          controller: gridScrollCtrl,
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: cols,
-                            mainAxisSpacing: spacing,
-                            crossAxisSpacing: spacing,
-                            childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
-                          ),
-                          itemCount: files.length,
-                          itemBuilder: (context, index) {
-                    final fi = files[index];
-                    Widget buildCardCell() {
-                      final card = SizedBox(
-                        width: gridCardWidth,
-                        height: baseCardHeight,
-                        child: _GridFileCard(file: fi),
-                      );
-                      if (!showPrintTest) return card;
-                      return SizedBox(
-                        width: gridCardWidth,
-                        height: gridCardHeight,
-                        child: Column(
-                          children: [
-                            card,
-                            SizedBox(height: printBarGap),
-                            _BookPrintTestBar(
-                              key: ValueKey('${fi.id}#print'),
-                              width: gridCardWidth,
-                              height: printBarHeight,
-                              onPrint: (range) => _printBookRange(fi, range),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return LongPressDraggable<_ResourceFile>(
-                      key: ValueKey('file-drag-${fi.id}'),
-                      data: fi,
-                      hapticFeedbackOnStart: true,
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: buildCardCell(),
-                      ),
-                      onDragUpdate: (details) {
-                        _handleGridDragUpdate(
-                          globalPosition: details.globalPosition,
-                          incoming: fi,
-                          cols: cols,
-                          gridCardWidth: gridCardWidth,
-                          gridCardHeight: gridCardHeight,
+                        child: AnimatedReorderableGrid<_ResourceFile>(
+                          items: files,
+                          itemId: (file) => file.id,
+                          itemBuilder: (context, file) => buildCardCell(file),
+                          feedbackBuilder: (context, file) => buildCardCell(file),
+                          cardWidth: gridCardWidth,
+                          cardHeight: gridCardHeight,
                           spacing: spacing,
-                          gridWidth: gridWidth,
-                          viewportKey: gridViewportKey,
-                          scrollCtrl: gridScrollCtrl,
-                        );
-                      },
-                      onDragStarted: () {
-                        final parentId = fi.parentId ?? _selectedFolderIdForTree;
-                        final idx = _childFilesOf(parentId).indexWhere((x) => x.id == fi.id);
-                        setState(() {
-                          _draggingFileId = fi.id;
-                          _dragReorderParentId = parentId;
-                          _dragReorderIndex = idx == -1 ? null : idx;
-                        });
-                      },
-                      onDragEnd: (_) {
-                        final parentId = fi.parentId ?? _selectedFolderIdForTree;
-                        if (parentId != '__FAVORITES__') {
-                          _persistFileOrderForParent(parentId);
-                        }
-                        setState(() {
-                          _draggingFileId = null;
-                          _dragReorderIndex = null;
-                          _dragReorderParentId = null;
-                        });
-                      },
-                      childWhenDragging: const SizedBox.shrink(),
-                      dragAnchorStrategy: childDragAnchorStrategy,
-                      child: buildCardCell(),
-                    );
-                  },
+                          columns: cols,
+                          scrollController: gridScrollCtrl,
+                          animationDuration: const Duration(milliseconds: 180),
+                          animationCurve: Curves.easeOutCubic,
+                          onReorder: (file, targetIndex) async {
+                            if (files.isEmpty) return;
+                            final ordered = List<_ResourceFile>.from(files);
+                            final fromIdx = ordered.indexWhere((x) => x.id == file.id);
+                            if (fromIdx == -1) return;
+                            final moved = ordered.removeAt(fromIdx);
+                            final insertAt = targetIndex.clamp(0, ordered.length);
+                            ordered.insert(insertAt, moved);
+                            for (int i = 0; i < ordered.length; i++) {
+                              final gIdx = _files.indexWhere((x) => x.id == ordered[i].id);
+                              if (gIdx != -1 && _files[gIdx].orderIndex != i) {
+                                _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
+                              }
+                            }
+                            setState(() {});
+                            if (_selectedFolderIdForTree != '__FAVORITES__') {
+                              await _persistFileOrderForParent(_selectedFolderIdForTree);
+                            }
+                          },
                         ),
                       ),
                     ),
@@ -4137,7 +4037,8 @@ class _ResourceFile {
 
 class _GridFileCard extends StatefulWidget {
   final _ResourceFile file;
-  const _GridFileCard({required this.file});
+  final _ResourcesScreenState? resStateOverride;
+  const _GridFileCard({required this.file, this.resStateOverride});
 
   @override
   State<_GridFileCard> createState() => _GridFileCardState();
@@ -4176,13 +4077,15 @@ class _GridFileCardState extends State<_GridFileCard> {
   Widget build(BuildContext context) {
     // 고정형 카드 스타일: 일관된 크기/패딩, 드래그/리사이즈 없음
     final file = widget.file;
-    final resState = context.findAncestorStateOfType<_ResourcesScreenState>();
+    final resState = widget.resStateOverride ?? context.findAncestorStateOfType<_ResourcesScreenState>();
     final grades = resState?._grades ?? const <String>[];
     final currentGrade = resState?._effectiveGradeLabelForFile(file);
     final hasForCurrent = currentGrade != null && (file.linksByGrade['$currentGrade#body']?.trim().isNotEmpty ?? false);
     final bg = hasForCurrent ? (file.color ?? const Color(0xFF2B2B2B)) : const Color(0xFF2B2B2B).withOpacity(0.22);
     final coverPath = _coverForGrade(currentGrade);
     final hasCover = coverPath != null && coverPath.isNotEmpty;
+    final hasExplicitIcon = (file.iconImagePath?.trim().isNotEmpty ?? false) ||
+        (file.icon != null && file.icon != Icons.insert_drive_file);
     final displayGrade = currentGrade ?? file.primaryGrade;
     final isTextbook = resState?._currentCategory == 'textbook';
     final isPrintMode = resState?._printPickMode ?? false;
@@ -4292,7 +4195,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                                           color: Colors.white60,
                                         ),
                                       ),
-                                    if (hasCover && file.icon != null)
+                                    if (hasCover && hasExplicitIcon && file.icon != null)
                                       IgnorePointer(
                                         child: Center(
                                           child: Icon(
@@ -4311,7 +4214,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                                         child: Container(
                                           padding: const EdgeInsets.all(6),
                                           decoration: BoxDecoration(
-                                            color: Colors.black.withOpacity(0.45),
+                                            color: Colors.transparent,
                                             borderRadius: BorderRadius.circular(16),
                                           ),
                                           child: Icon(
@@ -4883,7 +4786,6 @@ class _MoreMenuButton extends StatelessWidget {
                 'name': edited.name,
                 'description': edited.description,
                 'parent_id': edited.parentId,
-                'order_index': edited.orderIndex,
                 if (resourcesState != null) 'category': resourcesState._currentCategory,
                 'icon_code': edited.icon?.codePoint,
                 'icon_image_path': edited.iconImagePath,
@@ -4919,7 +4821,6 @@ class _MoreMenuButton extends StatelessWidget {
                 'name': edited.name,
                 'description': edited.description,
                 'parent_id': edited.parentId,
-                'order_index': edited.orderIndex,
                 if (resourcesState != null) 'category': resourcesState._currentCategory,
                 'icon_code': edited.icon?.codePoint,
                 'icon_image_path': edited.iconImagePath,

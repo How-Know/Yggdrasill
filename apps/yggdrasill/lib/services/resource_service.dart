@@ -17,6 +17,11 @@ class ResourceService {
       'id,parent_id:folder_id,name,url,category,order_index,icon_code,icon_image_path,description,text_color,color,grade,pos_x,pos_y,width,height';
 
   bool _resourceFilesExtendedColumnsAvailable = true;
+  bool _resourceFileOrdersAvailable = true;
+
+  String _scopeTypeForCategory(String category) {
+    return category == 'file_shortcut' ? 'file_shortcut' : 'resources';
+  }
 
   bool _isMissingColumnError(Object e) {
     if (e is PostgrestException) {
@@ -24,6 +29,14 @@ class ResourceService {
     }
     final msg = e.toString();
     return msg.contains('does not exist') || msg.contains('schema cache');
+  }
+
+  bool _isMissingTableError(Object e) {
+    if (e is PostgrestException) {
+      return e.code == '42P01' || e.code == 'PGRST106';
+    }
+    final msg = e.toString();
+    return msg.contains('does not exist') && msg.contains('resource_file_orders');
   }
 
   Map<String, dynamic> _buildResourceFileUpsert(
@@ -87,6 +100,64 @@ class ResourceService {
       }
     }
     return serverRows;
+  }
+
+  Future<List<Map<String, dynamic>>> _applyOrderOverrides(
+    List<Map<String, dynamic>> rows,
+    String category,
+  ) async {
+    if (rows.isEmpty) return rows;
+    final orders = await _loadOrderOverrides(category);
+    if (orders.isEmpty) return rows;
+    final orderByKey = <String, int>{};
+    for (final o in orders) {
+      final fileId = (o['file_id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = (o['parent_id'] as String?) ?? '';
+      final order = (o['order_index'] as int?) ?? 0;
+      orderByKey['$fileId|$parent'] = order;
+    }
+    for (final row in rows) {
+      final fileId = (row['id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = (row['parent_id'] as String?) ?? '';
+      final key = '$fileId|$parent';
+      if (orderByKey.containsKey(key)) {
+        row['order_index'] = orderByKey[key];
+      }
+    }
+    return rows;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadOrderOverrides(String category) async {
+    final scopeType = _scopeTypeForCategory(category);
+    if (TagPresetService.preferSupabaseRead && _resourceFileOrdersAvailable) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final data = await supa
+            .from('resource_file_orders')
+            .select('file_id,parent_id,order_index')
+            .match({
+              'academy_id': academyId,
+              'scope_type': scopeType,
+              'category': category,
+            });
+        return (data as List).cast<Map<String, dynamic>>();
+      } catch (e, st) {
+        if (_isMissingTableError(e)) {
+          _resourceFileOrdersAvailable = false;
+        } else {
+          print('[RES][file order load] supabase failed: $e\n$st');
+        }
+      }
+    }
+    return await AcademyDbService.instance.loadResourceFileOrders(
+      scopeType: scopeType,
+      category: category,
+    );
   }
 
   // ======== RESOURCES (FOLDERS/FILES) ========
@@ -332,12 +403,14 @@ class ResourceService {
             rethrow;
           }
         }
-        final rows = (data as List).cast<Map<String, dynamic>>();
-        if (!usedExtended && !RuntimeFlags.serverOnly) {
+        var rows = (data as List).cast<Map<String, dynamic>>();
+        if (!RuntimeFlags.serverOnly) {
           final local = await AcademyDbService.instance.loadResourceFilesForCategory(category);
-          return _mergeResourceFileRows(rows, local);
+          if (local.isNotEmpty) {
+            rows = _mergeResourceFileRows(rows, local);
+          }
         }
-        return rows;
+        return await _applyOrderOverrides(rows, category);
       } catch (e, st) {
         print('[RES][filesByCat] server load failed: $e\n$st');
         if (RuntimeFlags.serverOnly) {
@@ -345,7 +418,53 @@ class ResourceService {
         }
       }
     }
-    return await AcademyDbService.instance.loadResourceFilesForCategory(category);
+    final rows = await AcademyDbService.instance.loadResourceFilesForCategory(category);
+    return await _applyOrderOverrides(rows, category);
+  }
+
+  Future<void> saveResourceFileOrders({
+    required String scopeType,
+    required String category,
+    required String? parentId,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    await AcademyDbService.instance.saveResourceFileOrders(
+      scopeType: scopeType,
+      category: category,
+      parentId: parentId,
+      rows: rows,
+    );
+    if (TagPresetService.dualWrite && _resourceFileOrdersAvailable) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final parent = (parentId ?? '').trim();
+        final up = rows
+            .map((r) => {
+                  'academy_id': academyId,
+                  'scope_type': scopeType,
+                  'category': category,
+                  'parent_id': parent,
+                  'file_id': r['file_id'],
+                  'order_index': r['order_index'],
+                })
+            .toList();
+        if (up.isNotEmpty) {
+          await supa.from('resource_file_orders').upsert(
+                up,
+                onConflict: 'academy_id,scope_type,category,parent_id,file_id',
+              );
+        }
+      } catch (e, st) {
+        if (_isMissingTableError(e)) {
+          _resourceFileOrdersAvailable = false;
+        } else {
+          print('[RES][file order save] supabase upsert failed: $e\n$st');
+        }
+      }
+    }
   }
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
@@ -410,11 +529,19 @@ class ResourceService {
 
   Future<void> deleteResourceFile(String fileId) async {
     await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
+    await AcademyDbService.instance.deleteResourceFileOrdersByFileId(fileId);
     await AcademyDbService.instance.deleteResourceFile(fileId);
     if (TagPresetService.dualWrite) {
       try {
         final supa = Supabase.instance.client;
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+                await TenantService.instance.ensureActiveAcademy();
         await supa.from('resource_files').delete().eq('id', fileId);
+        await supa.from('resource_file_orders').delete().match({
+          'academy_id': academyId,
+          'file_id': fileId,
+        });
       } catch (_) {}
     }
   }

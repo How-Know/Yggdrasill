@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
 import '../../widgets/pill_tab_selector.dart';
+import '../../widgets/animated_reorderable_grid.dart';
 import 'problem_bank_view.dart';
 
 class LearningScreen extends StatefulWidget {
@@ -82,10 +82,7 @@ class _LearningCurriculumView extends StatefulWidget {
 
 class _LearningCurriculumViewState extends State<_LearningCurriculumView> {
   final List<_CurriculumCard> _cards = [];
-  final GlobalKey _gridViewportKey = GlobalKey();
   final ScrollController _gridScrollCtrl = ScrollController();
-  String? _draggingCardId;
-  int? _pendingDropIndex;
 
   @override
   void initState() {
@@ -120,21 +117,6 @@ class _LearningCurriculumViewState extends State<_LearningCurriculumView> {
     return list;
   }
 
-  List<_CurriculumCard> _buildPreviewCards(List<_CurriculumCard> ordered) {
-    if (_draggingCardId == null) {
-      return ordered;
-    }
-    final dragIndex = ordered.indexWhere((x) => x.id == _draggingCardId);
-    if (dragIndex == -1) {
-      return ordered;
-    }
-    final list = List<_CurriculumCard>.from(ordered);
-    final moved = list.removeAt(dragIndex);
-    final insertAt = (_pendingDropIndex ?? dragIndex).clamp(0, list.length);
-    list.insert(insertAt, moved);
-    return list;
-  }
-
   void _commitCardReorder({
     required String id,
     required int targetIndex,
@@ -154,97 +136,9 @@ class _LearningCurriculumViewState extends State<_LearningCurriculumView> {
     }
   }
 
-  int _calcDropIndexFromGlobal({
-    required Offset globalPosition,
-    required int cols,
-    required double gridCardWidth,
-    required double gridCardHeight,
-    required double spacing,
-    required double gridWidth,
-    required GlobalKey viewportKey,
-    required ScrollController scrollCtrl,
-    required int itemCount,
-  }) {
-    final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return math.max(0, itemCount - 1);
-    final local = box.globalToLocal(globalPosition);
-    final maxX = math.max(0.0, gridWidth - 1);
-    final x = local.dx.clamp(0.0, maxX);
-    final scrollOffset = scrollCtrl.hasClients ? scrollCtrl.offset : 0.0;
-    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
-    final slotWidth = gridCardWidth + spacing;
-    final slotHeight = gridCardHeight + spacing;
-    var col = (x / slotWidth).floor();
-    final colOffset = x - (col * slotWidth);
-    if (colOffset > gridCardWidth) col += 1;
-    col = col.clamp(0, cols);
-    var row = (y / slotHeight).floor();
-    final rowOffset = y - (row * slotHeight);
-    if (rowOffset > gridCardHeight) row += 1;
-    var targetIndex = row * cols + col;
-    targetIndex = targetIndex.clamp(0, math.max(0, itemCount - 1));
-    return targetIndex;
-  }
-
-  void _handleGridDragUpdate({
-    required Offset globalPosition,
-    required _CurriculumCard incoming,
-    required int cols,
-    required double gridCardWidth,
-    required double gridCardHeight,
-    required double spacing,
-    required double gridWidth,
-    required GlobalKey viewportKey,
-    required ScrollController scrollCtrl,
-  }) {
-    if (_draggingCardId == null || incoming.id != _draggingCardId) return;
-    final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final local = box.globalToLocal(globalPosition);
-    final maxX = math.max(0.0, gridWidth - 1);
-    final x = local.dx.clamp(0.0, maxX);
-    final scrollOffset = scrollCtrl.hasClients ? scrollCtrl.offset : 0.0;
-    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
-    final slotWidth = gridCardWidth + spacing;
-    final slotHeight = gridCardHeight + spacing;
-    var col = (x / slotWidth).floor();
-    final colOffset = x - (col * slotWidth);
-    if (colOffset > gridCardWidth) col += 1; // 카드 사이 여백이면 다음 칸
-    col = col.clamp(0, cols);
-    var row = (y / slotHeight).floor();
-    final rowOffset = y - (row * slotHeight);
-    if (rowOffset > gridCardHeight) row += 1; // 줄 사이 여백이면 다음 줄
-    final ordered = _orderedCards();
-    if (ordered.isEmpty) return;
-    var targetIndex = row * cols + col;
-    targetIndex = targetIndex.clamp(0, math.max(0, ordered.length - 1));
-    if (_pendingDropIndex == targetIndex) {
-      _maybeAutoScroll(local.dy, box.size.height, scrollCtrl);
-      return;
-    }
-    setState(() {
-      _pendingDropIndex = targetIndex;
-    });
-    _maybeAutoScroll(local.dy, box.size.height, scrollCtrl);
-  }
-
-  void _maybeAutoScroll(double localDy, double viewportHeight, ScrollController scrollCtrl) {
-    if (!scrollCtrl.hasClients) return;
-    const edge = 60.0;
-    const step = 18.0;
-    final offset = scrollCtrl.offset;
-    final max = scrollCtrl.position.maxScrollExtent;
-    if (localDy < edge && offset > 0) {
-      scrollCtrl.jumpTo(math.max(0.0, offset - step));
-    } else if (localDy > viewportHeight - edge && offset < max) {
-      scrollCtrl.jumpTo(math.min(max, offset + step));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final orderedCards = _orderedCards();
-    final previewCards = _buildPreviewCards(orderedCards);
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
       child: LayoutBuilder(
@@ -285,115 +179,23 @@ class _LearningCurriculumViewState extends State<_LearningCurriculumView> {
                 child: Align(
                   alignment: Alignment.topLeft,
                   child: SizedBox(
-                    key: _gridViewportKey,
                     width: gridWidth,
-                    child: DragTarget<_CurriculumCard>(
-                      onWillAccept: (data) => data != null,
-                      onMove: (details) {
-                        _handleGridDragUpdate(
-                          globalPosition: details.offset,
-                          incoming: details.data,
-                          cols: cols,
-                          gridCardWidth: gridCardWidth,
-                          gridCardHeight: gridCardHeight,
-                          spacing: spacing,
-                          gridWidth: gridWidth,
-                          viewportKey: _gridViewportKey,
-                          scrollCtrl: _gridScrollCtrl,
-                        );
-                      },
-                      onAcceptWithDetails: (details) {
-                        final targetIndex = _calcDropIndexFromGlobal(
-                          globalPosition: details.offset,
-                          cols: cols,
-                          gridCardWidth: gridCardWidth,
-                          gridCardHeight: gridCardHeight,
-                          spacing: spacing,
-                          gridWidth: gridWidth,
-                          viewportKey: _gridViewportKey,
-                          scrollCtrl: _gridScrollCtrl,
-                          itemCount: orderedCards.length,
-                        );
+                    child: AnimatedReorderableGrid<_CurriculumCard>(
+                      items: orderedCards,
+                      itemId: (card) => card.id,
+                      itemBuilder: (context, card) => _CurriculumCardTile(card: card),
+                      feedbackBuilder: (context, card) => _CurriculumCardTile(card: card),
+                      cardWidth: gridCardWidth,
+                      cardHeight: gridCardHeight,
+                      spacing: spacing,
+                      columns: cols,
+                      scrollController: _gridScrollCtrl,
+                      animationDuration: const Duration(milliseconds: 180),
+                      animationCurve: Curves.easeOutCubic,
+                      onReorder: (card, targetIndex) {
                         setState(() {
-                          _commitCardReorder(id: details.data.id, targetIndex: targetIndex);
-                          _draggingCardId = null;
-                          _pendingDropIndex = null;
+                          _commitCardReorder(id: card.id, targetIndex: targetIndex);
                         });
-                      },
-                      builder: (context, cand, rej) {
-                        final rowCount = (previewCards.length / cols).ceil();
-                        final contentHeight = rowCount == 0
-                            ? gridCardHeight
-                            : (rowCount * gridCardHeight) + ((rowCount - 1) * spacing);
-
-                        Widget buildDraggableCard(_CurriculumCard card, int index) {
-                          final isDragging = _draggingCardId == card.id;
-                          final base = SizedBox.expand(child: _CurriculumCardTile(card: card));
-                          final cell = Opacity(
-                            opacity: isDragging ? 0.0 : 1.0,
-                            child: base,
-                          );
-                          return LongPressDraggable<_CurriculumCard>(
-                            key: ValueKey('curriculum-drag-${card.id}'),
-                            data: card,
-                            hapticFeedbackOnStart: true,
-                            dragAnchorStrategy: childDragAnchorStrategy,
-                            feedback: Material(
-                              color: Colors.transparent,
-                              child: Opacity(
-                                opacity: 0.9,
-                                child: SizedBox(
-                                  width: gridCardWidth,
-                                  height: gridCardHeight,
-                                  child: _CurriculumCardTile(card: card),
-                                ),
-                              ),
-                            ),
-                            childWhenDragging: cell,
-                            onDragStarted: () {
-                              setState(() {
-                                _draggingCardId = card.id;
-                                _pendingDropIndex = index;
-                              });
-                            },
-                            onDragEnd: (_) {
-                              setState(() {
-                                _draggingCardId = null;
-                                _pendingDropIndex = null;
-                              });
-                            },
-                            onDraggableCanceled: (_, __) {
-                              setState(() {
-                                _draggingCardId = null;
-                                _pendingDropIndex = null;
-                              });
-                            },
-                            child: cell,
-                          );
-                        }
-
-                        return SingleChildScrollView(
-                          controller: _gridScrollCtrl,
-                          child: SizedBox(
-                            width: gridWidth,
-                            height: contentHeight,
-                            child: Stack(
-                              children: [
-                                for (int i = 0; i < previewCards.length; i++)
-                                  AnimatedPositioned(
-                                    key: ValueKey('curriculum-pos-${previewCards[i].id}'),
-                                    duration: const Duration(milliseconds: 180),
-                                    curve: Curves.easeOutCubic,
-                                    left: (i % cols) * (gridCardWidth + spacing),
-                                    top: (i ~/ cols) * (gridCardHeight + spacing),
-                                    width: gridCardWidth,
-                                    height: gridCardHeight,
-                                    child: buildDraggableCard(previewCards[i], i),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        );
                       },
                     ),
                   ),

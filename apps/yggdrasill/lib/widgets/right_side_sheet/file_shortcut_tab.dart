@@ -570,22 +570,35 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     // 2) 파일 upsert + 삭제 동기화
     final newIds = <String>{};
     final futures = <Future<void>>[];
+    final ordersByFolder = <String, List<Map<String, dynamic>>>{};
     for (final c in _categories) {
       for (int fi = 0; fi < c.folders.length; fi++) {
         final folder = c.folders[fi];
+        ordersByFolder[folder.id] = <Map<String, dynamic>>[];
         for (int xi = 0; xi < folder.files.length; xi++) {
           final x = folder.files[xi];
           newIds.add(x.id);
+          ordersByFolder[folder.id]!.add({
+            'file_id': x.id,
+            'order_index': xi,
+          });
           final row = <String, dynamic>{
             'id': x.id,
             'parent_id': folder.id,
             'name': x.name,
             'url': x.path,
-            'order_index': xi,
           };
           futures.add(DataManager.instance.saveResourceFileWithCategory(row, _kCategoryKey));
         }
       }
+    }
+    for (final entry in ordersByFolder.entries) {
+      futures.add(DataManager.instance.saveResourceFileOrders(
+        scopeType: 'file_shortcut',
+        category: _kCategoryKey,
+        parentId: entry.key,
+        rows: entry.value,
+      ));
     }
 
     final removed = _knownFileIds.difference(newIds);

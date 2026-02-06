@@ -453,6 +453,17 @@ class AcademyDbService {
           )
         ''');
         await db.execute('''
+          CREATE TABLE IF NOT EXISTS resource_file_orders (
+            scope_type TEXT NOT NULL,
+            category TEXT NOT NULL,
+            parent_id TEXT NOT NULL,
+            file_id TEXT NOT NULL,
+            order_index INTEGER,
+            updated_at INTEGER,
+            PRIMARY KEY (scope_type, category, parent_id, file_id)
+          )
+        ''');
+        await db.execute('''
           CREATE TABLE IF NOT EXISTS resource_favorites (
             file_id TEXT PRIMARY KEY
           )
@@ -1632,6 +1643,17 @@ class AcademyDbService {
       )
     ''');
     await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS resource_file_orders (
+        scope_type TEXT NOT NULL,
+        category TEXT NOT NULL,
+        parent_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        order_index INTEGER,
+        updated_at INTEGER,
+        PRIMARY KEY (scope_type, category, parent_id, file_id)
+      )
+    ''');
+    await dbClient.execute('''
       CREATE TABLE IF NOT EXISTS resource_file_links (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         file_id TEXT,
@@ -1851,6 +1873,81 @@ class AcademyDbService {
     await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> saveResourceFileOrders({
+    required String scopeType,
+    required String category,
+    required String? parentId,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    final parent = (parentId ?? '').trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await dbClient.transaction((txn) async {
+      final existing = await txn.query(
+        'resource_file_orders',
+        columns: ['file_id'],
+        where: 'scope_type = ? AND category = ? AND parent_id = ?',
+        whereArgs: [scopeType, category, parent],
+      );
+      final existingIds = existing
+          .map((r) => (r['file_id'] as String?) ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final newIds = rows
+          .map((r) => (r['file_id'] as String?) ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final removed = existingIds.difference(newIds);
+      for (final id in removed) {
+        await txn.delete(
+          'resource_file_orders',
+          where: 'scope_type = ? AND category = ? AND parent_id = ? AND file_id = ?',
+          whereArgs: [scopeType, category, parent, id],
+        );
+      }
+      for (final raw in rows) {
+        final fileId = (raw['file_id'] as String?) ?? '';
+        if (fileId.isEmpty) continue;
+        final order = (raw['order_index'] as int?) ?? 0;
+        await txn.insert(
+          'resource_file_orders',
+          {
+            'scope_type': scopeType,
+            'category': category,
+            'parent_id': parent,
+            'file_id': fileId,
+            'order_index': order,
+            'updated_at': now,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> loadResourceFileOrders({
+    required String scopeType,
+    required String category,
+    String? parentId,
+  }) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    if (parentId != null) {
+      final parent = parentId.trim();
+      return await dbClient.query(
+        'resource_file_orders',
+        where: 'scope_type = ? AND category = ? AND parent_id = ?',
+        whereArgs: [scopeType, category, parent],
+      );
+    }
+    return await dbClient.query(
+      'resource_file_orders',
+      where: 'scope_type = ? AND category = ?',
+      whereArgs: [scopeType, category],
+    );
+  }
+
   /// category 범위의 resource_files를 "서버 스냅샷"으로 동기화한다.
   ///
   /// - 해당 category에 존재하지만 rows에는 없는 파일은 로컬에서 제거한다.
@@ -1902,9 +1999,78 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureResourceTables();
     if (category == 'textbook') {
-      return await dbClient.query('resource_files', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+      final rows = await dbClient.query('resource_files', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+      return await _applyResourceFileOrders(category, rows);
     }
-    return await dbClient.query('resource_files', where: 'category = ?', whereArgs: [category]);
+    final rows = await dbClient.query('resource_files', where: 'category = ?', whereArgs: [category]);
+    return await _applyResourceFileOrders(category, rows);
+  }
+
+  Future<List<Map<String, dynamic>>> _applyResourceFileOrders(
+    String category,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    if (rows.isEmpty) return rows;
+    final scopeType = category == 'file_shortcut' ? 'file_shortcut' : 'resources';
+    final orders = await loadResourceFileOrders(scopeType: scopeType, category: category);
+    if (orders.isEmpty) {
+      await _seedResourceFileOrdersFromRows(scopeType: scopeType, category: category, rows: rows);
+      return rows;
+    }
+    final orderByKey = <String, int>{};
+    for (final o in orders) {
+      final fileId = (o['file_id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = (o['parent_id'] as String?) ?? '';
+      final order = (o['order_index'] as int?) ?? 0;
+      orderByKey['$fileId|$parent'] = order;
+    }
+    for (final row in rows) {
+      final fileId = (row['id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = (row['parent_id'] as String?) ?? '';
+      final key = '$fileId|$parent';
+      if (orderByKey.containsKey(key)) {
+        row['order_index'] = orderByKey[key];
+      }
+    }
+    return rows;
+  }
+
+  Future<void> _seedResourceFileOrdersFromRows({
+    required String scopeType,
+    required String category,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    if (rows.isEmpty) return;
+    final byParent = <String, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      final fileId = (row['id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = (row['parent_id'] as String?) ?? '';
+      final order = (row['order_index'] as int?) ?? 0;
+      byParent.putIfAbsent(parent, () => <Map<String, dynamic>>[]).add({
+        'file_id': fileId,
+        'order_index': order,
+      });
+    }
+    for (final entry in byParent.entries) {
+      final list = entry.value;
+      list.sort((a, b) {
+        final ai = (a['order_index'] as int?) ?? 0;
+        final bi = (b['order_index'] as int?) ?? 0;
+        return ai.compareTo(bi);
+      });
+      for (int i = 0; i < list.length; i++) {
+        list[i]['order_index'] = i;
+      }
+      await saveResourceFileOrders(
+        scopeType: scopeType,
+        category: category,
+        parentId: entry.key,
+        rows: list,
+      );
+    }
   }
 
   Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
@@ -1942,6 +2108,12 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureResourceTables();
     await dbClient.delete('resource_files', where: 'id = ?', whereArgs: [fileId]);
+  }
+
+  Future<void> deleteResourceFileOrdersByFileId(String fileId) async {
+    final dbClient = await db;
+    await ensureResourceTables();
+    await dbClient.delete('resource_file_orders', where: 'file_id = ?', whereArgs: [fileId]);
   }
 
   Future<void> deleteResourceFileLinksByFileId(String fileId) async {
