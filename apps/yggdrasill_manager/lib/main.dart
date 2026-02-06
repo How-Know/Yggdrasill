@@ -8,6 +8,7 @@ import 'screens/arithmetic/arithmetic_screen.dart';
 import 'screens/skill/skill_screen.dart';
 import 'screens/problem_bank/problem_bank_screen.dart';
 import 'screens/trait_survey/trait_survey_screen.dart';
+import 'screens/textbook/textbook_screen.dart';
 import 'screens/management/management_screen.dart';
 import 'widgets/app_navigation_bar.dart';
 
@@ -160,21 +161,37 @@ class _MainScreenState extends State<MainScreen> {
     SkillScreen(),
     ProblemBankScreen(),
     TraitSurveyScreen(),
+    TextbookScreen(),
     ManagementScreen(),
   ];
 
+  int _normalizeIndex(int index) {
+    if (_screens.isEmpty) {
+      return 0;
+    }
+    if (index < 0) {
+      return 0;
+    }
+    final int maxIndex = _screens.length - 1;
+    if (index > maxIndex) {
+      return maxIndex;
+    }
+    return index;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final int safeIndex = _normalizeIndex(_selectedIndex);
     return Scaffold(
       backgroundColor: const Color(0xFF1F1F1F),
       body: Row(
         children: [
           // 좌측 네비게이션 바
           AppNavigationBar(
-            selectedIndex: _selectedIndex,
+            selectedIndex: safeIndex,
             onDestinationSelected: (index) {
               setState(() {
-                _selectedIndex = index;
+                _selectedIndex = _normalizeIndex(index);
               });
             },
             onLogout: () async {
@@ -188,7 +205,7 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 // 콘텐츠 영역
                 Expanded(
-                  child: _screens[_selectedIndex],
+                  child: _screens[safeIndex],
                 ),
               ],
             ),

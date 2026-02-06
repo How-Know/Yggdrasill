@@ -17,6 +17,7 @@ import 'dart:ui' as ui;
 import 'dart:math' as math;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/pdf/pdf_editor_dialog.dart';
+import '../../widgets/resource_file_meta_dialog.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -4089,6 +4090,54 @@ class _GridFileCardState extends State<_GridFileCard> {
     final displayGrade = currentGrade ?? file.primaryGrade;
     final isTextbook = resState?._currentCategory == 'textbook';
     final isPrintMode = resState?._printPickMode ?? false;
+    Future<void> openPrimaryLink() async {
+      if (currentGrade == null) return;
+      final key = '${currentGrade}#body';
+      final link = file.linksByGrade[key]?.trim() ?? '';
+      if (link.isEmpty) return;
+      try {
+        if (link.startsWith('http://') || link.startsWith('https://')) {
+          final uri = Uri.parse(link);
+          await launchUrl(uri, mode: LaunchMode.platformDefault);
+        } else {
+          await OpenFilex.open(link);
+        }
+      } catch (_) {}
+    }
+    void openMetaDialog() {
+      String? categoryLabel;
+      if (resState?._currentCategory == 'textbook') {
+        categoryLabel = '교재';
+      } else if (resState?._currentCategory == 'exam') {
+        categoryLabel = '시험';
+      } else if (resState?._currentCategory == 'other') {
+        categoryLabel = '기타';
+      }
+      String? parentLabel;
+      final parentId = file.parentId;
+      if (parentId != null && parentId.isNotEmpty) {
+        final idx = resState?._folders.indexWhere((f) => f.id == parentId) ?? -1;
+        if (idx != -1 && resState != null) {
+          parentLabel = resState._folders[idx].name;
+        }
+      }
+      final linkCount = file.linksByGrade.entries
+          .where((e) => !e.key.endsWith('#cover') && e.value.trim().isNotEmpty)
+          .length;
+      showDialog(
+        context: context,
+        builder: (ctx) => ResourceFileMetaDialog(
+          fileName: file.name,
+          description: file.description,
+          categoryLabel: categoryLabel,
+          parentLabel: parentLabel,
+          gradeLabel: displayGrade,
+          linkCount: linkCount,
+          hasCover: hasCover,
+          hasIcon: hasExplicitIcon,
+        ),
+      );
+    }
     void handleGradeDelta(int delta) {
       if (resState == null) return;
       resState._changeFileGradeByDelta(file, delta);
@@ -4118,19 +4167,9 @@ class _GridFileCardState extends State<_GridFileCard> {
                 await resState?._handlePrintPick(file);
                 return;
               }
-              if (currentGrade == null) return;
-              final key = '${currentGrade}#body';
-              final link = file.linksByGrade[key]?.trim() ?? '';
-              if (link.isEmpty) return;
-              try {
-                if (link.startsWith('http://') || link.startsWith('https://')) {
-                  final uri = Uri.parse(link);
-                  await launchUrl(uri, mode: LaunchMode.platformDefault);
-                } else {
-                  await OpenFilex.open(link);
-                }
-              } catch (_) {}
+              openMetaDialog();
             },
+            onDoubleTap: isPrintMode ? null : openPrimaryLink,
             splashColor: Colors.white.withOpacity(0.06),
             highlightColor: Colors.white.withOpacity(0.03),
             child: IgnorePointer(
