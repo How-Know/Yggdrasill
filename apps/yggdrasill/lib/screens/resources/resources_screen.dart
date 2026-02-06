@@ -111,6 +111,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   bool _resizeMode = false;
   bool _editMode = false;
   bool _printPickMode = false;
+  final List<GlobalKey> _gridViewportKeys = List<GlobalKey>.generate(3, (_) => GlobalKey());
+  final List<ScrollController> _gridScrollCtrls = List<ScrollController>.generate(3, (_) => ScrollController());
+  int? _dragReorderIndex;
+  String? _dragReorderParentId;
 
   final List<_ResourceFolder> _folders = [];
   final List<_ResourceFile> _files = [];
@@ -137,11 +141,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   final Set<String> _expandedFolderIds = <String>{};
   Set<String> _favoriteFileIds = <String>{};
   String? _draggingFileId;
-  String? _reorderFileTargetId;
   String? _draggingFolderId;
   String? _dragIncomingParentId;
   String? _reorderTargetFolderId;
-  bool _reorderInsertBefore = true;
   String? _moveToParentFolderId;
   String? _fileDropTargetFolderId;
   String get _currentCategory => _customTabIndex == 0 ? 'textbook' : (_customTabIndex == 1 ? 'exam' : 'other');
@@ -924,6 +926,100 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() => _fileGradeLabels[file.id] = nextLabel);
   }
 
+  int? _reorderFilesDuringDrag({
+    required _ResourceFile incoming,
+    required String? parentId,
+    required int targetIndex,
+  }) {
+    final sameParent = (incoming.parentId ?? '') == (parentId ?? '');
+    if (!sameParent) return null;
+    final siblings = _childFilesOf(parentId);
+    if (siblings.isEmpty) return null;
+    final fromIdx = siblings.indexWhere((x) => x.id == incoming.id);
+    if (fromIdx == -1) return null;
+    var toIdx = targetIndex.clamp(0, siblings.length - 1);
+    if (toIdx == fromIdx) return fromIdx;
+    final ordered = List<_ResourceFile>.from(siblings);
+    final moved = ordered.removeAt(fromIdx);
+    if (fromIdx < toIdx) toIdx -= 1;
+    ordered.insert(toIdx, moved);
+    bool changed = false;
+    for (int i = 0; i < ordered.length; i++) {
+      final gIdx = _files.indexWhere((x) => x.id == ordered[i].id);
+      if (gIdx != -1 && _files[gIdx].orderIndex != i) {
+        _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
+        changed = true;
+      }
+    }
+    if (changed) setState(() {});
+    return toIdx;
+  }
+
+  Future<void> _persistFileOrderForParent(String? parentId) async {
+    final ordered = _childFilesOf(parentId);
+    for (int i = 0; i < ordered.length; i++) {
+      final file = ordered[i];
+      final gIdx = _files.indexWhere((x) => x.id == file.id);
+      if (gIdx != -1 && _files[gIdx].orderIndex != i) {
+        _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
+      }
+      await DataManager.instance.saveResourceFile({'id': file.id, 'order_index': i});
+    }
+  }
+
+  void _handleGridDragUpdate({
+    required Offset globalPosition,
+    required _ResourceFile incoming,
+    required int cols,
+    required double gridCardWidth,
+    required double gridCardHeight,
+    required double spacing,
+    required double gridWidth,
+    required GlobalKey viewportKey,
+    required ScrollController scrollCtrl,
+  }) {
+    if (_draggingFileId == null || incoming.id != _draggingFileId) return;
+    final parentId = incoming.parentId ?? _selectedFolderIdForTree;
+    final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final local = box.globalToLocal(globalPosition);
+    final maxX = math.max(0.0, gridWidth - 1);
+    final x = local.dx.clamp(0.0, maxX);
+    final scrollOffset = scrollCtrl.hasClients ? scrollCtrl.offset : 0.0;
+    final y = (local.dy + scrollOffset).clamp(0.0, double.infinity);
+    final col = (x / (gridCardWidth + spacing)).floor().clamp(0, cols - 1);
+    final row = (y / (gridCardHeight + spacing)).floor();
+    final siblings = _childFilesOf(parentId);
+    if (siblings.isEmpty) return;
+    var targetIndex = row * cols + col;
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex > siblings.length - 1) targetIndex = siblings.length - 1;
+    if (_dragReorderIndex == targetIndex && _dragReorderParentId == parentId) return;
+    _dragReorderParentId = parentId;
+    final newIndex = _reorderFilesDuringDrag(
+      incoming: incoming,
+      parentId: parentId,
+      targetIndex: targetIndex,
+    );
+    if (newIndex != null) {
+      _dragReorderIndex = newIndex;
+    }
+    _maybeAutoScroll(local.dy, box.size.height, scrollCtrl);
+  }
+
+  void _maybeAutoScroll(double localDy, double viewportHeight, ScrollController scrollCtrl) {
+    if (!scrollCtrl.hasClients) return;
+    const edge = 60.0;
+    const step = 18.0;
+    final offset = scrollCtrl.offset;
+    final max = scrollCtrl.position.maxScrollExtent;
+    if (localDy < edge && offset > 0) {
+      scrollCtrl.jumpTo(math.max(0.0, offset - step));
+    } else if (localDy > viewportHeight - edge && offset < max) {
+      scrollCtrl.jumpTo(math.min(max, offset + step));
+    }
+  }
+
   Future<void> _loadGradeIcons() async {
     try {
       final map = await DataManager.instance.getResourceGradeIcons();
@@ -1552,6 +1648,14 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _initFavoritesAndDefaultSelection();
   }
 
+  @override
+  void dispose() {
+    for (final c in _gridScrollCtrls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   Future<void> _initFavoritesAndDefaultSelection() async {
     _favoriteFileIds = await DataManager.instance.loadResourceFavorites();
     // 교재탭 첫 진입: 즐겨찾기가 있으면 즐겨찾기, 없으면 루트(전체)
@@ -1852,9 +1956,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                 child: IndexedStack(
                   index: _customTabIndex,
                   children: [
-                    _buildTextbooksTreeLayout(),
-                    _buildTextbooksTreeLayout(),
-                    _buildTextbooksTreeLayout(),
+                    _buildTextbooksTreeLayout(0),
+                    _buildTextbooksTreeLayout(1),
+                    _buildTextbooksTreeLayout(2),
                   ],
                 ),
               ),
@@ -1993,7 +2097,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     setState(() {});
     _saveLayout();
   }
-  Widget _buildTextbooksTreeLayout() {
+  Widget _buildTextbooksTreeLayout(int tabSlot) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2016,7 +2120,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               Positioned.fill(
                 child: Padding(
                   padding: const EdgeInsets.only(top: 15, left: 0),
-                  child: _buildFolderContentGrid(),
+                  child: _buildFolderContentGrid(tabSlot),
                 ),
               ),
               // [RES] bottom +파일 버튼 제거 (헤더 우측 버튼으로 대체)
@@ -2347,8 +2451,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     );
   }
 
-  Widget _buildFolderContentGrid() {
+  Widget _buildFolderContentGrid(int tabSlot) {
     final files = _childFilesOf(_selectedFolderIdForTree);
+    final gridViewportKey = _gridViewportKeys[tabSlot];
+    final gridScrollCtrl = _gridScrollCtrls[tabSlot];
     final selectedFolder = _folders.firstWhere(
       (f) => f.id == _selectedFolderIdForTree,
       orElse: () => _ResourceFolder(id: '', name: '', color: null, description: '', position: Offset.zero, size: const Size(0,0), shape: 'rect', parentId: null),
@@ -2367,10 +2473,6 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           final double spacing = isTextbook ? 22.4 : 16.0;
           final cols = (constraints.maxWidth / (gridCardWidth + spacing)).floor().clamp(1, 999);
           final double gridWidth = (cols * gridCardWidth) + ((cols - 1) * spacing);
-          // ignore: avoid_print
-          print('[GRID] constraints=' + constraints.maxWidth.toStringAsFixed(1) + 'x' + constraints.maxHeight.toStringAsFixed(1) +
-              ', fixed=' + gridCardWidth.toString() + 'x' + gridCardHeight.toString() + ', cols=' + cols.toString() +
-              ', aspect=' + (gridCardWidth / gridCardHeight).toStringAsFixed(3));
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2381,19 +2483,21 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   child: MouseRegion(
                     cursor: _printPickMode ? SystemMouseCursors.copy : SystemMouseCursors.basic,
                     child: SizedBox(
+                      key: gridViewportKey,
                       width: gridWidth,
-                      child: GridView.builder(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: cols,
-                          mainAxisSpacing: spacing,
-                          crossAxisSpacing: spacing,
-                          childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
-                        ),
-                        itemCount: files.length,
-                        itemBuilder: (context, index) {
+                      child: ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                        child: GridView.builder(
+                          controller: gridScrollCtrl,
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: cols,
+                            mainAxisSpacing: spacing,
+                            crossAxisSpacing: spacing,
+                            childAspectRatio: gridCardWidth / gridCardHeight, // 고정 비율 유지
+                          ),
+                          itemCount: files.length,
+                          itemBuilder: (context, index) {
                     final fi = files[index];
-                    // ignore: avoid_print
-                    print('[GRID:item] idx=' + index.toString() + ' id=' + fi.id);
                     Widget buildCardCell() {
                       final card = SizedBox(
                         width: gridCardWidth,
@@ -2419,122 +2523,52 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       );
                     }
                     return LongPressDraggable<_ResourceFile>(
+                      key: ValueKey('file-drag-${fi.id}'),
                       data: fi,
                       hapticFeedbackOnStart: true,
-                      feedback: Opacity(
-                        opacity: 0.9,
-                      child: Material(
-                          color: Colors.transparent,
-                          child: buildCardCell(),
-                        ),
+                      feedback: Material(
+                        color: Colors.transparent,
+                        child: buildCardCell(),
                       ),
-                      onDragStarted: () => setState(() { _draggingFileId = fi.id; }),
-                      onDragEnd: (_) => setState(() { _draggingFileId = null; _reorderFileTargetId = null; }),
-                      childWhenDragging: AnimatedOpacity(duration: const Duration(milliseconds: 150), opacity: 0.25, child: buildCardCell()),
-                      dragAnchorStrategy: pointerDragAnchorStrategy,
-                      child: Row(
-                        children: [
-                          // 왼쪽 폴더 트리 드롭 영역: 폴더로 이동 허용
-                          DragTarget<_ResourceFolder>(
-                            onWillAccept: (incomingFolder) {
-                              // 파일을 트리로 드롭할 때만 하이라이트 (incomingFolder는 null, candidate는 상위 DragTarget의 데이터)
-                              return false; // 폴더 재정렬용, 여기서는 파일 받지 않음
-                            },
-                            builder: (context, candF, rejF) {
-                              return const SizedBox(width: 0);
-                            },
-                          ),
-                          // 카드 간 재정렬 영역
-                          Expanded(child: DragTarget<_ResourceFile>(
-                        onWillAccept: (incoming) {
-                          final ok = incoming != null && incoming.id != fi.id;
-                          if (ok) setState(() { _reorderFileTargetId = fi.id; });
-                          return ok;
-                        },
-                        onAcceptWithDetails: (details) {
-                          final incoming = details.data;
-                          // 같은 폴더에서 재정렬
-                          final sameParent = (incoming.parentId ?? '') == (fi.parentId ?? _selectedFolderIdForTree ?? '');
-                          if (sameParent) {
-                            // 같은 폴더 내 재정렬: order_index를 기준으로 드롭 대상 위치로 이동
-                            final siblings = _childFilesOf(fi.parentId ?? _selectedFolderIdForTree);
-                            final fromIdx = siblings.indexWhere((x) => x.id == incoming.id);
-                            final toIdx = siblings.indexWhere((x) => x.id == fi.id);
-                            if (fromIdx != -1 && toIdx != -1) {
-                              final ordered = List<_ResourceFile>.from(siblings);
-                              final moved = ordered.removeAt(fromIdx);
-                              ordered.insert(toIdx, moved);
-                              // Re-assign order_index 0..N and persist
-                              for (int i = 0; i < ordered.length; i++) {
-                                final gIdx = _files.indexWhere((x) => x.id == ordered[i].id);
-                                if (gIdx != -1) {
-                                  _files[gIdx] = _files[gIdx].copyWith(orderIndex: i);
-                                  DataManager.instance.saveResourceFile({'id': ordered[i].id, 'order_index': i});
-                                }
-                              }
-                              setState(() {});
-                            }
-                          } else {
-                            // 폴더 트리로의 이동은 폴더 DragTarget에서만 허용. 여기서는 막음.
-                          }
-                          setState(() { _reorderFileTargetId = null; });
-                        },
-                        onLeave: (_) => setState(() { if (_reorderFileTargetId == fi.id) _reorderFileTargetId = null; }),
-                        builder: (context, cand, rej) {
-                          final draggingId = _draggingFileId;
-                          final isTarget = _reorderFileTargetId == fi.id && draggingId != null && draggingId != fi.id;
-                          // 마우스 x 기준으로 좌/우 표시를 나눔 (기본 좌측 우선 강조)
-                          bool showLeft = false;
-                          bool showRight = false;
-                          return LayoutBuilder(builder: (ctx, cons) {
-                            if (isTarget && cand.isNotEmpty) {
-                              showLeft = true;
-                              showRight = false;
-                            }
-                            return Stack(children: [
-                              // 고정 크기 카드 (그리드 셀 내에서 항상 동일 크기)
-                              Center(
-                                child: SizedBox(
-                                  width: gridCardWidth,
-                                  height: gridCardHeight,
-                                  child: buildCardCell(),
-                                ),
-                              ),
-                              // 좌/우 하이라이트는 오버레이로 표시하여 실제 레이아웃에 영향 없음
-                              if (isTarget && showLeft)
-                                Positioned(
-                                  left: 0,
-                                  top: 0,
-                                  bottom: 0,
-                                  width: 10,
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF64A6DD).withOpacity(0.25),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                  ),
-                                ),
-                              if (isTarget && showRight)
-                                Positioned(
-                                  right: 0,
-                                  top: 0,
-                                  bottom: 0,
-                                  width: 10,
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF64A6DD).withOpacity(0.25),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                  ),
-                                ),
-                            ]);
-                          });
-                        },
-                      )),
-                        ],
-                      ),
+                      onDragUpdate: (details) {
+                        _handleGridDragUpdate(
+                          globalPosition: details.globalPosition,
+                          incoming: fi,
+                          cols: cols,
+                          gridCardWidth: gridCardWidth,
+                          gridCardHeight: gridCardHeight,
+                          spacing: spacing,
+                          gridWidth: gridWidth,
+                          viewportKey: gridViewportKey,
+                          scrollCtrl: gridScrollCtrl,
+                        );
+                      },
+                      onDragStarted: () {
+                        final parentId = fi.parentId ?? _selectedFolderIdForTree;
+                        final idx = _childFilesOf(parentId).indexWhere((x) => x.id == fi.id);
+                        setState(() {
+                          _draggingFileId = fi.id;
+                          _dragReorderParentId = parentId;
+                          _dragReorderIndex = idx == -1 ? null : idx;
+                        });
+                      },
+                      onDragEnd: (_) {
+                        final parentId = fi.parentId ?? _selectedFolderIdForTree;
+                        if (parentId != '__FAVORITES__') {
+                          _persistFileOrderForParent(parentId);
+                        }
+                        setState(() {
+                          _draggingFileId = null;
+                          _dragReorderIndex = null;
+                          _dragReorderParentId = null;
+                        });
+                      },
+                      childWhenDragging: const SizedBox.shrink(),
+                      dragAnchorStrategy: childDragAnchorStrategy,
+                      child: buildCardCell(),
                     );
                   },
+                        ),
                       ),
                     ),
                   ),
@@ -4141,9 +4175,7 @@ class _GridFileCardState extends State<_GridFileCard> {
   @override
   Widget build(BuildContext context) {
     // 고정형 카드 스타일: 일관된 크기/패딩, 드래그/리사이즈 없음
-    // ignore: avoid_print
     final file = widget.file;
-    print('[GridFileCard] build id=' + file.id + ' size=' + file.size.toString());
     final resState = context.findAncestorStateOfType<_ResourcesScreenState>();
     final grades = resState?._grades ?? const <String>[];
     final currentGrade = resState?._effectiveGradeLabelForFile(file);
@@ -4179,8 +4211,6 @@ class _GridFileCardState extends State<_GridFileCard> {
           color: Colors.transparent,
           child: InkWell(
             onTap: () async {
-              // ignore: avoid_print
-              print('[GridFileCard] tap id=' + file.id);
               if (isPrintMode) {
                 await resState?._handlePrintPick(file);
                 return;
@@ -4216,8 +4246,6 @@ class _GridFileCardState extends State<_GridFileCard> {
                 ),
                 child: LayoutBuilder(
                   builder: (context, box) {
-                    // ignore: avoid_print
-                    print('[GridFileCard:layout] id=' + file.id + ' box=' + box.maxWidth.toStringAsFixed(1) + 'x' + box.maxHeight.toStringAsFixed(1) + ' model=' + file.size.toString());
                     if (!isTextbook) {
                       return _buildWideMeta(context, hasForCurrent: hasForCurrent, currentGrade: currentGrade);
                     }
