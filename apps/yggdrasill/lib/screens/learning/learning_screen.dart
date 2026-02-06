@@ -321,61 +321,78 @@ class _LearningCurriculumViewState extends State<_LearningCurriculumView> {
                         });
                       },
                       builder: (context, cand, rej) {
-                        return GridView.builder(
-                          controller: _gridScrollCtrl,
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: cols,
-                            mainAxisSpacing: spacing,
-                            crossAxisSpacing: spacing,
-                            childAspectRatio: gridCardWidth / gridCardHeight,
-                          ),
-                          itemCount: previewCards.length,
-                          itemBuilder: (context, index) {
-                            final card = previewCards[index];
-                            final isDragging = _draggingCardId == card.id;
-                            Widget buildCell() {
-                              return SizedBox(
-                                width: gridCardWidth,
-                                height: gridCardHeight,
-                                child: _CurriculumCardTile(card: card),
-                              );
-                            }
-                            final cell = Opacity(
-                              opacity: isDragging ? 0.0 : 1.0,
-                              child: buildCell(),
-                            );
+                        final rowCount = (previewCards.length / cols).ceil();
+                        final contentHeight = rowCount == 0
+                            ? gridCardHeight
+                            : (rowCount * gridCardHeight) + ((rowCount - 1) * spacing);
 
-                            return LongPressDraggable<_CurriculumCard>(
-                              key: ValueKey('curriculum-drag-${card.id}'),
-                              data: card,
-                              hapticFeedbackOnStart: true,
-                              dragAnchorStrategy: childDragAnchorStrategy,
-                              feedback: Material(
-                                color: Colors.transparent,
-                                child: Opacity(opacity: 0.9, child: buildCell()),
+                        Widget buildDraggableCard(_CurriculumCard card, int index) {
+                          final isDragging = _draggingCardId == card.id;
+                          final base = SizedBox.expand(child: _CurriculumCardTile(card: card));
+                          final cell = Opacity(
+                            opacity: isDragging ? 0.0 : 1.0,
+                            child: base,
+                          );
+                          return LongPressDraggable<_CurriculumCard>(
+                            key: ValueKey('curriculum-drag-${card.id}'),
+                            data: card,
+                            hapticFeedbackOnStart: true,
+                            dragAnchorStrategy: childDragAnchorStrategy,
+                            feedback: Material(
+                              color: Colors.transparent,
+                              child: Opacity(
+                                opacity: 0.9,
+                                child: SizedBox(
+                                  width: gridCardWidth,
+                                  height: gridCardHeight,
+                                  child: _CurriculumCardTile(card: card),
+                                ),
                               ),
-                              childWhenDragging: cell,
-                              onDragStarted: () {
-                                setState(() {
-                                  _draggingCardId = card.id;
-                                  _pendingDropIndex = index;
-                                });
-                              },
-                              onDragEnd: (_) {
-                                setState(() {
-                                  _draggingCardId = null;
-                                  _pendingDropIndex = null;
-                                });
-                              },
-                              onDraggableCanceled: (_, __) {
-                                setState(() {
-                                  _draggingCardId = null;
-                                  _pendingDropIndex = null;
-                                });
-                              },
-                              child: cell,
-                            );
-                          },
+                            ),
+                            childWhenDragging: cell,
+                            onDragStarted: () {
+                              setState(() {
+                                _draggingCardId = card.id;
+                                _pendingDropIndex = index;
+                              });
+                            },
+                            onDragEnd: (_) {
+                              setState(() {
+                                _draggingCardId = null;
+                                _pendingDropIndex = null;
+                              });
+                            },
+                            onDraggableCanceled: (_, __) {
+                              setState(() {
+                                _draggingCardId = null;
+                                _pendingDropIndex = null;
+                              });
+                            },
+                            child: cell,
+                          );
+                        }
+
+                        return SingleChildScrollView(
+                          controller: _gridScrollCtrl,
+                          child: SizedBox(
+                            width: gridWidth,
+                            height: contentHeight,
+                            child: Stack(
+                              children: [
+                                for (int i = 0; i < previewCards.length; i++)
+                                  AnimatedPositioned(
+                                    key: ValueKey('curriculum-pos-${previewCards[i].id}'),
+                                    duration: const Duration(milliseconds: 180),
+                                    curve: Curves.easeOutCubic,
+                                    left: (i % cols) * (gridCardWidth + spacing),
+                                    top: (i ~/ cols) * (gridCardHeight + spacing),
+                                    width: gridCardWidth,
+                                    height: gridCardHeight,
+                                    child: buildDraggableCard(previewCards[i], i),
+                                  ),
+                              ],
+                            ),
+                          ),
                         );
                       },
                     ),
