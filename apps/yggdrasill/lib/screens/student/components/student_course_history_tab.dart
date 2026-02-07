@@ -9,6 +9,7 @@ import '../../../services/data_manager.dart';
 import '../../../services/homework_store.dart';
 import '../../../services/tag_store.dart';
 import '../../learning/tag_preset_dialog.dart';
+import '../../../widgets/flow_setup_dialog.dart';
 
 class StudentCourseHistoryTab extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
@@ -239,9 +240,17 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                 const Spacer(),
                 TextButton.icon(
                   onPressed: () async {
+                    final enabledFlows = await ensureEnabledFlowsForHomework(context, sid);
+                    if (enabledFlows.isEmpty) return;
                     final draft = await _showHomeworkDialog();
                     if (draft != null) {
-                      HomeworkStore.instance.add(sid, title: draft.title, body: draft.body, color: draft.color);
+                      HomeworkStore.instance.add(
+                        sid,
+                        title: draft.title,
+                        body: draft.body,
+                        color: draft.color,
+                        flowId: enabledFlows.first.id,
+                      );
                       setState(() {});
                     }
                   },
@@ -365,13 +374,21 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                 IconButton(
                                   tooltip: '내용 추가',
                                   onPressed: () async {
+                                    final enabledFlows = await ensureEnabledFlowsForHomework(context, sid);
+                                    if (enabledFlows.isEmpty) return;
                                     final draft = await _showHomeworkDialog(
                                       initialTitle: hw.title,
                                       initialColor: hw.color,
                                       bodyOnly: true,
                                     );
                                     if (draft != null) {
-                                      HomeworkStore.instance.continueAdd(sid, hw.id, body: draft.body);
+                                      final flowId = hw.flowId ?? enabledFlows.first.id;
+                                      HomeworkStore.instance.continueAdd(
+                                        sid,
+                                        hw.id,
+                                        body: draft.body,
+                                        flowId: flowId,
+                                      );
                                       setState(() {});
                                     }
                                   },

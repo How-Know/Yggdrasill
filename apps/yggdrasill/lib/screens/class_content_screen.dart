@@ -11,6 +11,7 @@ import 'learning/tag_preset_dialog.dart';
 import 'package:uuid/uuid.dart';
 import '../models/memo.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../widgets/flow_setup_dialog.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
 class ClassContentScreen extends StatefulWidget {
@@ -227,13 +228,27 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   }
 
   Future<void> _onAddHomework(BuildContext context, String studentId) async {
+    final enabledFlows = await ensureEnabledFlowsForHomework(context, studentId);
+    if (enabledFlows.isEmpty) return;
     final item = await showDialog<dynamic>(
       context: context,
-      builder: (ctx) => HomeworkQuickAddProxyDialog(studentId: studentId, initialTitle: '', initialColor: const Color(0xFF1976D2)),
+      builder: (ctx) => HomeworkQuickAddProxyDialog(
+        studentId: studentId,
+        flows: enabledFlows,
+        initialFlowId: enabledFlows.first.id,
+        initialTitle: '',
+        initialColor: const Color(0xFF1976D2),
+      ),
     );
     if (item is Map<String, dynamic>) {
       if (item['studentId'] == studentId) {
-        HomeworkStore.instance.add(item['studentId'], title: item['title'], body: item['body'], color: item['color']);
+        HomeworkStore.instance.add(
+          item['studentId'],
+          title: item['title'],
+          body: item['body'],
+          color: item['color'],
+          flowId: item['flowId'] as String?,
+        );
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과제를 추가했어요.')));
       }
     }

@@ -2,12 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../models/student_flow.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
   final String? initialTitle;
   final Color? initialColor;
-  const HomeworkQuickAddProxyDialog({required this.studentId, this.initialTitle, this.initialColor});
+  final List<StudentFlow> flows;
+  final String? initialFlowId;
+  const HomeworkQuickAddProxyDialog({
+    required this.studentId,
+    required this.flows,
+    this.initialTitle,
+    this.initialColor,
+    this.initialFlowId,
+  });
   @override
   State<HomeworkQuickAddProxyDialog> createState() => HomeworkQuickAddProxyDialogState();
 }
@@ -19,6 +28,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
   late final TextEditingController _count;
   late Color _color;
   String _type = '프린트';
+  late String _flowId;
   @override
   void initState() {
     super.initState();
@@ -27,6 +37,12 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     _page = ImeAwareTextEditingController(text: '');
     _count = ImeAwareTextEditingController(text: '');
     _color = _colorForType(_type);
+    final initial = widget.initialFlowId;
+    if (initial != null && widget.flows.any((f) => f.id == initial)) {
+      _flowId = initial;
+    } else {
+      _flowId = widget.flows.isNotEmpty ? widget.flows.first.id : '';
+    }
   }
   @override
   void dispose() {
@@ -67,6 +83,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
         return Colors.amber;
       case '학습':
         return Colors.purple;
+      case '테스트':
+        return Colors.red;
       default:
         return Colors.blue;
     }
@@ -98,12 +116,27 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           children: [
             const YggDialogSectionHeader(icon: Icons.task_alt, title: '과제 정보'),
             DropdownButtonFormField<String>(
+              value: _flowId.isEmpty ? null : _flowId,
+              items: widget.flows
+                  .map((f) => DropdownMenuItem(value: f.id, child: Text(f.name)))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                _flowId = v ?? _flowId;
+              }),
+              decoration: _inputDecoration('플로우'),
+              dropdownColor: kDlgPanelBg,
+              style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+              iconEnabledColor: kDlgTextSub,
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
               value: _type,
               items: const [
                 DropdownMenuItem(value: '프린트', child: Text('프린트')),
                 DropdownMenuItem(value: '교재', child: Text('교재')),
                 DropdownMenuItem(value: '문제집', child: Text('문제집')),
                 DropdownMenuItem(value: '학습', child: Text('학습')),
+                DropdownMenuItem(value: '테스트', child: Text('테스트')),
               ],
               onChanged: (v) => setState(() {
                 _type = v ?? '프린트';
@@ -177,8 +210,15 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
               );
               return;
             }
+            if (_flowId.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('플로우를 선택하세요.')),
+              );
+              return;
+            }
             Navigator.pop(context, {
               'studentId': widget.studentId,
+              'flowId': _flowId,
               'type': _type,
               'title': title,
               'page': _page.text.trim(),

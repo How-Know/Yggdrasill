@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 40,
+      version: 42,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -107,6 +107,7 @@ class AcademyDbService {
             parent_phone_number TEXT,
             group_id TEXT,
             memo TEXT,
+            flows TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -501,6 +502,7 @@ class AcademyDbService {
             title TEXT,
             body TEXT,
             color INTEGER,
+            flow_id TEXT,
             status INTEGER,
             accumulated_ms INTEGER,
             run_start TEXT,
@@ -538,6 +540,7 @@ class AcademyDbService {
                 title TEXT,
                 body TEXT,
                 color INTEGER,
+                flow_id TEXT,
                 status INTEGER,
                 accumulated_ms INTEGER,
                 run_start TEXT,
@@ -740,6 +743,28 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v40 lesson_occurrences/occurrence_id 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 41) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+            final hasFlows = cols.any((c) => c['name'] == 'flows');
+            if (!hasFlows) {
+              await db.execute("ALTER TABLE student_basic_info ADD COLUMN flows TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v41 student_basic_info.flows 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 42) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(homework_items)");
+            final hasFlowId = cols.any((c) => c['name'] == 'flow_id');
+            if (!hasFlowId) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN flow_id TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v42 homework_items.flow_id 추가 실패: $e');
           }
         }
         if (oldVersion < 37) {

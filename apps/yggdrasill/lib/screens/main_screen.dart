@@ -32,6 +32,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/dark_panel_route.dart';
+import '../widgets/flow_setup_dialog.dart';
 import 'student/student_profile_page.dart';
 
 class MainScreen extends StatefulWidget {
@@ -1414,7 +1415,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             },
             onLongPress: () async {
               // 이어가기: 동일 제목/색상으로 내용만 빈 과제 추가
-              HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: '');
+              final enabledFlows = await ensureEnabledFlowsForHomework(context, t.student.id);
+              if (enabledFlows.isEmpty) return;
+              final flowId = hw.flowId ?? enabledFlows.first.id;
+              HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: '', flowId: flowId);
               setState(() {});
             },
             onSecondaryTap: () {
@@ -1783,12 +1787,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               // 활성화 지정 후 이어가기 다이얼로그 표시
               _activeStudentId = t.student.id;
               _activeItemId = hw.id;
+              final enabledFlows = await ensureEnabledFlowsForHomework(context, t.student.id);
+              if (enabledFlows.isEmpty) return;
               final res = await showDialog<Map<String, dynamic>?>(
                 context: context,
                 builder: (_) => HomeworkContinueDialog(studentId: t.student.id, title: hw.title, color: hw.color),
               );
               if (res != null && (res['body'] as String).isNotEmpty) {
-                HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: res['body'] as String);
+                final flowId = hw.flowId ?? enabledFlows.first.id;
+                HomeworkStore.instance.continueAdd(
+                  t.student.id,
+                  hw.id,
+                  body: res['body'] as String,
+                  flowId: flowId,
+                );
                 setState(() {});
               }
             },
@@ -2048,6 +2060,7 @@ extension on _MainScreenState {
       title: (edited['title'] as String).trim(),
       body: (edited['body'] as String).trim(),
       color: (edited['color'] as Color),
+      flowId: item.flowId,
       status: item.status,
       phase: item.phase,
       accumulatedMs: item.accumulatedMs,
@@ -2135,10 +2148,14 @@ extension on _MainScreenState {
     Future<void> _handleHomeworkPressed() async {
       _removeClassTagOverlay();
       await Future<void>.delayed(Duration.zero);
+      final enabledFlows = await ensureEnabledFlowsForHomework(context, target.student.id);
+      if (enabledFlows.isEmpty) return;
       final result = await showDialog<dynamic>(
         context: context,
         builder: (ctx) => HomeworkQuickAddProxyDialog(
           studentId: target.student.id,
+          flows: enabledFlows,
+          initialFlowId: enabledFlows.first.id,
           initialTitle: '',
           initialColor: const Color(0xFF1976D2),
         ),
@@ -2150,6 +2167,7 @@ extension on _MainScreenState {
           title: (result['title'] as String?) ?? '',
           body: (result['body'] as String?) ?? '',
           color: (result['color'] as Color?) ?? const Color(0xFF1976D2),
+          flowId: result['flowId'] as String?,
         );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('과제를 추가했어요.')),

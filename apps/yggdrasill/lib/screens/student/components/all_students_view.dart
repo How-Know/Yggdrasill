@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart'
@@ -23,6 +25,8 @@ import '../../../widgets/dark_panel_route.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import '../../../utils/attendance_judgement.dart';
 import 'student_promotion_dialog.dart';
+import 'package:uuid/uuid.dart';
+import '../../../services/student_flow_store.dart';
 
 const Color _studentListPrimaryTextColor = Color(0xFFEAF2F2);
 const Color _studentListMutedTextColor = Color(0xFFCBD8D8);
@@ -77,9 +81,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   StudentWithInfo? _detailsStudent;
   int _detailsWeekOffset = 0; // 0: 이번주, 1: 다음주 ...
   final Map<String, List<StudentFlow>> _flowByStudentId = {};
-  int _flowIdSeed = 0;
+  final Uuid _flowIdGen = Uuid();
+  final Set<String> _flowLoadingStudentIds = <String>{};
+  final Set<String> _flowSeededDefaults = <String>{};
 
-  String _nextFlowId() => 'flow_${_flowIdSeed++}';
+  String _nextFlowId() => _flowIdGen.v4();
 
   List<StudentFlow> _defaultFlows() {
     return [
@@ -88,7 +94,17 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     ];
   }
 
+  StudentWithInfo? _findStudentById(String studentId) {
+    for (final s in widget.students) {
+      if (s.student.id == studentId) return s;
+    }
+    return null;
+  }
+
   List<StudentFlow> _flowsForStudent(String studentId) {
+    final existing = _flowByStudentId[studentId];
+    if (existing != null) return existing;
+    unawaited(_ensureFlowsLoaded(studentId));
     return _flowByStudentId.putIfAbsent(studentId, _defaultFlows);
   }
 
@@ -110,6 +126,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     setState(() {
       flows.add(StudentFlow(id: _nextFlowId(), name: name, enabled: false));
     });
+    unawaited(_persistFlows(studentId, flows));
   }
 
   void _toggleFlowForStudent(String studentId, String flowId, bool enabled) {
@@ -120,6 +137,66 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     setState(() {
       flows[idx] = flows[idx].copyWith(enabled: enabled);
     });
+    unawaited(_persistFlows(studentId, flows));
+  }
+
+  Future<void> _persistFlows(String studentId, List<StudentFlow> flows) async {
+    try {
+      await StudentFlowStore.instance.saveFlows(studentId, List<StudentFlow>.from(flows));
+    } catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(context, '플로우 저장 실패');
+    }
+  }
+
+  Future<void> _ensureFlowsLoaded(String studentId) async {
+    if (_flowLoadingStudentIds.contains(studentId)) return;
+    _flowLoadingStudentIds.add(studentId);
+    try {
+      final flows = await StudentFlowStore.instance.loadForStudent(studentId);
+      if (!mounted) return;
+      if (flows.isNotEmpty) {
+        setState(() {
+          _flowByStudentId[studentId] = List<StudentFlow>.from(flows);
+        });
+        return;
+      }
+      if (!_flowSeededDefaults.contains(studentId)) {
+        _flowSeededDefaults.add(studentId);
+        final defaults = _defaultFlows();
+        setState(() {
+          _flowByStudentId[studentId] = defaults;
+        });
+        unawaited(_persistFlows(studentId, defaults));
+      }
+    } finally {
+      _flowLoadingStudentIds.remove(studentId);
+    }
+  }
+
+  Future<void> _primeFlowsForStudents(List<StudentWithInfo> students) async {
+    final ids = students.map((s) => s.student.id).toList();
+    if (ids.isEmpty) return;
+    await StudentFlowStore.instance.loadForStudents(ids);
+    if (!mounted) return;
+    setState(() {
+      for (final id in ids) {
+        final flows = StudentFlowStore.instance.cached(id);
+        if (flows.isNotEmpty) {
+          _flowByStudentId[id] = List<StudentFlow>.from(flows);
+        } else if (!_flowByStudentId.containsKey(id)) {
+          _flowByStudentId[id] = _defaultFlows();
+        }
+      }
+    });
+    for (final id in ids) {
+      final cached = StudentFlowStore.instance.cached(id);
+      if (cached.isNotEmpty) continue;
+      if (_flowSeededDefaults.contains(id)) continue;
+      final flows = _flowByStudentId[id] ?? _defaultFlows();
+      _flowSeededDefaults.add(id);
+      unawaited(_persistFlows(id, flows));
+    }
   }
 
   bool get _useImmediateDrag {
@@ -131,6 +208,20 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         return true;
       default:
         return false;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_primeFlowsForStudents(widget.students));
+  }
+
+  @override
+  void didUpdateWidget(covariant AllStudentsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.students != widget.students) {
+      unawaited(_primeFlowsForStudents(widget.students));
     }
   }
 
@@ -1823,6 +1914,28 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     this.onRefreshAfterPauseResume,
   });
 
+  int _flowPriority(StudentFlow flow) {
+    final name = flow.name.trim();
+    if (name == '현행') return 0;
+    if (name == '선행') return 1;
+    return 2;
+  }
+
+  List<StudentFlow> _sortedFlowsForDisplay(List<StudentFlow> input) {
+    final list = List<StudentFlow>.from(input);
+    list.sort((a, b) {
+      final pa = _flowPriority(a);
+      final pb = _flowPriority(b);
+      if (pa != pb) return pa - pb;
+      if (pa == 2) {
+        final oi = a.orderIndex.compareTo(b.orderIndex);
+        if (oi != 0) return oi;
+      }
+      return a.name.compareTo(b.name);
+    });
+    return list;
+  }
+
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   DateTime _mondayOf(DateTime d) {
     final base = _dateOnly(d);
@@ -1924,12 +2037,13 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     final String memoText = (basicInfo.memo ?? '').trim().isEmpty
         ? '메모가 없습니다.'
         : (basicInfo.memo ?? '').trim();
+    final List<StudentFlow> displayFlows = _sortedFlowsForDisplay(flows);
     final List<Widget> flowChildren = [];
-    if (flows.isEmpty) {
+    if (displayFlows.isEmpty) {
       flowChildren.add(Text('등록된 플로우가 없습니다.', style: valueStyle));
     } else {
-      for (int i = 0; i < flows.length; i++) {
-        final flow = flows[i];
+      for (int i = 0; i < displayFlows.length; i++) {
+        final flow = displayFlows[i];
         flowChildren.add(Row(
           children: [
             Expanded(
@@ -1942,7 +2056,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             ),
           ],
         ));
-        if (i != flows.length - 1) {
+        if (i != displayFlows.length - 1) {
           flowChildren.add(const SizedBox(height: 8));
         }
       }

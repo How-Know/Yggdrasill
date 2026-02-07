@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'group_info.dart';
 import 'education_level.dart';
+import 'student_flow.dart';
 
 class Student {
   final String id;
@@ -92,6 +93,7 @@ class StudentBasicInfo {
   final String? groupId;
   final DateTime? registrationDate;
   final String? memo;
+  final List<StudentFlow> flows;
 
   StudentBasicInfo({
     required this.studentId,
@@ -100,7 +102,8 @@ class StudentBasicInfo {
     this.groupId,
     this.registrationDate,
     this.memo,
-  });
+    List<StudentFlow>? flows,
+  }) : flows = flows ?? const <StudentFlow>[];
 
   StudentBasicInfo copyWith({
     String? phoneNumber,
@@ -108,6 +111,7 @@ class StudentBasicInfo {
     String? groupId,
     DateTime? registrationDate,
     String? memo,
+    List<StudentFlow>? flows,
     bool clearGroupId = false,
   }) {
     return StudentBasicInfo(
@@ -117,6 +121,7 @@ class StudentBasicInfo {
       groupId: clearGroupId ? null : (groupId ?? this.groupId),
       registrationDate: registrationDate ?? this.registrationDate,
       memo: memo ?? this.memo,
+      flows: flows ?? this.flows,
     );
   }
 
@@ -127,6 +132,7 @@ class StudentBasicInfo {
       parentPhoneNumber: row['parent_phone_number'] as String?,
       groupId: row['group_id'] as String?,
       memo: row['memo'] as String?,
+      flows: StudentFlow.decodeList(row['flows']),
     );
   }
 
@@ -137,6 +143,7 @@ class StudentBasicInfo {
       'parent_phone_number': parentPhoneNumber,
       'group_id': groupId,
       'memo': memo,
+      'flows': StudentFlow.encodeListToJson(flows),
     };
   }
 
