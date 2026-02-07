@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:uuid/uuid.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/gestures.dart';
 import '../../widgets/pill_tab_selector.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import '../../services/data_manager.dart';
+import '../../services/tenant_service.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
@@ -73,6 +75,28 @@ Future<List<_CourseOption>> _loadAnswerKeyGradeOptions() async {
 Future<List<String>> _loadAnswerKeyGradeLabels() async {
   final options = await _loadAnswerKeyGradeOptions();
   return options.map((e) => e.label).toList();
+}
+
+bool _isRemoteUrl(String path) {
+  return path.startsWith('http://') || path.startsWith('https://');
+}
+
+String _normalizeLocalPath(String path) {
+  if (path.startsWith('file://')) {
+    final uri = Uri.tryParse(path);
+    if (uri != null) return uri.toFilePath();
+  }
+  return path;
+}
+
+ImageProvider? _coverImageProvider(String rawPath) {
+  final path = rawPath.trim();
+  if (path.isEmpty) return null;
+  if (_isRemoteUrl(path)) return NetworkImage(path);
+  final localPath = _normalizeLocalPath(path);
+  final file = File(localPath);
+  if (!file.existsSync()) return null;
+  return FileImage(file);
 }
 
 const List<IconData> _gradeIconPack = [
@@ -2497,9 +2521,11 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
   final Map<String, TextEditingController> _solutionCtrls = {}; // 해설
   final Map<String, TextEditingController> _answerCtrls = {};   // 정답
   final Map<String, String> _coverPaths = {}; // 표지 경로
+  final Set<String> _coverUploadingGrades = <String>{};
   final Set<String> _expandedGrades = <String>{};
   bool _isLoadingGrades = true;
   String? _coverDragGrade;
+  bool get _isCoverUploading => _coverUploadingGrades.isNotEmpty;
   @override
   void initState() {
     super.initState();
@@ -2534,8 +2560,11 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
       _bodyCtrls[g] = ImeAwareTextEditingController(text: body);
       _solutionCtrls[g] = ImeAwareTextEditingController(text: sol);
       _answerCtrls[g] = ImeAwareTextEditingController(text: ans);
-      if (cover.trim().isNotEmpty) {
-        _coverPaths[g] = cover.trim();
+      final coverTrim = cover.trim();
+      if (coverTrim.isNotEmpty) {
+        if (_isRemoteUrl(coverTrim) || File(_normalizeLocalPath(coverTrim)).existsSync()) {
+          _coverPaths[g] = coverTrim;
+        }
       }
       if (body.trim().isNotEmpty || sol.trim().isNotEmpty || ans.trim().isNotEmpty) {
         _expandedGrades.add(g);
@@ -2546,26 +2575,76 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
   }
 
   bool _isImagePath(String path) {
-    final ext = p.extension(path).toLowerCase();
+    if (_isRemoteUrl(path)) return true;
+    final ext = p.extension(_normalizeLocalPath(path)).toLowerCase();
     const allowed = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
     return allowed.contains(ext);
   }
 
-  void _setCoverForGrade(String grade, String path) {
-    if (!_isImagePath(path)) {
+  static const String _coverBucket = 'resource-covers';
+
+  Future<String?> _uploadCoverToSupabase({required String grade, required String path}) async {
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final ext = p.extension(path).toLowerCase();
+      final safeGrade = grade.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final safeExt = ext.isNotEmpty ? ext : '.png';
+      final object =
+          '$academyId/resource-covers/${widget.meta.id}_${safeGrade}_${DateTime.now().millisecondsSinceEpoch}$safeExt';
+      final supa = Supabase.instance.client;
+      await supa.storage.from(_coverBucket).upload(object, File(path));
+      return supa.storage.from(_coverBucket).getPublicUrl(object);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[RES][cover upload] failed: $e\n$st');
+      return null;
+    }
+  }
+
+  Future<void> _setCoverForGrade(String grade, String path) async {
+    final raw = path.trim();
+    if (raw.isEmpty) return;
+    if (_coverUploadingGrades.contains(grade)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('표지 업로드가 진행 중입니다.')));
+      return;
+    }
+    if (_isRemoteUrl(raw)) {
+      setState(() {
+        _coverPaths[grade] = raw;
+      });
+      return;
+    }
+    final localPath = _normalizeLocalPath(raw);
+    if (!_isImagePath(localPath)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('이미지 파일만 등록할 수 있어요.')));
       return;
     }
     setState(() {
-      _coverPaths[grade] = path;
+      _coverPaths[grade] = localPath;
+      _coverUploadingGrades.add(grade);
     });
+    final uploadedUrl = await _uploadCoverToSupabase(grade: grade, path: localPath);
+    if (!mounted) return;
+    setState(() {
+      _coverUploadingGrades.remove(grade);
+      if (uploadedUrl != null && uploadedUrl.isNotEmpty) {
+        _coverPaths[grade] = uploadedUrl;
+      }
+    });
+    if (uploadedUrl == null || uploadedUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('표지 업로드 실패: 로컬 경로로 유지됩니다.')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('표지 업로드 완료')));
+    }
   }
 
   Future<void> _pickCoverForGrade(String grade) async {
     final typeGroup = XTypeGroup(label: 'image', extensions: ['png','jpg','jpeg','webp','gif']);
     final f = await openFile(acceptedTypeGroups: [typeGroup]);
     if (f == null) return;
-    _setCoverForGrade(grade, f.path);
+    await _setCoverForGrade(grade, f.path);
   }
   @override
   void dispose() {
@@ -2616,6 +2695,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                     final isExpanded = _expandedGrades.contains(grade);
                     final hasCover = (_coverPaths[grade]?.trim().isNotEmpty ?? false);
                     final isCoverDrag = _coverDragGrade == grade;
+                    final isUploading = _coverUploadingGrades.contains(grade);
                     return Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
@@ -2677,7 +2757,11 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                                 onDragExited: (_) => setState(() {
                                   if (_coverDragGrade == grade) _coverDragGrade = null;
                                 }),
-                                onDragDone: (detail) {
+                                onDragDone: (detail) async {
+                                  if (isUploading) {
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('표지 업로드가 진행 중입니다.')));
+                                    return;
+                                  }
                                   if (detail.files.isEmpty) return;
                                   final path = detail.files.first.path;
                                   if (path == null || path.isEmpty) {
@@ -2689,12 +2773,12 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                                   setState(() {
                                     if (_coverDragGrade == grade) _coverDragGrade = null;
                                   });
-                                  _setCoverForGrade(grade, path);
+                                  await _setCoverForGrade(grade, path);
                                 },
                                 child: SizedBox(
                                   height: 30,
                                   child: OutlinedButton(
-                                    onPressed: () => _pickCoverForGrade(grade),
+                                    onPressed: isUploading ? null : () => _pickCoverForGrade(grade),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: _rsText,
                                       side: BorderSide(color: isCoverDrag ? _rsAccent : _rsBorder),
@@ -2702,7 +2786,10 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
                                       shape: const StadiumBorder(),
                                       padding: const EdgeInsets.symmetric(horizontal: 12),
                                     ),
-                                    child: Text(hasCover ? '표지 등록됨' : '표지 등록', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                                    child: Text(
+                                      isUploading ? '업로드 중...' : (hasCover ? '표지 등록됨' : '표지 등록'),
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2855,7 +2942,7 @@ class _FileLinksDialogState extends State<_FileLinksDialog> {
         ),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: _rsAccent),
-          onPressed: () {
+          onPressed: _isCoverUploading ? null : () {
             final links = <String, String>{};
             for (final g in _grades) {
               final body = _bodyCtrls[g]!.text.trim();
@@ -4084,7 +4171,8 @@ class _GridFileCardState extends State<_GridFileCard> {
     final hasForCurrent = currentGrade != null && (file.linksByGrade['$currentGrade#body']?.trim().isNotEmpty ?? false);
     final bg = hasForCurrent ? (file.color ?? const Color(0xFF2B2B2B)) : const Color(0xFF2B2B2B).withOpacity(0.22);
     final coverPath = _coverForGrade(currentGrade);
-    final hasCover = coverPath != null && coverPath.isNotEmpty;
+    final coverImage = coverPath != null ? _coverImageProvider(coverPath) : null;
+    final hasCoverImage = coverImage != null;
     final hasExplicitIcon = (file.iconImagePath?.trim().isNotEmpty ?? false) ||
         (file.icon != null && file.icon != Icons.insert_drive_file);
     final displayGrade = currentGrade ?? file.primaryGrade;
@@ -4133,7 +4221,7 @@ class _GridFileCardState extends State<_GridFileCard> {
           parentLabel: parentLabel,
           gradeLabel: displayGrade,
           linkCount: linkCount,
-          hasCover: hasCover,
+          hasCover: hasCoverImage,
           hasIcon: hasExplicitIcon,
         ),
       );
@@ -4220,13 +4308,13 @@ class _GridFileCardState extends State<_GridFileCard> {
                               onHorizontalDragCancel: () => _gradeDragDx = 0.0,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: hasCover ? bg : const Color(0xFF2B2B2B),
-                                  image: hasCover ? DecorationImage(image: FileImage(File(coverPath!)), fit: BoxFit.cover) : null,
+                                  color: hasCoverImage ? bg : const Color(0xFF2B2B2B),
+                                  image: hasCoverImage ? DecorationImage(image: coverImage!, fit: BoxFit.cover) : null,
                                 ),
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
-                                    if (!hasCover)
+                                    if (!hasCoverImage)
                                       Center(
                                         child: Icon(
                                           file.icon ?? Icons.menu_book,
@@ -4234,7 +4322,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                                           color: Colors.white60,
                                         ),
                                       ),
-                                    if (hasCover && hasExplicitIcon && file.icon != null)
+                                    if (hasCoverImage && hasExplicitIcon && file.icon != null)
                                       IgnorePointer(
                                         child: Center(
                                           child: Icon(

@@ -7,7 +7,7 @@ const double _treeIndentStep = 18.0;
 const double _treeConnectorWidth = 12.0;
 const double _treeLineWidth = 1.4;
 const double _treeCornerRadius = 8.0;
-const double _treeRowHeight = 38.0;
+const double _treeRowHeight = 42.0;
 const Color _treeLineColor = Color(0xFF2A2A2A);
 const Color _rsBg = Color(0xFF0B1112);
 const Color _rsPanelBg = Color(0xFF10171A);
@@ -30,6 +30,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
   bool _isLoadingBooks = false;
   bool _isLoadingPdfs = false;
   bool _isSaving = false;
+  bool _isLoadingMetadata = false;
 
   List<_BookEntry> _books = [];
   String? _selectedBookId;
@@ -45,6 +46,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
 
   Map<String, int> _gradeOrderByLabel = {};
   int _pdfRequestId = 0;
+  int _metadataRequestId = 0;
 
   @override
   void initState() {
@@ -166,6 +168,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
         _setPdfLists(parsed);
         _isLoadingPdfs = false;
       });
+      await _loadTextbookMetadataForSelection();
     } catch (e) {
       if (!mounted || requestId != _pdfRequestId) return;
       setState(() => _isLoadingPdfs = false);
@@ -340,6 +343,149 @@ class _TextbookScreenState extends State<TextbookScreen> {
     final key = _pageOffsetKey(bookId, gradeLabel);
     final value = _pageOffsetByKey[key];
     _pageOffsetCtrl.text = value?.toString() ?? '';
+  }
+
+  Future<void> _loadTextbookMetadataForSelection() async {
+    final book = _selectedBook;
+    final body = _selectedBody;
+    if (book == null || body == null) {
+      setState(() {
+        _clearChapterTree();
+        _setPageOffsetForSelection();
+        _isLoadingMetadata = false;
+      });
+      return;
+    }
+    final academyId = book.academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    final requestId = ++_metadataRequestId;
+    setState(() => _isLoadingMetadata = true);
+    try {
+      final data = await _supabase
+          .from('textbook_metadata')
+          .select('page_offset,payload')
+          .match({
+            'academy_id': academyId,
+            'book_id': book.id,
+            'grade_label': body.gradeLabel,
+          })
+          .maybeSingle();
+      if (!mounted || requestId != _metadataRequestId) return;
+      if (_selectedBook?.id != book.id ||
+          _selectedBody?.gradeLabel != body.gradeLabel) {
+        return;
+      }
+      _applyLoadedMetadata(
+        data as Map<String, dynamic>?,
+        book: book,
+        body: body,
+      );
+    } catch (e) {
+      if (!mounted || requestId != _metadataRequestId) return;
+      _showError('메타데이터 로드 실패: $e');
+    } finally {
+      if (mounted && requestId == _metadataRequestId) {
+        setState(() => _isLoadingMetadata = false);
+      }
+    }
+  }
+
+  void _applyLoadedMetadata(
+    Map<String, dynamic>? row, {
+    required _BookEntry book,
+    required _PdfEntry body,
+  }) {
+    final key = _pageOffsetKey(book.id, body.gradeLabel);
+    final bigUnits = _parseBigUnits(row?['payload']);
+    setState(() {
+      _clearChapterTree();
+      _bigUnits.addAll(bigUnits);
+      final pageOffset = _toInt(row?['page_offset']);
+      if (pageOffset == null) {
+        _pageOffsetByKey.remove(key);
+      } else {
+        _pageOffsetByKey[key] = pageOffset;
+      }
+      _setPageOffsetForSelection();
+    });
+  }
+
+  List<_BigUnitNode> _parseBigUnits(dynamic payload) {
+    if (payload is! Map) return <_BigUnitNode>[];
+    final rawUnits = payload['units'];
+    if (rawUnits is! List) return <_BigUnitNode>[];
+    final units = rawUnits
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    units.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+    final out = <_BigUnitNode>[];
+    for (final u in units) {
+      final name = (u['name'] as String?)?.trim() ?? '';
+      final big = _BigUnitNode(name: name);
+      final midsRaw = u['middles'];
+      if (midsRaw is List) {
+        final mids = midsRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        mids.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+        for (final m in mids) {
+          final midName = (m['name'] as String?)?.trim() ?? '';
+          final mid = _MidUnitNode(name: midName);
+          final smallsRaw = m['smalls'];
+          if (smallsRaw is List) {
+            final smalls = smallsRaw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+            smalls.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+            for (final s in smalls) {
+              final smallName = (s['name'] as String?)?.trim() ?? '';
+              final start = _toInt(s['start_page']);
+              final end = _toInt(s['end_page']);
+              final small = _SmallUnitNode(
+                name: smallName,
+                startPage: start?.toString(),
+                endPage: end?.toString(),
+              );
+              if (start != null && end != null && start > 0 && end > 0) {
+                small.ensurePageControllers(start, end);
+              }
+              final countsRaw = s['page_counts'];
+              if (countsRaw is Map) {
+                countsRaw.forEach((key, value) {
+                  final page = _toInt(key);
+                  final count = _toInt(value);
+                  if (page == null || count == null) return;
+                  if (start != null && end != null) {
+                    if (page < start || page > end) return;
+                  }
+                  small.pageCountController(page).text = count.toString();
+                });
+              }
+              mid.smalls.add(small);
+            }
+          }
+          big.middles.add(mid);
+        }
+      }
+      out.add(big);
+    }
+    return out;
+  }
+
+  int _orderIndex(dynamic value) {
+    final v = _toInt(value);
+    return v ?? 1 << 30;
+  }
+
+  int? _toInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   void _clearChapterTree() {
@@ -583,7 +729,9 @@ class _TextbookScreenState extends State<TextbookScreen> {
         setState(() {
           _selectedBodyKey = value;
           _setPageOffsetForSelection();
+          _clearChapterTree();
         });
+        _loadTextbookMetadataForSelection();
       },
     );
   }
@@ -975,7 +1123,8 @@ class _TextbookScreenState extends State<TextbookScreen> {
     required List<bool> ancestorHasNext,
   }) {
     final hasNextSibling = index < siblingCount - 1;
-    final nextAncestorHasNext = [...ancestorHasNext, hasNextSibling];
+    // 대단원 레벨의 연결선은 하위 트리에 전달하지 않음
+    final nextAncestorHasNext = [...ancestorHasNext];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1007,8 +1156,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
         if (unit.middles.isNotEmpty)
           Column(
             children: [
-              for (int i = 0; i < unit.middles.length; i++) ...[
-                const SizedBox(height: 6),
+              for (int i = 0; i < unit.middles.length; i++)
                 _buildMidUnitNode(
                   unit,
                   unit.middles[i],
@@ -1016,7 +1164,6 @@ class _TextbookScreenState extends State<TextbookScreen> {
                   siblingCount: unit.middles.length,
                   ancestorHasNext: nextAncestorHasNext,
                 ),
-              ],
             ],
           ),
       ],
@@ -1063,8 +1210,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
         if (unit.smalls.isNotEmpty)
           Column(
             children: [
-              for (int i = 0; i < unit.smalls.length; i++) ...[
-                const SizedBox(height: 6),
+              for (int i = 0; i < unit.smalls.length; i++)
                 _buildSmallUnitNode(
                   unit,
                   unit.smalls[i],
@@ -1072,7 +1218,6 @@ class _TextbookScreenState extends State<TextbookScreen> {
                   siblingCount: unit.smalls.length,
                   ancestorHasNext: nextAncestorHasNext,
                 ),
-              ],
             ],
           ),
       ],
@@ -1171,7 +1316,12 @@ class _TextbookScreenState extends State<TextbookScreen> {
             )
           else
             SizedBox(width: indentWidth),
-          Expanded(child: child),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: child,
+            ),
+          ),
         ],
       ),
     );
@@ -1546,7 +1696,12 @@ class _TreeIndentPainter extends CustomPainter {
       ..lineTo(elbowX + connectorWidth, centerY);
     canvas.drawPath(elbowPath, paint);
     if (hasNextSibling) {
-      canvas.drawLine(Offset(elbowX, centerY), Offset(elbowX, size.height), paint);
+      // 연결선이 곡선 시작점과 자연스럽게 이어지도록 살짝 겹치게 그림
+      canvas.drawLine(
+        Offset(elbowX, centerY - radius),
+        Offset(elbowX, size.height),
+        paint,
+      );
     }
   }
 

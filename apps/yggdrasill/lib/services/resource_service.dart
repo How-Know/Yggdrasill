@@ -260,6 +260,22 @@ class ResourceService {
               .eq('academy_id', academyId)
               .or('category.is.null,category.eq.textbook')
               .order('order_index');
+          // legacy fallback: empty-string category rows
+          if ((data as List).isEmpty) {
+            final all = await supa
+                .from('resource_folders')
+                .select('id,name,parent_id,order_index,category')
+                .eq('academy_id', academyId)
+                .order('order_index');
+            final filtered = (all as List)
+                .cast<Map<String, dynamic>>()
+                .where((r) {
+                  final c = (r['category'] as String?)?.trim();
+                  return c == null || c.isEmpty || c == 'textbook';
+                })
+                .toList();
+            return filtered;
+          }
         } else {
           data = await supa
               .from('resource_folders')
@@ -404,6 +420,18 @@ class ResourceService {
           }
         }
         var rows = (data as List).cast<Map<String, dynamic>>();
+        if (category == 'textbook' && rows.isEmpty) {
+          // legacy fallback: include empty-string category rows
+          final all = await supa
+              .from('resource_files')
+              .select(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase)
+              .eq('academy_id', academyId)
+              .order('order_index');
+          rows = (all as List).cast<Map<String, dynamic>>().where((r) {
+            final c = (r['category'] as String?)?.trim();
+            return c == null || c.isEmpty || c == 'textbook';
+          }).toList();
+        }
         if (!RuntimeFlags.serverOnly) {
           final local = await AcademyDbService.instance.loadResourceFilesForCategory(category);
           if (local.isNotEmpty) {

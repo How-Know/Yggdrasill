@@ -1134,12 +1134,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         children: [
                                           if (attended.isEmpty && trialAttended.isEmpty)
                                             const Center(
-                                              child: Text(
-                                                '출석',
-                                                style: TextStyle(
-                                                  color: Color(0xFF9FB3B3),
-                                                  fontSize: 22,
-                                                  fontWeight: FontWeight.bold,
+                                              child: Padding(
+                                                padding: EdgeInsets.only(left: 14.0),
+                                                child: Text(
+                                                  '출석',
+                                                  style: TextStyle(
+                                                    color: Color(0xFF9FB3B3),
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                               ),
                                             ),
