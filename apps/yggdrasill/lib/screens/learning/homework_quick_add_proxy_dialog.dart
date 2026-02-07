@@ -1,5 +1,7 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import '../../widgets/dialog_tokens.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
@@ -12,83 +14,181 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
 
 class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog> {
   late final TextEditingController _title;
-  late final TextEditingController _body;
+  late final TextEditingController _content;
+  late final TextEditingController _page;
+  late final TextEditingController _count;
   late Color _color;
+  String _type = '프린트';
   @override
   void initState() {
     super.initState();
     _title = ImeAwareTextEditingController(text: widget.initialTitle ?? '');
-    _body = ImeAwareTextEditingController(text: '');
-    _color = widget.initialColor ?? const Color(0xFF1976D2);
+    _content = ImeAwareTextEditingController(text: '');
+    _page = ImeAwareTextEditingController(text: '');
+    _count = ImeAwareTextEditingController(text: '');
+    _color = _colorForType(_type);
   }
   @override
-  void dispose() { _title.dispose(); _body.dispose(); super.dispose(); }
+  void dispose() {
+    _title.dispose();
+    _content.dispose();
+    _page.dispose();
+    _count.dispose();
+    super.dispose();
+  }
+
+  InputDecoration _inputDecoration(String label, {String? hint}) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      labelStyle: const TextStyle(color: kDlgTextSub),
+      hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+      filled: true,
+      fillColor: kDlgFieldBg,
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kDlgBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+    );
+  }
+
+  Color _colorForType(String type) {
+    switch (type) {
+      case '프린트':
+        return Colors.blue;
+      case '교재':
+        return Colors.green;
+      case '문제집':
+        return Colors.amber;
+      case '학습':
+        return Colors.purple;
+      default:
+        return Colors.blue;
+    }
+  }
+
+  String _composeBody() {
+    final content = _content.text.trim();
+    final page = _page.text.trim();
+    final count = _count.text.trim();
+    final parts = <String>[];
+    if (page.isNotEmpty) parts.add('p.$page');
+    if (count.isNotEmpty) parts.add('${count}문항');
+    if (parts.isEmpty) return content;
+    if (content.isEmpty) return parts.join(' / ');
+    return '${parts.join(' / ')}\n$content';
+  }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: const Text('과제 추가', style: TextStyle(color: Colors.white)),
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('과제 추가', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
       content: SizedBox(
-        width: 420,
+        width: 520,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              controller: _title,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(labelText: '과제 이름', labelStyle: TextStyle(color: Colors.white60), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _body,
-              minLines: 2,
-              maxLines: 4,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(labelText: '내용', labelStyle: TextStyle(color: Colors.white60), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+            const YggDialogSectionHeader(icon: Icons.task_alt, title: '과제 정보'),
+            DropdownButtonFormField<String>(
+              value: _type,
+              items: const [
+                DropdownMenuItem(value: '프린트', child: Text('프린트')),
+                DropdownMenuItem(value: '교재', child: Text('교재')),
+                DropdownMenuItem(value: '문제집', child: Text('문제집')),
+                DropdownMenuItem(value: '학습', child: Text('학습')),
+              ],
+              onChanged: (v) => setState(() {
+                _type = v ?? '프린트';
+                _color = _colorForType(_type);
+              }),
+              decoration: _inputDecoration('과제 유형'),
+              dropdownColor: kDlgPanelBg,
+              style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+              iconEnabledColor: kDlgTextSub,
             ),
             const SizedBox(height: 12),
-            const Text('색상', style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            TextField(
+              controller: _title,
+              style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+              decoration: _inputDecoration('과제명', hint: '예: 프린트 1장'),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '과제명만 입력해도 저장됩니다.',
+              style: TextStyle(color: kDlgTextSub, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            Row(
               children: [
-                for (final c in [Colors.blue, Colors.green, Colors.orange, Colors.purple, Colors.pink, Colors.cyan, Colors.teal, Colors.red, const Color(0xFF90A4AE)])
-                  GestureDetector(
-                    onTap: () => setState(() => _color = c),
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: c,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: c == _color ? Colors.white : Colors.white24, width: c == _color ? 2 : 1),
-                      ),
-                    ),
+                Expanded(
+                  child: TextField(
+                    controller: _page,
+                    keyboardType: TextInputType.text,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9\-~,/ ]')),
+                    ],
+                    style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                    decoration: _inputDecoration('페이지', hint: '예: 10-12'),
                   ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _count,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                    decoration: _inputDecoration('문항수', hint: '예: 12'),
+                  ),
+                ),
               ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _content,
+              minLines: 2,
+              maxLines: 4,
+              style: const TextStyle(color: kDlgText),
+              decoration: _inputDecoration('내용', hint: '필요한 추가 내용을 적어주세요'),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('취소'),
+        ),
         FilledButton(
           onPressed: () {
             final title = _title.text.trim();
-            final body = _body.text.trim();
-            if (title.isEmpty) return;
+            if (title.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('과제명을 입력하세요.')),
+              );
+              return;
+            }
             Navigator.pop(context, {
               'studentId': widget.studentId,
+              'type': _type,
               'title': title,
-              'body': body,
+              'page': _page.text.trim(),
+              'count': _count.text.trim(),
+              'content': _content.text.trim(),
+              'body': _composeBody(),
               'color': _color,
             });
           },
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
           child: const Text('추가'),
         ),
       ],

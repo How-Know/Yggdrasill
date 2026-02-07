@@ -5,8 +5,10 @@ import 'package:intl/intl.dart';
 import '../../services/data_manager.dart';
 import '../../models/student.dart';
 import '../../models/education_level.dart';
+import '../../models/student_flow.dart';
 import '../../widgets/pill_tab_selector.dart';
 import '../../models/attendance_record.dart';
+import '../../services/homework_store.dart';
 import '../../services/tag_store.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
@@ -15,8 +17,13 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentProfilePage extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
+  final List<StudentFlow>? flows;
 
-  const StudentProfilePage({super.key, required this.studentWithInfo});
+  const StudentProfilePage({
+    super.key,
+    required this.studentWithInfo,
+    this.flows = const [],
+  });
 
   @override
   State<StudentProfilePage> createState() => _StudentProfilePageState();
@@ -68,6 +75,7 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                           child: _StudentProfileContent(
                             tabIndex: _tabIndex,
                             studentWithInfo: widget.studentWithInfo,
+                            flows: widget.flows,
                           ),
                         ),
                       ),
@@ -191,15 +199,21 @@ class _StudentProfileHeader extends StatelessWidget {
 class _StudentProfileContent extends StatelessWidget {
   final int tabIndex;
   final StudentWithInfo studentWithInfo;
+  final List<StudentFlow>? flows;
   const _StudentProfileContent({
     required this.tabIndex,
     required this.studentWithInfo,
+    required this.flows,
   });
 
   @override
   Widget build(BuildContext context) {
     if (tabIndex == 1) {
-      return _StudentTimelineView(studentWithInfo: studentWithInfo);
+      final safeFlows = flows ?? const <StudentFlow>[];
+      return _StudentTimelineView(
+        studentWithInfo: studentWithInfo,
+        flows: safeFlows,
+      );
     }
     final String label = tabIndex == 0 ? '요약 준비 중입니다.' : '스탯 준비 중입니다.';
     return Center(
@@ -217,7 +231,11 @@ class _StudentProfileContent extends StatelessWidget {
 
 class _StudentTimelineView extends StatefulWidget {
   final StudentWithInfo studentWithInfo;
-  const _StudentTimelineView({required this.studentWithInfo});
+  final List<StudentFlow>? flows;
+  const _StudentTimelineView({
+    required this.studentWithInfo,
+    required this.flows,
+  });
 
   @override
   State<_StudentTimelineView> createState() => _StudentTimelineViewState();
@@ -237,6 +255,7 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     super.initState();
     _timelineScrollController.addListener(_handleScroll);
     unawaited(TagStore.instance.loadAllFromDb());
+    unawaited(HomeworkStore.instance.loadAll());
   }
 
   @override
@@ -260,95 +279,116 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
               _daysLoaded,
             );
             final items = _buildRenderableTimeline(entries);
+            final enabledFlows =
+                (widget.flows ?? const <StudentFlow>[])
+                    .where((f) => f.enabled)
+                    .toList();
+            final timelineCard = ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10171A),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF223131)),
+                ),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _filterChip(label: '등/하원', selected: _showAttendance, onSelected: (v) => setState(() => _showAttendance = v)),
+                        const SizedBox(width: 8),
+                        _filterChip(label: '태그', selected: _showTags, onSelected: (v) => setState(() => _showTags = v)),
+                        const Spacer(),
+                        Text(
+                          DateFormat('yyyy.MM.dd').format(_anchorDate),
+                          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                        ),
+                        IconButton(
+                          tooltip: '날짜 선택',
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: _anchorDate,
+                              firstDate: DateTime.now().subtract(const Duration(days: 365 * 2)),
+                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                              builder: (context, child) {
+                                return Theme(
+                                  data: Theme.of(context).copyWith(
+                                    colorScheme: const ColorScheme.dark(primary: Color(0xFF1B6B63)),
+                                    dialogBackgroundColor: const Color(0xFF0B1112),
+                                  ),
+                                  child: child!,
+                                );
+                              },
+                            );
+                            if (picked != null) {
+                              setState(() {
+                                _anchorDate = DateTime(picked.year, picked.month, picked.day);
+                                _daysLoaded = 31;
+                              });
+                              if (_timelineScrollController.hasClients) {
+                                _timelineScrollController.jumpTo(0);
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.event, color: Colors.white70, size: 20),
+                        ),
+                        IconButton(
+                          tooltip: '태그 관리',
+                          onPressed: () async {
+                            await showDialog(context: context, builder: (_) => const TagPresetDialog());
+                            if (mounted) setState(() {});
+                          },
+                          icon: const Icon(Icons.style, color: Colors.white70, size: 20),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(color: Color(0xFF223131), height: 1),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: items.isEmpty
+                          ? const Center(child: Text('기록이 없습니다.', style: TextStyle(color: Colors.white54)))
+                          : ListView.separated(
+                              controller: _timelineScrollController,
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              itemCount: items.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final item = items[index];
+                                if (item is _TimelineHeader) {
+                                  return _buildDateHeader(item.date);
+                                } else if (item is _TimelineEntry) {
+                                  return _buildTimelineEntry(item);
+                                }
+                                return const SizedBox.shrink();
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            );
             return Align(
               alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 860),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10171A),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFF223131)),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          _filterChip(label: '등/하원', selected: _showAttendance, onSelected: (v) => setState(() => _showAttendance = v)),
-                          const SizedBox(width: 8),
-                          _filterChip(label: '태그', selected: _showTags, onSelected: (v) => setState(() => _showTags = v)),
-                          const Spacer(),
-                          Text(
-                            DateFormat('yyyy.MM.dd').format(_anchorDate),
-                            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
-                          ),
-                          IconButton(
-                            tooltip: '날짜 선택',
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: _anchorDate,
-                                firstDate: DateTime.now().subtract(const Duration(days: 365 * 2)),
-                                lastDate: DateTime.now().add(const Duration(days: 365)),
-                                builder: (context, child) {
-                                  return Theme(
-                                    data: Theme.of(context).copyWith(
-                                      colorScheme: const ColorScheme.dark(primary: Color(0xFF1B6B63)),
-                                      dialogBackgroundColor: const Color(0xFF0B1112),
-                                    ),
-                                    child: child!,
-                                  );
-                                },
-                              );
-                              if (picked != null) {
-                                setState(() {
-                                  _anchorDate = DateTime(picked.year, picked.month, picked.day);
-                                  _daysLoaded = 31;
-                                });
-                                if (_timelineScrollController.hasClients) {
-                                  _timelineScrollController.jumpTo(0);
-                                }
-                              }
-                            },
-                            icon: const Icon(Icons.event, color: Colors.white70, size: 20),
-                          ),
-                          IconButton(
-                            tooltip: '태그 관리',
-                            onPressed: () async {
-                              await showDialog(context: context, builder: (_) => const TagPresetDialog());
-                              if (mounted) setState(() {});
-                            },
-                            icon: const Icon(Icons.style, color: Colors.white70, size: 20),
-                          ),
-                        ],
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Flexible(child: timelineCard),
+                  if (enabledFlows.isNotEmpty) ...[
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: 260,
+                      child: _FlowHomeworkSidebar(
+                        studentId: widget.studentWithInfo.student.id,
+                        flows: enabledFlows,
                       ),
-                      const SizedBox(height: 12),
-                      const Divider(color: Color(0xFF223131), height: 1),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: items.isEmpty
-                            ? const Center(child: Text('기록이 없습니다.', style: TextStyle(color: Colors.white54)))
-                            : ListView.separated(
-                                controller: _timelineScrollController,
-                                padding: const EdgeInsets.symmetric(vertical: 6),
-                                itemCount: items.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                                itemBuilder: (context, index) {
-                                  final item = items[index];
-                                  if (item is _TimelineHeader) {
-                                    return _buildDateHeader(item.date);
-                                  } else if (item is _TimelineEntry) {
-                                    return _buildTimelineEntry(item);
-                                  }
-                                  return const SizedBox.shrink();
-                                },
-                              ),
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
+                  ],
+                ],
               ),
             );
           },
@@ -774,6 +814,298 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
       controller.dispose();
     });
     return result;
+  }
+}
+
+class _HomeworkStats {
+  final int inProgress;
+  final int homework;
+  final int completed;
+  const _HomeworkStats({
+    required this.inProgress,
+    required this.homework,
+    required this.completed,
+  });
+
+  factory _HomeworkStats.fromItems(List<HomeworkItem> items) {
+    int inProgress = 0;
+    int homework = 0;
+    int completed = 0;
+    for (final item in items) {
+      switch (item.status) {
+        case HomeworkStatus.inProgress:
+          inProgress += 1;
+          break;
+        case HomeworkStatus.homework:
+          homework += 1;
+          break;
+        case HomeworkStatus.completed:
+          completed += 1;
+          break;
+      }
+    }
+    return _HomeworkStats(
+      inProgress: inProgress,
+      homework: homework,
+      completed: completed,
+    );
+  }
+}
+
+class _FlowHomeworkSidebar extends StatelessWidget {
+  final String studentId;
+  final List<StudentFlow> flows;
+  const _FlowHomeworkSidebar({
+    required this.studentId,
+    required this.flows,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: HomeworkStore.instance.revision,
+      builder: (_, __, ___) {
+        final items = HomeworkStore.instance.items(studentId);
+        final stats = _HomeworkStats.fromItems(items);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < flows.length; i++) ...[
+              _FlowHomeworkCard(flow: flows[i], stats: stats),
+              if (i != flows.length - 1) const SizedBox(height: 12),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _FlowHomeworkCard extends StatelessWidget {
+  final StudentFlow flow;
+  final _HomeworkStats stats;
+  const _FlowHomeworkCard({required this.flow, required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1112),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF223131)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_tree_outlined,
+                  size: 16, color: Color(0xFF9FB3B3)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  flow.name,
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _FlowTextbookSummary(),
+          const SizedBox(height: 10),
+          const Text(
+            '과제 현황',
+            style: TextStyle(
+              color: Color(0xFF9FB3B3),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _FlowStatRow(
+            label: '진행중',
+            value: stats.inProgress,
+            color: const Color(0xFF33A373),
+          ),
+          const SizedBox(height: 6),
+          _FlowStatRow(
+            label: '숙제',
+            value: stats.homework,
+            color: const Color(0xFF6FA8DC),
+          ),
+          const SizedBox(height: 6),
+          _FlowStatRow(
+            label: '완료',
+            value: stats.completed,
+            color: const Color(0xFFB0B0B0),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FlowTextbookSummary extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    const bool hasTextbook = false;
+    if (!hasTextbook) {
+      return Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF10171A),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF223131)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.menu_book_outlined,
+                    size: 16, color: Color(0xFF9FB3B3)),
+                const SizedBox(width: 6),
+                const Text(
+                  '교재',
+                  style: TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('교재 추가는 아직 준비 중입니다.')),
+                    );
+                  },
+                  icon: const Icon(Icons.add, size: 14),
+                  label: const Text('추가'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF9FB3B3),
+                    side: const BorderSide(color: Color(0xFF4D5A5A)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    textStyle: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    visualDensity:
+                        const VisualDensity(horizontal: -3, vertical: -3),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '등록된 교재가 없습니다.',
+              style: TextStyle(
+                color: Color(0xFF9FB3B3),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    const String bookName = '교재';
+    const double progress = 0.0;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF10171A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF223131)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '교재',
+            style: TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            bookName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFFCBD8D8),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: const Color(0xFF1C2328),
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Color(0xFF33A373)),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${(progress * 100).toStringAsFixed(0)}%',
+            style: const TextStyle(
+              color: Color(0xFF9FB3B3),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FlowStatRow extends StatelessWidget {
+  final String label;
+  final int value;
+  final Color color;
+  const _FlowStatRow({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFFB9C8C8),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Text(
+          value.toString(),
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
   }
 }
 

@@ -1426,9 +1426,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               height: 28,
               padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                color: (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id)
-                    ? Colors.transparent
-                    : const Color(0xFF2F353A),
+                color: Colors.transparent,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: hw.color.withOpacity(0.6), width: 1),
               ),
@@ -1536,7 +1534,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 margin: EdgeInsets.zero,
-                padding: const EdgeInsets.fromLTRB(0, 12, 18, 12),
+                padding: const EdgeInsets.fromLTRB(0, 9.5, 18, 9.5),
                 decoration: BoxDecoration(
                   // 등원 완료(출석) 카드: 테두리 제거
                   color: Colors.transparent,
@@ -1728,7 +1726,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
-      child: Row(children: chips),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(children: chips),
+      ),
     );
   }
 
@@ -1843,15 +1844,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
 
               Widget chipInner = Container(
-                height: 46,
+                height: 40,
                 padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: isRunning
-                      ? Colors.transparent
-                      : (phase == _UiPhase.confirmed
-                          ? Color.lerp(const Color(0xFF2A2A2A), const Color(0xFF33393F), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
-                          : const Color(0xFF2A2A2A)),
+                  color: Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                   border: isRunning
                       ? Border.all(color: hw.color.withOpacity(0.9), width: 2)
@@ -2135,6 +2132,31 @@ extension on _MainScreenState {
       _applyWorkingTags();
     }
 
+    Future<void> _handleHomeworkPressed() async {
+      _removeClassTagOverlay();
+      await Future<void>.delayed(Duration.zero);
+      final result = await showDialog<dynamic>(
+        context: context,
+        builder: (ctx) => HomeworkQuickAddProxyDialog(
+          studentId: target.student.id,
+          initialTitle: '',
+          initialColor: const Color(0xFF1976D2),
+        ),
+      );
+      if (result is Map<String, dynamic> &&
+          result['studentId'] == target.student.id) {
+        HomeworkStore.instance.add(
+          result['studentId'],
+          title: (result['title'] as String?) ?? '',
+          body: (result['body'] as String?) ?? '',
+          color: (result['color'] as Color?) ?? const Color(0xFF1976D2),
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('과제를 추가했어요.')),
+        );
+      }
+    }
+
     void _removeAppliedAt(void Function(void Function()) setLocal, int index) {
       setLocal(() {
         workingApplied.removeAt(index);
@@ -2222,7 +2244,49 @@ extension on _MainScreenState {
                           const SizedBox(height: 8),
                           SizedBox(
                             width: double.infinity,
-                            height: 35.2,
+                            height: 45.2,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('숙제 기능은 준비 중입니다.')),
+                                );
+                              },
+                              icon: const Icon(Icons.assignment_outlined, size: 16, color: Color(0xFF9FB3B3)),
+                              label: const Text('숙제', style: TextStyle(color: Color(0xFF9FB3B3), fontWeight: FontWeight.w700)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFF9FB3B3),
+                                side: const BorderSide(color: Color(0xFF4D5A5A), width: 1.2),
+                                backgroundColor: Colors.transparent,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                minimumSize: const Size.fromHeight(45.2),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: const StadiumBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 45.2,
+                            child: OutlinedButton.icon(
+                              onPressed: _handleHomeworkPressed,
+                              icon: const Icon(Icons.playlist_add, size: 16, color: Color(0xFF9FB3B3)),
+                              label: const Text('과제', style: TextStyle(color: Color(0xFF9FB3B3), fontWeight: FontWeight.w700)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFF9FB3B3),
+                                side: const BorderSide(color: Color(0xFF4D5A5A), width: 1.2),
+                                backgroundColor: Colors.transparent,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                minimumSize: const Size.fromHeight(45.2),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: const StadiumBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 45.2,
                             child: FilledButton.icon(
                               onPressed: _handleRecordPressed,
                               icon: const Icon(Icons.edit_note, size: 16, color: Colors.white),
@@ -2230,7 +2294,7 @@ extension on _MainScreenState {
                               style: FilledButton.styleFrom(
                                 backgroundColor: const Color(0xFF33A373),
                                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                                minimumSize: const Size.fromHeight(35.2),
+                                minimumSize: const Size.fromHeight(45.2),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 shape: const StadiumBorder(),
                               ),

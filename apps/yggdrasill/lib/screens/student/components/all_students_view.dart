@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../../../models/student.dart';
+import '../../../models/student_flow.dart';
 import '../../../models/education_level.dart';
 import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -75,6 +76,51 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   bool _showDeleteZone = false;
   StudentWithInfo? _detailsStudent;
   int _detailsWeekOffset = 0; // 0: 이번주, 1: 다음주 ...
+  final Map<String, List<StudentFlow>> _flowByStudentId = {};
+  int _flowIdSeed = 0;
+
+  String _nextFlowId() => 'flow_${_flowIdSeed++}';
+
+  List<StudentFlow> _defaultFlows() {
+    return [
+      StudentFlow(id: _nextFlowId(), name: '현행', enabled: false),
+      StudentFlow(id: _nextFlowId(), name: '선행', enabled: false),
+    ];
+  }
+
+  List<StudentFlow> _flowsForStudent(String studentId) {
+    return _flowByStudentId.putIfAbsent(studentId, _defaultFlows);
+  }
+
+  String _nextFlowName(List<StudentFlow> flows) {
+    const base = '플로우';
+    final existing = flows.map((f) => f.name).toSet();
+    var idx = 1;
+    var name = '$base $idx';
+    while (existing.contains(name)) {
+      idx += 1;
+      name = '$base $idx';
+    }
+    return name;
+  }
+
+  void _addFlowForStudent(String studentId) {
+    final flows = _flowsForStudent(studentId);
+    final name = _nextFlowName(flows);
+    setState(() {
+      flows.add(StudentFlow(id: _nextFlowId(), name: name, enabled: false));
+    });
+  }
+
+  void _toggleFlowForStudent(String studentId, String flowId, bool enabled) {
+    final flows = _flowByStudentId[studentId];
+    if (flows == null) return;
+    final idx = flows.indexWhere((f) => f.id == flowId);
+    if (idx == -1) return;
+    setState(() {
+      flows[idx] = flows[idx].copyWith(enabled: enabled);
+    });
+  }
 
   bool get _useImmediateDrag {
     if (kIsWeb) return true;
@@ -946,33 +992,40 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 DataManager.instance.attendanceRecordsNotifier,
                                 DataManager.instance.studentPaymentInfoRevision,
                               ]),
-                              builder: (context, _) =>
-                                  _EmbeddedStudentDetailsCard(
-                                studentWithInfo: _detailsStudent!,
-                                onRequestCourseView: widget.onRequestCourseView,
-                                weekOffset: _detailsWeekOffset,
-                                onWeekOffsetChanged: (next) =>
-                                    setState(() => _detailsWeekOffset = next),
-                                onCloseDetails: () =>
-                                    setState(() => _detailsStudent = null),
-                                onRefreshAfterPauseResume: () async {
-                                  await DataManager.instance.loadStudents();
-                                  if (!mounted) return;
-                                  setState(() {
-                                    // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
-                                    final sid = _detailsStudent?.student.id;
-                                    if (sid != null && sid.isNotEmpty) {
-                                      final idx = DataManager.instance.students
-                                          .indexWhere(
-                                              (s) => s.student.id == sid);
-                                      if (idx != -1) {
-                                        _detailsStudent =
-                                            DataManager.instance.students[idx];
+                              builder: (context, _) {
+                                final selected = _detailsStudent!;
+                                final flows = _flowsForStudent(selected.student.id);
+                                return _EmbeddedStudentDetailsCard(
+                                  studentWithInfo: selected,
+                                  flows: flows,
+                                  onAddFlow: () => _addFlowForStudent(selected.student.id),
+                                  onToggleFlow: (flowId, enabled) =>
+                                      _toggleFlowForStudent(selected.student.id, flowId, enabled),
+                                  onRequestCourseView: widget.onRequestCourseView,
+                                  weekOffset: _detailsWeekOffset,
+                                  onWeekOffsetChanged: (next) =>
+                                      setState(() => _detailsWeekOffset = next),
+                                  onCloseDetails: () =>
+                                      setState(() => _detailsStudent = null),
+                                  onRefreshAfterPauseResume: () async {
+                                    await DataManager.instance.loadStudents();
+                                    if (!mounted) return;
+                                    setState(() {
+                                      // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
+                                      final sid = _detailsStudent?.student.id;
+                                      if (sid != null && sid.isNotEmpty) {
+                                        final idx = DataManager.instance.students
+                                            .indexWhere(
+                                                (s) => s.student.id == sid);
+                                        if (idx != -1) {
+                                          _detailsStudent =
+                                              DataManager.instance.students[idx];
+                                        }
                                       }
-                                    }
-                                  });
-                                },
-                              ),
+                                    });
+                                  },
+                                );
+                              },
                             )
                           : Container(
                               decoration: BoxDecoration(
@@ -1515,7 +1568,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             onOpenStudentPage: (s) {
                               Navigator.of(context).push(
                                 DarkPanelRoute(
-                                  child: StudentProfilePage(studentWithInfo: s),
+                                  child: StudentProfilePage(
+                                    studentWithInfo: s,
+                                    flows: List<StudentFlow>.from(
+                                      _flowsForStudent(s.student.id),
+                                    ),
+                                  ),
                                 ),
                               );
                             },
@@ -1538,7 +1596,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onOpenStudentPage: (s) {
                           Navigator.of(context).push(
                             DarkPanelRoute(
-                              child: StudentProfilePage(studentWithInfo: s),
+                              child: StudentProfilePage(
+                                studentWithInfo: s,
+                                flows: List<StudentFlow>.from(
+                                  _flowsForStudent(s.student.id),
+                                ),
+                              ),
                             ),
                           );
                         },
@@ -1557,7 +1620,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         onOpenStudentPage: (s) {
                           Navigator.of(context).push(
                             DarkPanelRoute(
-                              child: StudentProfilePage(studentWithInfo: s),
+                              child: StudentProfilePage(
+                                studentWithInfo: s,
+                                flows: List<StudentFlow>.from(
+                                  _flowsForStudent(s.student.id),
+                                ),
+                              ),
                             ),
                           );
                         },
@@ -1682,7 +1750,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 onOpenStudentPage: (s) {
                                   Navigator.of(context).push(
                                     DarkPanelRoute(
-                                      child: StudentProfilePage(studentWithInfo: s),
+                                      child: StudentProfilePage(
+                                        studentWithInfo: s,
+                                        flows: List<StudentFlow>.from(
+                                          _flowsForStudent(s.student.id),
+                                        ),
+                                      ),
                                     ),
                                   );
                                 },
@@ -1730,6 +1803,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
 class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
+  final List<StudentFlow> flows;
+  final VoidCallback onAddFlow;
+  final void Function(String flowId, bool enabled) onToggleFlow;
   final Function(StudentWithInfo) onRequestCourseView;
   final int weekOffset; // 0: 이번주, 1: 다음주 ...
   final ValueChanged<int> onWeekOffsetChanged;
@@ -1737,6 +1813,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final Future<void> Function()? onRefreshAfterPauseResume;
   const _EmbeddedStudentDetailsCard({
     required this.studentWithInfo,
+    required this.flows,
+    required this.onAddFlow,
+    required this.onToggleFlow,
     required this.onRequestCourseView,
     required this.weekOffset,
     required this.onWeekOffsetChanged,
@@ -1845,6 +1924,29 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     final String memoText = (basicInfo.memo ?? '').trim().isEmpty
         ? '메모가 없습니다.'
         : (basicInfo.memo ?? '').trim();
+    final List<Widget> flowChildren = [];
+    if (flows.isEmpty) {
+      flowChildren.add(Text('등록된 플로우가 없습니다.', style: valueStyle));
+    } else {
+      for (int i = 0; i < flows.length; i++) {
+        final flow = flows[i];
+        flowChildren.add(Row(
+          children: [
+            Expanded(
+              child: Text(flow.name, style: valueStyle),
+            ),
+            Switch(
+              value: flow.enabled,
+              onChanged: (v) => onToggleFlow(flow.id, v),
+              activeColor: const Color(0xFF33A373),
+            ),
+          ],
+        ));
+        if (i != flows.length - 1) {
+          flowChildren.add(const SizedBox(height: 8));
+        }
+      }
+    }
 
     Widget section({
       required IconData icon,
@@ -2336,6 +2438,20 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                             borderWidth: 2)
                         : textValue('미배정'),
                   ],
+                ),
+                const SizedBox(height: 12),
+                section(
+                  icon: Icons.account_tree_outlined,
+                  title: '플로우',
+                  action: IconButton(
+                    tooltip: '플로우 추가',
+                    onPressed: onAddFlow,
+                    icon: const Icon(Icons.add, size: 18, color: Color(0xFF9FB3B3)),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    splashRadius: 16,
+                  ),
+                  children: flowChildren,
                 ),
                 const SizedBox(height: 12),
                 section(
