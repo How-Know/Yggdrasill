@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
 import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
+import 'homework_assignment_store.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -13,6 +14,11 @@ class HomeworkItem {
   String body;
   Color color;
   String? flowId;
+  String? type;
+  String? page;
+  int? count;
+  String? content;
+  int checkCount;
   HomeworkStatus status;
   int phase; // 0: 종료, 1: 대기, 2: 수행, 3: 제출, 4: 확인
   int accumulatedMs; // 누적 시간(ms)
@@ -29,6 +35,11 @@ class HomeworkItem {
     required this.body,
     this.color = const Color(0xFF1976D2),
     this.flowId,
+    this.type,
+    this.page,
+    this.count,
+    this.content,
+    this.checkCount = 0,
     this.status = HomeworkStatus.inProgress,
     this.phase = 1,
     this.accumulatedMs = 0,
@@ -59,6 +70,18 @@ class HomeworkStore {
     return List<HomeworkItem>.from(list);
   }
 
+  Future<List<HomeworkItem>> itemsForStats(
+    String studentId, {
+    bool excludeAssigned = false,
+  }) async {
+    final list = items(studentId);
+    if (!excludeAssigned) return list;
+    final assignedIds =
+        await HomeworkAssignmentStore.instance.loadAssignedItemIds(studentId);
+    if (assignedIds.isEmpty) return list;
+    return list.where((e) => !assignedIds.contains(e.id)).toList();
+  }
+
   Future<void> loadAll() async {
     if (_loaded) return;
     try {
@@ -66,7 +89,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       _byStudentId.clear();
@@ -92,6 +115,11 @@ class HomeworkStore {
           body: (r['body'] as String?) ?? '',
           color: Color(parseInt(r['color']) ?? 0xFF1976D2),
           flowId: r['flow_id'] as String?,
+          type: (r['type'] as String?)?.trim(),
+          page: (r['page'] as String?)?.trim(),
+          count: parseInt(r['count']),
+          content: (r['content'] as String?)?.trim(),
+          checkCount: parseInt(r['check_count']) ?? 0,
           status: HomeworkStatus.values[((r['status'] as int?) ?? 0).clamp(0, HomeworkStatus.values.length - 1)],
           phase: (parseInt(r['phase']) ?? 1).clamp(0, 4),
           accumulatedMs: (r['accumulated_ms'] as int?) ?? (r['accumulated_ms'] is num ? (r['accumulated_ms'] as num).toInt() : 0),
@@ -130,6 +158,11 @@ class HomeworkStore {
             if (sid.isEmpty) return;
             HomeworkItem parse(Map<String, dynamic> r) {
               int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+              int? _asIntOpt(dynamic v) {
+                if (v == null) return null;
+                if (v is num) return v.toInt();
+                return int.tryParse('$v');
+              }
               DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
               return HomeworkItem(
                 id: (r['id'] as String?) ?? const Uuid().v4(),
@@ -137,6 +170,11 @@ class HomeworkStore {
                 body: (r['body'] as String?) ?? '',
                 color: Color(_asInt(r['color'])),
                 flowId: r['flow_id'] as String?,
+                type: (r['type'] as String?)?.trim(),
+                page: (r['page'] as String?)?.trim(),
+                count: _asIntOpt(r['count']),
+                content: (r['content'] as String?)?.trim(),
+                checkCount: _asIntOpt(r['check_count']) ?? 0,
                 status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
                 phase: (_asInt(r['phase'])).clamp(0, 4),
                 accumulatedMs: _asInt(r['accumulated_ms']),
@@ -180,6 +218,13 @@ class HomeworkStore {
               body: (m['body'] as String?) ?? '',
               color: Color(_asInt(m['color'])),
               flowId: m['flow_id'] as String?,
+              type: (m['type'] as String?)?.trim(),
+              page: (m['page'] as String?)?.trim(),
+              count: m['count'] is num ? (m['count'] as num).toInt() : int.tryParse('${m['count']}'),
+              content: (m['content'] as String?)?.trim(),
+              checkCount: m['check_count'] is num
+                  ? (m['check_count'] as num).toInt()
+                  : int.tryParse('${m['check_count']}') ?? 0,
               status: HomeworkStatus.values[(_asInt(m['status'])).clamp(0, HomeworkStatus.values.length - 1)],
               phase: (_asInt(m['phase'])).clamp(0, 4),
               accumulatedMs: _asInt(m['accumulated_ms']),
@@ -236,6 +281,11 @@ class HomeworkStore {
         'body': it.body,
         'color': it.color.value,
         'flow_id': it.flowId,
+        'type': it.type,
+        'page': it.page,
+        'count': it.count,
+        'content': it.content,
+        'check_count': it.checkCount,
         'status': it.status.index,
         'phase': it.phase,
         'accumulated_ms': it.accumulatedMs,
@@ -283,9 +333,31 @@ class HomeworkStore {
     }
   }
 
-  HomeworkItem add(String studentId, {required String title, required String body, Color color = const Color(0xFF1976D2), String? flowId}) {
+  HomeworkItem add(
+    String studentId, {
+    required String title,
+    required String body,
+    Color color = const Color(0xFF1976D2),
+    String? flowId,
+    String? type,
+    String? page,
+    int? count,
+    String? content,
+  }) {
     final id = const Uuid().v4();
-    final item = HomeworkItem(id: id, title: title, body: body, color: color, flowId: flowId, version: 1);
+    final item = HomeworkItem(
+      id: id,
+      title: title,
+      body: body,
+      color: color,
+      flowId: flowId,
+      type: type,
+      page: page,
+      count: count,
+      content: content,
+      checkCount: 0,
+      version: 1,
+    );
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
     list.insert(0, item);
     _bump();
@@ -443,11 +515,42 @@ class HomeworkStore {
     _autoCompleteOnNextWaiting.add(id);
   }
 
-  HomeworkItem continueAdd(String studentId, String sourceId, {required String body, String? flowId}) {
+  HomeworkItem continueAdd(
+    String studentId,
+    String sourceId, {
+    required String body,
+    String? flowId,
+    String? type,
+    String? page,
+    int? count,
+    String? content,
+  }) {
     final list = _byStudentId[studentId];
-    if (list == null) return add(studentId, title: '과제', body: body, flowId: flowId);
+    if (list == null) {
+      return add(
+        studentId,
+        title: '과제',
+        body: body,
+        flowId: flowId,
+        type: type,
+        page: page,
+        count: count,
+        content: content ?? body,
+      );
+    }
     final idx = list.indexWhere((e) => e.id == sourceId);
-    if (idx == -1) return add(studentId, title: '과제', body: body, flowId: flowId);
+    if (idx == -1) {
+      return add(
+        studentId,
+        title: '과제',
+        body: body,
+        flowId: flowId,
+        type: type,
+        page: page,
+        count: count,
+        content: content ?? body,
+      );
+    }
     final src = list[idx];
     final created = add(
       studentId,
@@ -455,6 +558,10 @@ class HomeworkStore {
       body: body,
       color: src.color,
       flowId: flowId ?? src.flowId,
+      type: type ?? src.type,
+      page: page ?? src.page,
+      count: count ?? src.count,
+      content: content ?? src.content ?? body,
     );
     // add()가 서버 upsert를 처리함
     return created;
@@ -465,6 +572,7 @@ class HomeworkStore {
     final list = _byStudentId[studentId];
     if (list == null) return;
     bool changed = false;
+    final List<HomeworkItem> newlyAssigned = [];
     for (final e in list) {
       if (e.status != HomeworkStatus.completed) {
         if (e.runStart != null) {
@@ -476,6 +584,7 @@ class HomeworkStore {
         if (e.status != HomeworkStatus.homework) {
           e.status = HomeworkStatus.homework;
           changed = true;
+          newlyAssigned.add(e);
         }
       }
     }
@@ -483,6 +592,10 @@ class HomeworkStore {
       _bump();
       for (final e in list.where((e) => e.status == HomeworkStatus.homework)) {
         unawaited(_upsertItem(studentId, e));
+      }
+      if (newlyAssigned.isNotEmpty) {
+        unawaited(HomeworkAssignmentStore.instance
+            .recordAssignments(studentId, newlyAssigned));
       }
     }
   }
@@ -495,7 +608,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('updated_at', ascending: false);
@@ -509,6 +622,11 @@ class HomeworkStore {
           body: (r['body'] as String?) ?? '',
           color: Color(_asInt(r['color'])),
           flowId: r['flow_id'] as String?,
+          type: (r['type'] as String?)?.trim(),
+          page: (r['page'] as String?)?.trim(),
+          count: _asInt(r['count']),
+          content: (r['content'] as String?)?.trim(),
+          checkCount: _asInt(r['check_count']),
           status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
           phase: (_asInt(r['phase'])).clamp(0, 4),
           accumulatedMs: _asInt(r['accumulated_ms']),

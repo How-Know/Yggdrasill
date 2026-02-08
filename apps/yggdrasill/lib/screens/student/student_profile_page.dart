@@ -10,6 +10,7 @@ import '../../widgets/pill_tab_selector.dart';
 import '../../models/attendance_record.dart';
 import '../../services/homework_store.dart';
 import '../../services/tag_store.dart';
+import '../../services/student_flow_store.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
@@ -283,8 +284,10 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 (widget.flows ?? const <StudentFlow>[])
                     .where((f) => f.enabled)
                     .toList();
+            const double timelineMaxWidth = 860 * 0.7; // 30% 감소
+            const double flowSidebarWidth = 260 * 3 + 24; // 50% 추가 확장 (3장 가로 배치 여유)
             final timelineCard = ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 860),
+              constraints: const BoxConstraints(maxWidth: timelineMaxWidth),
               child: Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFF10171A),
@@ -381,7 +384,7 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                   if (enabledFlows.isNotEmpty) ...[
                     const SizedBox(width: 16),
                     SizedBox(
-                      width: 260,
+                      width: flowSidebarWidth,
                       child: _FlowHomeworkSidebar(
                         studentId: widget.studentWithInfo.student.id,
                         flows: enabledFlows,
@@ -860,21 +863,109 @@ class _FlowHomeworkSidebar extends StatelessWidget {
     required this.flows,
   });
 
+  Future<void> _renameFlow(BuildContext context, StudentFlow flow) async {
+    final controller = ImeAwareTextEditingController(text: flow.name);
+    final nextName = await showDialog<String?>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('플로우 이름 변경', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+          decoration: InputDecoration(
+            labelText: '플로우 이름',
+            labelStyle: const TextStyle(color: kDlgTextSub),
+            filled: true,
+            fillColor: kDlgFieldBg,
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: kDlgBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final trimmed = nextName?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == flow.name) return;
+    try {
+      final allFlows =
+          await StudentFlowStore.instance.loadForStudent(studentId, force: true);
+      final base = allFlows.isNotEmpty ? allFlows : flows;
+      final updated = base
+          .map((f) => f.id == flow.id ? f.copyWith(name: trimmed) : f)
+          .toList();
+      await StudentFlowStore.instance.saveFlows(studentId, updated);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('플로우 이름 변경 실패')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<int>(
-      valueListenable: HomeworkStore.instance.revision,
+      valueListenable: StudentFlowStore.instance.revision,
       builder: (_, __, ___) {
-        final items = HomeworkStore.instance.items(studentId);
-        final stats = _HomeworkStats.fromItems(items);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (int i = 0; i < flows.length; i++) ...[
-              _FlowHomeworkCard(flow: flows[i], stats: stats),
-              if (i != flows.length - 1) const SizedBox(height: 12),
-            ],
-          ],
+        final latest = StudentFlowStore.instance.cached(studentId);
+        final displayFlows = latest.isNotEmpty
+            ? latest.where((f) => f.enabled).toList()
+            : flows;
+        return ValueListenableBuilder<int>(
+          valueListenable: HomeworkStore.instance.revision,
+          builder: (_, __, ___) {
+            final allItems = HomeworkStore.instance.items(studentId);
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final double maxWidth = constraints.maxWidth.isFinite
+                    ? constraints.maxWidth
+                    : 260;
+                final double cardWidth = maxWidth < 260 ? maxWidth : 260;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    for (final flow in displayFlows) ...[
+                      SizedBox(
+                        width: cardWidth,
+                        child: _FlowHomeworkCard(
+                          flow: flow,
+                          stats: _HomeworkStats.fromItems(
+                            allItems.where((e) => e.flowId == flow.id).toList(),
+                          ),
+                          items: allItems
+                              .where((e) => e.flowId == flow.id)
+                              .toList(),
+                          onEditName: () => _renameFlow(context, flow),
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            );
+          },
         );
       },
     );
@@ -884,7 +975,75 @@ class _FlowHomeworkSidebar extends StatelessWidget {
 class _FlowHomeworkCard extends StatelessWidget {
   final StudentFlow flow;
   final _HomeworkStats stats;
-  const _FlowHomeworkCard({required this.flow, required this.stats});
+  final List<HomeworkItem> items;
+  final VoidCallback onEditName;
+  const _FlowHomeworkCard({
+    required this.flow,
+    required this.stats,
+    required this.items,
+    required this.onEditName,
+  });
+
+  Widget _buildHomeworkList() {
+    if (items.isEmpty) {
+      return const Text(
+        '등록된 과제가 없습니다.',
+        style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+      );
+    }
+    final visible = items.take(4).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (int i = 0; i < visible.length; i++) ...[
+          Row(
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: visible[i].color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  visible[i].title,
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          if (visible[i].body.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, top: 4),
+              child: Text(
+                visible[i].body.trim(),
+                style: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          if (i != visible.length - 1) const SizedBox(height: 8),
+        ],
+        if (items.length > visible.length)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '외 ${items.length - visible.length}개',
+              style: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+            ),
+          ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -912,6 +1071,13 @@ class _FlowHomeworkCard extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ),
+              IconButton(
+                tooltip: '이름 변경',
+                onPressed: onEditName,
+                icon: const Icon(Icons.edit, size: 16, color: Color(0xFF9FB3B3)),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               ),
             ],
           ),
@@ -944,6 +1110,17 @@ class _FlowHomeworkCard extends StatelessWidget {
             value: stats.completed,
             color: const Color(0xFFB0B0B0),
           ),
+          const SizedBox(height: 12),
+          const Text(
+            '과제 목록',
+            style: TextStyle(
+              color: Color(0xFF9FB3B3),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildHomeworkList(),
         ],
       ),
     );

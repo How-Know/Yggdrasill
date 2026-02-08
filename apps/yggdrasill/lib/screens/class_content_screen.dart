@@ -242,12 +242,19 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
     );
     if (item is Map<String, dynamic>) {
       if (item['studentId'] == studentId) {
+        final countStr = (item['count'] as String?)?.trim();
         HomeworkStore.instance.add(
           item['studentId'],
           title: item['title'],
           body: item['body'],
           color: item['color'],
           flowId: item['flowId'] as String?,
+          type: (item['type'] as String?)?.trim(),
+          page: (item['page'] as String?)?.trim(),
+          count: (countStr == null || countStr.isEmpty)
+              ? null
+              : int.tryParse(countStr),
+          content: (item['content'] as String?)?.trim(),
         );
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과제를 추가했어요.')));
       }

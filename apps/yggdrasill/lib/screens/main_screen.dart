@@ -2061,6 +2061,11 @@ extension on _MainScreenState {
       body: (edited['body'] as String).trim(),
       color: (edited['color'] as Color),
       flowId: item.flowId,
+      type: item.type,
+      page: item.page,
+      count: item.count,
+      content: item.content,
+      checkCount: item.checkCount,
       status: item.status,
       phase: item.phase,
       accumulatedMs: item.accumulatedMs,
@@ -2162,12 +2167,19 @@ extension on _MainScreenState {
       );
       if (result is Map<String, dynamic> &&
           result['studentId'] == target.student.id) {
+        final countStr = (result['count'] as String?)?.trim();
         HomeworkStore.instance.add(
           result['studentId'],
           title: (result['title'] as String?) ?? '',
           body: (result['body'] as String?) ?? '',
           color: (result['color'] as Color?) ?? const Color(0xFF1976D2),
           flowId: result['flowId'] as String?,
+          type: (result['type'] as String?)?.trim(),
+          page: (result['page'] as String?)?.trim(),
+          count: (countStr == null || countStr.isEmpty)
+              ? null
+              : int.tryParse(countStr),
+          content: (result['content'] as String?)?.trim(),
         );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('과제를 추가했어요.')),

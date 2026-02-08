@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 42,
+      version: 45,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -503,11 +503,30 @@ class AcademyDbService {
             body TEXT,
             color INTEGER,
             flow_id TEXT,
+            type TEXT,
+            page TEXT,
+            count INTEGER,
+            content TEXT,
+            check_count INTEGER,
             status INTEGER,
             accumulated_ms INTEGER,
             run_start TEXT,
             completed_at TEXT,
             first_started_at TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS homework_assignments (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            homework_item_id TEXT,
+            assigned_at TEXT,
+            due_date TEXT,
+            status TEXT,
+            carry_over_from_id TEXT,
+            note TEXT,
             created_at TEXT,
             updated_at TEXT
           )
@@ -541,6 +560,11 @@ class AcademyDbService {
                 body TEXT,
                 color INTEGER,
                 flow_id TEXT,
+                type TEXT,
+                page TEXT,
+                count INTEGER,
+                content TEXT,
+                check_count INTEGER,
                 status INTEGER,
                 accumulated_ms INTEGER,
                 run_start TEXT,
@@ -765,6 +789,60 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v42 homework_items.flow_id 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 43) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(homework_items)");
+            final hasType = cols.any((c) => c['name'] == 'type');
+            final hasPage = cols.any((c) => c['name'] == 'page');
+            final hasCount = cols.any((c) => c['name'] == 'count');
+            final hasContent = cols.any((c) => c['name'] == 'content');
+            if (!hasType) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN type TEXT");
+            }
+            if (!hasPage) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN page TEXT");
+            }
+            if (!hasCount) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN count INTEGER");
+            }
+            if (!hasContent) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN content TEXT");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v43 homework_items 타입/페이지/문항수/내용 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 44) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS homework_assignments (
+                id TEXT PRIMARY KEY,
+                student_id TEXT,
+                homework_item_id TEXT,
+                assigned_at TEXT,
+                due_date TEXT,
+                status TEXT,
+                carry_over_from_id TEXT,
+                note TEXT,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v44 homework_assignments 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 45) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(homework_items)");
+            final hasCheckCount = cols.any((c) => c['name'] == 'check_count');
+            if (!hasCheckCount) {
+              await db.execute("ALTER TABLE homework_items ADD COLUMN check_count INTEGER");
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v45 homework_items.check_count 추가 실패: $e');
           }
         }
         if (oldVersion < 37) {
