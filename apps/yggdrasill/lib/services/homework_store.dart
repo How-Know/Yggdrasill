@@ -19,6 +19,8 @@ class HomeworkItem {
   int? count;
   String? content;
   int checkCount;
+  DateTime? createdAt;
+  DateTime? updatedAt;
   HomeworkStatus status;
   int phase; // 0: 종료, 1: 대기, 2: 수행, 3: 제출, 4: 확인
   int accumulatedMs; // 누적 시간(ms)
@@ -40,6 +42,8 @@ class HomeworkItem {
     this.count,
     this.content,
     this.checkCount = 0,
+    this.createdAt,
+    this.updatedAt,
     this.status = HomeworkStatus.inProgress,
     this.phase = 1,
     this.accumulatedMs = 0,
@@ -120,6 +124,8 @@ class HomeworkStore {
           count: parseInt(r['count']),
           content: (r['content'] as String?)?.trim(),
           checkCount: parseInt(r['check_count']) ?? 0,
+          createdAt: parseTsOpt(r['created_at']),
+          updatedAt: parseTsOpt(r['updated_at']),
           status: HomeworkStatus.values[((r['status'] as int?) ?? 0).clamp(0, HomeworkStatus.values.length - 1)],
           phase: (parseInt(r['phase']) ?? 1).clamp(0, 4),
           accumulatedMs: (r['accumulated_ms'] as int?) ?? (r['accumulated_ms'] is num ? (r['accumulated_ms'] as num).toInt() : 0),
@@ -175,6 +181,8 @@ class HomeworkStore {
                 count: _asIntOpt(r['count']),
                 content: (r['content'] as String?)?.trim(),
                 checkCount: _asIntOpt(r['check_count']) ?? 0,
+                createdAt: _parse(r['created_at']),
+                updatedAt: _parse(r['updated_at']),
                 status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
                 phase: (_asInt(r['phase'])).clamp(0, 4),
                 accumulatedMs: _asInt(r['accumulated_ms']),
@@ -225,6 +233,8 @@ class HomeworkStore {
               checkCount: m['check_count'] is num
                   ? (m['check_count'] as num).toInt()
                   : int.tryParse('${m['check_count']}') ?? 0,
+              createdAt: _parse(m['created_at']),
+              updatedAt: _parse(m['updated_at']),
               status: HomeworkStatus.values[(_asInt(m['status'])).clamp(0, HomeworkStatus.values.length - 1)],
               phase: (_asInt(m['phase'])).clamp(0, 4),
               accumulatedMs: _asInt(m['accumulated_ms']),
@@ -356,6 +366,8 @@ class HomeworkStore {
       count: count,
       content: content,
       checkCount: 0,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
       version: 1,
     );
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
@@ -627,6 +639,8 @@ class HomeworkStore {
           count: _asInt(r['count']),
           content: (r['content'] as String?)?.trim(),
           checkCount: _asInt(r['check_count']),
+          createdAt: _parse(r['created_at']),
+          updatedAt: _parse(r['updated_at']),
           status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
           phase: (_asInt(r['phase'])).clamp(0, 4),
           accumulatedMs: _asInt(r['accumulated_ms']),

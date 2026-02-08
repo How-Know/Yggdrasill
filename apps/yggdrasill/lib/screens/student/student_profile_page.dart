@@ -9,6 +9,7 @@ import '../../models/student_flow.dart';
 import '../../widgets/pill_tab_selector.dart';
 import '../../models/attendance_record.dart';
 import '../../services/homework_store.dart';
+import '../../services/homework_assignment_store.dart';
 import '../../services/tag_store.dart';
 import '../../services/student_flow_store.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
@@ -285,7 +286,14 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                     .where((f) => f.enabled)
                     .toList();
             const double timelineMaxWidth = 860 * 0.7; // 30% 감소
-            const double flowSidebarWidth = 260 * 3 + 24; // 50% 추가 확장 (3장 가로 배치 여유)
+            const double flowCardWidth = 260;
+            const double flowCardSpacing = 12;
+            final int flowCount = enabledFlows.length;
+            final int columnCount = flowCount < 3 ? flowCount : 3;
+            final double flowSidebarWidth = columnCount == 0
+                ? 0
+                : (flowCardWidth * columnCount) +
+                    (flowCardSpacing * (columnCount - 1));
             final timelineCard = ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: timelineMaxWidth),
               child: Container(
@@ -382,7 +390,7 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 children: [
                   Flexible(child: timelineCard),
                   if (enabledFlows.isNotEmpty) ...[
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 8),
                     SizedBox(
                       width: flowSidebarWidth,
                       child: _FlowHomeworkSidebar(
@@ -855,13 +863,58 @@ class _HomeworkStats {
   }
 }
 
-class _FlowHomeworkSidebar extends StatelessWidget {
+class _FlowHomeworkSidebar extends StatefulWidget {
   final String studentId;
   final List<StudentFlow> flows;
   const _FlowHomeworkSidebar({
     required this.studentId,
     required this.flows,
   });
+
+  @override
+  State<_FlowHomeworkSidebar> createState() => _FlowHomeworkSidebarState();
+}
+
+class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
+  late Future<Set<String>> _assignedFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _assignedFuture =
+        HomeworkAssignmentStore.instance.loadAssignedItemIds(widget.studentId);
+  }
+
+  @override
+  void didUpdateWidget(covariant _FlowHomeworkSidebar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _assignedFuture = HomeworkAssignmentStore.instance
+          .loadAssignedItemIds(widget.studentId);
+    }
+  }
+
+  int _flowPriority(StudentFlow flow) {
+    final name = flow.name.trim();
+    if (name == '현행') return 0;
+    if (name == '선행') return 1;
+    return 2;
+  }
+
+  List<StudentFlow> _sortedFlows(List<StudentFlow> input) {
+    final list = List<StudentFlow>.from(input);
+    list.sort((a, b) {
+      final pa = _flowPriority(a);
+      final pb = _flowPriority(b);
+      if (pa != pb) return pa - pb;
+      if (pa == 2) {
+        final oi = a.orderIndex.compareTo(b.orderIndex);
+        if (oi != 0) return oi;
+      }
+      return a.name.compareTo(b.name);
+    });
+    return list;
+  }
 
   Future<void> _renameFlow(BuildContext context, StudentFlow flow) async {
     final controller = ImeAwareTextEditingController(text: flow.name);
@@ -909,12 +962,12 @@ class _FlowHomeworkSidebar extends StatelessWidget {
     if (trimmed.isEmpty || trimmed == flow.name) return;
     try {
       final allFlows =
-          await StudentFlowStore.instance.loadForStudent(studentId, force: true);
-      final base = allFlows.isNotEmpty ? allFlows : flows;
+          await StudentFlowStore.instance.loadForStudent(widget.studentId, force: true);
+      final base = allFlows.isNotEmpty ? allFlows : widget.flows;
       final updated = base
           .map((f) => f.id == flow.id ? f.copyWith(name: trimmed) : f)
           .toList();
-      await StudentFlowStore.instance.saveFlows(studentId, updated);
+      await StudentFlowStore.instance.saveFlows(widget.studentId, updated);
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -925,43 +978,50 @@ class _FlowHomeworkSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: StudentFlowStore.instance.revision,
-      builder: (_, __, ___) {
-        final latest = StudentFlowStore.instance.cached(studentId);
-        final displayFlows = latest.isNotEmpty
-            ? latest.where((f) => f.enabled).toList()
-            : flows;
+    return FutureBuilder<Set<String>>(
+      future: _assignedFuture,
+      builder: (context, snapshot) {
+        final assignedIds = snapshot.data ?? const <String>{};
         return ValueListenableBuilder<int>(
-          valueListenable: HomeworkStore.instance.revision,
+          valueListenable: StudentFlowStore.instance.revision,
           builder: (_, __, ___) {
-            final allItems = HomeworkStore.instance.items(studentId);
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final double maxWidth = constraints.maxWidth.isFinite
-                    ? constraints.maxWidth
-                    : 260;
-                final double cardWidth = maxWidth < 260 ? maxWidth : 260;
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final flow in displayFlows) ...[
-                      SizedBox(
-                        width: cardWidth,
-                        child: _FlowHomeworkCard(
-                          flow: flow,
-                          stats: _HomeworkStats.fromItems(
-                            allItems.where((e) => e.flowId == flow.id).toList(),
+            final latest = StudentFlowStore.instance.cached(widget.studentId);
+            final displayFlows = latest.isNotEmpty
+                ? latest.where((f) => f.enabled).toList()
+                : widget.flows;
+            final sortedFlows = _sortedFlows(displayFlows);
+            return ValueListenableBuilder<int>(
+              valueListenable: HomeworkStore.instance.revision,
+              builder: (_, __, ___) {
+                final allItems = HomeworkStore.instance.items(widget.studentId);
+                return LayoutBuilder(
+                  builder: (context, constraints) {
+                    final double maxWidth = constraints.maxWidth.isFinite
+                        ? constraints.maxWidth
+                        : 260;
+                    final double cardWidth = maxWidth < 260 ? maxWidth : 260;
+                    return Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      alignment: WrapAlignment.start,
+                      runAlignment: WrapAlignment.start,
+                      children: [
+                        for (final flow in sortedFlows) ...[
+                          SizedBox(
+                            width: cardWidth,
+                            child: _FlowHomeworkCard(
+                              flow: flow,
+                              items: allItems
+                                  .where((e) => e.flowId == flow.id)
+                                  .toList(),
+                              assignedIds: assignedIds,
+                              onEditName: () => _renameFlow(context, flow),
+                            ),
                           ),
-                          items: allItems
-                              .where((e) => e.flowId == flow.id)
-                              .toList(),
-                          onEditName: () => _renameFlow(context, flow),
-                        ),
-                      ),
-                    ],
-                  ],
+                        ],
+                      ],
+                    );
+                  },
                 );
               },
             );
@@ -974,79 +1034,179 @@ class _FlowHomeworkSidebar extends StatelessWidget {
 
 class _FlowHomeworkCard extends StatelessWidget {
   final StudentFlow flow;
-  final _HomeworkStats stats;
   final List<HomeworkItem> items;
+  final Set<String> assignedIds;
   final VoidCallback onEditName;
   const _FlowHomeworkCard({
     required this.flow,
-    required this.stats,
     required this.items,
+    required this.assignedIds,
     required this.onEditName,
   });
 
-  Widget _buildHomeworkList() {
-    if (items.isEmpty) {
-      return const Text(
-        '등록된 과제가 없습니다.',
-        style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
-      );
+  DateTime? _sortKey(HomeworkItem item) {
+    return item.completedAt ??
+        item.firstStartedAt ??
+        item.updatedAt ??
+        item.createdAt ??
+        item.runStart;
+  }
+
+  List<HomeworkItem> _sortedItems() {
+    final list = List<HomeworkItem>.from(items);
+    list.sort((a, b) {
+      final ka = _sortKey(a);
+      final kb = _sortKey(b);
+      if (ka == null && kb == null) return 0;
+      if (ka == null) return 1;
+      if (kb == null) return -1;
+      return kb.compareTo(ka); // 최신이 위
+    });
+    return list;
+  }
+
+  String _formatTime(DateTime? time) {
+    if (time == null) return '';
+    return DateFormat('MM.dd HH:mm').format(time);
+  }
+
+  String _formatDuration(HomeworkItem hw) {
+    final runningMs = hw.runStart != null
+        ? DateTime.now().difference(hw.runStart!).inMilliseconds
+        : 0;
+    final totalMs = hw.accumulatedMs + runningMs;
+    final duration = Duration(milliseconds: totalMs);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    if (hours > 0) {
+      return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
     }
-    final visible = items.take(4).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _infoRow(String label, String value, {bool muted = false}) {
+    return Row(
       children: [
-        for (int i = 0; i < visible.length; i++) ...[
-          Row(
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  color: visible[i].color,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  visible[i].title,
-                  style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          if (visible[i].body.trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 12, top: 4),
-              child: Text(
-                visible[i].body.trim(),
-                style: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          if (i != visible.length - 1) const SizedBox(height: 8),
-        ],
-        if (items.length > visible.length)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              '외 ${items.length - visible.length}개',
-              style: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+        SizedBox(
+          width: 64,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: muted ? const Color(0xFF7F8C8C) : const Color(0xFF9FB3B3),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              color: muted ? const Color(0xFF8A9898) : const Color(0xFFEAF2F2),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _buildHomeworkCard(HomeworkItem hw) {
+    final bool isCompleted = hw.status == HomeworkStatus.completed;
+    final bool isAssigned = assignedIds.contains(hw.id);
+    final DateTime? startTime =
+        hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
+    final DateTime? endTime = isCompleted
+        ? (hw.completedAt ?? hw.confirmedAt ?? hw.updatedAt)
+        : null;
+    final String type = (hw.type ?? '').trim();
+    final String title = (hw.title).trim();
+    final String page = (hw.page ?? '').trim();
+    final String count = hw.count != null ? hw.count.toString() : '';
+    final String duration = _formatDuration(hw);
+    final String checks = hw.checkCount.toString();
+    final String homeworkFlag = isAssigned ? '있음' : '없음';
+    final Color borderColor = isCompleted
+        ? const Color(0xFF223131).withOpacity(0.6)
+        : const Color(0xFF223131);
+    final Color bgColor =
+        isCompleted ? const Color(0xFF0B1112).withOpacity(0.6) : const Color(0xFF0B1112);
+    return Opacity(
+      opacity: isCompleted ? 0.55 : 1.0,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (type.isNotEmpty)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: hw.color.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: hw.color.withOpacity(0.6)),
+                    ),
+                    child: Text(
+                      type,
+                      style: TextStyle(
+                        color: hw.color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                if (type.isNotEmpty) const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(child: _infoRow('페이지', page, muted: isCompleted)),
+                Expanded(child: _infoRow('문항수', count, muted: isCompleted)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            _infoRow('시작', _formatTime(startTime), muted: isCompleted),
+            if (isCompleted)
+              _infoRow('종료', _formatTime(endTime), muted: isCompleted)
+            else
+              _infoRow('현재까지', duration, muted: isCompleted),
+            if (isCompleted)
+              _infoRow('총 시간', duration, muted: isCompleted),
+            _infoRow('검사횟수', checks, muted: isCompleted),
+            _infoRow('숙제 여부', homeworkFlag, muted: isCompleted),
+          ],
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final sorted = _sortedItems();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1085,33 +1245,6 @@ class _FlowHomeworkCard extends StatelessWidget {
           _FlowTextbookSummary(),
           const SizedBox(height: 10),
           const Text(
-            '과제 현황',
-            style: TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _FlowStatRow(
-            label: '진행중',
-            value: stats.inProgress,
-            color: const Color(0xFF33A373),
-          ),
-          const SizedBox(height: 6),
-          _FlowStatRow(
-            label: '숙제',
-            value: stats.homework,
-            color: const Color(0xFF6FA8DC),
-          ),
-          const SizedBox(height: 6),
-          _FlowStatRow(
-            label: '완료',
-            value: stats.completed,
-            color: const Color(0xFFB0B0B0),
-          ),
-          const SizedBox(height: 12),
-          const Text(
             '과제 목록',
             style: TextStyle(
               color: Color(0xFF9FB3B3),
@@ -1120,7 +1253,20 @@ class _FlowHomeworkCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          _buildHomeworkList(),
+          if (sorted.isEmpty)
+            const Text(
+              '등록된 과제가 없습니다.',
+              style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+            )
+          else
+            Column(
+              children: [
+                for (int i = 0; i < sorted.length; i++) ...[
+                  _buildHomeworkCard(sorted[i]),
+                  if (i != sorted.length - 1) const SizedBox(height: 8),
+                ],
+              ],
+            ),
         ],
       ),
     );

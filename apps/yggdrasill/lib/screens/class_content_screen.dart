@@ -3,6 +3,8 @@ import '../services/data_manager.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import '../services/homework_store.dart';
+import '../services/student_flow_store.dart';
+import '../services/homework_assignment_store.dart';
 import '../models/attendance_record.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
@@ -454,24 +456,133 @@ String _formatDateWithWeekdayAndTime(DateTime dt) {
   return two(dt.month) + '.' + two(dt.day) + ' (' + week[dt.weekday - 1] + ') ' + two(dt.hour) + '시 ' + two(dt.minute) + '분';
 }
 
+final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
+final Set<String> _flowLoadingStudentIds = <String>{};
+final Map<String, Future<Set<String>>> _assignedIdsFutureByStudent = {};
+
+Map<String, String> _getFlowNamesForStudent(String studentId) {
+  final flows = StudentFlowStore.instance.cached(studentId);
+  if (flows.isNotEmpty) {
+    _flowNameCacheByStudent[studentId] = {for (final f in flows) f.id: f.name};
+  }
+  final cached = _flowNameCacheByStudent[studentId] ?? <String, String>{};
+  if (cached.isEmpty && !_flowLoadingStudentIds.contains(studentId)) {
+    _flowLoadingStudentIds.add(studentId);
+    unawaited(
+      StudentFlowStore.instance.loadForStudent(studentId).then((flows) {
+        _flowNameCacheByStudent[studentId] = {for (final f in flows) f.id: f.name};
+      }).whenComplete(() {
+        _flowLoadingStudentIds.remove(studentId);
+      }),
+    );
+  }
+  return cached;
+}
+
+String _formatShortTime(DateTime dt) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(dt.hour)}:${two(dt.minute)}';
+}
+
+String _formatDurationMs(int totalMs) {
+  final duration = Duration(milliseconds: totalMs);
+  if (duration.inHours > 0) {
+    return '${duration.inHours}h ${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}m';
+  }
+  return '${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}';
+}
+
+void _appendCompletionMemo(String studentId, HomeworkItem item) {
+  final accMs = item.accumulatedMs;
+  final d = Duration(milliseconds: accMs);
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60);
+  final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
+  final studentName = DataManager.instance.students
+      .firstWhere((s) => s.student.id == studentId)
+      .student
+      .name;
+  final title = (item.title).trim();
+  final String page = (item.page ?? '').trim();
+  final String count = item.count != null ? item.count.toString() : '';
+  final String content = (item.content ?? '').trim();
+  final parts = <String>[];
+  if (page.isNotEmpty) parts.add('p.$page');
+  if (count.isNotEmpty) parts.add('${count}문항');
+  if (content.isNotEmpty) parts.add(content);
+  final detail = parts.join(' ');
+  final original =
+      '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (detail.isNotEmpty) detail, timeText].join(' ')}'
+          .trim();
+  final now = DateTime.now();
+  final memo = Memo(
+    id: const Uuid().v4(),
+    original: original,
+    summary: original,
+    categoryKey: MemoCategory.inquiry,
+    scheduledAt: now.add(const Duration(hours: 24)),
+    dismissed: false,
+    createdAt: now,
+    updatedAt: now,
+  );
+  unawaited(DataManager.instance.addMemo(memo));
+}
+
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
 // ------------------------
 Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void Function(String text) onComplete) {
   return ValueListenableBuilder<int>(
-    valueListenable: HomeworkStore.instance.revision,
-    builder: (context, _rev, _) {
-      return Wrap(
-        spacing: 24, // 칩 간격 2배
-        runSpacing: 24,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: _buildHomeworkChipsOnceForStudent(context, studentId, tick, onComplete),
+    valueListenable: StudentFlowStore.instance.revision,
+    builder: (context, __, ___) {
+      final flowNames = _getFlowNamesForStudent(studentId);
+      final assignedFuture = _assignedIdsFutureByStudent.putIfAbsent(
+        studentId,
+        () => HomeworkAssignmentStore.instance.loadAssignedItemIds(studentId),
+      );
+      return FutureBuilder<Set<String>>(
+        future: assignedFuture,
+        builder: (context, snapshot) {
+          final assignedIds = snapshot.data ?? const <String>{};
+          return ValueListenableBuilder<int>(
+            valueListenable: HomeworkStore.instance.revision,
+            builder: (context, _rev, _) {
+              final chips = _buildHomeworkChipsOnceForStudent(
+                context,
+                studentId,
+                tick,
+                onComplete,
+                flowNames,
+                assignedIds,
+              );
+              final rowChildren = <Widget>[];
+              for (final chip in chips) {
+                if (rowChildren.isNotEmpty) {
+                  rowChildren.add(const SizedBox(width: 24));
+                }
+                rowChildren.add(chip);
+              }
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(children: rowChildren),
+              );
+            },
+          );
+        },
       );
     },
   );
 }
 
-List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String studentId, double tick, void Function(String text) onComplete) {
+List<Widget> _buildHomeworkChipsOnceForStudent(
+  BuildContext context,
+  String studentId,
+  double tick,
+  void Function(String text) onComplete,
+  Map<String, String> flowNames,
+  Set<String> assignedIds,
+) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance.items(studentId)
       .where((e) => e.status != HomeworkStatus.completed)
@@ -512,32 +623,27 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
         onEnter: (_) {},
         onExit: (_) {},
         child: GestureDetector(
-          // 제출 단계에서만: 클릭=확인, 더블클릭=자동완료 플래그 설정+확인 전이
+          // 클릭: 대기→수행→제출→확인→대기 순환
           onTap: () {
-            final phase = HomeworkStore.instance.getById(studentId, hw.id)?.phase ?? 1;
-            if (phase == 3) {
-              unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
-              final item = HomeworkStore.instance.getById(studentId, hw.id);
-              final accMs = item?.accumulatedMs ?? 0;
-              final d = Duration(milliseconds: accMs);
-              final h = d.inHours; final m = d.inMinutes.remainder(60);
-              final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
-              final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
-              final title = (item?.title ?? '').trim();
-              final body = (item?.body ?? '').trim();
-              final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
-              final now = DateTime.now();
-              final memo = Memo(
-                id: const Uuid().v4(),
-                original: original,
-                summary: original,
-                categoryKey: MemoCategory.inquiry,
-                scheduledAt: now.add(const Duration(hours: 24)),
-                dismissed: false,
-                createdAt: now,
-                updatedAt: now,
-              );
-              unawaited(DataManager.instance.addMemo(memo));
+            final item = HomeworkStore.instance.getById(studentId, hw.id);
+            if (item == null) return;
+            final int phase = item.phase;
+            switch (phase) {
+              case 1: // 대기 → 수행
+                unawaited(HomeworkStore.instance.start(studentId, hw.id));
+                break;
+              case 2: // 수행 → 제출
+                unawaited(HomeworkStore.instance.submit(studentId, hw.id));
+                break;
+              case 3: // 제출 → 확인
+                unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
+                _appendCompletionMemo(studentId, item);
+                break;
+              case 4: // 확인 → 대기
+                unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
+                break;
+              default:
+                unawaited(HomeworkStore.instance.start(studentId, hw.id));
             }
           },
           onDoubleTap: () {
@@ -546,26 +652,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
               HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
               unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
               final item = HomeworkStore.instance.getById(studentId, hw.id);
-              final accMs = item?.accumulatedMs ?? 0;
-              final d = Duration(milliseconds: accMs);
-              final h = d.inHours; final m = d.inMinutes.remainder(60);
-              final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
-              final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
-              final title = (item?.title ?? '').trim();
-              final body = (item?.body ?? '').trim();
-              final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
-              final now = DateTime.now();
-              final memo = Memo(
-                id: const Uuid().v4(),
-                original: original,
-                summary: original,
-                categoryKey: MemoCategory.inquiry,
-                scheduledAt: now.add(const Duration(hours: 24)),
-                dismissed: false,
-                createdAt: now,
-                updatedAt: now,
-              );
-              unawaited(DataManager.instance.addMemo(memo));
+              if (item != null) {
+                _appendCompletionMemo(studentId, item);
+              }
             }
           },
           onSecondaryTap: () {
@@ -575,28 +664,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
             HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
             unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
             final item = HomeworkStore.instance.getById(studentId, hw.id);
-            final accMs = item?.accumulatedMs ?? 0;
-            final d = Duration(milliseconds: accMs);
-            final h = d.inHours; final m = d.inMinutes.remainder(60);
-            final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
-            final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
-            final title = (item?.title ?? '').trim();
-            final body = (item?.body ?? '').trim();
-            final original = '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (body.isNotEmpty) body, timeText].join(' ')}'.trim();
-            final now = DateTime.now();
-            final memo = Memo(
-              id: const Uuid().v4(),
-              original: original,
-              summary: original,
-              categoryKey: MemoCategory.inquiry,
-              scheduledAt: now.add(const Duration(hours: 24)),
-              dismissed: false,
-              createdAt: now,
-              updatedAt: now,
-            );
-            unawaited(DataManager.instance.addMemo(memo));
+            if (item != null) {
+              _appendCompletionMemo(studentId, item);
+            }
           },
-          child: _buildHomeworkChipVisual(context, studentId, hw.id, hw.title, hw.color, tick: tick),
+          child: _buildHomeworkChipVisual(
+            context,
+            studentId,
+            hw,
+            flowNames[hw.flowId ?? ''] ?? '',
+            assignedIds.contains(hw.id),
+            tick: tick,
+          ),
         ),
       ),
     );
@@ -604,71 +683,155 @@ List<Widget> _buildHomeworkChipsOnceForStudent(BuildContext context, String stud
   return chips;
 }
 
-Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String id, String title, Color color, {required double tick}) {
-  final item = HomeworkStore.instance.getById(studentId, id);
-  final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == id;
-  final int phase = item?.phase ?? 1; // 1:대기,2:수행,3:제출,4:확인
-  final style = TextStyle(color: isRunning ? Colors.white70 : (phase == 4 ? Colors.white.withOpacity(0.9) : Colors.white60), fontSize: 25, fontWeight: FontWeight.w600, height: 1.1);
-  const double leftPad = 40; // 좌우 여백 확대
-  const double rightPad = 40; // 좌우 여백 확대
+Widget _buildHomeworkChipVisual(
+  BuildContext context,
+  String studentId,
+  HomeworkItem hw,
+  String flowName,
+  bool isAssigned, {
+  required double tick,
+}) {
+  final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+  final int phase = hw.phase; // 1:대기,2:수행,3:제출,4:확인
+  final TextStyle titleStyle = const TextStyle(
+    color: Color(0xFFEAF2F2),
+    fontSize: 19,
+    fontWeight: FontWeight.w700,
+    height: 1.1,
+  );
+  final TextStyle flowStyle = const TextStyle(
+    color: Color(0xFF9FB3B3),
+    fontSize: 11,
+    fontWeight: FontWeight.w600,
+    height: 1.1,
+  );
+  final TextStyle metaStyle = const TextStyle(
+    color: Color(0xFF9FB3B3),
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    height: 1.1,
+  );
+  final TextStyle statStyle = const TextStyle(
+    color: Color(0xFF7F8C8C),
+    fontSize: 12,
+    fontWeight: FontWeight.w600,
+    height: 1.1,
+  );
+  const double leftPad = 24;
+  const double rightPad = 24;
+  const double chipHeight = 120;
   final double borderW = isRunning ? 3.0 : 2.0; // 테두리 두께 증가
   const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
 
-  // 폭 고정: 텍스트 실제 폭 + 패딩 + 최대 테두리 두께*2 (+여유 6px) - 영문 조기 ellipsis 방지
-  final painter = TextPainter(
-    text: TextSpan(text: title, style: style),
+  final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
+  final String page = (hw.page ?? '').trim();
+  final String count = hw.count != null ? hw.count.toString() : '';
+  final String line2 = 'p.${page.isNotEmpty ? page : '-'} / ${count.isNotEmpty ? count : '-'}문항';
+  final DateTime? startAt = hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
+  final String startText = startAt == null ? '-' : _formatShortTime(startAt);
+  final int runningMs = hw.runStart != null
+      ? DateTime.now().difference(hw.runStart!).inMilliseconds
+      : 0;
+  final int totalMs = hw.accumulatedMs + runningMs;
+  final String durationText = _formatDurationMs(totalMs);
+  final String line3 = '시작 $startText · 진행 $durationText · 검사 ${hw.checkCount} · 숙제 ${isAssigned ? '있음' : '없음'}';
+
+  final String titleText = (hw.title).trim();
+  // 폭 고정: 가장 긴 라인 기준으로 계산
+  final titlePainter = TextPainter(
+    text: TextSpan(text: titleText, style: titleStyle),
     maxLines: 1,
     textDirection: TextDirection.ltr,
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
-  // 여유폭을 14px로 상향하고 최소폭을 110px로 늘려 영문 조기 ellipsis 방지
-  final double fixedWidth = (painter.width + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(110.0, 760.0);
-
-  // 칩 내부: 제목 + 본문/총 수행시간(2줄) 표시
-  final String body = HomeworkStore.instance.getById(studentId, id)?.body ?? '';
-  final int accumulatedMs = HomeworkStore.instance.getById(studentId, id)?.accumulatedMs ?? 0;
-  final Duration acc = Duration(milliseconds: accumulatedMs);
-  final int hours = acc.inHours;
-  final int minutes = acc.inMinutes.remainder(60);
-  final String timeText = hours > 0 ? ('$hours시간 $minutes분') : ('$minutes분');
+  final flowPainter = TextPainter(
+    text: TextSpan(text: displayFlowName, style: flowStyle),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
+  )..layout(minWidth: 0, maxWidth: double.infinity);
+  final painter2 = TextPainter(
+    text: TextSpan(text: line2, style: metaStyle),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
+  )..layout(minWidth: 0, maxWidth: double.infinity);
+  final painter3 = TextPainter(
+    text: TextSpan(text: line3, style: statStyle),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
+  )..layout(minWidth: 0, maxWidth: double.infinity);
+  final double rowWidth = titlePainter.width + 8 + flowPainter.width;
+  final double maxLineWidth = math.max(rowWidth, math.max(painter2.width, painter3.width));
+  // 여유폭 14px, 최소폭 300px
+  final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
 
   Widget chipInner = Container(
-    height: ClassContentScreen._attendingCardHeight,
-    padding: const EdgeInsets.fromLTRB(leftPad, 10, rightPad, 10),
-    alignment: Alignment.center,
+    height: chipHeight,
+    padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
+    alignment: Alignment.centerLeft,
     decoration: BoxDecoration(
-      color: isRunning
-          ? Colors.transparent
-          : (phase == 4
-              ? Color.lerp(const Color(0xFF2A2A2A), const Color(0xFF33393F), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
-              : const Color(0xFF2A2A2A)),
+      color: (phase == 4
+          ? Color.lerp(const Color(0xFF15171C), const Color(0xFF1D2128), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
+          : const Color(0xFF15171C)),
       borderRadius: BorderRadius.circular(10),
       border: isRunning
-          ? Border.all(color: color.withOpacity(0.9), width: borderW)
+          ? Border.all(color: hw.color.withOpacity(0.9), width: borderW)
           : (phase == 3 ? null : Border.all(color: Colors.white24, width: borderW)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.4),
+          blurRadius: 10,
+          offset: const Offset(0, 4),
+        ),
+      ],
     ),
     child: Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 제목은 필요시 폰트를 약간 축소해 잘림을 방지
-        SizedBox(
-          width: fixedWidth - leftPad - rightPad - 4,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.center,
-            child: Text(title, style: style, maxLines: 1, softWrap: false),
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                titleText,
+                style: titleStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 160),
+              child: Text(
+                displayFlowName,
+                style: flowStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
           child: Text(
-            body.isNotEmpty ? (body + ' · ' + timeText) : timeText,
-            style: const TextStyle(color: Colors.white60, fontSize: 14, height: 1.15),
+            line2,
+            style: metaStyle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
+          ),
+        ),
+        const SizedBox(height: 6),
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
+          child: Text(
+            line3,
+            style: statStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
@@ -677,7 +840,7 @@ Widget _buildHomeworkChipVisual(BuildContext context, String studentId, String i
 
   if (!isRunning && phase == 3) {
     chipInner = CustomPaint(
-      foregroundPainter: _RotatingBorderPainter(baseColor: color, tick: tick, strokeWidth: 3.0, cornerRadius: 10.0),
+      foregroundPainter: _RotatingBorderPainter(baseColor: hw.color, tick: tick, strokeWidth: 3.0, cornerRadius: 10.0),
       child: chipInner,
     );
   }

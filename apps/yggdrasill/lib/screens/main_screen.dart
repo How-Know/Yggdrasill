@@ -1395,61 +1395,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
     }
     // 텍스트 자체의 underline을 사용하여 높이 증가 없이 이름 전체에 밑줄 적용
-    // 이름 + 과제 요약 칩들
-    final List<Widget> chips = [];
-    final hwList = HomeworkStore.instance.items(t.student.id);
-    for (final hw in hwList.where((e) => e.status != HomeworkStatus.completed).take(3)) {
-      chips.add(const SizedBox(width: 8));
-      chips.add(
-        MouseRegion(
-          onEnter: (e) {
-            final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-            final offset = overlay.globalToLocal(e.position);
-            _showTooltip(offset, hw.body.isEmpty ? '(내용 없음)' : hw.body);
-          },
-          onExit: (_) => _removeTooltip(),
-          child: GestureDetector(
-            onTap: () async {
-              await _openHomeworkEditDialog(t.student.id, hw.id);
-              if (mounted) setState(() {});
-            },
-            onLongPress: () async {
-              // 이어가기: 동일 제목/색상으로 내용만 빈 과제 추가
-              final enabledFlows = await ensureEnabledFlowsForHomework(context, t.student.id);
-              if (enabledFlows.isEmpty) return;
-              final flowId = hw.flowId ?? enabledFlows.first.id;
-              HomeworkStore.instance.continueAdd(t.student.id, hw.id, body: '', flowId: flowId);
-              setState(() {});
-            },
-            onSecondaryTap: () {
-              // 완료 처리
-              unawaited(HomeworkStore.instance.complete(t.student.id, hw.id));
-              setState(() {});
-            },
-            child: Container(
-              height: 28,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: hw.color.withOpacity(0.6), width: 1),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                hw.title,
-                style: const TextStyle(
-                  color: Color(0xFFEAF2F2),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-                textAlign: TextAlign.center,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
     final Widget attendedChild = nameWidget;
     final Widget cardChild = nameWidget; // 기본은 이름만 사용 (waiting/leaved)
     if (status == 'attended') {
@@ -1838,7 +1783,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final double width = painter.width + leftPad + rightPad + borderWMax * 2 + 6.0;
               if (!_chipDebugLogged.contains(hw.id)) {
                 _chipDebugLogged.add(hw.id);
-                debugPrint('[CHIP][measure] id=' + hw.id + ' title="' + hw.title + '" w=' + painter.width.toStringAsFixed(1) + ' scale=' + textScale.toStringAsFixed(2) + ' finalW=' + width.toStringAsFixed(1));
+                debugPrint('[CHIP][measure] id=' + hw.id + ' title="' + hw.title + '" w=' +
+                    painter.width.toStringAsFixed(1) + ' scale=' + textScale.toStringAsFixed(2) +
+                    ' finalW=' + width.toStringAsFixed(1));
               }
               // 폰트 사이즈 증가를 고려하되, 지나친 최소폭은 줄임표를 유발하므로 완화
               final double minChipWidth = 70.0;
@@ -2066,6 +2013,8 @@ extension on _MainScreenState {
       count: item.count,
       content: item.content,
       checkCount: item.checkCount,
+      createdAt: item.createdAt,
+      updatedAt: DateTime.now(),
       status: item.status,
       phase: item.phase,
       accumulatedMs: item.accumulatedMs,
