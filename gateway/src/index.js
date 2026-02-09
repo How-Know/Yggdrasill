@@ -103,11 +103,10 @@ client.on('message', async (topic, payload) => {
     const rpc = rpcMap[action];
     if (!rpc) return;
 
-    let params = { p_item_id: item_id, p_academy_id: academy_id };
+    const updated_by = msg.updated_by ?? null;
+    let params = { p_item_id: item_id, p_academy_id: academy_id, p_updated_by: updated_by };
     if (action === 'start') params.p_student_id = student_id;
-    if (action === 'pause_all') params = { p_student_id: student_id, p_academy_id: academy_id };
-    // Add updated_by if provided
-    if (msg.updated_by) params.p_updated_by = msg.updated_by;
+    if (action === 'pause_all') params = { p_student_id: student_id, p_academy_id: academy_id, p_updated_by: updated_by };
     const { error } = await supa.rpc(rpc, params);
     if (error) console.error('[gateway] rpc error', error);
 

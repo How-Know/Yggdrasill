@@ -30,6 +30,28 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<Map<String, int>> loadAssignmentCounts(String studentId) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('homework_assignments')
+          .select('homework_item_id')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId);
+      final Map<String, int> counts = {};
+      for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final id = (r['homework_item_id'] as String?) ?? '';
+        if (id.isEmpty) continue;
+        counts[id] = (counts[id] ?? 0) + 1;
+      }
+      return counts;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
   Future<void> recordAssignments(
     String studentId,
     List<HomeworkItem> items, {

@@ -447,7 +447,7 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
 
 String _formatDateTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
-  return '${dt.year}.${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+  return '${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
 }
 
 String _formatDateWithWeekdayAndTime(DateTime dt) {
@@ -458,7 +458,7 @@ String _formatDateWithWeekdayAndTime(DateTime dt) {
 
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
-final Map<String, Future<Set<String>>> _assignedIdsFutureByStudent = {};
+final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent = {};
 
 Map<String, String> _getFlowNamesForStudent(String studentId) {
   final flows = StudentFlowStore.instance.cached(studentId);
@@ -536,14 +536,14 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void
     valueListenable: StudentFlowStore.instance.revision,
     builder: (context, __, ___) {
       final flowNames = _getFlowNamesForStudent(studentId);
-      final assignedFuture = _assignedIdsFutureByStudent.putIfAbsent(
+      final assignmentCountsFuture = _assignmentCountsFutureByStudent.putIfAbsent(
         studentId,
-        () => HomeworkAssignmentStore.instance.loadAssignedItemIds(studentId),
+        () => HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId),
       );
-      return FutureBuilder<Set<String>>(
-        future: assignedFuture,
+      return FutureBuilder<Map<String, int>>(
+        future: assignmentCountsFuture,
         builder: (context, snapshot) {
-          final assignedIds = snapshot.data ?? const <String>{};
+          final assignmentCounts = snapshot.data ?? const <String, int>{};
           return ValueListenableBuilder<int>(
             valueListenable: HomeworkStore.instance.revision,
             builder: (context, _rev, _) {
@@ -553,7 +553,7 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void
                 tick,
                 onComplete,
                 flowNames,
-                assignedIds,
+                assignmentCounts,
               );
               final rowChildren = <Widget>[];
               for (final chip in chips) {
@@ -581,7 +581,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   double tick,
   void Function(String text) onComplete,
   Map<String, String> flowNames,
-  Set<String> assignedIds,
+  Map<String, int> assignmentCounts,
 ) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance.items(studentId)
@@ -673,7 +673,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             studentId,
             hw,
             flowNames[hw.flowId ?? ''] ?? '',
-            assignedIds.contains(hw.id),
+            assignmentCounts[hw.id] ?? 0,
             tick: tick,
           ),
         ),
@@ -688,7 +688,7 @@ Widget _buildHomeworkChipVisual(
   String studentId,
   HomeworkItem hw,
   String flowName,
-  bool isAssigned, {
+  int assignmentCount, {
   required double tick,
 }) {
   final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
@@ -726,15 +726,19 @@ Widget _buildHomeworkChipVisual(
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
   final String count = hw.count != null ? hw.count.toString() : '';
-  final String line2 = 'p.${page.isNotEmpty ? page : '-'} / ${count.isNotEmpty ? count : '-'}문항';
+  final String line2Left = 'p.${page.isNotEmpty ? page : '-'} / ${count.isNotEmpty ? count : '-'}문항';
+  final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : '';
+  final List<String> rightParts = ['검사 ${hw.checkCount}'];
+  if (homeworkText.isNotEmpty) rightParts.add(homeworkText);
+  final String line2Right = rightParts.join(' · ');
   final DateTime? startAt = hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
-  final String startText = startAt == null ? '-' : _formatShortTime(startAt);
+  final String startText = startAt == null ? '-' : _formatDateTime(startAt);
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
   final int totalMs = hw.accumulatedMs + runningMs;
   final String durationText = _formatDurationMs(totalMs);
-  final String line3 = '시작 $startText · 진행 $durationText · 검사 ${hw.checkCount} · 숙제 ${isAssigned ? '있음' : '없음'}';
+  final String line3 = '시작 $startText · 진행 $durationText';
 
   final String titleText = (hw.title).trim();
   // 폭 고정: 가장 긴 라인 기준으로 계산
@@ -750,8 +754,14 @@ Widget _buildHomeworkChipVisual(
     textDirection: TextDirection.ltr,
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
-  final painter2 = TextPainter(
-    text: TextSpan(text: line2, style: metaStyle),
+  final painter2Left = TextPainter(
+    text: TextSpan(text: line2Left, style: metaStyle),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
+  )..layout(minWidth: 0, maxWidth: double.infinity);
+  final painter2Right = TextPainter(
+    text: TextSpan(text: line2Right, style: statStyle),
     maxLines: 1,
     textDirection: TextDirection.ltr,
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
@@ -763,7 +773,8 @@ Widget _buildHomeworkChipVisual(
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
   final double rowWidth = titlePainter.width + 8 + flowPainter.width;
-  final double maxLineWidth = math.max(rowWidth, math.max(painter2.width, painter3.width));
+  final double line2Width = painter2Left.width + (line2Right.isNotEmpty ? (8 + painter2Right.width) : 0);
+  final double maxLineWidth = math.max(rowWidth, math.max(line2Width, painter3.width));
   // 여유폭 14px, 최소폭 300px
   final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
 
@@ -815,16 +826,29 @@ Widget _buildHomeworkChipVisual(
           ],
         ),
         const SizedBox(height: 10),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
-          child: Text(
-            line2,
-            style: metaStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                line2Left,
+                style: metaStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (line2Right.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text(
+                line2Right,
+                style: statStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+              ),
+            ],
+          ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 9),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
           child: Text(

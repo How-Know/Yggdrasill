@@ -422,10 +422,12 @@ class HomeworkStore {
     if (idx == -1) return;
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_start', params: {
         'p_item_id': id,
         'p_student_id': studentId,
         'p_academy_id': academyId,
+        'p_updated_by': updatedBy,
       });
     } catch (e) {
       // ignore
@@ -439,9 +441,11 @@ class HomeworkStore {
     if (idx == -1) return;
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_pause', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
+        'p_updated_by': updatedBy,
       });
     } catch (_) {}
   }
@@ -467,9 +471,11 @@ class HomeworkStore {
     if (idx == -1) return;
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_submit', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
+        'p_updated_by': updatedBy,
       });
       // 비동기 보정: 리얼타임 지연 시 강제 재로드
       unawaited(_reloadStudent(studentId));
@@ -486,9 +492,11 @@ class HomeworkStore {
     if (idx == -1) return;
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_confirm', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
+        'p_updated_by': updatedBy,
       });
       unawaited(_reloadStudent(studentId));
     } catch (e) {
@@ -504,9 +512,11 @@ class HomeworkStore {
     if (idx == -1) return;
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_wait', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
+        'p_updated_by': updatedBy,
       });
       unawaited(_reloadStudent(studentId));
     } catch (e) {
