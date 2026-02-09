@@ -492,6 +492,9 @@ String _formatDurationMs(int totalMs) {
   return '${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 }
 
+const double _homeworkChipHeight = 120.0;
+const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.5;
+
 void _appendCompletionMemo(String studentId, HomeworkItem item) {
   final accMs = item.accumulatedMs;
   final d = Duration(milliseconds: accMs);
@@ -618,64 +621,134 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   });
 
   for (final hw in hwList.take(12)) {
+    final bool isRunning = hw.runStart != null || hw.phase == 2;
+    final bool isSubmitted = hw.phase == 3;
+    final bool canSlideDown = isRunning || isSubmitted;
+    final String downLabel = isSubmitted ? '완료' : (isRunning ? '멈춤' : '');
     chips.add(
-      MouseRegion(
-        onEnter: (_) {},
-        onExit: (_) {},
-        child: GestureDetector(
-          // 클릭: 대기→수행→제출→확인→대기 순환
-          onTap: () {
-            final item = HomeworkStore.instance.getById(studentId, hw.id);
-            if (item == null) return;
-            final int phase = item.phase;
-            switch (phase) {
-              case 1: // 대기 → 수행
-                unawaited(HomeworkStore.instance.start(studentId, hw.id));
-                break;
-              case 2: // 수행 → 제출
-                unawaited(HomeworkStore.instance.submit(studentId, hw.id));
-                break;
-              case 3: // 제출 → 확인
-                unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
-                _appendCompletionMemo(studentId, item);
-                break;
-              case 4: // 확인 → 대기
-                unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
-                break;
-              default:
-                unawaited(HomeworkStore.instance.start(studentId, hw.id));
-            }
-          },
-          onDoubleTap: () {
-            final phase = HomeworkStore.instance.getById(studentId, hw.id)?.phase ?? 1;
-            if (phase == 3) {
-              HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+      _SlideableHomeworkChip(
+        key: ValueKey('hw_chip_${hw.id}'),
+        maxSlide: _homeworkChipMaxSlide,
+        canSlideDown: canSlideDown,
+        canSlideUp: true,
+        downLabel: downLabel,
+        upLabel: '취소',
+        downColor: isSubmitted ? const Color(0xFF4CAF50) : const Color(0xFF9FB3B3),
+        upColor: const Color(0xFFE57373),
+        onTap: () {
+          final item = HomeworkStore.instance.getById(studentId, hw.id);
+          if (item == null) return;
+          final int phase = item.phase;
+          switch (phase) {
+            case 1: // 대기 → 수행
+              unawaited(HomeworkStore.instance.start(studentId, hw.id));
+              break;
+            case 2: // 수행 → 제출
+              unawaited(HomeworkStore.instance.submit(studentId, hw.id));
+              break;
+            case 3: // 제출 → 확인
               unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
-              final item = HomeworkStore.instance.getById(studentId, hw.id);
-              if (item != null) {
-                _appendCompletionMemo(studentId, item);
-              }
-            }
-          },
-          onSecondaryTap: () {
-            final phase = HomeworkStore.instance.getById(studentId, hw.id)?.phase ?? 1;
-            if (phase != 3) return;
-            // 확인으로 전이 + 다음 대기 진입 시 자동 완료 플래그 설정
-            HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
-            unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
-            final item = HomeworkStore.instance.getById(studentId, hw.id);
-            if (item != null) {
               _appendCompletionMemo(studentId, item);
+              break;
+            case 4: // 확인 → 대기
+              unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
+              break;
+            default:
+              unawaited(HomeworkStore.instance.start(studentId, hw.id));
+          }
+        },
+        onSlideDown: () {
+          final item = HomeworkStore.instance.getById(studentId, hw.id);
+          if (item == null) return;
+          if (item.runStart != null || item.phase == 2) {
+            unawaited(HomeworkStore.instance.pause(studentId, hw.id));
+          } else if (item.phase == 3) {
+            unawaited(HomeworkStore.instance.complete(studentId, hw.id));
+          }
+        },
+        onSlideUp: () async {
+          final choice = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1F1F1F),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('과제 처리', style: TextStyle(color: Colors.white)),
+              content: const Text('완전 취소 또는 포기를 선택하세요.', style: TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('remove'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                  child: const Text('하드삭제'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop('abandon'),
+                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2A2A2A)),
+                  child: const Text('포기'),
+                ),
+              ],
+            ),
+          );
+          if (!context.mounted || choice == null) return;
+          if (choice == 'remove') {
+            HomeworkStore.instance.remove(studentId, hw.id);
+            return;
+          }
+          if (choice == 'abandon') {
+            final reason = await showDialog<String>(
+              context: context,
+              builder: (ctx) {
+                final controller = ImeAwareTextEditingController();
+                return AlertDialog(
+                  backgroundColor: const Color(0xFF1F1F1F),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  title: const Text('포기 사유', style: TextStyle(color: Colors.white)),
+                  content: TextField(
+                    controller: controller,
+                    minLines: 2,
+                    maxLines: 4,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: '포기 사유를 입력하세요',
+                      hintStyle: TextStyle(color: Colors.white38),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF2C2C2C)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF4A4A4A)),
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(null),
+                      child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2A2A2A)),
+                      child: const Text('저장'),
+                    ),
+                  ],
+                );
+              },
+            );
+            if (!context.mounted) return;
+            if (reason != null && reason.trim().isNotEmpty) {
+              unawaited(HomeworkStore.instance.abandon(studentId, hw.id, reason));
             }
-          },
-          child: _buildHomeworkChipVisual(
-            context,
-            studentId,
-            hw,
-            flowNames[hw.flowId ?? ''] ?? '',
-            assignmentCounts[hw.id] ?? 0,
-            tick: tick,
-          ),
+          }
+        },
+        child: _buildHomeworkChipVisual(
+          context,
+          studentId,
+          hw,
+          flowNames[hw.flowId ?? ''] ?? '',
+          assignmentCounts[hw.id] ?? 0,
+          tick: tick,
         ),
       ),
     );
@@ -719,7 +792,7 @@ Widget _buildHomeworkChipVisual(
   );
   const double leftPad = 24;
   const double rightPad = 24;
-  const double chipHeight = 120;
+  const double chipHeight = _homeworkChipHeight;
   final double borderW = isRunning ? 3.0 : 2.0; // 테두리 두께 증가
   const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
 
@@ -786,7 +859,7 @@ Widget _buildHomeworkChipVisual(
       color: (phase == 4
           ? Color.lerp(const Color(0xFF15171C), const Color(0xFF1D2128), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
           : const Color(0xFF15171C)),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       border: isRunning
           ? Border.all(color: hw.color.withOpacity(0.9), width: borderW)
           : (phase == 3 ? null : Border.all(color: Colors.white24, width: borderW)),
@@ -864,7 +937,7 @@ Widget _buildHomeworkChipVisual(
 
   if (!isRunning && phase == 3) {
     chipInner = CustomPaint(
-      foregroundPainter: _RotatingBorderPainter(baseColor: hw.color, tick: tick, strokeWidth: 3.0, cornerRadius: 10.0),
+      foregroundPainter: _RotatingBorderPainter(baseColor: hw.color, tick: tick, strokeWidth: 3.0, cornerRadius: 12.0),
       child: chipInner,
     );
   }
@@ -912,6 +985,171 @@ class _AttendingStudent {
   final Color color;
   final String id;
   _AttendingStudent({required this.id, required this.name, required this.color});
+}
+
+class _SlideableHomeworkChip extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final VoidCallback onSlideDown;
+  final Future<void> Function() onSlideUp;
+  final bool canSlideDown;
+  final bool canSlideUp;
+  final String downLabel;
+  final String upLabel;
+  final Color downColor;
+  final Color upColor;
+  final double maxSlide;
+
+  const _SlideableHomeworkChip({
+    super.key,
+    required this.child,
+    required this.onTap,
+    required this.onSlideDown,
+    required this.onSlideUp,
+    required this.canSlideDown,
+    required this.canSlideUp,
+    required this.downLabel,
+    required this.upLabel,
+    required this.downColor,
+    required this.upColor,
+    required this.maxSlide,
+  });
+
+  @override
+  State<_SlideableHomeworkChip> createState() => _SlideableHomeworkChipState();
+}
+
+class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
+  double _offset = 0.0;
+  bool _dragging = false;
+
+  void _updateOffset(double delta) {
+    final next = (_offset + delta).clamp(-widget.maxSlide, widget.maxSlide);
+    setState(() {
+      _offset = next;
+      _dragging = true;
+    });
+  }
+
+  Future<void> _endDrag(DragEndDetails details) async {
+    final vy = details.primaryVelocity ?? 0.0;
+    final double absOffset = _offset.abs();
+    final bool isDown = _offset > 0;
+    final bool isUp = _offset < 0;
+    final bool trigger =
+        absOffset >= widget.maxSlide * 0.55 || vy.abs() > 800.0;
+
+    if (trigger) {
+      setState(() {
+        _offset = 0.0;
+        _dragging = false;
+      });
+      if (isDown && widget.canSlideDown) {
+        widget.onSlideDown();
+      } else if (isUp && widget.canSlideUp) {
+        await widget.onSlideUp();
+      }
+      return;
+    }
+    setState(() {
+      _offset = 0.0;
+      _dragging = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double progress =
+        (_offset.abs() / widget.maxSlide).clamp(0.0, 1.0);
+    final bool isDown = _offset > 0;
+    final bool isUp = _offset < 0;
+    final TextStyle labelStyle = const TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.w700,
+      height: 1.1,
+    );
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              color: const Color(0xFF101315),
+              child: Stack(
+                children: [
+                  if (widget.downLabel.isNotEmpty)
+                    Align(
+                      alignment: const Alignment(0, -0.75),
+                      child: Opacity(
+                        opacity: isDown ? progress : 0.0,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.arrow_downward_rounded,
+                                color: widget.downColor, size: 24),
+                            const SizedBox(width: 6),
+                            Text(
+                              widget.downLabel,
+                              style: labelStyle.copyWith(
+                                color: widget.downColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  Align(
+                    alignment: const Alignment(0, 0.75),
+                    child: Opacity(
+                      opacity: isUp ? progress : 0.0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.arrow_upward_rounded,
+                              color: widget.upColor, size: 24),
+                          const SizedBox(width: 6),
+                          Text(
+                            widget.upLabel,
+                            style: labelStyle.copyWith(
+                              color: widget.upColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        AnimatedContainer(
+          duration: _dragging
+              ? Duration.zero
+              : const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          transform: Matrix4.translationValues(0, _offset, 0),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            onVerticalDragUpdate: (details) {
+              final delta = details.delta.dy;
+              if (delta > 0) {
+                // 내려가는 방향: 슬라이드 불가여도 위에서 내려오는 복귀는 허용
+                if (!widget.canSlideDown && _offset >= 0) return;
+              } else if (delta < 0) {
+                // 올라가는 방향: 슬라이드 불가여도 아래에서 복귀는 허용
+                if (!widget.canSlideUp && _offset <= 0) return;
+              }
+              _updateOffset(delta);
+            },
+            onVerticalDragEnd: _endDrag,
+            child: widget.child,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _AttendingButton extends StatelessWidget {

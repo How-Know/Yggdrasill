@@ -525,6 +525,30 @@ class HomeworkStore {
     }
   }
 
+  Future<void> abandon(
+    String studentId,
+    String id,
+    String reason,
+  ) async {
+    if (reason.trim().isEmpty) return;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa.from('homework_item_phase_events').insert({
+        'academy_id': academyId,
+        'item_id': id,
+        'phase': 4,
+        'note': '포기: ${reason.trim()}',
+      });
+      await complete(studentId, id);
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][abandon][ERROR] ' + e.toString());
+    }
+  }
+
   void _maybeAutoCompleteOnWaiting(String studentId, HomeworkItem item) {
     if (item.phase == 1 /* waiting */ && _autoCompleteOnNextWaiting.remove(item.id)) {
       // 확인 → 대기로 전이된 첫 타이밍에 자동 완료
