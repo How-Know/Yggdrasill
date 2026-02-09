@@ -286,14 +286,13 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                     .where((f) => f.enabled)
                     .toList();
             const double timelineMaxWidth = 860 * 0.7; // 30% 감소
-            const double flowCardWidth = 260;
+            const double flowCardWidth = 260 * 1.3;
             const double flowCardSpacing = 12;
             final int flowCount = enabledFlows.length;
-            final int columnCount = flowCount < 3 ? flowCount : 3;
-            final double flowSidebarWidth = columnCount == 0
+            final double flowSidebarWidth = flowCount == 0
                 ? 0
-                : (flowCardWidth * columnCount) +
-                    (flowCardSpacing * (columnCount - 1));
+                : (flowCardWidth * flowCount) +
+                    (flowCardSpacing * (flowCount - 1));
             final timelineCard = ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: timelineMaxWidth),
               child: Container(
@@ -385,17 +384,19 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
             return Align(
               alignment: Alignment.topCenter,
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Flexible(child: timelineCard),
+                  SizedBox(width: timelineMaxWidth, child: timelineCard),
                   if (enabledFlows.isNotEmpty) ...[
-                    const SizedBox(width: 8),
+                    const SizedBox(width: flowCardSpacing),
                     SizedBox(
                       width: flowSidebarWidth,
                       child: _FlowHomeworkSidebar(
                         studentId: widget.studentWithInfo.student.id,
                         flows: enabledFlows,
+                        cardWidth: flowCardWidth,
                       ),
                     ),
                   ],
@@ -866,9 +867,11 @@ class _HomeworkStats {
 class _FlowHomeworkSidebar extends StatefulWidget {
   final String studentId;
   final List<StudentFlow> flows;
+  final double cardWidth;
   const _FlowHomeworkSidebar({
     required this.studentId,
     required this.flows,
+    required this.cardWidth,
   });
 
   @override
@@ -876,22 +879,29 @@ class _FlowHomeworkSidebar extends StatefulWidget {
 }
 
 class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
-  late Future<Set<String>> _assignedFuture;
+  late Future<Map<String, List<HomeworkAssignmentBrief>>> _assignmentsFuture;
+  late Future<Map<String, List<HomeworkAssignmentCheck>>> _checksFuture;
+  int _lastAssignmentRevision = -1;
 
   @override
   void initState() {
     super.initState();
-    _assignedFuture =
-        HomeworkAssignmentStore.instance.loadAssignedItemIds(widget.studentId);
+    _reloadAssignmentData();
   }
 
   @override
   void didUpdateWidget(covariant _FlowHomeworkSidebar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.studentId != widget.studentId) {
-      _assignedFuture = HomeworkAssignmentStore.instance
-          .loadAssignedItemIds(widget.studentId);
+      _reloadAssignmentData();
     }
+  }
+
+  void _reloadAssignmentData() {
+    _assignmentsFuture =
+        HomeworkAssignmentStore.instance.loadAssignmentsForStudent(widget.studentId);
+    _checksFuture =
+        HomeworkAssignmentStore.instance.loadChecksForStudent(widget.studentId);
   }
 
   int _flowPriority(StudentFlow flow) {
@@ -978,48 +988,66 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Set<String>>(
-      future: _assignedFuture,
-      builder: (context, snapshot) {
-        final assignedIds = snapshot.data ?? const <String>{};
-        return ValueListenableBuilder<int>(
-          valueListenable: StudentFlowStore.instance.revision,
-          builder: (_, __, ___) {
-            final latest = StudentFlowStore.instance.cached(widget.studentId);
-            final displayFlows = latest.isNotEmpty
-                ? latest.where((f) => f.enabled).toList()
-                : widget.flows;
-            final sortedFlows = _sortedFlows(displayFlows);
-            return ValueListenableBuilder<int>(
-              valueListenable: HomeworkStore.instance.revision,
-              builder: (_, __, ___) {
-                final allItems = HomeworkStore.instance.items(widget.studentId);
-                return LayoutBuilder(
-                  builder: (context, constraints) {
-                    final double maxWidth = constraints.maxWidth.isFinite
-                        ? constraints.maxWidth
-                        : 260;
-                    final double cardWidth = maxWidth < 260 ? maxWidth : 260;
-                    return Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      alignment: WrapAlignment.start,
-                      runAlignment: WrapAlignment.start,
-                      children: [
-                        for (final flow in sortedFlows) ...[
-                          SizedBox(
-                            width: cardWidth,
-                            child: _FlowHomeworkCard(
-                              flow: flow,
-                              items: allItems
-                                  .where((e) => e.flowId == flow.id)
-                                  .toList(),
-                              assignedIds: assignedIds,
-                              onEditName: () => _renameFlow(context, flow),
-                            ),
-                          ),
-                        ],
-                      ],
+    return ValueListenableBuilder<int>(
+      valueListenable: HomeworkAssignmentStore.instance.revision,
+      builder: (context, rev, _) {
+        if (_lastAssignmentRevision != rev) {
+          _lastAssignmentRevision = rev;
+          _reloadAssignmentData();
+        }
+        return FutureBuilder<Map<String, List<HomeworkAssignmentBrief>>>(
+          future: _assignmentsFuture,
+          builder: (context, assignmentsSnapshot) {
+            final assignmentsByItem =
+                assignmentsSnapshot.data ??
+                    const <String, List<HomeworkAssignmentBrief>>{};
+            return FutureBuilder<Map<String, List<HomeworkAssignmentCheck>>>(
+              future: _checksFuture,
+              builder: (context, checksSnapshot) {
+                final checksByItem =
+                    checksSnapshot.data ??
+                        const <String, List<HomeworkAssignmentCheck>>{};
+                return ValueListenableBuilder<int>(
+                  valueListenable: StudentFlowStore.instance.revision,
+                  builder: (_, __, ___) {
+                    final latest =
+                        StudentFlowStore.instance.cached(widget.studentId);
+                    final displayFlows = latest.isNotEmpty
+                        ? latest.where((f) => f.enabled).toList()
+                        : widget.flows;
+                    final sortedFlows = _sortedFlows(displayFlows);
+                    return ValueListenableBuilder<int>(
+                      valueListenable: HomeworkStore.instance.revision,
+                      builder: (_, __, ___) {
+                        final allItems =
+                            HomeworkStore.instance.items(widget.studentId);
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (int i = 0; i < sortedFlows.length; i++) ...[
+                              SizedBox(
+                                width: widget.cardWidth,
+                                child: _FlowHomeworkCard(
+                                  flow: sortedFlows[i],
+                                  items: allItems
+                                      .where((e) =>
+                                          e.flowId == sortedFlows[i].id)
+                                      .toList(),
+                                  assignmentsByItem: assignmentsByItem,
+                                  checksByItem: checksByItem,
+                                  onEditName: _flowPriority(sortedFlows[i]) <= 1
+                                      ? null
+                                      : () =>
+                                          _renameFlow(context, sortedFlows[i]),
+                                ),
+                              ),
+                              if (i != sortedFlows.length - 1)
+                                const SizedBox(width: 12),
+                            ],
+                          ],
+                        );
+                      },
                     );
                   },
                 );
@@ -1032,17 +1060,26 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
   }
 }
 
-class _FlowHomeworkCard extends StatelessWidget {
+class _FlowHomeworkCard extends StatefulWidget {
   final StudentFlow flow;
   final List<HomeworkItem> items;
-  final Set<String> assignedIds;
-  final VoidCallback onEditName;
+  final Map<String, List<HomeworkAssignmentBrief>> assignmentsByItem;
+  final Map<String, List<HomeworkAssignmentCheck>> checksByItem;
+  final VoidCallback? onEditName;
   const _FlowHomeworkCard({
     required this.flow,
     required this.items,
-    required this.assignedIds,
+    required this.assignmentsByItem,
+    required this.checksByItem,
     required this.onEditName,
   });
+
+  @override
+  State<_FlowHomeworkCard> createState() => _FlowHomeworkCardState();
+}
+
+class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
+  final Set<String> _expandedIds = <String>{};
 
   DateTime? _sortKey(HomeworkItem item) {
     return item.completedAt ??
@@ -1053,7 +1090,7 @@ class _FlowHomeworkCard extends StatelessWidget {
   }
 
   List<HomeworkItem> _sortedItems() {
-    final list = List<HomeworkItem>.from(items);
+    final list = List<HomeworkItem>.from(widget.items);
     list.sort((a, b) {
       final ka = _sortKey(a);
       final kb = _sortKey(b);
@@ -1066,7 +1103,7 @@ class _FlowHomeworkCard extends StatelessWidget {
   }
 
   String _formatTime(DateTime? time) {
-    if (time == null) return '';
+    if (time == null) return '-';
     return DateFormat('MM.dd HH:mm').format(time);
   }
 
@@ -1085,15 +1122,45 @@ class _FlowHomeworkCard extends StatelessWidget {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  Widget _infoRow(String label, String value, {bool muted = false}) {
+  Widget _metaItem(String label, String value) {
+    final safe = value.trim().isEmpty ? '-' : value.trim();
+    return RichText(
+      text: TextSpan(
+        children: [
+          TextSpan(
+            text: '$label ',
+            style: const TextStyle(
+              color: Color(0xFF9FB3B3),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          TextSpan(
+            text: safe,
+            style: const TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  Widget _detailRow(String label, String value) {
+    final safe = value.trim().isEmpty ? '-' : value.trim();
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 64,
+          width: 84,
           child: Text(
             label,
-            style: TextStyle(
-              color: muted ? const Color(0xFF7F8C8C) : const Color(0xFF9FB3B3),
+            style: const TextStyle(
+              color: Color(0xFF9FB3B3),
               fontSize: 11,
               fontWeight: FontWeight.w700,
             ),
@@ -1101,104 +1168,170 @@ class _FlowHomeworkCard extends StatelessWidget {
         ),
         Expanded(
           child: Text(
-            value,
-            style: TextStyle(
-              color: muted ? const Color(0xFF8A9898) : const Color(0xFFEAF2F2),
+            safe,
+            style: const TextStyle(
+              color: Color(0xFFEAF2F2),
               fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
-            overflow: TextOverflow.ellipsis,
+            softWrap: true,
           ),
         ),
       ],
     );
   }
 
+  Widget _detailList(String label, List<String> values) {
+    final safe = values.isEmpty ? '-' : values.join(' · ');
+    return _detailRow(label, safe);
+  }
+
   Widget _buildHomeworkCard(HomeworkItem hw) {
     final bool isCompleted = hw.status == HomeworkStatus.completed;
-    final bool isAssigned = assignedIds.contains(hw.id);
+    final assignments = widget.assignmentsByItem[hw.id] ?? const <HomeworkAssignmentBrief>[];
+    final checks = widget.checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
+    final int assignmentCount = assignments.length;
+    final String homeworkLabel = assignmentCount > 0 ? 'H$assignmentCount' : '';
+    final int checkCount =
+        checks.isNotEmpty ? checks.length : hw.checkCount;
     final DateTime? startTime =
         hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
     final DateTime? endTime = isCompleted
         ? (hw.completedAt ?? hw.confirmedAt ?? hw.updatedAt)
         : null;
     final String type = (hw.type ?? '').trim();
-    final String title = (hw.title).trim();
+    final String title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
     final String page = (hw.page ?? '').trim();
     final String count = hw.count != null ? hw.count.toString() : '';
     final String duration = _formatDuration(hw);
-    final String checks = hw.checkCount.toString();
-    final String homeworkFlag = isAssigned ? '있음' : '없음';
+    final String content =
+        (hw.content ?? '').trim().isNotEmpty ? (hw.content ?? '').trim() : hw.body.trim();
+
+    final List<HomeworkAssignmentBrief> sortedAssignments =
+        List<HomeworkAssignmentBrief>.from(assignments)
+          ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+    final List<String> assignmentDates =
+        sortedAssignments.map((a) => _formatTime(a.assignedAt)).toList();
+
+    final List<HomeworkAssignmentCheck> sortedChecks =
+        List<HomeworkAssignmentCheck>.from(checks)
+          ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+    final List<String> checkDates =
+        sortedChecks.map((c) => _formatTime(c.checkedAt)).toList();
+    final List<String> checkRates =
+        sortedChecks.map((c) => '${c.progress}%').toList();
+
+    final bool expanded = _expandedIds.contains(hw.id);
     final Color borderColor = isCompleted
         ? const Color(0xFF223131).withOpacity(0.6)
         : const Color(0xFF223131);
-    final Color bgColor =
-        isCompleted ? const Color(0xFF0B1112).withOpacity(0.6) : const Color(0xFF0B1112);
+    final Color bgColor = isCompleted
+        ? const Color(0xFF0B1112).withOpacity(0.6)
+        : const Color(0xFF0B1112);
     return Opacity(
       opacity: isCompleted ? 0.55 : 1.0,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (type.isNotEmpty)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: hw.color.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: hw.color.withOpacity(0.6)),
-                    ),
-                    child: Text(
-                      type,
-                      style: TextStyle(
-                        color: hw.color,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            if (expanded) {
+              _expandedIds.remove(hw.id);
+            } else {
+              _expandedIds.add(hw.id);
+            }
+          });
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (type.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: hw.color.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: hw.color.withOpacity(0.6)),
+                      ),
+                      child: Text(
+                        type,
+                        style: TextStyle(
+                          color: hw.color,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                if (type.isNotEmpty) const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      color: Color(0xFFEAF2F2),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
+                  if (type.isNotEmpty) const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
+                  if (homeworkLabel.isNotEmpty)
+                    Text(
+                      homeworkLabel,
+                      style: const TextStyle(
+                        color: Color(0xFF9FB3B3),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 12,
+                runSpacing: 4,
+                children: [
+                  _metaItem('페이지', page),
+                  _metaItem('문항수', count),
+                  _metaItem('시작', _formatTime(startTime)),
+                  _metaItem('총 걸린시간', duration),
+                  _metaItem('검사횟수', checkCount.toString()),
+                ],
+              ),
+              AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 10),
+                    const Divider(color: Color(0xFF223131), height: 1),
+                    const SizedBox(height: 8),
+                    if (isCompleted)
+                      _detailRow('종료시간', _formatTime(endTime)),
+                    _detailList('숙제 나간 날짜', assignmentDates),
+                    _detailList('검사 날짜', checkDates),
+                    _detailList('완료율', checkRates),
+                    _detailRow('내용', content),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(child: _infoRow('페이지', page, muted: isCompleted)),
-                Expanded(child: _infoRow('문항수', count, muted: isCompleted)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            _infoRow('시작', _formatTime(startTime), muted: isCompleted),
-            if (isCompleted)
-              _infoRow('종료', _formatTime(endTime), muted: isCompleted)
-            else
-              _infoRow('현재까지', duration, muted: isCompleted),
-            if (isCompleted)
-              _infoRow('총 시간', duration, muted: isCompleted),
-            _infoRow('검사횟수', checks, muted: isCompleted),
-            _infoRow('숙제 여부', homeworkFlag, muted: isCompleted),
-          ],
+                crossFadeState: expanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 180),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1224,7 +1357,7 @@ class _FlowHomeworkCard extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  flow.name,
+                  widget.flow.name,
                   style: const TextStyle(
                     color: Color(0xFFEAF2F2),
                     fontSize: 16,
@@ -1232,13 +1365,14 @@ class _FlowHomeworkCard extends StatelessWidget {
                   ),
                 ),
               ),
-              IconButton(
-                tooltip: '이름 변경',
-                onPressed: onEditName,
-                icon: const Icon(Icons.edit, size: 16, color: Color(0xFF9FB3B3)),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
+              if (widget.onEditName != null)
+                IconButton(
+                  tooltip: '이름 변경',
+                  onPressed: widget.onEditName,
+                  icon: const Icon(Icons.edit, size: 16, color: Color(0xFF9FB3B3)),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                ),
             ],
           ),
           const SizedBox(height: 10),

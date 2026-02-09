@@ -54,6 +54,10 @@ class YggDialogFilterChip extends StatelessWidget {
   final bool selected;
   final ValueChanged<bool> onSelected;
 
+  static const Color _chipSelected = Color(0xFF1B6B63);
+  static const Color _chipBg = Color(0xFF2A2A2A);
+  static const Color _chipText = Color(0xFFCDD5D5);
+
   const YggDialogFilterChip({
     super.key,
     required this.label,
@@ -63,24 +67,34 @@ class YggDialogFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FilterChip(
-      label: Text(
-        label,
-        style: TextStyle(
-          color: selected ? Colors.white : kDlgTextSub,
-          fontWeight: FontWeight.w800,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => onSelected(!selected),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          height: 36,
+          decoration: BoxDecoration(
+            color: selected ? _chipSelected : _chipBg,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? Colors.white : _chipText,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-      selected: selected,
-      onSelected: onSelected,
-      showCheckmark: false,
-      selectedColor: kDlgAccent.withOpacity(0.18),
-      backgroundColor: kDlgPanelBg,
-      side: BorderSide(
-        color: selected ? kDlgAccent : kDlgBorder,
-        width: selected ? 2 : 1,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
     );
   }
 }

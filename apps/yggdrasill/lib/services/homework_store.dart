@@ -499,6 +499,10 @@ class HomeworkStore {
         'p_updated_by': updatedBy,
       });
       unawaited(_reloadStudent(studentId));
+      unawaited(HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
+        studentId: studentId,
+        homeworkItemId: id,
+      ));
     } catch (e) {
       // ignore: avoid_print
       print('[HW][confirm][ERROR] ' + e.toString());
@@ -623,7 +627,7 @@ class HomeworkStore {
     final list = _byStudentId[studentId];
     if (list == null) return;
     bool changed = false;
-    final List<HomeworkItem> newlyAssigned = [];
+    final List<HomeworkItem> toAssign = [];
     for (final e in list) {
       if (e.status != HomeworkStatus.completed) {
         if (e.runStart != null) {
@@ -635,7 +639,7 @@ class HomeworkStore {
         if (e.status != HomeworkStatus.homework) {
           e.status = HomeworkStatus.homework;
           changed = true;
-          newlyAssigned.add(e);
+          toAssign.add(e);
         }
       }
     }
@@ -644,10 +648,58 @@ class HomeworkStore {
       for (final e in list.where((e) => e.status == HomeworkStatus.homework)) {
         unawaited(_upsertItem(studentId, e));
       }
-      if (newlyAssigned.isNotEmpty) {
+      if (toAssign.isNotEmpty) {
         unawaited(HomeworkAssignmentStore.instance
-            .recordAssignments(studentId, newlyAssigned));
+            .recordAssignments(studentId, toAssign));
       }
+    }
+  }
+
+  // 선택된 과제들을 숙제로 표시
+  void markItemsAsHomework(
+    String studentId,
+    List<String> itemIds, {
+    DateTime? dueDate,
+  }) {
+    if (itemIds.isEmpty) return;
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final Set<String> idSet = itemIds.toSet();
+    bool changed = false;
+    final List<HomeworkItem> toAssign = [];
+    final Map<String, HomeworkItem> toUpsert = {};
+    for (final e in list) {
+      if (!idSet.contains(e.id)) continue;
+      if (e.status == HomeworkStatus.completed) continue;
+      bool updated = false;
+      if (e.runStart != null) {
+        final now = DateTime.now();
+        e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
+        e.runStart = null;
+        updated = true;
+      }
+      if (e.status != HomeworkStatus.homework) {
+        e.status = HomeworkStatus.homework;
+        updated = true;
+      }
+      toAssign.add(e);
+      if (updated) {
+        changed = true;
+        toUpsert[e.id] = e;
+      }
+    }
+    if (changed) {
+      _bump();
+      for (final e in toUpsert.values) {
+        unawaited(_upsertItem(studentId, e));
+      }
+    }
+    if (toAssign.isNotEmpty) {
+      unawaited(HomeworkAssignmentStore.instance.recordAssignments(
+        studentId,
+        toAssign,
+        dueDate: dueDate,
+      ));
     }
   }
 

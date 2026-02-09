@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/data_manager.dart';
 import 'dart:async';
 import 'dart:math' as math;
@@ -105,7 +106,20 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
-                              const SizedBox(width: 45),
+                              const SizedBox(width: 30),
+                              _buildHomeworkBadge(
+                                context,
+                                s.id,
+                                onUpdated: () {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _activeAssignmentsFutureByStudent[s.id] =
+                                        HomeworkAssignmentStore.instance
+                                            .loadActiveAssignments(s.id);
+                                  });
+                                },
+                              ),
+                              const SizedBox(width: 30),
                               Flexible(
                                 fit: FlexFit.loose,
                                 child: Align(
@@ -408,6 +422,534 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
   );
 }
 
+  String _formatDateShort(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(dt.month)}.${two(dt.day)}';
+  }
+
+  String _formatDateRange(DateTime start, DateTime? end) {
+    final left = _formatDateShort(start);
+    if (end == null) return '$left ~ 미정';
+    return '$left ~ ${_formatDateShort(end)}';
+  }
+
+  Widget _buildHomeworkBadge(
+    BuildContext context,
+    String studentId, {
+    required VoidCallback onUpdated,
+  }) {
+    return ValueListenableBuilder<int>(
+      valueListenable: HomeworkAssignmentStore.instance.revision,
+      builder: (context, _rev, _) {
+        _activeAssignmentsFutureByStudent[studentId] =
+            HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+        _assignmentChecksFutureByStudent[studentId] =
+            HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
+        final assignmentsFuture = _activeAssignmentsFutureByStudent[studentId]!;
+        final checksFuture = _assignmentChecksFutureByStudent[studentId]!;
+        return FutureBuilder<List<HomeworkAssignmentDetail>>(
+          future: assignmentsFuture,
+          builder: (context, assignmentsSnapshot) {
+            final list =
+                assignmentsSnapshot.data ?? const <HomeworkAssignmentDetail>[];
+            if (list.isEmpty) return const SizedBox.shrink();
+            return FutureBuilder<Map<String, List<HomeworkAssignmentCheck>>>(
+              future: checksFuture,
+              builder: (context, checksSnapshot) {
+                final checksByItem =
+                    checksSnapshot.data ??
+                        const <String, List<HomeworkAssignmentCheck>>{};
+                bool sameDay(DateTime a, DateTime b) =>
+                    a.year == b.year && a.month == b.month && a.day == b.day;
+                final now = DateTime.now();
+                final dueToday = list
+                    .where((a) => a.dueDate != null && sameDay(a.dueDate!, now))
+                    .toList();
+                if (dueToday.isEmpty) return const SizedBox.shrink();
+                bool hasCheck(HomeworkAssignmentDetail a) {
+                  final checks = checksByItem[a.homeworkItemId] ?? const [];
+                  return checks.any((c) => c.assignmentId == a.id);
+                }
+
+                final dueUnchecked =
+                    dueToday.where((a) => !hasCheck(a)).toList();
+                if (dueUnchecked.isEmpty) return const SizedBox.shrink();
+                return InkWell(
+                  onTap: () => showHomeworkAssignmentsDialog(
+                    context,
+                    studentId,
+                    onUpdated: onUpdated,
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    height: ClassContentScreen._attendingCardHeight,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(10),
+                      border:
+                          Border.all(color: const Color(0xFF2C3E3E), width: 2),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.assignment_outlined,
+                          color: kDlgAccent,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '숙제 ${dueUnchecked.length}',
+                          style: const TextStyle(
+                            color: kDlgText,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+Future<void> showHomeworkAssignmentsDialog(
+  BuildContext context,
+  String studentId, {
+  VoidCallback? onUpdated,
+  bool hideBadgeOnSave = true,
+}) async {
+    final assignments =
+        await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+    if (!context.mounted) return;
+    if (assignments.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('현재 숙제가 없습니다.')),
+      );
+      return;
+    }
+    final counts =
+        await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+    if (!context.mounted) return;
+
+    final Map<String, int> progressById = {
+      for (final a in assignments) a.id: a.progress,
+    };
+    final Map<String, int> initialProgressById = {
+      for (final a in assignments) a.id: a.progress,
+    };
+    final Map<String, String?> issueTypeById = {
+      for (final a in assignments) a.id: a.issueType,
+    };
+    final Map<String, TextEditingController> noteControllers = {
+      for (final a in assignments)
+        a.id: TextEditingController(text: a.issueNote ?? ''),
+    };
+    final Map<String, TextEditingController> progressControllers = {
+      for (final a in assignments)
+        a.id: TextEditingController(text: a.progress.toString()),
+    };
+    bool isClosing = false;
+
+    Future<bool> applyAssignmentUpdates(
+      List<Map<String, dynamic>> updates,
+    ) async {
+      bool ok = true;
+      for (final u in updates) {
+        final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+          assignmentId: u['id'] as String,
+          studentId: studentId,
+          homeworkItemId: u['homeworkItemId'] as String,
+          progress: u['progress'] as int,
+          issueType: u['issueType'] as String?,
+          issueNote: u['issueNote'] as String?,
+        );
+        if (!saved) ok = false;
+      }
+      if (!context.mounted) return ok;
+      onUpdated?.call();
+      return ok;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setState) {
+            return AlertDialog(
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('숙제 현황', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+              content: SizedBox(
+                width: 720,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const YggDialogSectionHeader(icon: Icons.assignment_turned_in, title: '현재 숙제'),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 520),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: assignments.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (ctx, idx) {
+                          final a = assignments[idx];
+                          final progress = progressById[a.id] ?? 0;
+                          final progressController = progressControllers[a.id]!;
+                          final issueType = issueTypeById[a.id];
+                          final String type = (a.type ?? '').trim();
+                          final String page = (a.page ?? '').trim();
+                          final String count = a.count != null ? a.count.toString() : '';
+                          final String meta = [
+                            if (type.isNotEmpty) type,
+                            if (page.isNotEmpty) 'p.$page',
+                            if (count.isNotEmpty) '${count}문항',
+                          ].join(' · ');
+                          final int assignCount = counts[a.homeworkItemId] ?? 1;
+                          final String reassignText =
+                              assignCount > 1 ? '재숙제 ${assignCount}회' : '';
+                          const double progressThumbRadius = 8;
+                          return Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: kDlgPanelBg,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: kDlgBorder),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        a.title.isEmpty ? '(제목 없음)' : a.title,
+                                        style: const TextStyle(
+                                          color: kDlgText,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 19,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    if (reassignText.isNotEmpty)
+                                      Text(
+                                        reassignText,
+                                        style: const TextStyle(
+                                          color: kDlgTextSub,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                if (meta.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    meta,
+                                    style: const TextStyle(
+                                      color: kDlgTextSub,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 6),
+                                Text(
+                                  _formatDateRange(a.assignedAt, a.dueDate),
+                                  style: const TextStyle(
+                                    color: kDlgTextSub,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Row(
+                                  children: [
+                                    const Text('수행률', style: TextStyle(color: kDlgTextSub)),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SliderTheme(
+                                            data: SliderTheme.of(ctx).copyWith(
+                                              trackHeight: 4,
+                                              activeTrackColor: kDlgAccent,
+                                              inactiveTrackColor: kDlgBorder,
+                                              thumbColor: kDlgAccent,
+                                              overlayColor: kDlgAccent.withOpacity(0.12),
+                                              thumbShape: RoundSliderThumbShape(
+                                                enabledThumbRadius: progressThumbRadius,
+                                              ),
+                                              tickMarkShape: const RoundSliderTickMarkShape(
+                                                tickMarkRadius: 0,
+                                              ),
+                                              activeTickMarkColor: kDlgAccent,
+                                              inactiveTickMarkColor: kDlgBorder,
+                                              overlayShape: const RoundSliderOverlayShape(
+                                                overlayRadius: 14,
+                                              ),
+                                              valueIndicatorColor: kDlgAccent,
+                                              valueIndicatorTextStyle: const TextStyle(color: Colors.white),
+                                            ),
+                                            child: Slider(
+                                              value: progress.toDouble(),
+                                              min: 0,
+                                              max: 150,
+                                              divisions: 15,
+                                              label: '$progress%',
+                                              onChanged: (v) {
+                                                if (isClosing) return;
+                                                final next = ((v / 10).round() * 10).clamp(0, 150);
+                                                setState(() {
+                                                  progressById[a.id] = next;
+                                                  final text = next.toString();
+                                                  if (progressController.text != text) {
+                                                    progressController.text = text;
+                                                    progressController.selection =
+                                                        TextSelection.collapsed(offset: text.length);
+                                                  }
+                                                });
+                                              },
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Padding(
+                                            padding:
+                                                EdgeInsets.symmetric(horizontal: progressThumbRadius),
+                                            child: SizedBox(
+                                              height: 22,
+                                              child: Stack(
+                                                clipBehavior: Clip.none,
+                                                children: [
+                                                  for (final v in const [0, 50, 100, 150])
+                                                    Align(
+                                                      alignment:
+                                                          Alignment(-1 + (v / 150) * 2, -1),
+                                                      child: Column(
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          Container(
+                                                            width: 1,
+                                                            height: 6,
+                                                            color: kDlgBorder,
+                                                          ),
+                                                          const SizedBox(height: 2),
+                                                          Text(
+                                                            '$v%',
+                                                            style: const TextStyle(
+                                                              color: kDlgTextSub,
+                                                              fontSize: 10,
+                                                              fontWeight: FontWeight.w600,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    SizedBox(
+                                      width: 64,
+                                      child: TextField(
+                                        controller: progressController,
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          color: kDlgText,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                        decoration: InputDecoration(
+                                          suffixText: '%',
+                                          suffixStyle: const TextStyle(color: kDlgTextSub),
+                                          filled: true,
+                                          fillColor: kDlgFieldBg,
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                            borderSide: const BorderSide(color: kDlgBorder),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                            borderSide: const BorderSide(
+                                              color: kDlgAccent,
+                                              width: 1.4,
+                                            ),
+                                          ),
+                                          contentPadding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 8,
+                                          ),
+                                        ),
+                                        onChanged: (v) {
+                                          if (isClosing) return;
+                                          final parsed = int.tryParse(v);
+                                          if (parsed == null) return;
+                                          final safe = parsed.clamp(0, 150);
+                                          setState(() {
+                                            progressById[a.id] = safe;
+                                          });
+                                          final safeText = safe.toString();
+                                          if (safeText != v) {
+                                            progressController.text = safeText;
+                                            progressController.selection =
+                                                TextSelection.collapsed(offset: safeText.length);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    YggDialogFilterChip(
+                                      label: '분실',
+                                      selected: issueType == 'lost',
+                                      onSelected: (v) {
+                                        if (isClosing) return;
+                                        setState(() {
+                                          issueTypeById[a.id] = v ? 'lost' : null;
+                                          if (issueTypeById[a.id] != 'other') {
+                                            noteControllers[a.id]?.text = '';
+                                          }
+                                        });
+                                      },
+                                    ),
+                                    YggDialogFilterChip(
+                                      label: '잊음',
+                                      selected: issueType == 'forgot',
+                                      onSelected: (v) {
+                                        if (isClosing) return;
+                                        setState(() {
+                                          issueTypeById[a.id] = v ? 'forgot' : null;
+                                          if (issueTypeById[a.id] != 'other') {
+                                            noteControllers[a.id]?.text = '';
+                                          }
+                                        });
+                                      },
+                                    ),
+                                    YggDialogFilterChip(
+                                      label: '기타',
+                                      selected: issueType == 'other',
+                                      onSelected: (v) {
+                                        if (isClosing) return;
+                                        setState(() {
+                                          issueTypeById[a.id] = v ? 'other' : null;
+                                          if (!v) noteControllers[a.id]?.text = '';
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                if (issueType == 'other') ...[
+                                  const SizedBox(height: 8),
+                                  TextField(
+                                    controller: noteControllers[a.id],
+                                    minLines: 1,
+                                    maxLines: 2,
+                                    style: const TextStyle(color: kDlgText),
+                                    decoration: InputDecoration(
+                                      hintText: '사유를 입력하세요',
+                                      hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+                                      filled: true,
+                                      fillColor: kDlgFieldBg,
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: const BorderSide(color: kDlgBorder),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                                      ),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('닫기'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final updates = <Map<String, dynamic>>[];
+                    for (final a in assignments) {
+                      final raw = progressControllers[a.id]?.text.trim() ?? '';
+                      final parsed = int.tryParse(raw);
+                      final progress =
+                          (parsed ?? (progressById[a.id] ?? 0)).clamp(0, 150);
+                      final issueType = issueTypeById[a.id];
+                      final issueNote =
+                          (issueType == 'other')
+                              ? noteControllers[a.id]?.text.trim()
+                              : null;
+                      updates.add({
+                        'id': a.id,
+                        'homeworkItemId': a.homeworkItemId,
+                        'progress': progress,
+                        'issueType': issueType,
+                        'issueNote': issueNote,
+                      });
+                    }
+                    isClosing = true;
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    await Future<void>.delayed(const Duration(milliseconds: 1));
+                    if (!ctx.mounted) return;
+                    Navigator.of(ctx).pop();
+                    unawaited(applyAssignmentUpdates(updates).then((ok) {
+                      if (!context.mounted) return;
+                      if (!ok) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('숙제 점검 저장에 실패했습니다. 권한/네트워크를 확인해 주세요.'),
+                          ),
+                        );
+                      }
+                    }));
+                  },
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    for (final c in noteControllers.values) {
+      c.dispose();
+    }
+    for (final c in progressControllers.values) {
+      c.dispose();
+    }
+  }
+
 String _formatDateTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   return '${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
@@ -422,6 +964,9 @@ String _formatDateWithWeekdayAndTime(DateTime dt) {
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
 final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent = {};
+final Map<String, Future<List<HomeworkAssignmentDetail>>> _activeAssignmentsFutureByStudent = {};
+final Map<String, Future<Map<String, List<HomeworkAssignmentCheck>>>>
+    _assignmentChecksFutureByStudent = {};
 
 Map<String, String> _getFlowNamesForStudent(String studentId) {
   final flows = StudentFlowStore.instance.cached(studentId);

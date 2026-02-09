@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 45,
+      version: 47,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -527,6 +527,21 @@ class AcademyDbService {
             status TEXT,
             carry_over_from_id TEXT,
             note TEXT,
+            progress INTEGER,
+            issue_type TEXT,
+            issue_note TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS homework_assignment_checks (
+            id TEXT PRIMARY KEY,
+            student_id TEXT,
+            homework_item_id TEXT,
+            assignment_id TEXT,
+            checked_at TEXT,
+            progress INTEGER,
             created_at TEXT,
             updated_at TEXT
           )
@@ -843,6 +858,41 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v45 homework_items.check_count 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 46) {
+          try {
+            await db.execute('ALTER TABLE homework_assignments ADD COLUMN progress INTEGER');
+          } catch (e) {
+            print('[DB][마이그레이션] v46 homework_assignments.progress 추가 실패: $e');
+          }
+          try {
+            await db.execute('ALTER TABLE homework_assignments ADD COLUMN issue_type TEXT');
+          } catch (e) {
+            print('[DB][마이그레이션] v46 homework_assignments.issue_type 추가 실패: $e');
+          }
+          try {
+            await db.execute('ALTER TABLE homework_assignments ADD COLUMN issue_note TEXT');
+          } catch (e) {
+            print('[DB][마이그레이션] v46 homework_assignments.issue_note 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 47) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS homework_assignment_checks (
+                id TEXT PRIMARY KEY,
+                student_id TEXT,
+                homework_item_id TEXT,
+                assignment_id TEXT,
+                checked_at TEXT,
+                progress INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+              )
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v47 homework_assignment_checks 생성 실패: $e');
           }
         }
         if (oldVersion < 37) {
