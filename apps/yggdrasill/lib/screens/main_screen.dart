@@ -34,6 +34,7 @@ import '../widgets/dialog_tokens.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import 'student/student_profile_page.dart';
+import '../app_overlays.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -499,6 +500,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     super.initState();
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
+    hideGlobalMemoFloatingBanners.value = (_selectedIndex == 0);
+    blockRightSideSheetOpen.value = false;
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(_markSideSheetDirty);
     _rotationAnimation = AnimationController(
@@ -915,6 +918,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               setState(() {
                 _selectedIndex = index;
               });
+              hideGlobalMemoFloatingBanners.value = (index == 0);
+              if (index != 1) {
+                blockRightSideSheetOpen.value = false;
+              }
             },
             rotationAnimation: _rotationAnimation,
             onMenuPressed: _toggleSideSheet,

@@ -10,8 +10,8 @@ import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
-import 'package:uuid/uuid.dart';
-import '../models/memo.dart';
+import '../widgets/dialog_tokens.dart';
+import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 
@@ -19,7 +19,7 @@ import '../widgets/flow_setup_dialog.dart';
 class ClassContentScreen extends StatefulWidget {
   const ClassContentScreen({super.key});
 
-  static const double _attendingCardHeight = 100; // 64 * 1.2
+  static const double _attendingCardHeight = 120; // 과제칩 높이와 맞춤
   static const double _attendingCardWidth = 330; // 고정 폭으로 내부 우측 정렬 보장
 
   @override
@@ -28,7 +28,6 @@ class ClassContentScreen extends StatefulWidget {
 
 class _ClassContentScreenState extends State<ClassContentScreen> with SingleTickerProviderStateMixin {
   late final AnimationController _uiAnimController;
-  final List<_NoteEntry> _notes = <_NoteEntry>[]; // ephemeral, not persisted
   late final Timer _clockTimer;
   DateTime _now = DateTime.now();
 
@@ -106,7 +105,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
-                              const SizedBox(width: 24),
+                              const SizedBox(width: 45),
                               Flexible(
                                 fit: FlexFit.loose,
                                 child: Align(
@@ -118,7 +117,6 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                                       return _buildHomeworkChipsReactiveForStudent(
                                         s.id,
                                         tick,
-                                        (text) { if (!mounted) return; setState(() { _notes.add(_NoteEntry(text)); }); },
                                       );
                                     },
                                   ),
@@ -135,42 +133,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
             },
           ),
         ),
-        // Floating completion notes (ephemeral)
-        Positioned(
-          right: 16,
-          top: 16,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: _notes.map((n) => _buildNote(n)).toList(),
-          ),
-        ),
       ],
-    );
-  }
-
-  Widget _buildNote(_NoteEntry n) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1F1F1F),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF1976D2), width: 1.5), // blue border
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 4))],
-      ),
-      constraints: const BoxConstraints(maxWidth: 420),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Expanded(child: Text(n.text, style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.2)) ),
-          const SizedBox(width: 8),
-          InkWell(
-            onTap: () { setState(() { _notes.remove(n); }); },
-            borderRadius: BorderRadius.circular(999),
-            child: const Icon(Icons.close, color: Colors.white60, size: 18),
-          ),
-        ],
-      ),
     );
   }
 
@@ -495,46 +458,11 @@ String _formatDurationMs(int totalMs) {
 const double _homeworkChipHeight = 120.0;
 const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.5;
 
-void _appendCompletionMemo(String studentId, HomeworkItem item) {
-  final accMs = item.accumulatedMs;
-  final d = Duration(milliseconds: accMs);
-  final h = d.inHours;
-  final m = d.inMinutes.remainder(60);
-  final timeText = h > 0 ? ('$h시간 $m분') : ('$m분');
-  final studentName = DataManager.instance.students
-      .firstWhere((s) => s.student.id == studentId)
-      .student
-      .name;
-  final title = (item.title).trim();
-  final String page = (item.page ?? '').trim();
-  final String count = item.count != null ? item.count.toString() : '';
-  final String content = (item.content ?? '').trim();
-  final parts = <String>[];
-  if (page.isNotEmpty) parts.add('p.$page');
-  if (count.isNotEmpty) parts.add('${count}문항');
-  if (content.isNotEmpty) parts.add(content);
-  final detail = parts.join(' ');
-  final original =
-      '$studentName 학생 ${title.isEmpty ? '' : title + ' '}완료, ${[if (detail.isNotEmpty) detail, timeText].join(' ')}'
-          .trim();
-  final now = DateTime.now();
-  final memo = Memo(
-    id: const Uuid().v4(),
-    original: original,
-    summary: original,
-    categoryKey: MemoCategory.inquiry,
-    scheduledAt: now.add(const Duration(hours: 24)),
-    dismissed: false,
-    createdAt: now,
-    updatedAt: now,
-  );
-  unawaited(DataManager.instance.addMemo(memo));
-}
 
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
 // ------------------------
-Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void Function(String text) onComplete) {
+Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
     builder: (context, __, ___) {
@@ -554,14 +482,13 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick, void
                 context,
                 studentId,
                 tick,
-                onComplete,
                 flowNames,
                 assignmentCounts,
               );
               final rowChildren = <Widget>[];
               for (final chip in chips) {
                 if (rowChildren.isNotEmpty) {
-                  rowChildren.add(const SizedBox(width: 24));
+                  rowChildren.add(const SizedBox(width: 20));
                 }
                 rowChildren.add(chip);
               }
@@ -582,7 +509,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   BuildContext context,
   String studentId,
   double tick,
-  void Function(String text) onComplete,
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
 ) {
@@ -648,7 +574,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               break;
             case 3: // 제출 → 확인
               unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
-              _appendCompletionMemo(studentId, item);
               break;
             case 4: // 확인 → 대기
               unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
@@ -663,30 +588,46 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           if (item.runStart != null || item.phase == 2) {
             unawaited(HomeworkStore.instance.pause(studentId, hw.id));
           } else if (item.phase == 3) {
-            unawaited(HomeworkStore.instance.complete(studentId, hw.id));
+            // 아래로 슬라이드한 완료 의도: 다음 대기 진입 시 완료 처리
+            HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+            unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
           }
         },
         onSlideUp: () async {
           final choice = await showDialog<String>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1F1F1F),
+              backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('과제 처리', style: TextStyle(color: Colors.white)),
-              content: const Text('완전 취소 또는 포기를 선택하세요.', style: TextStyle(color: Colors.white70)),
+              title: const Text('과제 취소', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    YggDialogSectionHeader(icon: Icons.cancel_outlined, title: '처리 방식'),
+                    Text('완전 취소 또는 포기를 선택하세요.', style: TextStyle(color: kDlgTextSub)),
+                  ],
+                ),
+              ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(null),
-                  child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('닫기'),
                 ),
-                TextButton(
+                OutlinedButton(
                   onPressed: () => Navigator.of(ctx).pop('remove'),
-                  style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFE57373),
+                    side: const BorderSide(color: Color(0xFFE57373)),
+                  ),
                   child: const Text('하드삭제'),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.of(ctx).pop('abandon'),
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2A2A2A)),
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                   child: const Text('포기'),
                 ),
               ],
@@ -703,33 +644,49 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               builder: (ctx) {
                 final controller = ImeAwareTextEditingController();
                 return AlertDialog(
-                  backgroundColor: const Color(0xFF1F1F1F),
+                  backgroundColor: kDlgBg,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  title: const Text('포기 사유', style: TextStyle(color: Colors.white)),
-                  content: TextField(
-                    controller: controller,
-                    minLines: 2,
-                    maxLines: 4,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: '포기 사유를 입력하세요',
-                      hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF2C2C2C)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF4A4A4A)),
-                      ),
+                  title: const Text('포기 사유', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+                  content: SizedBox(
+                    width: 420,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const YggDialogSectionHeader(icon: Icons.edit_note, title: '사유 입력'),
+                        TextField(
+                          controller: controller,
+                          minLines: 2,
+                          maxLines: 4,
+                          style: const TextStyle(color: kDlgText),
+                          decoration: InputDecoration(
+                            hintText: '포기 사유를 입력하세요',
+                            hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+                            filled: true,
+                            fillColor: kDlgFieldBg,
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: kDlgBorder),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(null),
-                      child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                      style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                      child: const Text('취소'),
                     ),
                     FilledButton(
                       onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2A2A2A)),
+                      style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                       child: const Text('저장'),
                     ),
                   ],
@@ -793,7 +750,6 @@ Widget _buildHomeworkChipVisual(
   const double leftPad = 24;
   const double rightPad = 24;
   const double chipHeight = _homeworkChipHeight;
-  final double borderW = isRunning ? 3.0 : 2.0; // 테두리 두께 증가
   const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
 
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
@@ -851,6 +807,12 @@ Widget _buildHomeworkChipVisual(
   // 여유폭 14px, 최소폭 300px
   final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
 
+  final Border border = (phase == 3)
+      ? Border.all(color: Colors.transparent, width: borderWMax)
+      : (isRunning
+          ? Border.all(color: hw.color.withOpacity(0.9), width: borderWMax)
+          : Border.all(color: Colors.white24, width: borderWMax));
+
   Widget chipInner = Container(
     height: chipHeight,
     padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
@@ -860,9 +822,7 @@ Widget _buildHomeworkChipVisual(
           ? Color.lerp(const Color(0xFF15171C), const Color(0xFF1D2128), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
           : const Color(0xFF15171C)),
       borderRadius: BorderRadius.circular(12),
-      border: isRunning
-          ? Border.all(color: hw.color.withOpacity(0.9), width: borderW)
-          : (phase == 3 ? null : Border.all(color: Colors.white24, width: borderW)),
+      border: border,
       boxShadow: [
         BoxShadow(
           color: Colors.black.withOpacity(0.4),
@@ -1262,13 +1222,4 @@ class _AttendingButton extends StatelessWidget {
     );
   }
 }
-
-class _NoteEntry {
-  final String text;
-  _NoteEntry(this.text);
-}
-
-
-
-
 

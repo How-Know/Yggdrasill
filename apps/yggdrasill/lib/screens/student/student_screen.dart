@@ -132,8 +132,6 @@ class StudentScreenState extends State<StudentScreen> {
     _searchFocusNode.dispose();
     _removeToolsDropdown();
     _searchController.dispose();
-    hideGlobalMemoFloatingBanners.value = false;
-    blockRightSideSheetOpen.value = false;
     super.dispose();
   }
 

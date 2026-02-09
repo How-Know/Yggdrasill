@@ -518,7 +518,12 @@ class HomeworkStore {
         'p_academy_id': academyId,
         'p_updated_by': updatedBy,
       });
-      unawaited(_reloadStudent(studentId));
+      unawaited(_reloadStudent(studentId).then((_) {
+        final item = getById(studentId, id);
+        if (item != null) {
+          _maybeAutoCompleteOnWaiting(studentId, item);
+        }
+      }));
     } catch (e) {
       // ignore: avoid_print
       print('[HW][wait][ERROR] ' + e.toString());
