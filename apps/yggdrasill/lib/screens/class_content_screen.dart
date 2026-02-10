@@ -538,6 +538,9 @@ Future<void> showHomeworkAssignmentsDialog(
     final counts =
         await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
     if (!context.mounted) return;
+    final checksByItem =
+        await HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
+    if (!context.mounted) return;
 
     final Map<String, int> progressById = {
       for (final a in assignments) a.id: a.progress,
@@ -556,6 +559,31 @@ Future<void> showHomeworkAssignmentsDialog(
       for (final a in assignments)
         a.id: TextEditingController(text: a.progress.toString()),
     };
+    final Map<String, bool> selectedById = {
+      for (final a in assignments) a.id: true,
+    };
+    final Map<String, int> latestProgressByItem = {};
+    for (final entry in checksByItem.entries) {
+      final list = List<HomeworkAssignmentCheck>.from(entry.value);
+      if (list.isEmpty) continue;
+      list.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+      latestProgressByItem[entry.key] = list.last.progress;
+    }
+    final Map<String, int> minProgressById = {};
+    for (final a in assignments) {
+      final prev = latestProgressByItem[a.homeworkItemId] ?? 0;
+      final min = math.max(prev, a.progress);
+      minProgressById[a.id] = min;
+      if ((progressById[a.id] ?? 0) < min) {
+        progressById[a.id] = min;
+        final controller = progressControllers[a.id];
+        if (controller != null) {
+          controller.text = min.toString();
+          controller.selection =
+              TextSelection.collapsed(offset: controller.text.length);
+        }
+      }
+    }
     bool isClosing = false;
 
     Future<bool> applyAssignmentUpdates(
@@ -570,8 +598,21 @@ Future<void> showHomeworkAssignmentsDialog(
           progress: u['progress'] as int,
           issueType: u['issueType'] as String?,
           issueNote: u['issueNote'] as String?,
+          markCompleted: (u['markCompleted'] as bool?) ?? false,
         );
         if (!saved) ok = false;
+        if (saved) {
+          final itemId = u['homeworkItemId'] as String;
+          final bool abandon = (u['abandon'] as bool?) ?? false;
+          if (abandon) {
+            unawaited(HomeworkStore.instance.abandon(studentId, itemId, '분실'));
+          } else {
+            final item = HomeworkStore.instance.getById(studentId, itemId);
+            if (item != null && item.phase < 3) {
+              unawaited(HomeworkStore.instance.submit(studentId, itemId));
+            }
+          }
+        }
       }
       if (!context.mounted) return ok;
       onUpdated?.call();
@@ -605,6 +646,10 @@ Future<void> showHomeworkAssignmentsDialog(
                           final progress = progressById[a.id] ?? 0;
                           final progressController = progressControllers[a.id]!;
                           final issueType = issueTypeById[a.id];
+                          final bool selected = selectedById[a.id] ?? true;
+                          final int minProgress = minProgressById[a.id] ?? 0;
+                          final bool lockProgress =
+                              !selected || issueType == 'lost';
                           final String type = (a.type ?? '').trim();
                           final String page = (a.page ?? '').trim();
                           final String count = a.count != null ? a.count.toString() : '';
@@ -629,6 +674,23 @@ Future<void> showHomeworkAssignmentsDialog(
                               children: [
                                 Row(
                                   children: [
+                                    Checkbox(
+                                      value: selected,
+                                      onChanged: isClosing
+                                          ? null
+                                          : (v) {
+                                              setState(() {
+                                                selectedById[a.id] = v ?? false;
+                                              });
+                                            },
+                                      activeColor: kDlgAccent,
+                                      checkColor: Colors.white,
+                                      side: const BorderSide(color: kDlgBorder),
+                                      materialTapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                    const SizedBox(width: 6),
                                     Expanded(
                                       child: Text(
                                         a.title.isEmpty ? '(제목 없음)' : a.title,
@@ -671,216 +733,279 @@ Future<void> showHomeworkAssignmentsDialog(
                                   ),
                                 ),
                                 const SizedBox(height: 10),
-                                Row(
-                                  children: [
-                                    const Text('수행률', style: TextStyle(color: kDlgTextSub)),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          SliderTheme(
-                                            data: SliderTheme.of(ctx).copyWith(
-                                              trackHeight: 4,
-                                              activeTrackColor: kDlgAccent,
-                                              inactiveTrackColor: kDlgBorder,
-                                              thumbColor: kDlgAccent,
-                                              overlayColor: kDlgAccent.withOpacity(0.12),
-                                              thumbShape: RoundSliderThumbShape(
-                                                enabledThumbRadius: progressThumbRadius,
+                                Opacity(
+                                  opacity: lockProgress ? 0.4 : 1,
+                                  child: IgnorePointer(
+                                    ignoring: lockProgress,
+                                    child: Row(
+                                      children: [
+                                        const Text('수행률',
+                                            style: TextStyle(color: kDlgTextSub)),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              SliderTheme(
+                                                data: SliderTheme.of(ctx).copyWith(
+                                                  trackHeight: 4,
+                                                  activeTrackColor: kDlgAccent,
+                                                  inactiveTrackColor: kDlgBorder,
+                                                  thumbColor: kDlgAccent,
+                                                  overlayColor:
+                                                      kDlgAccent.withOpacity(0.12),
+                                                  thumbShape: RoundSliderThumbShape(
+                                                    enabledThumbRadius:
+                                                        progressThumbRadius,
+                                                  ),
+                                                  tickMarkShape:
+                                                      const RoundSliderTickMarkShape(
+                                                    tickMarkRadius: 0,
+                                                  ),
+                                                  activeTickMarkColor: kDlgAccent,
+                                                  inactiveTickMarkColor: kDlgBorder,
+                                                  overlayShape:
+                                                      const RoundSliderOverlayShape(
+                                                    overlayRadius: 14,
+                                                  ),
+                                                  valueIndicatorColor: kDlgAccent,
+                                                  valueIndicatorTextStyle:
+                                                      const TextStyle(
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                                child: Slider(
+                                                  value: progress.toDouble(),
+                                                  min: 0,
+                                                  max: 150,
+                                                  divisions: 15,
+                                                  label: '$progress%',
+                                                  onChanged: (v) {
+                                                    if (isClosing) return;
+                                                    final next = ((v / 10).round() * 10)
+                                                        .clamp(minProgress, 150);
+                                                    setState(() {
+                                                      progressById[a.id] = next;
+                                                      final text = next.toString();
+                                                      if (progressController.text != text) {
+                                                        progressController.text = text;
+                                                        progressController.selection =
+                                                            TextSelection.collapsed(
+                                                                offset: text.length);
+                                                      }
+                                                    });
+                                                  },
+                                                ),
                                               ),
-                                              tickMarkShape: const RoundSliderTickMarkShape(
-                                                tickMarkRadius: 0,
+                                              const SizedBox(height: 4),
+                                              Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                    horizontal: progressThumbRadius),
+                                                child: SizedBox(
+                                                  height: 22,
+                                                  child: Stack(
+                                                    clipBehavior: Clip.none,
+                                                    children: [
+                                                      for (final v in const [
+                                                        0,
+                                                        50,
+                                                        100,
+                                                        150
+                                                      ])
+                                                        Align(
+                                                          alignment: Alignment(
+                                                              -1 + (v / 150) * 2,
+                                                              -1),
+                                                          child: Column(
+                                                            mainAxisSize:
+                                                                MainAxisSize.min,
+                                                            children: [
+                                                              Container(
+                                                                width: 1,
+                                                                height: 6,
+                                                                color: kDlgBorder,
+                                                              ),
+                                                              const SizedBox(height: 2),
+                                                              Text(
+                                                                '$v%',
+                                                                style: const TextStyle(
+                                                                  color: kDlgTextSub,
+                                                                  fontSize: 10,
+                                                                  fontWeight:
+                                                                      FontWeight.w600,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
                                               ),
-                                              activeTickMarkColor: kDlgAccent,
-                                              inactiveTickMarkColor: kDlgBorder,
-                                              overlayShape: const RoundSliderOverlayShape(
-                                                overlayRadius: 14,
-                                              ),
-                                              valueIndicatorColor: kDlgAccent,
-                                              valueIndicatorTextStyle: const TextStyle(color: Colors.white),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        SizedBox(
+                                          width: 64,
+                                          child: TextField(
+                                            controller: progressController,
+                                            enabled: !lockProgress,
+                                            keyboardType: TextInputType.number,
+                                            inputFormatters: [
+                                              FilteringTextInputFormatter.digitsOnly
+                                            ],
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                              color: kDlgText,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w800,
                                             ),
-                                            child: Slider(
-                                              value: progress.toDouble(),
-                                              min: 0,
-                                              max: 150,
-                                              divisions: 15,
-                                              label: '$progress%',
-                                              onChanged: (v) {
+                                            decoration: InputDecoration(
+                                              suffixText: '%',
+                                              suffixStyle:
+                                                  const TextStyle(color: kDlgTextSub),
+                                              filled: true,
+                                              fillColor: kDlgFieldBg,
+                                              enabledBorder: OutlineInputBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                borderSide: const BorderSide(
+                                                  color: kDlgBorder,
+                                                ),
+                                              ),
+                                              focusedBorder: OutlineInputBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                borderSide: const BorderSide(
+                                                  color: kDlgAccent,
+                                                  width: 1.4,
+                                                ),
+                                              ),
+                                              contentPadding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 6,
+                                                vertical: 8,
+                                              ),
+                                            ),
+                                            onChanged: (v) {
+                                              if (isClosing) return;
+                                              final parsed = int.tryParse(v);
+                                              if (parsed == null) return;
+                                              final safe =
+                                                  parsed.clamp(minProgress, 150);
+                                              setState(() {
+                                                progressById[a.id] = safe;
+                                              });
+                                              final safeText = safe.toString();
+                                              if (safeText != v) {
+                                                progressController.text = safeText;
+                                                progressController.selection =
+                                                    TextSelection.collapsed(
+                                                        offset: safeText.length);
+                                              }
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Opacity(
+                                  opacity: selected ? 1 : 0.4,
+                                  child: IgnorePointer(
+                                    ignoring: !selected,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Wrap(
+                                          spacing: 8,
+                                          children: [
+                                            YggDialogFilterChip(
+                                              label: '분실',
+                                              selected: issueType == 'lost',
+                                              onSelected: (v) {
                                                 if (isClosing) return;
-                                                final next = ((v / 10).round() * 10).clamp(0, 150);
                                                 setState(() {
-                                                  progressById[a.id] = next;
-                                                  final text = next.toString();
-                                                  if (progressController.text != text) {
-                                                    progressController.text = text;
-                                                    progressController.selection =
-                                                        TextSelection.collapsed(offset: text.length);
+                                                  issueTypeById[a.id] =
+                                                      v ? 'lost' : null;
+                                                  if (issueTypeById[a.id] != 'other') {
+                                                    noteControllers[a.id]?.text = '';
                                                   }
                                                 });
                                               },
                                             ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Padding(
-                                            padding:
-                                                EdgeInsets.symmetric(horizontal: progressThumbRadius),
-                                            child: SizedBox(
-                                              height: 22,
-                                              child: Stack(
-                                                clipBehavior: Clip.none,
-                                                children: [
-                                                  for (final v in const [0, 50, 100, 150])
-                                                    Align(
-                                                      alignment:
-                                                          Alignment(-1 + (v / 150) * 2, -1),
-                                                      child: Column(
-                                                        mainAxisSize: MainAxisSize.min,
-                                                        children: [
-                                                          Container(
-                                                            width: 1,
-                                                            height: 6,
-                                                            color: kDlgBorder,
-                                                          ),
-                                                          const SizedBox(height: 2),
-                                                          Text(
-                                                            '$v%',
-                                                            style: const TextStyle(
-                                                              color: kDlgTextSub,
-                                                              fontSize: 10,
-                                                              fontWeight: FontWeight.w600,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                ],
+                                            YggDialogFilterChip(
+                                              label: '잊음',
+                                              selected: issueType == 'forgot',
+                                              onSelected: (v) {
+                                                if (isClosing) return;
+                                                setState(() {
+                                                  issueTypeById[a.id] =
+                                                      v ? 'forgot' : null;
+                                                  if (issueTypeById[a.id] != 'other') {
+                                                    noteControllers[a.id]?.text = '';
+                                                  }
+                                                });
+                                              },
+                                            ),
+                                            YggDialogFilterChip(
+                                              label: '기타',
+                                              selected: issueType == 'other',
+                                              onSelected: (v) {
+                                                if (isClosing) return;
+                                                setState(() {
+                                                  issueTypeById[a.id] =
+                                                      v ? 'other' : null;
+                                                  if (!v) {
+                                                    noteControllers[a.id]?.text = '';
+                                                  }
+                                                });
+                                              },
+                                            ),
+                                          ],
+                                        ),
+                                        if (issueType == 'other') ...[
+                                          const SizedBox(height: 8),
+                                          TextField(
+                                            controller: noteControllers[a.id],
+                                            minLines: 1,
+                                            maxLines: 2,
+                                            style: const TextStyle(color: kDlgText),
+                                            decoration: InputDecoration(
+                                              hintText: '사유를 입력하세요',
+                                              hintStyle:
+                                                  const TextStyle(color: Color(0xFF6E7E7E)),
+                                              filled: true,
+                                              fillColor: kDlgFieldBg,
+                                              enabledBorder: OutlineInputBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                borderSide: const BorderSide(
+                                                  color: kDlgBorder,
+                                                ),
+                                              ),
+                                              focusedBorder: OutlineInputBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                borderSide: const BorderSide(
+                                                  color: kDlgAccent,
+                                                  width: 1.4,
+                                                ),
+                                              ),
+                                              contentPadding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 10,
                                               ),
                                             ),
                                           ),
                                         ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    SizedBox(
-                                      width: 64,
-                                      child: TextField(
-                                        controller: progressController,
-                                        keyboardType: TextInputType.number,
-                                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          color: kDlgText,
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                        decoration: InputDecoration(
-                                          suffixText: '%',
-                                          suffixStyle: const TextStyle(color: kDlgTextSub),
-                                          filled: true,
-                                          fillColor: kDlgFieldBg,
-                                          enabledBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(8),
-                                            borderSide: const BorderSide(color: kDlgBorder),
-                                          ),
-                                          focusedBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(8),
-                                            borderSide: const BorderSide(
-                                              color: kDlgAccent,
-                                              width: 1.4,
-                                            ),
-                                          ),
-                                          contentPadding: const EdgeInsets.symmetric(
-                                            horizontal: 6,
-                                            vertical: 8,
-                                          ),
-                                        ),
-                                        onChanged: (v) {
-                                          if (isClosing) return;
-                                          final parsed = int.tryParse(v);
-                                          if (parsed == null) return;
-                                          final safe = parsed.clamp(0, 150);
-                                          setState(() {
-                                            progressById[a.id] = safe;
-                                          });
-                                          final safeText = safe.toString();
-                                          if (safeText != v) {
-                                            progressController.text = safeText;
-                                            progressController.selection =
-                                                TextSelection.collapsed(offset: safeText.length);
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  children: [
-                                    YggDialogFilterChip(
-                                      label: '분실',
-                                      selected: issueType == 'lost',
-                                      onSelected: (v) {
-                                        if (isClosing) return;
-                                        setState(() {
-                                          issueTypeById[a.id] = v ? 'lost' : null;
-                                          if (issueTypeById[a.id] != 'other') {
-                                            noteControllers[a.id]?.text = '';
-                                          }
-                                        });
-                                      },
-                                    ),
-                                    YggDialogFilterChip(
-                                      label: '잊음',
-                                      selected: issueType == 'forgot',
-                                      onSelected: (v) {
-                                        if (isClosing) return;
-                                        setState(() {
-                                          issueTypeById[a.id] = v ? 'forgot' : null;
-                                          if (issueTypeById[a.id] != 'other') {
-                                            noteControllers[a.id]?.text = '';
-                                          }
-                                        });
-                                      },
-                                    ),
-                                    YggDialogFilterChip(
-                                      label: '기타',
-                                      selected: issueType == 'other',
-                                      onSelected: (v) {
-                                        if (isClosing) return;
-                                        setState(() {
-                                          issueTypeById[a.id] = v ? 'other' : null;
-                                          if (!v) noteControllers[a.id]?.text = '';
-                                        });
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                if (issueType == 'other') ...[
-                                  const SizedBox(height: 8),
-                                  TextField(
-                                    controller: noteControllers[a.id],
-                                    minLines: 1,
-                                    maxLines: 2,
-                                    style: const TextStyle(color: kDlgText),
-                                    decoration: InputDecoration(
-                                      hintText: '사유를 입력하세요',
-                                      hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
-                                      filled: true,
-                                      fillColor: kDlgFieldBg,
-                                      enabledBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                        borderSide: const BorderSide(color: kDlgBorder),
-                                      ),
-                                      focusedBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                        borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                                      ),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      ],
                                     ),
                                   ),
-                                ],
+                                ),
                               ],
                             ),
                           );
@@ -900,6 +1025,9 @@ Future<void> showHomeworkAssignmentsDialog(
                   onPressed: () async {
                     final updates = <Map<String, dynamic>>[];
                     for (final a in assignments) {
+                      if (!(selectedById[a.id] ?? true)) {
+                        continue;
+                      }
                       final raw = progressControllers[a.id]?.text.trim() ?? '';
                       final parsed = int.tryParse(raw);
                       final progress =
@@ -915,6 +1043,8 @@ Future<void> showHomeworkAssignmentsDialog(
                         'progress': progress,
                         'issueType': issueType,
                         'issueNote': issueNote,
+                        'abandon': issueType == 'lost',
+                        'markCompleted': true,
                       });
                     }
                     isClosing = true;
@@ -963,7 +1093,9 @@ String _formatDateWithWeekdayAndTime(DateTime dt) {
 
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
+final Map<String, int> _assignmentRevisionByStudent = {};
 final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent = {};
+final Map<String, Future<Set<String>>> _activeAssignedItemIdsFutureByStudent = {};
 final Map<String, Future<List<HomeworkAssignmentDetail>>> _activeAssignmentsFutureByStudent = {};
 final Map<String, Future<Map<String, List<HomeworkAssignmentCheck>>>>
     _assignmentChecksFutureByStudent = {};
@@ -1012,35 +1144,67 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
     valueListenable: StudentFlowStore.instance.revision,
     builder: (context, __, ___) {
       final flowNames = _getFlowNamesForStudent(studentId);
-      final assignmentCountsFuture = _assignmentCountsFutureByStudent.putIfAbsent(
-        studentId,
-        () => HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId),
-      );
-      return FutureBuilder<Map<String, int>>(
-        future: assignmentCountsFuture,
-        builder: (context, snapshot) {
-          final assignmentCounts = snapshot.data ?? const <String, int>{};
-          return ValueListenableBuilder<int>(
-            valueListenable: HomeworkStore.instance.revision,
-            builder: (context, _rev, _) {
-              final chips = _buildHomeworkChipsOnceForStudent(
-                context,
+      return ValueListenableBuilder<int>(
+        valueListenable: HomeworkAssignmentStore.instance.revision,
+        builder: (context, rev, ___) {
+          final lastRev = _assignmentRevisionByStudent[studentId];
+          if (lastRev != rev) {
+            _assignmentRevisionByStudent[studentId] = rev;
+            _assignmentCountsFutureByStudent[studentId] =
+                HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+            _activeAssignedItemIdsFutureByStudent[studentId] =
+                HomeworkAssignmentStore.instance.loadActiveAssignedItemIds(studentId);
+          }
+          final assignmentCountsFuture =
+              _assignmentCountsFutureByStudent.putIfAbsent(
                 studentId,
-                tick,
-                flowNames,
-                assignmentCounts,
+                () => HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId),
               );
-              final rowChildren = <Widget>[];
-              for (final chip in chips) {
-                if (rowChildren.isNotEmpty) {
-                  rowChildren.add(const SizedBox(width: 20));
-                }
-                rowChildren.add(chip);
-              }
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                physics: const BouncingScrollPhysics(),
-                child: Row(children: rowChildren),
+          final activeAssignedFuture =
+              _activeAssignedItemIdsFutureByStudent.putIfAbsent(
+                studentId,
+                () => HomeworkAssignmentStore.instance
+                    .loadActiveAssignedItemIds(studentId),
+              );
+          return FutureBuilder<Map<String, int>>(
+            future: assignmentCountsFuture,
+            builder: (context, snapshot) {
+              final assignmentCounts = snapshot.data ?? const <String, int>{};
+              return FutureBuilder<Set<String>>(
+                future: activeAssignedFuture,
+                builder: (context, activeSnapshot) {
+                  if (activeSnapshot.connectionState != ConnectionState.done &&
+                      !activeSnapshot.hasData) {
+                    return const SizedBox.shrink();
+                  }
+                  final activeAssignedIds =
+                      activeSnapshot.data ?? const <String>{};
+                  return ValueListenableBuilder<int>(
+                    valueListenable: HomeworkStore.instance.revision,
+                    builder: (context, _rev, _) {
+                      final chips = _buildHomeworkChipsOnceForStudent(
+                        context,
+                        studentId,
+                        tick,
+                        flowNames,
+                        assignmentCounts,
+                        activeAssignedIds,
+                      );
+                      final rowChildren = <Widget>[];
+                      for (final chip in chips) {
+                        if (rowChildren.isNotEmpty) {
+                          rowChildren.add(const SizedBox(width: 20));
+                        }
+                        rowChildren.add(chip);
+                      }
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Row(children: rowChildren),
+                      );
+                    },
+                  );
+                },
               );
             },
           );
@@ -1056,10 +1220,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   double tick,
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
+  Set<String> activeAssignedItemIds,
 ) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance.items(studentId)
       .where((e) => e.status != HomeworkStatus.completed)
+      .where((e) => !activeAssignedItemIds.contains(e.id))
       .toList();
   // 정렬: 수행(phase=2, runStart!=null), 대기(1), 확인(4), 제출(3). 같은 그룹 내 runStart/타임스탬프 asc
   int group(HomeworkItem e) {

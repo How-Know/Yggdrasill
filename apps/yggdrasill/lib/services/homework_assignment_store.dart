@@ -104,6 +104,28 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<Set<String>> loadActiveAssignedItemIds(String studentId) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('homework_assignments')
+          .select('homework_item_id')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('status', 'assigned');
+      final Set<String> ids = {};
+      for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final id = (r['homework_item_id'] as String?) ?? '';
+        if (id.isNotEmpty) ids.add(id);
+      }
+      return ids;
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
   Future<Map<String, int>> loadAssignmentCounts(String studentId) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -187,14 +209,19 @@ class HomeworkAssignmentStore {
     required int progress,
     String? issueType,
     String? issueNote,
+    String? status,
   }) async {
     try {
       final supa = Supabase.instance.client;
-      await supa.from('homework_assignments').update({
+      final data = <String, dynamic>{
         'progress': progress.clamp(0, 150),
         'issue_type': issueType,
         'issue_note': issueNote,
-      }).eq('id', assignmentId);
+      };
+      if (status != null) {
+        data['status'] = status;
+      }
+      await supa.from('homework_assignments').update(data).eq('id', assignmentId);
       _bump();
       return true;
     } catch (e, st) {
@@ -210,6 +237,7 @@ class HomeworkAssignmentStore {
     required int progress,
     String? issueType,
     String? issueNote,
+    bool markCompleted = false,
   }) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -222,6 +250,7 @@ class HomeworkAssignmentStore {
         'p_progress': progress.clamp(0, 150),
         'p_issue_type': issueType,
         'p_issue_note': issueNote,
+        'p_status': markCompleted ? 'completed' : null,
         'p_updated_by': updatedBy,
       });
       _bump();
@@ -236,6 +265,7 @@ class HomeworkAssignmentStore {
       progress: progress,
       issueType: issueType,
       issueNote: issueNote,
+      status: markCompleted ? 'completed' : null,
     );
     final checkOk = await recordAssignmentCheck(
       studentId: studentId,

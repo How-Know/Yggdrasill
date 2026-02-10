@@ -627,20 +627,30 @@ class HomeworkStore {
     final list = _byStudentId[studentId];
     if (list == null) return;
     bool changed = false;
+    final now = DateTime.now();
     final List<HomeworkItem> toAssign = [];
     for (final e in list) {
       if (e.status != HomeworkStatus.completed) {
+        bool updated = false;
         if (e.runStart != null) {
           // 진행 중이면 일시정지 후 숙제로 전환
-          final now = DateTime.now();
           e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
           e.runStart = null;
+          updated = true;
+        }
+        if (e.phase != 1) {
+          e.phase = 1;
+          e.waitingAt = now;
+          e.submittedAt = null;
+          e.confirmedAt = null;
+          updated = true;
         }
         if (e.status != HomeworkStatus.homework) {
           e.status = HomeworkStatus.homework;
-          changed = true;
+          updated = true;
           toAssign.add(e);
         }
+        if (updated) changed = true;
       }
     }
     if (changed) {
@@ -666,6 +676,7 @@ class HomeworkStore {
     if (list == null) return;
     final Set<String> idSet = itemIds.toSet();
     bool changed = false;
+    final now = DateTime.now();
     final List<HomeworkItem> toAssign = [];
     final Map<String, HomeworkItem> toUpsert = {};
     for (final e in list) {
@@ -673,9 +684,15 @@ class HomeworkStore {
       if (e.status == HomeworkStatus.completed) continue;
       bool updated = false;
       if (e.runStart != null) {
-        final now = DateTime.now();
         e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
         e.runStart = null;
+        updated = true;
+      }
+      if (e.phase != 1) {
+        e.phase = 1;
+        e.waitingAt = now;
+        e.submittedAt = null;
+        e.confirmedAt = null;
         updated = true;
       }
       if (e.status != HomeworkStatus.homework) {

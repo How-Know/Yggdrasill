@@ -1425,6 +1425,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             direction: DismissDirection.startToEnd,
             confirmDismiss: (_) async {
               final now = DateTime.now();
+              final hasHomeworkItems = HomeworkStore.instance
+                  .items(t.student.id)
+                  .any((e) => e.status != HomeworkStatus.completed);
+              final _HomeworkAssignSelection? selection = hasHomeworkItems
+                  ? await _showHomeworkAssignDialog(
+                      t.student.id,
+                      anchorTime: t.classDateTime,
+                    )
+                  : _HomeworkAssignSelection(itemIds: const [], dueDate: null);
+              if (selection == null) {
+                return false;
+              }
               setState(() {
                 _leavedSetIds.add(t.setId);
                 _leaveTimes[t.setId] = now;
@@ -1446,10 +1458,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   sessionTypeId: t.classInfo?.id,
                 );
                 // 하원 시 숙제 선택 다이얼로그
-                final selection = await _showHomeworkAssignDialog(
-                  t.student.id,
-                  anchorTime: t.classDateTime,
-                );
                 if (selection != null && selection.itemIds.isNotEmpty) {
                   HomeworkStore.instance.markItemsAsHomework(
                     t.student.id,
