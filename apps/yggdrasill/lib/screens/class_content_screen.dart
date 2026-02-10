@@ -11,7 +11,9 @@ import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
+import 'learning/homework_edit_dialog.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/homework_assign_dialog.dart';
 import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
@@ -21,7 +23,7 @@ class ClassContentScreen extends StatefulWidget {
   const ClassContentScreen({super.key});
 
   static const double _attendingCardHeight = 120; // 과제칩 높이와 맞춤
-  static const double _attendingCardWidth = 330; // 고정 폭으로 내부 우측 정렬 보장
+  static const double _attendingCardWidth = 320; // 고정 폭으로 내부 우측 정렬 보장
 
   @override
   State<ClassContentScreen> createState() => _ClassContentScreenState();
@@ -93,6 +95,8 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                       ],
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  const Divider(color: Color(0xFF223131), height: 24),
                   const SizedBox(height: 24),
                   Expanded(
                     child: ListView.builder(
@@ -105,8 +109,46 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              _AttendingButton(studentId: s.id, name: s.name, color: s.color, onAddTag: () => _onAddTag(context, s.id), onAddHomework: () => _onAddHomework(context, s.id)),
-                              const SizedBox(width: 30),
+                              _AttendingButton(
+                                studentId: s.id,
+                                name: s.name,
+                                color: s.color,
+                                arrivalTime: s.record.arrivalTime,
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 58,
+                                    height: 58,
+                                    child: IconButton(
+                                      onPressed: () =>
+                                          _onAddHomework(context, s.id),
+                                      icon: const Icon(Icons.add_rounded),
+                                      iconSize: 28,
+                                      color: kDlgTextSub,
+                                      splashRadius: 29,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  SizedBox(
+                                    width: 58,
+                                    height: 58,
+                                    child: IconButton(
+                                      onPressed: () => _onDepartFromHome(
+                                        context,
+                                        s,
+                                      ),
+                                      icon: const Icon(Icons.logout_rounded),
+                                      iconSize: 26,
+                                      color: const Color(0xFFE57373),
+                                      splashRadius: 29,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 12),
                               _buildHomeworkBadge(
                                 context,
                                 s.id,
@@ -119,7 +161,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                                   });
                                 },
                               ),
-                              const SizedBox(width: 30),
+                              const SizedBox(width: 16),
                               Flexible(
                                 fit: FlexFit.loose,
                                 child: Align(
@@ -176,7 +218,12 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
       if (idx == -1) continue;
       final name = students[idx].name;
       // 색상은 슬라이드 시트의 "출석" 박스 느낌을 살려 파랑 계열 고정(개별 과목 색상 추후 반영 가능)
-      result.add(_AttendingStudent(id: rec.studentId, name: name, color: const Color(0xFF0F467D)));
+      result.add(_AttendingStudent(
+        id: rec.studentId,
+        name: name,
+        color: const Color(0xFF0F467D),
+        record: rec,
+      ));
     }
     // 중복 제거
     final seen = <String>{};
@@ -237,6 +284,64 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
         );
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과제를 추가했어요.')));
       }
+    }
+  }
+
+  Future<void> _onDepartFromHome(
+    BuildContext context,
+    _AttendingStudent student,
+  ) async {
+    final now = DateTime.now();
+    final studentId = student.id;
+    final hasHomeworkItems = HomeworkStore.instance
+        .items(studentId)
+        .any((e) => e.status != HomeworkStatus.completed);
+    final HomeworkAssignSelection? selection = hasHomeworkItems
+        ? await showHomeworkAssignDialog(
+            context,
+            studentId,
+            anchorTime: student.record.classDateTime,
+          )
+        : const HomeworkAssignSelection(itemIds: [], dueDate: null);
+    if (selection == null) return;
+
+    try {
+      final record = DataManager.instance
+              .getAttendanceRecord(studentId, student.record.classDateTime) ??
+          student.record;
+      final arrival = record.arrivalTime ?? now;
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: studentId,
+        classDateTime: record.classDateTime,
+        classEndTime: record.classEndTime,
+        className: record.className.isNotEmpty ? record.className : '수업',
+        isPresent: true,
+        arrivalTime: arrival,
+        departureTime: now,
+        setId: record.setId,
+        sessionTypeId: record.sessionTypeId,
+        cycle: record.cycle,
+        sessionOrder: record.sessionOrder,
+        isPlanned: record.isPlanned,
+        snapshotId: record.snapshotId,
+        batchSessionId: record.batchSessionId,
+      );
+      if (selection.itemIds.isNotEmpty) {
+        HomeworkStore.instance.markItemsAsHomework(
+          studentId,
+          selection.itemIds,
+          dueDate: selection.dueDate,
+        );
+      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${student.name} 하원 처리되었습니다.')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('하원 처리 실패: $e')),
+      );
     }
   }
 
@@ -1132,6 +1237,52 @@ String _formatDurationMs(int totalMs) {
   return '${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 }
 
+Future<void> _openHomeworkEditDialogForHome(
+  BuildContext context,
+  String studentId,
+  HomeworkItem item,
+) async {
+  final edited = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => HomeworkEditDialog(
+      initialTitle: item.title,
+      initialBody: item.body,
+      initialColor: item.color,
+      initialType: item.type,
+      initialPage: item.page,
+      initialCount: item.count,
+      initialContent: item.content,
+    ),
+  );
+  if (edited == null) return;
+  final countStr = (edited['count'] as String?)?.trim();
+  final updated = HomeworkItem(
+    id: item.id,
+    title: (edited['title'] as String).trim(),
+    body: (edited['body'] as String).trim(),
+    color: (edited['color'] as Color),
+    flowId: item.flowId,
+    type: (edited['type'] as String?)?.trim(),
+    page: (edited['page'] as String?)?.trim(),
+    count: (countStr == null || countStr.isEmpty) ? null : int.tryParse(countStr),
+    content: (edited['content'] as String?)?.trim(),
+    checkCount: item.checkCount,
+    createdAt: item.createdAt,
+    updatedAt: DateTime.now(),
+    status: item.status,
+    phase: item.phase,
+    accumulatedMs: item.accumulatedMs,
+    runStart: item.runStart,
+    completedAt: item.completedAt,
+    firstStartedAt: item.firstStartedAt,
+    submittedAt: item.submittedAt,
+    confirmedAt: item.confirmedAt,
+    waitingAt: item.waitingAt,
+    version: item.version,
+  );
+  HomeworkStore.instance.edit(studentId, updated);
+}
+
 const double _homeworkChipHeight = 120.0;
 const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.5;
 
@@ -1260,8 +1411,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   for (final hw in hwList.take(12)) {
     final bool isRunning = hw.runStart != null || hw.phase == 2;
     final bool isSubmitted = hw.phase == 3;
-    final bool canSlideDown = isRunning || isSubmitted;
-    final String downLabel = isSubmitted ? '완료' : (isRunning ? '멈춤' : '');
+    final bool isWaiting = hw.phase == 1;
+    final bool isConfirmed = hw.phase == 4;
+    final bool slideDownIsEdit = isWaiting || isConfirmed;
+    final bool canSlideDown = isRunning || isSubmitted || slideDownIsEdit;
+    final String downLabel =
+        slideDownIsEdit ? '수정' : (isSubmitted ? '완료' : (isRunning ? '멈춤' : ''));
     chips.add(
       _SlideableHomeworkChip(
         key: ValueKey('hw_chip_${hw.id}'),
@@ -1270,7 +1425,11 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         canSlideUp: true,
         downLabel: downLabel,
         upLabel: '취소',
-        downColor: isSubmitted ? const Color(0xFF4CAF50) : const Color(0xFF9FB3B3),
+        downColor: slideDownIsEdit
+            ? kDlgAccent
+            : (isSubmitted
+                ? const Color(0xFF4CAF50)
+                : const Color(0xFF9FB3B3)),
         upColor: const Color(0xFFE57373),
         onTap: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
@@ -1296,7 +1455,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         onSlideDown: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
           if (item == null) return;
-          if (item.runStart != null || item.phase == 2) {
+          if (item.phase == 1 || item.phase == 4) {
+            unawaited(_openHomeworkEditDialogForHome(context, studentId, item));
+          } else if (item.runStart != null || item.phase == 2) {
             unawaited(HomeworkStore.instance.pause(studentId, hw.id));
           } else if (item.phase == 3) {
             // 아래로 슬라이드한 완료 의도: 다음 대기 진입 시 완료 처리
@@ -1655,7 +1816,13 @@ class _AttendingStudent {
   final String name;
   final Color color;
   final String id;
-  _AttendingStudent({required this.id, required this.name, required this.color});
+  final AttendanceRecord record;
+  _AttendingStudent({
+    required this.id,
+    required this.name,
+    required this.color,
+    required this.record,
+  });
 }
 
 class _SlideableHomeworkChip extends StatefulWidget {
@@ -1826,10 +1993,14 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
 class _AttendingButton extends StatelessWidget {
   final String name;
   final Color color;
-  final VoidCallback onAddTag;
-  final VoidCallback onAddHomework;
   final String studentId;
-  const _AttendingButton({required this.studentId, required this.name, required this.color, required this.onAddTag, required this.onAddHomework});
+  final DateTime? arrivalTime;
+  const _AttendingButton({
+    required this.studentId,
+    required this.name,
+    required this.color,
+    required this.arrivalTime,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1838,96 +2009,105 @@ class _AttendingButton extends StatelessWidget {
       child: Container(
         width: ClassContentScreen._attendingCardWidth,
         height: ClassContentScreen._attendingCardHeight,
-        padding: const EdgeInsets.fromLTRB(22, 0, 16, 0),
+        margin: const EdgeInsets.only(left: 24),
+        padding: const EdgeInsets.fromLTRB(22, 0, 32, 0),
         decoration: BoxDecoration(
           color: Colors.transparent,
           borderRadius: BorderRadius.circular(28),
           border: Border.all(color: color, width: 2),
         ),
-        child: Row(
-          children: [
-            ValueListenableBuilder<int>(
-              valueListenable: HomeworkStore.instance.revision,
-              builder: (context, _rev, _) {
-                // 과제 진행 상태 확인
-                final items = HomeworkStore.instance
-                    .items(studentId)
-                    .where((e) => e.status != HomeworkStatus.completed)
-                    .toList();
-                final bool hasAny = items.isNotEmpty;
-                final bool hasRunning = HomeworkStore.instance.runningOf(studentId) != null;
-                final bool isResting = hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
+        child: ValueListenableBuilder<int>(
+          valueListenable: HomeworkStore.instance.revision,
+          builder: (context, _rev, _) {
+            // 과제 진행 상태 확인
+            final items = HomeworkStore.instance
+                .items(studentId)
+                .where((e) => e.status != HomeworkStatus.completed)
+                .toList();
+            final bool hasAny = items.isNotEmpty;
+            final bool hasRunning =
+                HomeworkStore.instance.runningOf(studentId) != null;
+            final bool isResting = hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
 
-                // 학생 정보 조회(학교/학년)
-                String school = '';
-                String gradeText = '';
-                try {
-                  final swi = DataManager.instance.students.firstWhere((s) => s.student.id == studentId);
-                  school = swi.student.school;
-                  final int g = swi.student.grade;
-                  gradeText = g > 0 ? (g.toString() + '학년') : '';
-                } catch (_) {}
+            // 학생 정보 조회(학교/학년)
+            String school = '';
+            String gradeText = '';
+            try {
+              final swi = DataManager.instance.students
+                  .firstWhere((s) => s.student.id == studentId);
+              school = swi.student.school;
+              final int g = swi.student.grade;
+              gradeText = g > 0 ? (g.toString() + '학년') : '';
+            } catch (_) {}
 
-                final nameStyle = TextStyle(
-                  color: isResting ? Colors.white54 : Colors.white,
-                  fontSize: 34,
-                  fontWeight: FontWeight.w600,
-                );
+            final nameStyle = TextStyle(
+              color: isResting ? Colors.white54 : Colors.white,
+              fontSize: 38,
+              fontWeight: FontWeight.w600,
+              height: 1.0,
+            );
+            final infoLine = [
+              if (school.isNotEmpty) school,
+              if (gradeText.isNotEmpty) gradeText,
+            ].join(' · ');
+            final arrivalText =
+                arrivalTime != null ? _formatShortTime(arrivalTime!) : '--:--';
+            final double nameHeight =
+                (nameStyle.fontSize ?? 34) * (nameStyle.height ?? 1.0);
 
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(name, style: nameStyle, overflow: TextOverflow.ellipsis),
-                    const SizedBox(width: 22),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 220),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(school, style: const TextStyle(color: Colors.white70, fontSize: 16, height: 1.15, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-                          SizedBox(height: 8),
-                          Text(gradeText, style: const TextStyle(color: Colors.white60, fontSize: 15, height: 1.15), maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-            const Spacer(),
-            Row(
-              mainAxisSize: MainAxisSize.min,
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // O: 태그 추가 버튼(아이콘 자리만; 기능 미구현)
-                Tooltip(
-                  message: '태그 추가',
-                  child: InkWell(
-                    onTap: onAddTag,
-                    borderRadius: BorderRadius.circular(999),
-                    child: const SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: Center(child: Icon(Icons.circle_outlined, color: Colors.white70, size: 22)),
-                    ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    name,
+                    style: nameStyle,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Tooltip(
-                  message: '과제 추가',
-                  child: InkWell(
-                    onTap: onAddHomework,
-                    borderRadius: BorderRadius.circular(999),
-                    child: const SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: Center(child: Icon(Icons.add_rounded, color: Colors.white70, size: 24)),
+                const SizedBox(width: 20),
+                Expanded(
+                  flex: 3,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: SizedBox(
+                      height: nameHeight,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            infoLine.isEmpty ? '-' : infoLine,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 16,
+                              height: 1.2,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '등원 $arrivalText',
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 14,
+                              height: 1.2,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
