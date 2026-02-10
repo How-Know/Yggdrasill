@@ -137,7 +137,8 @@ class StudentScreenState extends State<StudentScreen> {
 
   void _syncMemoFloatingVisibility() {
     final isTendencyTab = _customTabIndex == 1;
-    hideGlobalMemoFloatingBanners.value = isTendencyTab;
+    // 학생 탭에서는 항상 메모 플로팅을 숨김
+    hideGlobalMemoFloatingBanners.value = true;
     blockRightSideSheetOpen.value = isTendencyTab;
   }
 

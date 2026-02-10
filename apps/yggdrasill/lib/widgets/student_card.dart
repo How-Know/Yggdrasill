@@ -11,12 +11,15 @@ import '../screens/student/student_profile_page.dart';
 import '../screens/student/student_course_detail_screen.dart';
 import 'dark_panel_route.dart';
 
+const Color _studentCardHighlight = Color(0xFF33A373);
+
 class StudentCard extends StatelessWidget {
   final StudentWithInfo studentWithInfo;
   final VoidCallback? onTap;
   final Function(StudentWithInfo) onShowDetails;
   final Function(StudentWithInfo)? onDelete;
   final Function(StudentWithInfo)? onUpdate;
+  final bool isSelected;
   final bool showCheckbox;
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
@@ -32,6 +35,7 @@ class StudentCard extends StatelessWidget {
     required this.onShowDetails,
     this.onDelete,
     this.onUpdate,
+    this.isSelected = false,
     this.showCheckbox = false,
     this.checked = false,
     this.onCheckboxChanged,
@@ -106,6 +110,7 @@ class StudentCard extends StatelessWidget {
       onShowDetails: onShowDetails,
       onDelete: onDelete,
       onUpdate: onUpdate,
+      isSelected: isSelected,
       showCheckbox: showCheckbox,
       checked: checked,
       onCheckboxChanged: onCheckboxChanged,
@@ -122,6 +127,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
   final Function(StudentWithInfo) onShowDetails;
   final Function(StudentWithInfo)? onDelete;
   final Function(StudentWithInfo)? onUpdate;
+  final bool isSelected;
   final bool showCheckbox;
   final bool checked;
   final void Function(bool?)? onCheckboxChanged;
@@ -136,6 +142,7 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
     required this.onShowDetails,
     this.onDelete,
     this.onUpdate,
+    this.isSelected = false,
     this.showCheckbox = false,
     this.checked = false,
     this.onCheckboxChanged,
@@ -224,6 +231,9 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
       shadowColor: Colors.black.withOpacity(0.4),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10.0),
+        side: widget.isSelected
+            ? const BorderSide(color: _studentCardHighlight, width: 2)
+            : BorderSide.none,
       ),
       child: AnimatedContainer(
           width: widget.showCheckbox ? 135 : 100,

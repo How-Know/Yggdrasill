@@ -510,7 +510,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     super.initState();
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
-    hideGlobalMemoFloatingBanners.value = (_selectedIndex == 0);
+    hideGlobalMemoFloatingBanners.value =
+        (_selectedIndex == 0 || _selectedIndex == 1);
     blockRightSideSheetOpen.value = false;
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(_markSideSheetDirty);
@@ -928,7 +929,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               setState(() {
                 _selectedIndex = index;
               });
-              hideGlobalMemoFloatingBanners.value = (index == 0);
+              hideGlobalMemoFloatingBanners.value =
+                  (index == 0 || index == 1);
               if (index != 1) {
                 blockRightSideSheetOpen.value = false;
               }
