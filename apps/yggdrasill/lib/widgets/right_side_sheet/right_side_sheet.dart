@@ -13,6 +13,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
+import '../pill_tab_selector.dart';
 import '../../models/consult_note.dart';
 import '../../models/memo.dart';
 import '../../screens/consult/consult_notes_screen.dart';
@@ -57,6 +58,16 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Map<String, Map<String, String>> _pdfPathByBookAndGrade = <String, Map<String, String>>{};
   int _bookSeq = 0;
   String? _selectedBookId;
+  int _answerKeyTabIndex = 0;
+  Future<void>? _answerKeyLoadFuture;
+  static const List<String> _answerKeyTabs = ['교재', '시험'];
+  String get _answerKeyCategory => _answerKeyTabIndex == 0 ? 'textbook' : 'exam';
+  bool get _answerKeyReadOnly => true;
+  static const List<String> _answerKeyGradeOrder = [
+    '초1', '초2', '초3', '초4', '초5', '초6',
+    '중1', '중2', '중3',
+    '고1', '고2', '고3', 'N수',
+  ];
 
   List<_GradeOption> _grades = <_GradeOption>[];
   int _defaultGradeIndex = 0;
@@ -106,13 +117,12 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (_gradesLoaded || _gradesLoading) return;
     _gradesLoading = true;
     try {
-      final rows = await DataManager.instance.loadAnswerKeyGrades();
+      final rows = await DataManager.instance.getResourceGrades();
       final next = <_GradeOption>[];
       for (final r in rows) {
-        final key = (r['grade_key'] as String?)?.trim() ?? '';
-        final label = (r['label'] as String?)?.trim() ?? '';
-        if (key.isEmpty || label.isEmpty) continue;
-        next.add(_GradeOption(key: key, label: label));
+        final name = (r['name'] as String?)?.trim() ?? '';
+        if (name.isEmpty) continue;
+        next.add(_GradeOption(key: name, label: name));
       }
       if (!mounted) return;
       setState(() {
@@ -142,6 +152,27 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (_grades.isEmpty) return '';
     final idx = _defaultGradeIndex.clamp(0, _grades.length - 1);
     return _grades[idx].label;
+  }
+
+  List<_GradeOption> _buildGradeOptionsFromNames(Iterable<String> names) {
+    final unique = names.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet();
+    if (unique.isEmpty) return <_GradeOption>[];
+    final orderIndex = <String, int>{};
+    for (int i = 0; i < _answerKeyGradeOrder.length; i++) {
+      orderIndex[_answerKeyGradeOrder[i]] = i;
+    }
+    final known = <String>[];
+    final unknown = <String>[];
+    for (final name in unique) {
+      if (orderIndex.containsKey(name)) {
+        known.add(name);
+      } else {
+        unknown.add(name);
+      }
+    }
+    known.sort((a, b) => orderIndex[a]!.compareTo(orderIndex[b]!));
+    unknown.sort();
+    return [...known, ...unknown].map((n) => _GradeOption(key: n, label: n)).toList();
   }
 
   String _basenameWithoutExtension(String path) {
@@ -304,34 +335,87 @@ class _RightSideSheetState extends State<RightSideSheet> {
   }
 
   Future<void> _loadBooks() async {
-    if (_booksLoaded || _booksLoading) return;
+    if (_booksLoaded) return;
+    if (_booksLoading) {
+      await (_answerKeyLoadFuture ?? Future.value());
+      return;
+    }
     _booksLoading = true;
+    final completer = Completer<void>();
+    _answerKeyLoadFuture = completer.future;
+    final category = _answerKeyCategory;
 
     try {
-      final rows = await DataManager.instance.loadAnswerKeyBooks();
-      if (!mounted) return;
+      final rows = await DataManager.instance.loadResourceFilesForCategory(category);
+      final nextBooks = <_BookItem>[];
+      final nextPdfMap = <String, Map<String, String>>{};
+      final gradeNames = <String>{};
+
+      for (final r in rows) {
+        final id = (r['id'] as String?)?.trim() ?? '';
+        if (id.isEmpty) continue;
+        final name = (r['name'] as String?)?.trim() ?? '';
+        final desc = (r['description'] as String?)?.trim() ?? '';
+
+        final links = await DataManager.instance.loadResourceFileLinks(id);
+        final ansByGrade = <String, String>{};
+        for (final e in links.entries) {
+          final key = e.key.trim();
+          final value = e.value.trim();
+          if (key.isEmpty || value.isEmpty) continue;
+          if (!key.endsWith('#ans')) continue;
+          final grade = key.substring(0, key.length - 4).trim();
+          if (grade.isEmpty) continue;
+          ansByGrade[grade] = value;
+        }
+        if (ansByGrade.isEmpty) continue;
+        gradeNames.addAll(ansByGrade.keys);
+        nextPdfMap[id] = ansByGrade;
+        nextBooks.add(_BookItem(
+          id: id,
+          name: name,
+          description: desc,
+          gradeIndex: 0,
+        ));
+      }
+
+      if (!mounted || category != _answerKeyCategory) return;
+      final derivedGrades = _grades.isNotEmpty ? _grades : _buildGradeOptionsFromNames(gradeNames);
+      final updatedBooks = <_BookItem>[];
+      for (final b in nextBooks) {
+        final paths = nextPdfMap[b.id] ?? const <String, String>{};
+        int gradeIndex = 0;
+        if (derivedGrades.isNotEmpty) {
+          final idx = derivedGrades.indexWhere((g) => paths.containsKey(g.key));
+          if (idx != -1) gradeIndex = idx;
+        }
+        updatedBooks.add(b.copyWith(gradeIndex: gradeIndex));
+      }
       setState(() {
         _books
           ..clear()
-          ..addAll(rows.map((r) {
-            final id = (r['id'] as String?) ?? '';
-            final name = (r['name'] as String?) ?? '';
-            final desc = (r['description'] as String?) ?? '';
-            final gradeKey = (r['grade_key'] as String?) ?? '';
-            final gradeIndex = _gradeIndexForKey(gradeKey);
-            return _BookItem(
-              id: id,
-              name: name,
-              description: desc,
-              gradeIndex: gradeIndex,
-            );
-          }));
+          ..addAll(updatedBooks);
+        _pdfPathByBookAndGrade = nextPdfMap;
+        if (_grades.isEmpty && derivedGrades.isNotEmpty) {
+          _grades = derivedGrades;
+          _gradesLoaded = true;
+          _defaultGradeIndex = _defaultGradeIndex.clamp(0, _grades.length - 1);
+        }
+        if (_selectedBookId != null && !updatedBooks.any((b) => b.id == _selectedBookId)) {
+          _selectedBookId = null;
+        }
       });
       _booksLoaded = true;
+      _pdfsLoaded = true;
     } catch (_) {
       _booksLoaded = false;
+      _pdfsLoaded = false;
     } finally {
       _booksLoading = false;
+      _answerKeyLoadFuture = null;
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
     }
   }
 
@@ -339,22 +423,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (_pdfsLoaded || _pdfsLoading) return;
     _pdfsLoading = true;
     try {
-      final rows = await DataManager.instance.loadAnswerKeyBookPdfs();
-      final Map<String, Map<String, String>> next = <String, Map<String, String>>{};
-      for (final r in rows) {
-        final bookId = (r['book_id'] as String?) ?? '';
-        final gradeKey = (r['grade_key'] as String?) ?? '';
-        final path = (r['path'] as String?) ?? '';
-        if (bookId.isEmpty || gradeKey.isEmpty || path.isEmpty) continue;
-        next.putIfAbsent(bookId, () => <String, String>{})[gradeKey] = path;
-      }
-      if (!mounted) return;
-      setState(() {
-        _pdfPathByBookAndGrade = next;
-        _pdfsLoaded = true;
-      });
-    } catch (_) {
-      // ignore
+      await _loadBooks();
     } finally {
       _pdfsLoading = false;
     }
@@ -566,13 +635,28 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (mounted) {
       setState(() => _selectedBookId = book.id);
     }
-    if (_grades.isEmpty) return;
     final paths = _pdfPathByBookAndGrade[book.id];
     if (paths == null || paths.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('연결된 PDF가 없습니다: -')),
       );
+      return;
+    }
+
+    if (_grades.isEmpty) {
+      final entry = paths.entries.firstWhere(
+        (e) => e.value.trim().isNotEmpty,
+        orElse: () => const MapEntry('', ''),
+      );
+      if (entry.value.trim().isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('연결된 PDF가 없습니다: -')),
+        );
+        return;
+      }
+      await OpenFilex.open(entry.value);
       return;
     }
 
@@ -872,6 +956,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
   }
 
   void _onReorderBooks(int oldIndex, int newIndex) {
+    if (_answerKeyReadOnly) return;
     if (oldIndex < 0 || oldIndex >= _books.length) return;
     if (newIndex < 0) return;
     if (newIndex > _books.length) newIndex = _books.length;
@@ -994,8 +1079,26 @@ class _RightSideSheetState extends State<RightSideSheet> {
       _defaultGradeIndex = next;
     });
 
-    // ✅ 마지막 선택만 저장되도록 디바운스
-    _schedulePersistBookGrade(bookId);
+    if (!_answerKeyReadOnly) {
+      // ✅ 마지막 선택만 저장되도록 디바운스
+      _schedulePersistBookGrade(bookId);
+    }
+  }
+
+  void _onAnswerKeyTabSelected(int idx) {
+    if (idx == _answerKeyTabIndex) return;
+    setState(() {
+      _answerKeyTabIndex = idx;
+      _books.clear();
+      _pdfPathByBookAndGrade = <String, Map<String, String>>{};
+      _selectedBookId = null;
+      _booksLoaded = false;
+      _pdfsLoaded = false;
+      _booksLoading = false;
+      _pdfsLoading = false;
+    });
+    _answerKeyLoadFuture = null;
+    unawaited(_ensureGradesThenLoadAnswerKeyData());
   }
 
   @override
@@ -1015,8 +1118,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
                 onModeSelected: (m) {
                   setState(() => _mode = m);
                   if (m == RightSideSheetMode.answerKey) {
-                    unawaited(_loadBooks());
-                    unawaited(_loadPdfs());
+                    unawaited(_ensureGradesThenLoadAnswerKeyData());
                   }
                   if (m == RightSideSheetMode.memo) {
                     unawaited(DataManager.instance.loadMemos());
@@ -1026,14 +1128,6 @@ class _RightSideSheetState extends State<RightSideSheet> {
               ),
               const Divider(height: 1, color: Color(0x22FFFFFF)),
               Expanded(child: _buildBody()),
-              if (_mode == RightSideSheetMode.answerKey) ...[
-                const Divider(height: 1, color: Color(0x22FFFFFF)),
-                _BottomAddBar(
-                  onAddPressed: () {
-                    unawaited(_onAddPdfPressed());
-                  },
-                ),
-              ],
             ],
           ),
         ),
@@ -1049,6 +1143,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
           unawaited(_loadGrades());
         }
         return _AnswerKeyPdfShortcutExplorer(
+          tabIndex: _answerKeyTabIndex,
+          onTabSelected: _onAnswerKeyTabSelected,
           books: _books,
           grades: _grades,
           pdfPathByBookAndGrade: _pdfPathByBookAndGrade,
@@ -2207,6 +2303,8 @@ class _MemoFilterPill extends StatelessWidget {
 // -------------------- 답지: PDF 바로가기(윈도우 탐색기 느낌) --------------------
 
 class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
+  final int tabIndex;
+  final ValueChanged<int> onTabSelected;
   final List<_BookItem> books;
   final List<_GradeOption> grades;
   final Map<String, Map<String, String>> pdfPathByBookAndGrade;
@@ -2220,6 +2318,8 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   final void Function(int oldIndex, int newIndex) onReorderBooks;
 
   const _AnswerKeyPdfShortcutExplorer({
+    required this.tabIndex,
+    required this.onTabSelected,
     required this.books,
     required this.grades,
     required this.pdfPathByBookAndGrade,
@@ -2253,52 +2353,18 @@ class _AnswerKeyPdfShortcutExplorerState extends State<_AnswerKeyPdfShortcutExpl
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'PDF 바로가기',
-            style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
-          _ExplorerHeader(
-            // Windows 탐색기 느낌: 툴바/주소줄을 단순화
-            leading: Row(
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '책 추가',
-                    icon: Icons.library_add_outlined,
-                    onPressed: widget.onAddBook,
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '책 수정',
-                    icon: Icons.edit_outlined,
-                    onPressed: widget.onEditBook,
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '과정 편집',
-                    icon: Icons.tune_rounded,
-                    onPressed: widget.onEditGrades,
-                    showRightDivider: true,
-                  ),
-                ),
-                Expanded(
-                  child: _ToolbarSegmentButton(
-                    tooltip: '삭제',
-                    icon: Icons.delete_outline,
-                    onPressed: widget.onDeleteBook,
-                    showRightDivider: false,
-                  ),
-                ),
-              ],
+          Center(
+            child: PillTabSelector(
+              selectedIndex: widget.tabIndex,
+              tabs: _RightSideSheetState._answerKeyTabs,
+              onTabSelected: widget.onTabSelected,
+              width: 220,
+              height: 36,
+              fontSize: 14,
+              padding: 3,
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           Expanded(
             child: _BooksSection(
               books: widget.books,
@@ -2693,13 +2759,13 @@ class _EmptyState extends StatelessWidget {
           Icon(Icons.folder_open, color: Colors.white24, size: 24),
           SizedBox(height: 10),
           Text(
-            '등록된 PDF 바로가기가 없습니다.',
+            '연결된 정답 PDF가 없습니다.',
             style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
             textAlign: TextAlign.center,
           ),
           SizedBox(height: 6),
           Text(
-            '아래 “추가” 버튼으로 PDF 경로를 등록할 예정입니다.',
+            '교재 탭에서 정답 링크를 등록하면 여기서 바로 열 수 있습니다.',
             style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, height: 1.3),
             textAlign: TextAlign.center,
           ),
