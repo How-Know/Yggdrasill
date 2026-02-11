@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:open_filex/open_filex.dart';
@@ -10,7 +9,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
-import 'package:uuid/uuid.dart';
 
 import '../../services/academy_db.dart';
 import '../../services/data_manager.dart';
@@ -25,7 +23,6 @@ const Color _rsBorder = Color(0xFF223131);
 const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
-const Color _rsHancomBlue = Color(0xFF2A63FF); // 한글(Hancom) 로고 톤(스크린샷 기준으로 근사)
 
 Widget _rsReorderProxyDecorator(Widget child, int index, Animation<double> animation) {
   // 기본 drag proxy는 Material 배경/여백 때문에 다크 UI에서 "흰 테두리/여백"처럼 보일 수 있다.
@@ -59,11 +56,12 @@ Widget _rsReorderProxyDecorator(Widget child, int index, Animation<double> anima
   );
 }
 
-/// 파일 바로가기 탭(범주 -> 폴더(1-depth) -> 파일(HWP/PDF) 바로가기)
+/// 파일 바로가기 탭(폴더(기타) -> 파일(HWP/PDF) 바로가기)
 ///
-/// - 범주/폴더 CRUD는 상단 동일 버튼(추가/수정/삭제)로 처리
+/// - 폴더(기타) 선택 후 파일 바로가기를 바로 관리
 /// - Overlay 컨텍스트( Navigator 없음 )에서도 동작하도록 dialogContext를 사용해 showDialog 호출
-/// - 서버 저장은 resource_folders/resource_files를 category='file_shortcut'로 사용
+/// - 파일 저장은 resource_files (category='file_shortcut')
+/// - 상단 폴더 선택은 자료탭 기타(category='other')의 폴더를 사용
 class FileShortcutTab extends StatefulWidget {
   final BuildContext? dialogContext;
   const FileShortcutTab({super.key, this.dialogContext});
@@ -74,17 +72,16 @@ class FileShortcutTab extends StatefulWidget {
 
 class _FileShortcutTabState extends State<FileShortcutTab> {
   static const String _kCategoryKey = 'file_shortcut';
+  static const String _kExternalCategoryKey = 'other';
 
-  // 로컬(서버 저장 없음)에서 마지막 선택 범주를 기억
+  // 로컬(서버 저장 없음)에서 마지막 선택 폴더를 기억
   static const String _spLastSelectedCategoryId = 'file_shortcut_last_selected_category_id';
 
-  // ✅ 탭 재진입(위젯 재생성) 시 "범주 표시가 잠깐 비어있음/불러오는중..." 플리커를 줄이기 위해
+  // ✅ 탭 재진입(위젯 재생성) 시 "폴더 표시가 잠깐 비어있음/불러오는중..." 플리커를 줄이기 위해
   // 마지막으로 렌더링한 상태를 메모리에 보관한다. (앱 실행 중에만 유지)
   static List<_FsCategory>? _memCategories;
   static String? _memSelectedCategoryId;
-  static String? _memSelectedFolderId;
-  static _FsTarget? _memTarget;
-  static Set<String>? _memKnownFileIds;
+  static Set<String>? _memExternalCategoryIds;
 
   final ScrollController _scrollCtrl = ScrollController();
   bool _loading = false;
@@ -92,42 +89,27 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   int _mutationRev = 0;
 
   List<_FsCategory> _categories = <_FsCategory>[];
+  Set<String> _externalCategoryIds = <String>{};
   String? _selectedCategoryId;
-  String? _selectedFolderId;
-  _FsTarget _target = _FsTarget.category;
-
-  // 삭제 동기화를 위해 현재(서버/로컬)에 존재하는 파일 id 집합을 추적
-  Set<String> _knownFileIds = <String>{};
 
   static _FsFile _cloneFile(_FsFile x) => _FsFile(
         id: x.id,
         name: x.name,
-        path: x.path,
-        kind: x.kind,
+        links: Map<_FsFileKind, String>.from(x.links),
         order: x.order,
-      );
-
-  static _FsFolder _cloneFolder(_FsFolder f) => _FsFolder(
-        id: f.id,
-        name: f.name,
-        expanded: f.expanded,
-        order: f.order,
-        files: <_FsFile>[for (final x in f.files) _cloneFile(x)],
       );
 
   static _FsCategory _cloneCategory(_FsCategory c) => _FsCategory(
         id: c.id,
         name: c.name,
         order: c.order,
-        folders: <_FsFolder>[for (final f in c.folders) _cloneFolder(f)],
+        files: <_FsFile>[for (final x in c.filesOrEmpty) _cloneFile(x)],
       );
 
   void _saveMemCache() {
     _memCategories = <_FsCategory>[for (final c in _categories) _cloneCategory(c)];
     _memSelectedCategoryId = _selectedCategoryId;
-    _memSelectedFolderId = _selectedFolderId;
-    _memTarget = _target;
-    _memKnownFileIds = <String>{..._knownFileIds};
+    _memExternalCategoryIds = <String>{..._externalCategoryIds};
   }
 
   void _restoreMemCache() {
@@ -135,15 +117,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     if (cached == null || cached.isEmpty) return;
     _categories = <_FsCategory>[for (final c in cached) _cloneCategory(c)];
     _selectedCategoryId = _memSelectedCategoryId;
-    _selectedFolderId = _memSelectedFolderId;
-    _target = _memTarget ?? _FsTarget.category;
-    _knownFileIds = _memKnownFileIds != null
-        ? <String>{..._memKnownFileIds!}
-        : <String>{
-            for (final c in _categories)
-              for (final f in c.folders)
-                for (final x in f.files) x.id,
-          };
+    _externalCategoryIds = _memExternalCategoryIds != null ? <String>{..._memExternalCategoryIds!} : <String>{};
     // 캐시가 있으면 일단 즉시 표시하고, 최신화는 백그라운드로 진행
     _booting = false;
   }
@@ -155,10 +129,21 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     unawaited(_init());
   }
 
+  @override
+  void reassemble() {
+    super.reassemble();
+    _memCategories = null;
+    _categories = <_FsCategory>[];
+    _externalCategoryIds = <String>{};
+    _selectedCategoryId = null;
+    _booting = true;
+    unawaited(_bootstrapReload());
+  }
+
   // dispose는 아래에서 메모리 캐시와 함께 처리한다.
 
   Future<void> _init() async {
-    // ✅ 서버 저장 없이 "마지막 선택 범주"를 로컬(SharedPreferences)에서 복원
+    // ✅ 서버 저장 없이 "마지막 선택 폴더"를 로컬(SharedPreferences)에서 복원
     await _restoreLastSelectedCategoryFromPrefs();
     if (!mounted) return;
     // ✅ 파일 바로가기 탭은 서버 읽기(preferSupabaseRead)가 켜져 있으면
@@ -177,9 +162,6 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       if (!mounted) return;
       setState(() {
         _selectedCategoryId = id;
-        // 범주 변경 시 폴더 선택은 무효가 될 수 있으니 초기화
-        _selectedFolderId = null;
-        _target = _FsTarget.category;
       });
     } catch (_) {}
   }
@@ -226,21 +208,15 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     await OpenFilex.open(p);
   }
 
-  Future<void> _renameFile({
-    required String folderId,
-    required String fileId,
-  }) async {
+  Future<void> _renameFile({required String fileId}) async {
     final catId = _effectiveCategoryId;
     if (catId == null) return;
     final ci = _categories.indexWhere((c) => c.id == catId);
     if (ci == -1) return;
     final cat = _categories[ci];
-    final fi = cat.folders.indexWhere((f) => f.id == folderId);
-    if (fi == -1) return;
-    final folder = cat.folders[fi];
-    final xi = folder.files.indexWhere((x) => x.id == fileId);
+    final xi = cat.filesOrEmpty.indexWhere((x) => x.id == fileId);
     if (xi == -1) return;
-    final cur = folder.files[xi];
+    final cur = cat.filesOrEmpty[xi];
 
     final name = await _promptText(
       title: '파일 수정',
@@ -251,39 +227,31 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     final trimmed = name?.trim() ?? '';
     if (trimmed.isEmpty || trimmed == cur.name) return;
 
-    final nextFiles = [...folder.files];
-    nextFiles[xi] = _FsFile(
-      id: cur.id,
-      name: trimmed,
-      path: cur.path,
-      kind: cur.kind,
-      order: cur.order,
-    );
-
-    final nextFolders = [...cat.folders];
-    nextFolders[fi] = folder.copyWith(files: nextFiles);
+    final nextFiles = [...cat.filesOrEmpty];
+    nextFiles[xi] = cur.copyWith(name: trimmed);
     setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _target = _FsTarget.folder;
+      _categories[ci] = cat.copyWith(files: nextFiles);
     });
-    await _persistAll();
+    _mutationRev++;
+    await DataManager.instance.saveResourceFileWithCategory(
+      {
+        'id': cur.id,
+        'name': trimmed,
+        'parent_id': catId,
+      },
+      _kExternalCategoryKey,
+    );
   }
 
-  Future<void> _deleteFile({
-    required String folderId,
-    required String fileId,
-  }) async {
+  Future<void> _deleteFile({required String fileId}) async {
     final catId = _effectiveCategoryId;
     if (catId == null) return;
     final ci = _categories.indexWhere((c) => c.id == catId);
     if (ci == -1) return;
     final cat = _categories[ci];
-    final fi = cat.folders.indexWhere((f) => f.id == folderId);
-    if (fi == -1) return;
-    final folder = cat.folders[fi];
-    final xi = folder.files.indexWhere((x) => x.id == fileId);
+    final xi = cat.filesOrEmpty.indexWhere((x) => x.id == fileId);
     if (xi == -1) return;
-    final cur = folder.files[xi];
+    final cur = cat.filesOrEmpty[xi];
 
     final ok = await _confirmDelete(
       title: '파일 삭제',
@@ -291,25 +259,17 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     );
     if (!ok) return;
 
-    final kept = [...folder.files]..removeAt(xi);
+    final kept = [...cat.filesOrEmpty]..removeAt(xi);
     final normalized = <_FsFile>[
       for (int i = 0; i < kept.length; i++)
-        _FsFile(
-          id: kept[i].id,
-          name: kept[i].name,
-          path: kept[i].path,
-          kind: kept[i].kind,
-          order: i,
-        ),
+        kept[i].copyWith(order: i),
     ];
 
-    final nextFolders = [...cat.folders];
-    nextFolders[fi] = folder.copyWith(files: normalized);
     setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _target = _FsTarget.folder;
+      _categories[ci] = cat.copyWith(files: normalized);
     });
-    await _persistAll();
+    _mutationRev++;
+    await DataManager.instance.deleteResourceFile(cur.id);
   }
 
   String? get _effectiveCategoryId {
@@ -328,28 +288,6 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     final idx = _categories.indexWhere((c) => c.id == id);
     if (idx == -1) return null;
     return _categories[idx];
-  }
-
-  _FsFolder? get _selectedFolder {
-    final cat = _effectiveCategory;
-    final folderId = _selectedFolderId;
-    if (cat == null || folderId == null || folderId.trim().isEmpty) return null;
-    return cat.folders.firstWhere((f) => f.id == folderId, orElse: () => const _FsFolder.none());
-  }
-
-  bool get canEdit {
-    final hasCategory = _effectiveCategoryId != null;
-    final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
-    return (_target == _FsTarget.category && hasCategory) ||
-        (_target == _FsTarget.folder && hasFolder);
-  }
-
-  bool get canDelete => canEdit;
-
-  bool get canAddFile {
-    final hasCategory = _effectiveCategoryId != null;
-    final hasFolder = _selectedFolder != null && _selectedFolder!.id.isNotEmpty;
-    return hasCategory && hasFolder;
   }
 
   Future<void> _bootstrapReload() async {
@@ -376,14 +314,17 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   Future<bool> _reloadFromLocal() async {
     try {
       final res = await Future.wait([
-        AcademyDbService.instance.loadResourceFoldersForCategory(_kCategoryKey),
-        AcademyDbService.instance.loadResourceFilesForCategory(_kCategoryKey),
+        AcademyDbService.instance.loadResourceFilesForCategory(_kExternalCategoryKey),
+        AcademyDbService.instance.loadResourceFoldersForCategory(_kExternalCategoryKey),
       ]);
       if (!mounted) return false;
-      final folderRows = (res[0] as List).cast<Map<String, dynamic>>();
-      final fileRows = (res[1] as List).cast<Map<String, dynamic>>();
-      _applyLoadedRows(folderRows: folderRows, fileRows: fileRows);
-      return folderRows.isNotEmpty || fileRows.isNotEmpty;
+      final rawFileRows = (res[0] as List).cast<Map<String, dynamic>>();
+      final otherFolderRows = (res[1] as List).cast<Map<String, dynamic>>();
+      final fileRows = await _applyShortcutOrdersIfAny(rawFileRows);
+      final linksByFileId = await _loadLinksByFileId(fileRows);
+      _applyLoadedRows(fileRows: fileRows, otherFolderRows: otherFolderRows, linksByFileId: linksByFileId);
+      unawaited(AcademyDbService.instance.saveResourceFoldersForCategory(_kCategoryKey, const <Map<String, dynamic>>[]));
+      return rawFileRows.isNotEmpty || otherFolderRows.isNotEmpty;
     } catch (_) {
       return false;
     }
@@ -397,6 +338,8 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     }
     try {
       final res = await Future.wait([
+        DataManager.instance.loadResourceFilesForCategory(_kExternalCategoryKey),
+        DataManager.instance.loadResourceFoldersForCategory(_kExternalCategoryKey),
         DataManager.instance.loadResourceFoldersForCategory(_kCategoryKey),
         DataManager.instance.loadResourceFilesForCategory(_kCategoryKey),
       ]);
@@ -404,17 +347,28 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       // 로딩 중 사용자가 수정/정렬/삭제 등을 수행했으면 서버 결과로 덮어쓰지 않는다.
       if (startRev != _mutationRev) return;
 
-      final folderRows = (res[0] as List).cast<Map<String, dynamic>>();
-      final fileRows = (res[1] as List).cast<Map<String, dynamic>>();
+      final rawFileRows = (res[0] as List).cast<Map<String, dynamic>>();
+      final otherFolderRows = (res[1] as List).cast<Map<String, dynamic>>();
+      final legacyFolderRows = (res[2] as List).cast<Map<String, dynamic>>();
+      final legacyFileRows = (res[3] as List).cast<Map<String, dynamic>>();
+      final fileRows = await _applyShortcutOrdersIfAny(rawFileRows);
 
       // 다음 진입 속도를 위해 로컬 캐시도 갱신(서버 write 없이 local-only)
-      unawaited(AcademyDbService.instance.saveResourceFoldersForCategory(_kCategoryKey, folderRows));
-      unawaited(AcademyDbService.instance.saveResourceFilesForCategory(_kCategoryKey, fileRows));
+      unawaited(AcademyDbService.instance.saveResourceFoldersForCategory(_kCategoryKey, const <Map<String, dynamic>>[]));
+      unawaited(AcademyDbService.instance.saveResourceFilesForCategory(_kExternalCategoryKey, rawFileRows));
+      unawaited(AcademyDbService.instance.saveResourceFoldersForCategory(_kExternalCategoryKey, otherFolderRows));
 
-      _applyLoadedRows(folderRows: folderRows, fileRows: fileRows);
+      final linksByFileId = await _loadLinksByFileId(fileRows);
+      _applyLoadedRows(fileRows: fileRows, otherFolderRows: otherFolderRows, linksByFileId: linksByFileId);
+      if (legacyFolderRows.isNotEmpty) {
+        unawaited(DataManager.instance.saveResourceFoldersForCategory(_kCategoryKey, const <Map<String, dynamic>>[]));
+      }
+      if (legacyFileRows.isNotEmpty) {
+        unawaited(_cleanupLegacyShortcutFiles(legacyFileRows));
+      }
       if (mounted) setState(() => _booting = false);
     } catch (_) {
-      // 서버 로드 실패 시에도 booting을 끝내서 "범주 없음" 안내를 표시할 수 있게 한다.
+      // 서버 로드 실패 시에도 booting을 끝내서 "폴더 없음" 안내를 표시할 수 있게 한다.
       if (mounted) setState(() => _booting = false);
     } finally {
       if (blocking && mounted) setState(() => _loading = false);
@@ -422,63 +376,34 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   }
 
   void _applyLoadedRows({
-    required List<Map<String, dynamic>> folderRows,
     required List<Map<String, dynamic>> fileRows,
+    required List<Map<String, dynamic>> otherFolderRows,
+    required Map<String, Map<String, String>> linksByFileId,
   }) {
-    // 확장 상태 유지(2단계 로드/백그라운드 동기화에서 UI가 접히지 않게)
-    final expandedByFolderId = <String, bool>{};
-    for (final c in _categories) {
-      for (final f in c.folders) {
-        expandedByFolderId[f.id] = f.expanded;
-      }
-    }
+    final externalCategories = _parseExternalCategories(otherFolderRows);
+    _externalCategoryIds = <String>{for (final c in externalCategories) c.id};
+    final filesByFolder = _parseFilesByFolder(fileRows, linksByFileId);
 
-    final categories = _parseFolders(folderRows);
-    final filesByFolder = _parseFilesByFolder(fileRows);
-
-    // attach files + keep expanded
-    final nextCats = categories.map((c) {
-      final nextFolders = c.folders.map((f) {
-        final files = filesByFolder[f.id] ?? const <_FsFile>[];
-        final expanded = expandedByFolderId[f.id] ?? f.expanded;
-        return f.copyWith(files: files, expanded: expanded);
-      }).toList();
-      return c.copyWith(folders: nextFolders);
+    final nextCats = externalCategories.map((c) {
+      final files = filesByFolder[c.id] ?? const <_FsFile>[];
+      return c.copyWith(files: files);
     }).toList();
 
-    final known = <String>{};
-    for (final c in nextCats) {
-      for (final f in c.folders) {
-        for (final x in f.files) {
-          known.add(x.id);
-        }
-      }
-    }
+    final nextSelected = (() {
+      if (nextCats.isEmpty) return null;
+      final cur = _selectedCategoryId;
+      if (cur != null && nextCats.any((c) => c.id == cur)) return cur;
+      return nextCats.first.id;
+    })();
 
     setState(() {
       _categories = nextCats;
-      _knownFileIds = known;
-      // 선택 정리
-      final eff = _effectiveCategoryId;
-      if (eff == null) {
-        _selectedCategoryId = null;
-        _selectedFolderId = null;
-        _target = _FsTarget.category;
-      } else {
-        _selectedCategoryId = eff;
-        if (_selectedFolderId != null) {
-          final cat = _categories.firstWhere((c) => c.id == eff);
-          final ok = cat.folders.any((f) => f.id == _selectedFolderId);
-          if (!ok) _selectedFolderId = null;
-        }
-      }
+      _selectedCategoryId = nextSelected;
     });
   }
 
-  List<_FsCategory> _parseFolders(List<Map<String, dynamic>> rows) {
-    final cats = <_FsCategory>[];
-    final foldersByCat = <String, List<_FsFolder>>{};
-
+  List<_FsCategory> _parseExternalCategories(List<Map<String, dynamic>> rows) {
+    final items = <String, _FsExternalFolderRow>{};
     for (final r in rows) {
       final id = (r['id'] as String?) ?? '';
       if (id.isEmpty) continue;
@@ -486,51 +411,137 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
       final rawName = (r['name'] as String?) ?? '';
       final rawDesc = (r['description'] as String?) ?? '';
       final name = rawName.trim().isNotEmpty ? rawName : rawDesc;
-      final parent = (r['parent_id'] as String?)?.trim();
+      final safeName = name.trim().isNotEmpty ? name : id;
+      final parent = (r['parent_id'] as String?)?.trim() ?? '';
       final ord = (r['order_index'] as int?) ?? 0;
-      if (parent == null || parent.isEmpty) {
-        cats.add(_FsCategory(id: id, name: name, order: ord));
-      } else {
-        final list = foldersByCat.putIfAbsent(parent, () => <_FsFolder>[]);
-        list.add(_FsFolder(id: id, name: name, expanded: false, order: ord));
+      items[id] = _FsExternalFolderRow(id: id, name: safeName, parentId: parent, order: ord);
+    }
+
+    String buildPath(String id, Set<String> visited) {
+      final node = items[id];
+      if (node == null) return '';
+      if (visited.contains(id)) return node.name;
+      visited.add(id);
+      if (node.parentId.isEmpty || !items.containsKey(node.parentId)) {
+        return node.name;
       }
+      final parentName = buildPath(node.parentId, visited);
+      if (parentName.isEmpty) return node.name;
+      return '$parentName / ${node.name}';
     }
 
-    cats.sort((a, b) {
-      final t = a.order.compareTo(b.order);
-      if (t != 0) return t;
-      return a.name.compareTo(b.name);
-    });
-
-    for (final c in cats) {
-      final fs = foldersByCat[c.id] ?? <_FsFolder>[];
-      fs.sort((a, b) {
-        final t = a.order.compareTo(b.order);
-        if (t != 0) return t;
-        return a.name.compareTo(b.name);
-      });
-      c.folders = fs;
+    final out = <_FsCategory>[];
+    for (final node in items.values) {
+      final label = buildPath(node.id, <String>{});
+      out.add(_FsCategory(id: node.id, name: label, order: node.order));
     }
-
-    return cats;
+    out.sort((a, b) => a.name.compareTo(b.name));
+    return out;
   }
 
-  Map<String, List<_FsFile>> _parseFilesByFolder(List<Map<String, dynamic>> rows) {
+  Future<List<Map<String, dynamic>>> _applyShortcutOrdersIfAny(List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return rows;
+    try {
+      final orders = await AcademyDbService.instance.loadResourceFileOrders(
+        scopeType: 'file_shortcut',
+        category: _kCategoryKey,
+      );
+      if (orders.isEmpty) return rows;
+      final orderByKey = <String, int>{};
+      for (final o in orders) {
+        final fileId = (o['file_id'] as String?) ?? '';
+        if (fileId.isEmpty) continue;
+        final parent = (o['parent_id'] as String?)?.trim() ?? '';
+        final order = (o['order_index'] as int?) ?? 0;
+        orderByKey['$fileId|$parent'] = order;
+      }
+      if (orderByKey.isEmpty) return rows;
+      for (final row in rows) {
+        final fileId = (row['id'] as String?) ?? '';
+        if (fileId.isEmpty) continue;
+        final parent = (row['parent_id'] as String?)?.trim() ?? '';
+        final key = '$fileId|$parent';
+        if (orderByKey.containsKey(key)) {
+          row['order_index'] = orderByKey[key];
+        }
+      }
+    } catch (_) {}
+    return rows;
+  }
+
+  Future<Map<String, Map<String, String>>> _loadLinksByFileId(List<Map<String, dynamic>> rows) async {
+    final ids = <String>{};
+    for (final r in rows) {
+      final id = (r['id'] as String?) ?? '';
+      if (id.isNotEmpty) ids.add(id);
+    }
+    if (ids.isEmpty) return <String, Map<String, String>>{};
+    final out = <String, Map<String, String>>{};
+    final futures = <Future<void>>[];
+    for (final id in ids) {
+      futures.add(() async {
+        try {
+          out[id] = await DataManager.instance.loadResourceFileLinks(id);
+        } catch (_) {
+          out[id] = <String, String>{};
+        }
+      }());
+    }
+    await Future.wait(futures);
+    return out;
+  }
+
+  Map<_FsFileKind, String> _normalizeLinks(Map<String, String> raw) {
+    final out = <_FsFileKind, String>{};
+    for (final e in raw.entries) {
+      final key = e.key.trim().toLowerCase();
+      final value = e.value.trim();
+      if (value.isEmpty) continue;
+      if (key == 'pdf') {
+        out[_FsFileKind.pdf] = value;
+      } else if (key == 'hwp' || key == 'hwpx') {
+        out[_FsFileKind.hwp] = value;
+      }
+    }
+    if (out.isEmpty) {
+      for (final value in raw.values) {
+        final v = value.trim();
+        if (v.isEmpty) continue;
+        final kind = _FsFileKind.fromPath(v);
+        if (kind != _FsFileKind.other && !out.containsKey(kind)) {
+          out[kind] = v;
+        }
+      }
+    }
+    return out;
+  }
+
+  Map<String, List<_FsFile>> _parseFilesByFolder(
+    List<Map<String, dynamic>> rows,
+    Map<String, Map<String, String>> linksByFileId,
+  ) {
     final out = <String, List<_FsFile>>{};
     for (final r in rows) {
       final id = (r['id'] as String?) ?? '';
       if (id.isEmpty) continue;
       final folderId = (r['parent_id'] as String?)?.trim() ?? '';
       if (folderId.isEmpty) continue;
-      final name = (r['name'] as String?) ?? '';
+      final rawName = (r['name'] as String?) ?? '';
+      final rawDesc = (r['description'] as String?) ?? '';
+      final name = rawName.trim().isNotEmpty ? rawName : rawDesc;
+      final safeName = name.trim().isNotEmpty ? name : id;
       final url = (r['url'] as String?) ?? '';
       final ord = (r['order_index'] as int?) ?? 0;
-      final kind = _FsFileKind.fromPath(url);
+      final links = _normalizeLinks(linksByFileId[id] ?? const <String, String>{});
+      final fallbackKind = _FsFileKind.fromPath(url);
+      final fallbackLinks = links.isEmpty && url.trim().isNotEmpty && fallbackKind != _FsFileKind.other
+          ? <_FsFileKind, String>{fallbackKind: url}
+          : links;
+      if (fallbackLinks.isEmpty) continue;
       out.putIfAbsent(folderId, () => <_FsFile>[]).add(_FsFile(
         id: id,
-        name: name,
-        path: url,
-        kind: kind,
+        name: safeName,
+        links: fallbackLinks,
         order: ord,
       ));
     }
@@ -544,135 +555,28 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     return out;
   }
 
-  Future<void> _persistAll() async {
-    // 1) 폴더(범주/폴더) 전체 저장
-    final folderRows = <Map<String, dynamic>>[];
-    for (int ci = 0; ci < _categories.length; ci++) {
-      final c = _categories[ci];
-      folderRows.add({
-        'id': c.id,
-        'name': c.name,
-        'parent_id': null,
-        'order_index': ci,
-      });
-      for (int fi = 0; fi < c.folders.length; fi++) {
-        final f = c.folders[fi];
-        folderRows.add({
-          'id': f.id,
-          'name': f.name,
-          'parent_id': c.id,
-          'order_index': fi,
-        });
-      }
-    }
-    await DataManager.instance.saveResourceFoldersForCategory(_kCategoryKey, folderRows);
-
-    // 2) 파일 upsert + 삭제 동기화
-    final newIds = <String>{};
+  Future<void> _cleanupLegacyShortcutFiles(List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return;
     final futures = <Future<void>>[];
-    final ordersByFolder = <String, List<Map<String, dynamic>>>{};
-    for (final c in _categories) {
-      for (int fi = 0; fi < c.folders.length; fi++) {
-        final folder = c.folders[fi];
-        ordersByFolder[folder.id] = <Map<String, dynamic>>[];
-        for (int xi = 0; xi < folder.files.length; xi++) {
-          final x = folder.files[xi];
-          newIds.add(x.id);
-          ordersByFolder[folder.id]!.add({
-            'file_id': x.id,
-            'order_index': xi,
-          });
-          final row = <String, dynamic>{
-            'id': x.id,
-            'parent_id': folder.id,
-            'name': x.name,
-            'url': x.path,
-          };
-          futures.add(DataManager.instance.saveResourceFileWithCategory(row, _kCategoryKey));
-        }
-      }
-    }
-    for (final entry in ordersByFolder.entries) {
-      futures.add(DataManager.instance.saveResourceFileOrders(
-        scopeType: 'file_shortcut',
-        category: _kCategoryKey,
-        parentId: entry.key,
-        rows: entry.value,
-      ));
-    }
-
-    final removed = _knownFileIds.difference(newIds);
-    for (final id in removed) {
+    for (final r in rows) {
+      final id = (r['id'] as String?) ?? '';
+      if (id.isEmpty) continue;
       futures.add(DataManager.instance.deleteResourceFile(id));
     }
-    await Future.wait(futures);
-
-    _knownFileIds = newIds;
-    _mutationRev++;
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
   }
 
   void _selectCategory(String categoryId) {
     if (_selectedCategoryId == categoryId) return;
     setState(() {
       _selectedCategoryId = categoryId;
-      _selectedFolderId = null;
-      _target = _FsTarget.category;
     });
     unawaited(_saveLastSelectedCategoryToPrefs(categoryId));
   }
 
-  void _selectFolder(String folderId) {
-    if (_selectedFolderId == folderId && _target == _FsTarget.folder) return;
-    setState(() {
-      _selectedFolderId = folderId;
-      _target = _FsTarget.folder;
-    });
-  }
-
-  void _toggleFolderExpanded(String folderId) {
-    final catId = _effectiveCategoryId;
-    if (catId == null) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final folders = _categories[ci].folders;
-    final idx = folders.indexWhere((f) => f.id == folderId);
-    if (idx == -1) return;
-    final nextFolders = [...folders];
-    nextFolders[idx] = nextFolders[idx].copyWith(expanded: !nextFolders[idx].expanded);
-    setState(() {
-      _categories[ci] = _categories[ci].copyWith(folders: nextFolders);
-    });
-  }
-
-  Future<void> _onReorderFolders(int oldIndex, int newIndex) async {
-    if (_loading) return;
-    final catId = _effectiveCategoryId;
-    if (catId == null) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final cat = _categories[ci];
-    final list = [...cat.folders];
-    if (list.length < 2) return;
-
-    final oi = oldIndex.clamp(0, list.length - 1);
-    final ni = (newIndex > oldIndex) ? (newIndex - 1) : newIndex;
-    final safeNi = ni.clamp(0, list.length - 1);
-    final moved = list.removeAt(oi);
-    list.insert(safeNi, moved);
-
-    final normalized = <_FsFolder>[
-      for (int i = 0; i < list.length; i++) list[i].copyWith(order: i),
-    ];
-
-    setState(() {
-      _categories[ci] = cat.copyWith(folders: normalized);
-      _target = _FsTarget.folder;
-    });
-    await _persistAll();
-  }
-
   Future<void> _onReorderFiles({
-    required String folderId,
     required int oldIndex,
     required int newIndex,
   }) async {
@@ -682,10 +586,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     final ci = _categories.indexWhere((c) => c.id == catId);
     if (ci == -1) return;
     final cat = _categories[ci];
-    final fi = cat.folders.indexWhere((f) => f.id == folderId);
-    if (fi == -1) return;
-    final folder = cat.folders[fi];
-    final list = [...folder.files];
+    final list = [...cat.filesOrEmpty];
     if (list.length < 2) return;
 
     final oi = oldIndex.clamp(0, list.length - 1);
@@ -696,22 +597,25 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
 
     final normalized = <_FsFile>[
       for (int i = 0; i < list.length; i++)
-        _FsFile(
-          id: list[i].id,
-          name: list[i].name,
-          path: list[i].path,
-          kind: list[i].kind,
-          order: i,
-        ),
+        list[i].copyWith(order: i),
     ];
 
-    final nextFolders = [...cat.folders];
-    nextFolders[fi] = folder.copyWith(files: normalized);
     setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _target = _FsTarget.folder;
+      _categories[ci] = cat.copyWith(files: normalized);
     });
-    await _persistAll();
+    _mutationRev++;
+    await DataManager.instance.saveResourceFileOrders(
+      scopeType: 'file_shortcut',
+      category: _kCategoryKey,
+      parentId: catId,
+      rows: [
+        for (int i = 0; i < normalized.length; i++)
+          {
+            'file_id': normalized[i].id,
+            'order_index': i,
+          },
+      ],
+    );
   }
 
   Future<String?> _promptText({
@@ -731,6 +635,11 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
         initialText: initialText,
       ),
     );
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<bool> _confirmDelete({
@@ -763,186 +672,24 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   }
 
   Future<void> _onCreatePressed() async {
-    // UX: "추가"는 항상 다이얼로그를 띄워 범주/폴더 중 선택 가능
-    final catId = _effectiveCategoryId;
-    final canCreateFolder = catId != null;
-    final initialKind = canCreateFolder ? _FsCreateKind.folder : _FsCreateKind.category;
-
-    final result = await showDialog<_FsCreateDialogResult>(
-      context: _dlgCtx,
-      useRootNavigator: true,
-      barrierDismissible: true,
-      builder: (_) => _FsCreateDialog(
-        canCreateFolder: canCreateFolder,
-        categoryName: _effectiveCategory?.name,
-        initialKind: initialKind,
-      ),
-    );
-    if (result == null) return;
-    final trimmed = result.name.trim();
-    if (trimmed.isEmpty) return;
-
-    if (result.kind == _FsCreateKind.category) {
-      final id = const Uuid().v4();
-      setState(() {
-        _categories = [
-          _FsCategory(id: id, name: trimmed, order: 0, folders: <_FsFolder>[]),
-          ..._categories.map((c) => c.copyWith(order: c.order + 1)),
-        ];
-        _selectedCategoryId = id;
-        _selectedFolderId = null;
-        _target = _FsTarget.category;
-      });
-      await _persistAll();
-      return;
-    }
-
-    // folder
-    if (catId == null) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final folderId = const Uuid().v4();
-    final cat = _categories[ci];
-    final nextFolders = [
-      _FsFolder(id: folderId, name: trimmed, expanded: true, order: 0),
-      ...cat.folders.map((f) => f.copyWith(order: f.order + 1)),
-    ];
-    setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _selectedFolderId = folderId;
-      _target = _FsTarget.folder;
-    });
-    await _persistAll();
+    _showSnack('파일 추가는 기타 탭에서 해주세요.');
   }
 
   Future<void> _onEditPressed() async {
-    if (_target == _FsTarget.category) {
-      final catId = _effectiveCategoryId;
-      if (catId == null) return;
-      final ci = _categories.indexWhere((c) => c.id == catId);
-      if (ci == -1) return;
-      final cur = _categories[ci];
-      final name = await _promptText(title: '범주 수정', hintText: '범주 이름', okText: '저장', initialText: cur.name);
-      final trimmed = name?.trim() ?? '';
-      if (trimmed.isEmpty || trimmed == cur.name) return;
-      setState(() {
-        _categories[ci] = cur.copyWith(name: trimmed);
-      });
-      await _persistAll();
-      return;
-    }
-
-    final catId = _effectiveCategoryId;
-    final folderId = _selectedFolderId;
-    if (catId == null || folderId == null || folderId.trim().isEmpty) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final cat = _categories[ci];
-    final idx = cat.folders.indexWhere((f) => f.id == folderId);
-    if (idx == -1) return;
-    final cur = cat.folders[idx];
-    final name = await _promptText(title: '폴더 수정', hintText: '폴더 이름', okText: '저장', initialText: cur.name);
-    final trimmed = name?.trim() ?? '';
-    if (trimmed.isEmpty || trimmed == cur.name) return;
-    final nextFolders = [...cat.folders];
-    nextFolders[idx] = cur.copyWith(name: trimmed);
-    setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-    });
-    await _persistAll();
+    _showSnack('폴더는 기타 탭에서 관리하고, 파일은 카드에서 수정하세요.');
   }
 
   Future<void> _onDeletePressed() async {
-    if (_target == _FsTarget.category) {
-      final catId = _effectiveCategoryId;
-      if (catId == null) return;
-      final ci = _categories.indexWhere((c) => c.id == catId);
-      if (ci == -1) return;
-      final cur = _categories[ci];
-      final ok = await _confirmDelete(
-        title: '범주 삭제',
-        message: '“${cur.name}”을(를) 삭제할까요?\n(하위 폴더/파일 바로가기 포함)',
-      );
-      if (!ok) return;
-      setState(() {
-        _categories = [..._categories]..removeAt(ci);
-        _selectedFolderId = null;
-        _selectedCategoryId = _categories.isEmpty ? null : _categories.first.id;
-        _target = _FsTarget.category;
-      });
-      await _persistAll();
-      return;
-    }
-
-    final catId = _effectiveCategoryId;
-    final folderId = _selectedFolderId;
-    if (catId == null || folderId == null || folderId.trim().isEmpty) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final cat = _categories[ci];
-    final idx = cat.folders.indexWhere((f) => f.id == folderId);
-    if (idx == -1) return;
-    final cur = cat.folders[idx];
-    final ok = await _confirmDelete(
-      title: '폴더 삭제',
-      message: '“${cur.name}”을(를) 삭제할까요?\n(하위 파일 바로가기 포함)',
-    );
-    if (!ok) return;
-    final nextFolders = [...cat.folders]..removeAt(idx);
-    setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _selectedFolderId = null;
-      _target = _FsTarget.category;
-    });
-    await _persistAll();
+    _showSnack('폴더는 기타 탭에서 관리하고, 파일은 카드에서 삭제하세요.');
   }
 
   Future<void> _onAddFilePressed() async {
-    final catId = _effectiveCategoryId;
-    final folderId = _selectedFolderId;
-    if (catId == null || folderId == null || folderId.trim().isEmpty) return;
-    final ci = _categories.indexWhere((c) => c.id == catId);
-    if (ci == -1) return;
-    final cat = _categories[ci];
-    final fi = cat.folders.indexWhere((f) => f.id == folderId);
-    if (fi == -1) return;
-
-    final typeGroup = XTypeGroup(label: '문서', extensions: const ['pdf', 'hwp']);
-    final XFile? xf = await openFile(acceptedTypeGroups: [typeGroup]);
-    if (xf == null) return;
-
-    final path = xf.path;
-    final defaultName = (xf.name.isNotEmpty) ? xf.name : path.split(RegExp(r'[\\/]')).last;
-    final inputName = await _promptText(
-      title: '파일 추가',
-      hintText: '표시 이름',
-      okText: '추가',
-      initialText: defaultName,
-    );
-    final name = inputName?.trim() ?? '';
-    if (name.isEmpty) return;
-    final kind = _FsFileKind.fromPath(path);
-
-    final fileId = const Uuid().v4();
-    final folder = cat.folders[fi];
-    final nextFiles = [...folder.files, _FsFile(id: fileId, name: name, path: path, kind: kind, order: folder.files.length)];
-    final nextFolders = [...cat.folders];
-    nextFolders[fi] = folder.copyWith(expanded: true, files: nextFiles);
-    setState(() {
-      _categories[ci] = cat.copyWith(folders: nextFolders);
-      _target = _FsTarget.folder;
-    });
-    await _persistAll();
+    _showSnack('파일 추가는 기타 탭에서 해주세요.');
   }
 
   Future<void> _openCategoryPicker() async {
-    // 범주 선택 UI를 열면 작업 타겟도 "범주"로 둔다.
-    if (mounted) {
-      setState(() => _target = _FsTarget.category);
-    }
     if (_categories.isEmpty) {
-      // 범주가 없으면 바로 생성 모드로 유도
-      await _onCreatePressed();
+      _showSnack('기타 탭에서 폴더를 먼저 만들어 주세요.');
       return;
     }
 
@@ -963,7 +710,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
   @override
   Widget build(BuildContext context) {
     final cat = _effectiveCategory;
-    final folders = cat?.folders ?? const <_FsFolder>[];
+    final files = cat?.filesOrEmpty ?? const <_FsFile>[];
 
     final bootEmpty = _booting && _categories.isEmpty;
     final hasCategory = cat != null;
@@ -979,56 +726,18 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
           ),
           const SizedBox(height: 12),
           _CategoryPickerRow(
-            label: '범주',
+            label: '폴더',
             valueText: bootEmpty
                 ? '불러오는 중...'
                 : (hasCategory
                     ? (cat!.name.trim().isNotEmpty ? cat!.name : '불러오는 중...')
-                    : '범주 없음 (추가 버튼으로 생성)'),
-            selected: _target == _FsTarget.category,
+                    : '폴더 없음 (기타 탭에서 추가)'),
+            selected: hasCategory,
             onTap: (_loading || bootEmpty) ? null : () => unawaited(_openCategoryPicker()),
           ),
-          const SizedBox(height: 12),
-          InkWell(
-            onTap: _loading
-                ? null
-                : () {
-                    // 폴더 헤더를 누르면 "폴더 작업(추가/수정/삭제)" 타겟으로 전환
-                    setState(() => _target = _FsTarget.folder);
-                  },
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                children: [
-                  Text(
-                    '폴더',
-                    style: TextStyle(
-                      color: _rsText,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                      decoration: (_target == _FsTarget.folder) ? TextDecoration.underline : TextDecoration.none,
-                      decorationThickness: 2,
-                      decorationColor: _rsAccent,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${folders.length}개',
-                    style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
-                  const Spacer(),
-                  if (_loading)
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          const SizedBox(height: 16),
           Expanded(
             child: bootEmpty
                 ? const _EmptyState(
@@ -1039,14 +748,14 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
                 : (!hasCategory)
                 ? const _EmptyState(
                     icon: Icons.folder_special_outlined,
-                    title: '등록된 범주가 없습니다.',
-                    subtitle: '상단 “추가” 버튼으로 먼저 범주를 만들어 주세요.',
+                    title: '등록된 폴더가 없습니다.',
+                    subtitle: '기타 탭에서 폴더를 먼저 만들어 주세요.',
                   )
-                : (folders.isEmpty
+                : (files.isEmpty
                     ? const _EmptyState(
-                        icon: Icons.folder_open,
-                        title: '등록된 폴더가 없습니다.',
-                        subtitle: '상단 “추가” 버튼으로 폴더를 추가하세요.\n(범주 선택 후 폴더 모드에서 생성)',
+                        icon: Icons.insert_drive_file_outlined,
+                        title: '등록된 파일이 없습니다.',
+                        subtitle: '',
                       )
                     : Scrollbar(
                         controller: _scrollCtrl,
@@ -1055,26 +764,24 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
                           scrollController: _scrollCtrl,
                           buildDefaultDragHandles: false,
                           proxyDecorator: _rsReorderProxyDecorator,
-                          itemCount: folders.length,
-                          onReorder: (oldIndex, newIndex) => unawaited(_onReorderFolders(oldIndex, newIndex)),
+                          itemCount: files.length,
+                          onReorder: (oldIndex, newIndex) => unawaited(_onReorderFiles(oldIndex: oldIndex, newIndex: newIndex)),
                           itemBuilder: (context, index) {
-                            final folder = folders[index];
-                            final selected = (_selectedFolderId == folder.id) && (_target == _FsTarget.folder);
+                            final f = files[index];
                             return Padding(
-                              key: ValueKey(folder.id),
-                              padding: EdgeInsets.only(bottom: (index == folders.length - 1) ? 0 : 8),
-                              child: _FolderNode(
-                                folder: folder,
-                                reorderIndex: index,
-                                dialogContext: _dlgCtx,
-                                selected: selected,
-                                onSelect: () => _selectFolder(folder.id),
-                                onToggleExpanded: () => _toggleFolderExpanded(folder.id),
-                                onPrint: _openPrintDialogForPath,
-                                onRenameFile: (fileId) => unawaited(_renameFile(folderId: folder.id, fileId: fileId)),
-                                onDeleteFile: (fileId) => unawaited(_deleteFile(folderId: folder.id, fileId: fileId)),
-                                onReorderFiles: (oldIndex, newIndex) => unawaited(
-                                  _onReorderFiles(folderId: folder.id, oldIndex: oldIndex, newIndex: newIndex),
+                              key: ValueKey(f.id),
+                              padding: EdgeInsets.only(bottom: (index == files.length - 1) ? 0 : 8),
+                              child: ReorderableDelayedDragStartListener(
+                                index: index,
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: _FileCard(
+                                    file: f,
+                                    dialogContext: _dlgCtx,
+                                    onPrint: _openPrintDialogForPath,
+                                    onRename: () => unawaited(_renameFile(fileId: f.id)),
+                                    onDelete: () => unawaited(_deleteFile(fileId: f.id)),
+                                  ),
                                 ),
                               ),
                             );
@@ -1087,8 +794,6 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     );
   }
 }
-
-enum _FsTarget { category, folder }
 
 enum _FsPaperSize {
   followFile, // 기본(파일 설정)
@@ -1159,6 +864,17 @@ enum _FsFileKind {
     }
   }
 
+  String label() {
+    switch (this) {
+      case _FsFileKind.pdf:
+        return 'PDF';
+      case _FsFileKind.hwp:
+        return 'HWP';
+      case _FsFileKind.other:
+        return '기타';
+    }
+  }
+
   IconData icon() {
     switch (this) {
       case _FsFileKind.pdf:
@@ -1174,85 +890,85 @@ enum _FsFileKind {
 class _FsFile {
   final String id;
   final String name;
-  final String path;
-  final _FsFileKind kind;
+  final Map<_FsFileKind, String> links;
   final int order;
 
   const _FsFile({
     required this.id,
     required this.name,
-    required this.path,
-    required this.kind,
+    required this.links,
     required this.order,
   });
-}
 
-class _FsFolder {
-  final String id;
-  final String name;
-  final bool expanded;
-  final int order;
-  final List<_FsFile> files;
-
-  const _FsFolder({
-    required this.id,
-    required this.name,
-    required this.expanded,
-    required this.order,
-    this.files = const <_FsFile>[],
-  });
-
-  const _FsFolder.none()
-      : id = '',
-        name = '',
-        expanded = false,
-        order = 0,
-        files = const <_FsFile>[];
-
-  _FsFolder copyWith({
+  _FsFile copyWith({
     String? id,
     String? name,
-    bool? expanded,
+    Map<_FsFileKind, String>? links,
     int? order,
-    List<_FsFile>? files,
   }) {
-    return _FsFolder(
+    return _FsFile(
       id: id ?? this.id,
       name: name ?? this.name,
-      expanded: expanded ?? this.expanded,
+      links: links ?? this.links,
       order: order ?? this.order,
-      files: files ?? this.files,
     );
   }
+
+  List<_FsFileKind> get availableKinds => links.keys.toList()
+    ..sort((a, b) => a.label().compareTo(b.label()));
+
+  _FsFileKind get defaultKind {
+    if (links.containsKey(_FsFileKind.pdf)) return _FsFileKind.pdf;
+    if (links.containsKey(_FsFileKind.hwp)) return _FsFileKind.hwp;
+    return _FsFileKind.other;
+  }
+
+  String pathFor(_FsFileKind kind) => (links[kind] ?? '').trim();
 }
 
 class _FsCategory {
   final String id;
   String name;
   int order;
-  List<_FsFolder> folders;
+  List<_FsFile>? files;
 
   _FsCategory({
     required this.id,
     required this.name,
     required this.order,
-    List<_FsFolder>? folders,
-  }) : folders = folders ?? <_FsFolder>[];
+    List<_FsFile>? files,
+  }) : files = files ?? <_FsFile>[];
+
+  List<_FsFile> get filesOrEmpty => files ?? const <_FsFile>[];
 
   _FsCategory copyWith({
     String? id,
     String? name,
     int? order,
-    List<_FsFolder>? folders,
+    List<_FsFile>? files,
   }) {
     return _FsCategory(
       id: id ?? this.id,
       name: name ?? this.name,
       order: order ?? this.order,
-      folders: folders ?? this.folders,
+      files: files ?? this.filesOrEmpty,
     );
   }
 }
+
+class _FsExternalFolderRow {
+  final String id;
+  final String name;
+  final String parentId;
+  final int order;
+  const _FsExternalFolderRow({
+    required this.id,
+    required this.name,
+    required this.parentId,
+    required this.order,
+  });
+}
+
 
 class _CategoryPickerRow extends StatelessWidget {
   final String label;
@@ -1274,7 +990,7 @@ class _CategoryPickerRow extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          // 범주 행을 누르면 "범주 선택" 뿐 아니라, 작업 타겟도 범주로 둔다.
+          // 폴더 행을 누르면 폴더 선택
           onTap?.call();
         },
         borderRadius: BorderRadius.circular(12),
@@ -1308,134 +1024,6 @@ class _CategoryPickerRow extends StatelessWidget {
   }
 }
 
-class _FolderNode extends StatelessWidget {
-  final _FsFolder folder;
-  final int reorderIndex;
-  final BuildContext dialogContext;
-  final bool selected;
-  final VoidCallback onSelect;
-  final VoidCallback onToggleExpanded;
-  final Future<void> Function(String path) onPrint;
-  final void Function(String fileId) onRenameFile;
-  final void Function(String fileId) onDeleteFile;
-  final void Function(int oldIndex, int newIndex) onReorderFiles;
-
-  const _FolderNode({
-    required this.folder,
-    required this.reorderIndex,
-    required this.dialogContext,
-    required this.selected,
-    required this.onSelect,
-    required this.onToggleExpanded,
-    required this.onPrint,
-    required this.onRenameFile,
-    required this.onDeleteFile,
-    required this.onReorderFiles,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _rsPanelBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _rsBorder.withOpacity(0.9)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Material(
-            color: Colors.transparent,
-            child: ReorderableDelayedDragStartListener(
-              index: reorderIndex,
-              child: InkWell(
-                onTap: () {
-                  // 요청: 폴더 카드를 클릭하면 선택 + 펼치기/접기까지
-                  onSelect();
-                  onToggleExpanded();
-                },
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  decoration: BoxDecoration(
-                    // 선택 하이라이트는 "폴더 전체"가 아니라 헤더 영역에만 아주 약하게 적용
-                    color: selected ? _rsAccent.withOpacity(0.08) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-                  child: Row(
-                    children: [
-                      Icon(
-                        folder.expanded ? Icons.expand_more : Icons.chevron_right,
-                        color: _rsTextSub,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.folder_outlined, color: Colors.white70, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          folder.name,
-                          style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${folder.files.length}',
-                        style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (folder.expanded) ...[
-            const Divider(height: 1, color: Color(0x22FFFFFF)),
-            Padding(
-              // 트리 들여쓰기 과도함을 줄여 카드 폭을 더 채우도록 조정
-              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-              child: folder.files.isEmpty
-                  ? const Text(
-                      '파일 없음 (상단 “파일 추가”로 HWP/PDF 바로가기를 추가할 수 있어요)',
-                      style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700, height: 1.25),
-                    )
-                  : ReorderableListView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      buildDefaultDragHandles: false,
-                      proxyDecorator: _rsReorderProxyDecorator,
-                      itemCount: folder.files.length,
-                      onReorder: onReorderFiles,
-                      itemBuilder: (context, index) {
-                        final f = folder.files[index];
-                        return ReorderableDelayedDragStartListener(
-                          key: ValueKey(f.id),
-                          index: index,
-                          child: Padding(
-                            padding: EdgeInsets.only(bottom: (index == folder.files.length - 1) ? 0 : 8),
-                            child: SizedBox(
-                              width: double.infinity,
-                              child: _FileCard(
-                                file: f,
-                                dialogContext: dialogContext,
-                                onPrint: onPrint,
-                                onRename: () => onRenameFile(f.id),
-                                onDelete: () => onDeleteFile(f.id),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
 class _FileCard extends StatefulWidget {
   final _FsFile file;
   final BuildContext dialogContext;
@@ -1462,10 +1050,38 @@ class _FileCardState extends State<_FileCard> {
   bool _dragging = false;
   bool _printing = false;
   _FsPaperSize _paperSize = _FsPaperSize.followFile;
+  late _FsFileKind _activeKind;
   final TextEditingController _pageRangeCtrl = ImeAwareTextEditingController();
   final GlobalKey _paperAnchorKey = GlobalKey();
+  final GlobalKey _kindAnchorKey = GlobalKey();
   OverlayEntry? _paperMenuEntry;
   Completer<_FsPaperSize?>? _paperMenuCompleter;
+  OverlayEntry? _kindMenuEntry;
+  Completer<_FsFileKind?>? _kindMenuCompleter;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeKind = widget.file.defaultKind;
+  }
+
+  @override
+  void didUpdateWidget(covariant _FileCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final available = widget.file.availableKinds;
+    if (available.isEmpty) {
+      _activeKind = _FsFileKind.other;
+      return;
+    }
+    if (!available.contains(_activeKind)) {
+      _activeKind = widget.file.defaultKind;
+    }
+  }
+
+  List<_FsFileKind> get _availableKinds => widget.file.availableKinds;
+  String get _activePath => widget.file.pathFor(_activeKind);
+  bool get _hasActiveLink => _activeKind != _FsFileKind.other && _activePath.trim().isNotEmpty;
+  bool get _hasMultipleKinds => _availableKinds.length > 1;
 
   void _dismissPaperMenu([_FsPaperSize? picked]) {
     final entry = _paperMenuEntry;
@@ -1480,8 +1096,22 @@ class _FileCardState extends State<_FileCard> {
     }
   }
 
+  void _dismissKindMenu([_FsFileKind? picked]) {
+    final entry = _kindMenuEntry;
+    final c = _kindMenuCompleter;
+    _kindMenuEntry = null;
+    _kindMenuCompleter = null;
+    try {
+      entry?.remove();
+    } catch (_) {}
+    if (c != null && !c.isCompleted) {
+      c.complete(picked);
+    }
+  }
+
   @override
   void dispose() {
+    _dismissKindMenu();
     _dismissPaperMenu();
     _pageRangeCtrl.dispose();
     super.dispose();
@@ -1527,6 +1157,121 @@ class _FileCardState extends State<_FileCard> {
           await f.delete();
         }
       } catch (_) {}
+    });
+  }
+
+  Future<void> _openKindMenu() async {
+    if (_printing || !_hasMultipleKinds) return;
+    final anchorCtx = _kindAnchorKey.currentContext;
+    if (anchorCtx == null) return;
+    if (_kindMenuEntry != null) {
+      _dismissKindMenu();
+      return;
+    }
+
+    final overlayState = Overlay.of(context);
+    if (overlayState == null) return;
+
+    final overlayObj = overlayState.context.findRenderObject();
+    if (overlayObj is! RenderBox) return;
+    final overlayBox = overlayObj;
+
+    final anchorObj = anchorCtx.findRenderObject();
+    if (anchorObj is! RenderBox) return;
+    final anchorBox = anchorObj;
+
+    final globalTopLeft = anchorBox.localToGlobal(Offset.zero);
+    final topLeft = overlayBox.globalToLocal(globalTopLeft);
+    final anchorRect = topLeft & anchorBox.size;
+
+    final completer = Completer<_FsFileKind?>();
+    _kindMenuCompleter = completer;
+
+    const gap = 8.0;
+    const itemHeight = 40.0;
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) {
+        final overlaySize = overlayBox.size;
+        final menuWidth = math.max(anchorRect.width, 140.0);
+        final menuHeight = itemHeight * _availableKinds.length;
+
+        double x = anchorRect.left;
+        x = x.clamp(gap, overlaySize.width - gap - menuWidth).toDouble();
+
+        double y = anchorRect.bottom + gap;
+        if (y + menuHeight > overlaySize.height - gap) {
+          y = anchorRect.top - gap - menuHeight;
+        }
+        y = y.clamp(gap, overlaySize.height - gap - menuHeight).toDouble();
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _dismissKindMenu,
+              ),
+            ),
+            Positioned(
+              left: x,
+              top: y,
+              width: menuWidth,
+              child: Material(
+                color: _rsPanelBg,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: _rsBorder),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final v in _availableKinds)
+                      InkWell(
+                        onTap: () => _dismissKindMenu(v),
+                        child: SizedBox(
+                          height: itemHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    v.label(),
+                                    style: TextStyle(
+                                      color: v == _activeKind ? _rsText : _rsTextSub,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                if (v == _activeKind)
+                                  const Icon(Icons.check, size: 18, color: _rsAccent),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    _kindMenuEntry = entry;
+    overlayState.insert(entry);
+
+    final picked = await completer.future;
+    if (picked == null || picked == _activeKind) return;
+    if (!mounted) return;
+    setState(() {
+      _activeKind = picked;
+      _pageRangeCtrl.clear();
+      _paperSize = _FsPaperSize.followFile;
     });
   }
 
@@ -1789,23 +1534,27 @@ class _FileCardState extends State<_FileCard> {
 
   Future<void> _printNow() async {
     if (_printing) return;
-    final file = widget.file;
-    final srcPath = file.path.trim();
-    if (srcPath.isEmpty) return;
+    final srcPath = _activePath.trim();
+    if (srcPath.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('연결된 파일이 없습니다.')));
+      }
+      return;
+    }
     setState(() => _printing = true);
     try {
       unawaited(_cleanupOldPrintTemps());
       // HWP는 환경별로 자동화(숨김/키보드) 방식이 쉽게 깨질 수 있어,
       // 가장 안정적인 방식(Windows Shell Verb "Print")으로 위임한다.
       // -> "파일은 안 열리고, 인쇄 진행/대화창만 뜬 뒤 자동 인쇄"가 이 경로에서 동작하는 경우가 많다.
-      if (file.kind == _FsFileKind.hwp) {
+      if (_activeKind == _FsFileKind.hwp) {
         await _printHwpShellVerbBestEffort(path: srcPath, paper: _paperSize);
         return;
       }
       String pathToPrint = srcPath;
       String? tempToDelete;
       // 용지 크기 지정은 PDF에서만 적용(새 PDF 생성)
-      if (file.kind == _FsFileKind.pdf) {
+      if (_activeKind == _FsFileKind.pdf) {
         final rangeText = _pageRangeCtrl.text.trim();
         if (_paperSize != _FsPaperSize.followFile || rangeText.isNotEmpty) {
           final out = await _buildPdfForPrint(
@@ -1843,29 +1592,44 @@ class _FileCardState extends State<_FileCard> {
   @override
   Widget build(BuildContext context) {
     final file = widget.file;
+    const double _controlHeight = 35;
 
-    Widget buildKindBadge() {
-      String? letter;
-      Color? color;
-      switch (file.kind) {
-        case _FsFileKind.hwp:
-          letter = 'H';
-          color = _rsHancomBlue; // 한글(Hancom)
-          break;
-        case _FsFileKind.pdf:
-          letter = 'P';
-          color = const Color(0xFFED1C24); // Adobe 레드 톤
-          break;
-        case _FsFileKind.other:
-          return const SizedBox.shrink();
+    Widget buildKindPicker() {
+      if (_availableKinds.isEmpty) {
+        return const SizedBox.shrink();
       }
-
-      return Tooltip(
-        message: (file.kind == _FsFileKind.pdf) ? 'PDF' : 'HWP',
-        waitDuration: const Duration(milliseconds: 450),
-        child: Text(
-          letter,
-          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900),
+      final label = _activeKind.label();
+      final chip = DecoratedBox(
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.transparent),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
+              ),
+              if (_hasMultipleKinds) ...[
+                const SizedBox(width: 2),
+                const Icon(Icons.expand_more, size: 16, color: _rsTextSub),
+              ],
+            ],
+          ),
+        ),
+      );
+      if (!_hasMultipleKinds || _printing) return chip;
+      return SizedBox(
+        height: _controlHeight,
+        child: InkWell(
+          key: _kindAnchorKey,
+          onTap: _openKindMenu,
+          borderRadius: BorderRadius.circular(10),
+          child: chip,
         ),
       );
     }
@@ -1874,7 +1638,7 @@ class _FileCardState extends State<_FileCard> {
       color: Colors.transparent,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        padding: const EdgeInsets.fromLTRB(12, 12, 0, 5),
         decoration: BoxDecoration(
           color: _rsFieldBg,
           borderRadius: BorderRadius.circular(14),
@@ -1883,89 +1647,95 @@ class _FileCardState extends State<_FileCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            InkWell(
-              onTap: () {
-                if (_dx != 0) {
-                  _close();
-                  return;
-                }
-                final p = file.path.trim();
-                if (p.isEmpty) return;
-                unawaited(OpenFilex.open(p));
-              },
-              child: Row(
-                children: [
-                  Expanded(
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      if (_dx != 0) {
+                        _close();
+                        return;
+                      }
+                      final p = _activePath.trim();
+                      if (p.isEmpty) return;
+                      unawaited(OpenFilex.open(p));
+                    },
                     child: Text(
                       file.name,
                       style: const TextStyle(color: _rsText, fontSize: 15, fontWeight: FontWeight.w900),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                buildKindPicker(),
+              ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 13),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
-                  tooltip: (file.kind == _FsFileKind.hwp) ? '바로 인쇄' : '인쇄',
-                  onPressed: _printing ? null : () => unawaited(_printNow()),
-                  icon: const Icon(Icons.print_outlined, color: Colors.white70, size: 18),
+                  tooltip: (_activeKind == _FsFileKind.hwp) ? '바로 인쇄' : '인쇄',
+                  onPressed: (_printing || !_hasActiveLink) ? null : () => unawaited(_printNow()),
+                  icon: const Icon(Icons.print_outlined, color: Colors.white70, size: 20),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
-                const SizedBox(width: 6),
-                if (file.kind == _FsFileKind.pdf)
-                  InkWell(
-                    key: _paperAnchorKey,
-                    onTap: (!_printing) ? () => unawaited(_pickPaperSize()) : null,
-                    borderRadius: BorderRadius.circular(10),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: _rsPanelBg,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.transparent),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _paperSize.label(),
-                              style: const TextStyle(
-                                color: _rsTextSub,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
+                if (_activeKind == _FsFileKind.pdf && _hasActiveLink) ...[
+                  const Spacer(),
+                  SizedBox(
+                    height: _controlHeight,
+                    child: InkWell(
+                      key: _paperAnchorKey,
+                      onTap: (!_printing) ? () => unawaited(_pickPaperSize()) : null,
+                      borderRadius: BorderRadius.circular(10),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: _rsPanelBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.transparent),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _paperSize.label(),
+                                style: const TextStyle(
+                                  color: _rsTextSub,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 2),
-                            const Icon(
-                              Icons.expand_more,
-                              size: 16,
-                              color: _rsTextSub,
-                            ),
-                          ],
+                              const SizedBox(width: 2),
+                              const Icon(
+                                Icons.expand_more,
+                                size: 16,
+                                color: _rsTextSub,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  )
-                else
-                  const SizedBox.shrink(),
-                if (file.kind == _FsFileKind.pdf) ...[
-                  const SizedBox(width: 6),
+                  ),
+                  const SizedBox(width: 10),
                   SizedBox(
-                    width: 110,
-                    height: 30,
+                    width: 120,
+                    height: _controlHeight,
                     child: TextField(
                       controller: _pageRangeCtrl,
                       enabled: !_printing,
+                      minLines: 1,
+                      maxLines: 1,
+                      textAlignVertical: TextAlignVertical.center,
                       style: const TextStyle(color: _rsText, fontSize: 12, fontWeight: FontWeight.w700),
                       decoration: InputDecoration(
                         hintText: '페이지 (예: 10-15)',
                         hintStyle: const TextStyle(color: _rsTextSub, fontSize: 11),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: const BorderSide(color: _rsBorder),
@@ -1976,13 +1746,11 @@ class _FileCardState extends State<_FileCard> {
                         ),
                         filled: true,
                         fillColor: _rsPanelBg,
-                        isDense: true,
+                        isDense: false,
                       ),
                     ),
                   ),
                 ],
-                const Spacer(),
-                buildKindBadge(),
               ],
             ),
           ],
@@ -2114,12 +1882,14 @@ class _EmptyState extends StatelessWidget {
             style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, height: 1.3),
-            textAlign: TextAlign.center,
-          ),
+          if (subtitle.trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, height: 1.3),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ],
       ),
     );
@@ -2140,7 +1910,7 @@ class _CategoryPickDialog extends StatelessWidget {
     return AlertDialog(
       backgroundColor: _rsBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: const Text('범주 선택', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
+      title: const Text('폴더 선택', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
       content: SizedBox(
         width: 420,
         child: ListView.separated(
@@ -2186,169 +1956,6 @@ class _CategoryPickDialog extends StatelessWidget {
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('닫기', style: TextStyle(color: Colors.white70)),
-        ),
-      ],
-    );
-  }
-}
-
-enum _FsCreateKind { category, folder }
-
-class _FsCreateDialogResult {
-  final _FsCreateKind kind;
-  final String name;
-  const _FsCreateDialogResult({required this.kind, required this.name});
-}
-
-class _FsCreateDialog extends StatefulWidget {
-  final bool canCreateFolder;
-  final String? categoryName;
-  final _FsCreateKind initialKind;
-
-  const _FsCreateDialog({
-    required this.canCreateFolder,
-    required this.categoryName,
-    required this.initialKind,
-  });
-
-  @override
-  State<_FsCreateDialog> createState() => _FsCreateDialogState();
-}
-
-class _FsCreateDialogState extends State<_FsCreateDialog> {
-  late _FsCreateKind _kind = widget.initialKind;
-  late final TextEditingController _ctrl = ImeAwareTextEditingController();
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  bool get _canOk {
-    if (_ctrl.text.trim().isEmpty) return false;
-    if (_kind == _FsCreateKind.folder && !widget.canCreateFolder) return false;
-    return true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final folderEnabled = widget.canCreateFolder;
-    final folderHint = folderEnabled ? '폴더 이름' : '폴더를 추가하려면 먼저 범주를 선택/생성하세요';
-    final hint = (_kind == _FsCreateKind.category) ? '범주 이름' : folderHint;
-
-    Widget kindButton({
-      required String label,
-      required _FsCreateKind kind,
-      required bool enabled,
-    }) {
-      final selected = (_kind == kind);
-      final borderColor = !enabled
-          ? _rsBorder.withOpacity(0.35)
-          : (selected ? _rsAccent : _rsBorder);
-      final bg = selected ? _rsAccent.withOpacity(0.12) : _rsPanelBg;
-      final fg = !enabled
-          ? Colors.white24
-          : (selected ? _rsText : _rsTextSub);
-
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: enabled ? () => setState(() => _kind = kind) : null,
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            height: 38,
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: borderColor),
-            ),
-            child: Center(
-              child: Text(
-                label,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w900),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return AlertDialog(
-      backgroundColor: _rsBg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: const Text('추가', style: TextStyle(color: _rsText, fontWeight: FontWeight.w900)),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: kindButton(
-                    label: '범주',
-                    kind: _FsCreateKind.category,
-                    enabled: true,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: kindButton(
-                    label: '폴더',
-                    kind: _FsCreateKind.folder,
-                    enabled: folderEnabled,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (_kind == _FsCreateKind.folder && widget.categoryName != null) ...[
-              Text(
-                '현재 범주: ${widget.categoryName}',
-                style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 8),
-            ],
-            TextField(
-              controller: _ctrl,
-              autofocus: true,
-              enabled: !(_kind == _FsCreateKind.folder && !folderEnabled),
-              style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: const TextStyle(color: _rsTextSub),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: _rsBorder),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: _rsAccent, width: 1.4),
-                ),
-                filled: true,
-                fillColor: _rsFieldBg,
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('취소', style: TextStyle(color: Colors.white70)),
-        ),
-        FilledButton(
-          onPressed: _canOk
-              ? () => Navigator.of(context).pop(
-                    _FsCreateDialogResult(kind: _kind, name: _ctrl.text.trim()),
-                  )
-              : null,
-          style: FilledButton.styleFrom(backgroundColor: _rsAccent),
-          child: const Text('생성'),
         ),
       ],
     );
