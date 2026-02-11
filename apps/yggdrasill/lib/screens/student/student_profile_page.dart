@@ -285,8 +285,11 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 (widget.flows ?? const <StudentFlow>[])
                     .where((f) => f.enabled)
                     .toList();
-            const double timelineMaxWidth = 860 * 0.7; // 30% 감소
-            const double flowCardWidth = 260 * 1.3;
+            // 요청 반영:
+            // - 태그 타임라인 너비 20% 축소
+            // - 플로우 카드 너비 10% 확대
+            const double timelineMaxWidth = 860 * 0.56;
+            const double flowCardWidth = 260 * 1.43;
             const double flowCardSpacing = 12;
             final int flowCount = enabledFlows.length;
             final double flowSidebarWidth = flowCount == 0
@@ -1122,6 +1125,60 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
+  List<_HomeworkRoundData> _buildAssignmentRounds(
+    List<HomeworkAssignmentBrief> assignments,
+    List<HomeworkAssignmentCheck> checks,
+  ) {
+    if (checks.isEmpty) return const <_HomeworkRoundData>[];
+    final sortedAssignments = List<HomeworkAssignmentBrief>.from(assignments)
+      ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+    final sortedChecks = List<HomeworkAssignmentCheck>.from(checks)
+      ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+
+    final Map<String, HomeworkAssignmentBrief> assignmentById = {
+      for (final assignment in sortedAssignments) assignment.id: assignment,
+    };
+    final Set<String> usedAssignmentIds = <String>{};
+
+    HomeworkAssignmentBrief? fallbackFor(HomeworkAssignmentCheck check) {
+      HomeworkAssignmentBrief? nearestBefore;
+      for (final assignment in sortedAssignments) {
+        if (assignment.assignedAt.isAfter(check.checkedAt)) break;
+        if (!usedAssignmentIds.contains(assignment.id)) {
+          nearestBefore = assignment;
+        }
+      }
+      if (nearestBefore != null) return nearestBefore;
+      for (final assignment in sortedAssignments) {
+        if (!usedAssignmentIds.contains(assignment.id)) return assignment;
+      }
+      return sortedAssignments.isNotEmpty ? sortedAssignments.last : null;
+    }
+
+    final List<_HomeworkRoundData> rounds = <_HomeworkRoundData>[];
+    for (int i = 0; i < sortedChecks.length; i++) {
+      final check = sortedChecks[i];
+      HomeworkAssignmentBrief? linked;
+      final assignmentId = check.assignmentId;
+      if (assignmentId != null && assignmentId.isNotEmpty) {
+        linked = assignmentById[assignmentId];
+      }
+      linked ??= fallbackFor(check);
+      if (linked != null) {
+        usedAssignmentIds.add(linked.id);
+      }
+      rounds.add(
+        _HomeworkRoundData(
+          round: i + 1,
+          assignedAt: linked?.assignedAt,
+          checkedAt: check.checkedAt,
+          progress: check.progress,
+        ),
+      );
+    }
+    return rounds;
+  }
+
   Widget _metaItem(String label, String value) {
     final safe = value.trim().isEmpty ? '-' : value.trim();
     return RichText(
@@ -1131,7 +1188,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
             text: '$label ',
             style: const TextStyle(
               color: Color(0xFF9FB3B3),
-              fontSize: 11,
+              fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1139,7 +1196,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
             text: safe,
             style: const TextStyle(
               color: Color(0xFFEAF2F2),
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1156,12 +1213,12 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 84,
+          width: 100,
           child: Text(
             label,
             style: const TextStyle(
               color: Color(0xFF9FB3B3),
-              fontSize: 11,
+              fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1171,7 +1228,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
             safe,
             style: const TextStyle(
               color: Color(0xFFEAF2F2),
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
             softWrap: true,
@@ -1179,11 +1236,6 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
         ),
       ],
     );
-  }
-
-  Widget _detailList(String label, List<String> values) {
-    final safe = values.isEmpty ? '-' : values.join(' · ');
-    return _detailRow(label, safe);
   }
 
   Widget _buildHomeworkCard(HomeworkItem hw) {
@@ -1210,16 +1262,13 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
     final List<HomeworkAssignmentBrief> sortedAssignments =
         List<HomeworkAssignmentBrief>.from(assignments)
           ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
-    final List<String> assignmentDates =
-        sortedAssignments.map((a) => _formatTime(a.assignedAt)).toList();
-
     final List<HomeworkAssignmentCheck> sortedChecks =
         List<HomeworkAssignmentCheck>.from(checks)
           ..sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-    final List<String> checkDates =
-        sortedChecks.map((c) => _formatTime(c.checkedAt)).toList();
-    final List<String> checkRates =
-        sortedChecks.map((c) => '${c.progress}%').toList();
+    final List<_HomeworkRoundData> rounds = _buildAssignmentRounds(
+      sortedAssignments,
+      sortedChecks,
+    );
 
     final bool expanded = _expandedIds.contains(hw.id);
     final Color borderColor = isCompleted
@@ -1242,7 +1291,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
         },
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(12),
@@ -1256,19 +1305,19 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                   if (type.isNotEmpty)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
+                        horizontal: 8,
+                        vertical: 3,
                       ),
                       decoration: BoxDecoration(
                         color: hw.color.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(7),
                         border: Border.all(color: hw.color.withOpacity(0.6)),
                       ),
                       child: Text(
                         type,
                         style: TextStyle(
                           color: hw.color,
-                          fontSize: 11,
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -1279,7 +1328,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                       title,
                       style: const TextStyle(
                         color: Color(0xFFEAF2F2),
-                        fontSize: 13,
+                        fontSize: 15,
                         fontWeight: FontWeight.w700,
                       ),
                       maxLines: 1,
@@ -1291,16 +1340,16 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                       homeworkLabel,
                       style: const TextStyle(
                         color: Color(0xFF9FB3B3),
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               Wrap(
-                spacing: 12,
-                runSpacing: 4,
+                spacing: 14,
+                runSpacing: 6,
                 children: [
                   _metaItem('페이지', page),
                   _metaItem('문항수', count),
@@ -1314,15 +1363,91 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                 secondChild: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
                     const Divider(color: Color(0xFF223131), height: 1),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     if (isCompleted)
                       _detailRow('종료시간', _formatTime(endTime)),
-                    _detailList('숙제 나간 날짜', assignmentDates),
-                    _detailList('검사 날짜', checkDates),
-                    _detailList('완료율', checkRates),
                     _detailRow('내용', content),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '숙제 회차',
+                      style: TextStyle(
+                        color: Color(0xFF9FB3B3),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (rounds.isEmpty)
+                      const Text(
+                        '검사 기록이 없습니다.',
+                        style: TextStyle(
+                          color: Color(0xFF9FB3B3),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (int i = 0; i < rounds.length; i++) ...[
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 10,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    width: 72,
+                                    child: Text(
+                                      '${rounds[i].round}회차',
+                                      style: const TextStyle(
+                                        color: Color(0xFFEAF2F2),
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${_formatTime(rounds[i].assignedAt)}  →  ${_formatTime(rounds[i].checkedAt)}',
+                                          style: const TextStyle(
+                                            color: Color(0xFFCBD8D8),
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          '완료율 ${rounds[i].progress}%',
+                                          style: const TextStyle(
+                                            color: Color(0xFF9FB3B3),
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (i != rounds.length - 1)
+                              const Divider(
+                                color: Color(0xFF223131),
+                                height: 12,
+                                thickness: 1,
+                              ),
+                          ],
+                        ],
+                      ),
                   ],
                 ),
                 crossFadeState: expanded
@@ -1341,11 +1466,11 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
   Widget build(BuildContext context) {
     final sorted = _sortedItems();
     return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B1112),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF223131)),
+      padding: const EdgeInsets.fromLTRB(0, 12, 14, 12),
+      decoration: const BoxDecoration(
+        border: Border(
+          right: BorderSide(color: Color(0xFF223131), width: 1),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1353,14 +1478,14 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
           Row(
             children: [
               const Icon(Icons.account_tree_outlined,
-                  size: 16, color: Color(0xFF9FB3B3)),
-              const SizedBox(width: 6),
+                  size: 18, color: Color(0xFF9FB3B3)),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   widget.flow.name,
                   style: const TextStyle(
                     color: Color(0xFFEAF2F2),
-                    fontSize: 16,
+                    fontSize: 32,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1369,35 +1494,35 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                 IconButton(
                   tooltip: '이름 변경',
                   onPressed: widget.onEditName,
-                  icon: const Icon(Icons.edit, size: 16, color: Color(0xFF9FB3B3)),
+                  icon: const Icon(Icons.edit, size: 18, color: Color(0xFF9FB3B3)),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           _FlowTextbookSummary(),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           const Text(
             '과제 목록',
             style: TextStyle(
               color: Color(0xFF9FB3B3),
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           if (sorted.isEmpty)
             const Text(
               '등록된 과제가 없습니다.',
-              style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+              style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
             )
           else
             Column(
               children: [
                 for (int i = 0; i < sorted.length; i++) ...[
                   _buildHomeworkCard(sorted[i]),
-                  if (i != sorted.length - 1) const SizedBox(height: 8),
+                  if (i != sorted.length - 1) const SizedBox(height: 10),
                 ],
               ],
             ),
@@ -1407,13 +1532,27 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
   }
 }
 
+class _HomeworkRoundData {
+  final int round;
+  final DateTime? assignedAt;
+  final DateTime checkedAt;
+  final int progress;
+
+  const _HomeworkRoundData({
+    required this.round,
+    required this.assignedAt,
+    required this.checkedAt,
+    required this.progress,
+  });
+}
+
 class _FlowTextbookSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const bool hasTextbook = false;
     if (!hasTextbook) {
       return Container(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: const Color(0xFF10171A),
           borderRadius: BorderRadius.circular(10),
@@ -1425,13 +1564,13 @@ class _FlowTextbookSummary extends StatelessWidget {
             Row(
               children: [
                 const Icon(Icons.menu_book_outlined,
-                    size: 16, color: Color(0xFF9FB3B3)),
-                const SizedBox(width: 6),
+                    size: 18, color: Color(0xFF9FB3B3)),
+                const SizedBox(width: 8),
                 const Text(
                   '교재',
                   style: TextStyle(
                     color: Color(0xFFEAF2F2),
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1442,15 +1581,15 @@ class _FlowTextbookSummary extends StatelessWidget {
                       const SnackBar(content: Text('교재 추가는 아직 준비 중입니다.')),
                     );
                   },
-                  icon: const Icon(Icons.add, size: 14),
+                  icon: const Icon(Icons.add, size: 16),
                   label: const Text('추가'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF9FB3B3),
                     side: const BorderSide(color: Color(0xFF4D5A5A)),
                     padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     textStyle: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                     visualDensity:
@@ -1464,7 +1603,7 @@ class _FlowTextbookSummary extends StatelessWidget {
               '등록된 교재가 없습니다.',
               style: TextStyle(
                 color: Color(0xFF9FB3B3),
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -1475,7 +1614,7 @@ class _FlowTextbookSummary extends StatelessWidget {
     const String bookName = '교재';
     const double progress = 0.0;
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF10171A),
         borderRadius: BorderRadius.circular(10),
@@ -1488,38 +1627,38 @@ class _FlowTextbookSummary extends StatelessWidget {
             '교재',
             style: TextStyle(
               color: Color(0xFFEAF2F2),
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             bookName,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Color(0xFFCBD8D8),
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           ClipRRect(
             borderRadius: BorderRadius.circular(999),
             child: LinearProgressIndicator(
               value: progress,
-              minHeight: 6,
+              minHeight: 8,
               backgroundColor: const Color(0xFF1C2328),
               valueColor:
                   const AlwaysStoppedAnimation<Color>(Color(0xFF33A373)),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             '${(progress * 100).toStringAsFixed(0)}%',
             style: const TextStyle(
               color: Color(0xFF9FB3B3),
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1548,7 +1687,7 @@ class _FlowStatRow extends StatelessWidget {
             label,
             style: const TextStyle(
               color: Color(0xFFB9C8C8),
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1557,7 +1696,7 @@ class _FlowStatRow extends StatelessWidget {
           value.toString(),
           style: TextStyle(
             color: color,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: FontWeight.w700,
           ),
         ),
