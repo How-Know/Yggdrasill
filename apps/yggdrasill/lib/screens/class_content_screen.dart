@@ -217,11 +217,11 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
       final idx = students.indexWhere((x) => x.id == rec.studentId);
       if (idx == -1) continue;
       final name = students[idx].name;
-      // 색상은 슬라이드 시트의 "출석" 박스 느낌을 살려 파랑 계열 고정(개별 과목 색상 추후 반영 가능)
+      // 홈 메뉴 학생카드 테두리는 앱 기본 포인트 컬러(초록)로 통일
       result.add(_AttendingStudent(
         id: rec.studentId,
         name: name,
-        color: const Color(0xFF0F467D),
+        color: kDlgAccent,
         record: rec,
       ));
     }
@@ -1679,20 +1679,30 @@ Widget _buildHomeworkChipVisual(
   // 여유폭 14px, 최소폭 300px
   final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
 
+  final double phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
   final Border border = (phase == 3)
       ? Border.all(color: Colors.transparent, width: borderWMax)
       : (isRunning
           ? Border.all(color: hw.color.withOpacity(0.9), width: borderWMax)
-          : Border.all(color: Colors.white24, width: borderWMax));
+          : (phase == 4
+              ? Border.all(
+                  color: Color.lerp(
+                        Colors.white24,
+                        hw.color.withOpacity(0.9),
+                        phase4Pulse,
+                      ) ??
+                      Colors.white24,
+                  width: borderWMax,
+                )
+              : Border.all(color: Colors.white24, width: borderWMax)));
 
   Widget chipInner = Container(
     height: chipHeight,
     padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
     alignment: Alignment.centerLeft,
     decoration: BoxDecoration(
-      color: (phase == 4
-          ? Color.lerp(const Color(0xFF15171C), const Color(0xFF1D2128), (0.5 + 0.5 * math.sin(2 * math.pi * tick)))
-          : const Color(0xFF15171C)),
+      // 홈 메뉴 페이지 배경톤과 동일하게 맞춤
+      color: kDlgBg,
       borderRadius: BorderRadius.circular(12),
       border: border,
       boxShadow: [
@@ -1701,6 +1711,12 @@ Widget _buildHomeworkChipVisual(
           blurRadius: 10,
           offset: const Offset(0, 4),
         ),
+        if (!isRunning && phase == 4)
+          BoxShadow(
+            color: hw.color.withOpacity(0.08 + 0.14 * phase4Pulse),
+            blurRadius: 14,
+            spreadRadius: 0.5,
+          ),
       ],
     ),
     child: Column(
