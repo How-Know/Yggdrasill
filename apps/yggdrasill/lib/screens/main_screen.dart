@@ -2176,22 +2176,36 @@ extension on _MainScreenState {
       );
       if (result is Map<String, dynamic> &&
           result['studentId'] == target.student.id) {
-        final countStr = (result['count'] as String?)?.trim();
-        HomeworkStore.instance.add(
-          result['studentId'],
-          title: (result['title'] as String?) ?? '',
-          body: (result['body'] as String?) ?? '',
-          color: (result['color'] as Color?) ?? const Color(0xFF1976D2),
-          flowId: result['flowId'] as String?,
-          type: (result['type'] as String?)?.trim(),
-          page: (result['page'] as String?)?.trim(),
-          count: (countStr == null || countStr.isEmpty)
-              ? null
-              : int.tryParse(countStr),
-          content: (result['content'] as String?)?.trim(),
-        );
+        final flowId = result['flowId'] as String?;
+        final dynamic multiRaw = result['items'];
+        final entries = <Map<String, dynamic>>[];
+        if (multiRaw is List) {
+          for (final e in multiRaw) {
+            if (e is Map<String, dynamic>) entries.add(e);
+          }
+        } else {
+          entries.add(result);
+        }
+        for (final entry in entries) {
+          final countStr = (entry['count'] as String?)?.trim();
+          HomeworkStore.instance.add(
+            result['studentId'],
+            title: (entry['title'] as String?) ?? '',
+            body: (entry['body'] as String?) ?? '',
+            color: (entry['color'] as Color?) ?? const Color(0xFF1976D2),
+            flowId: flowId,
+            type: (entry['type'] as String?)?.trim(),
+            page: (entry['page'] as String?)?.trim(),
+            count: (countStr == null || countStr.isEmpty)
+                ? null
+                : int.tryParse(countStr),
+            content: (entry['content'] as String?)?.trim(),
+          );
+        }
+        final String msg =
+            entries.length > 1 ? '과제를 ${entries.length}개 추가했어요.' : '과제를 추가했어요.';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('과제를 추가했어요.')),
+          SnackBar(content: Text(msg)),
         );
       }
     }

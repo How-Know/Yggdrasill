@@ -39,6 +39,14 @@ class ResourceService {
     return msg.contains('does not exist') && msg.contains('resource_file_orders');
   }
 
+  int? _asInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
   Map<String, dynamic> _buildResourceFileUpsert(
     Map<String, dynamic> row, {
     required String academyId,
@@ -553,6 +561,194 @@ class ResourceService {
       }
     }
     return await AcademyDbService.instance.loadResourceFileLinks(fileId);
+  }
+
+  // ======== FLOW <-> TEXTBOOK LINKS ========
+  Future<List<Map<String, dynamic>>> loadTextbooksWithMetadata() async {
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+
+      final metadataRows = await supa
+          .from('textbook_metadata')
+          .select('book_id,grade_label,page_offset,payload')
+          .eq('academy_id', academyId);
+
+      final textbookFiles = await loadResourceFilesForCategory('textbook');
+      final Map<String, Map<String, dynamic>> fileById = <String, Map<String, dynamic>>{};
+      for (final row in textbookFiles) {
+        final id = (row['id'] as String?) ?? '';
+        if (id.isEmpty) continue;
+        fileById[id] = row;
+      }
+
+      final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
+      for (final row in (metadataRows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final bookId = (row['book_id'] as String?) ?? '';
+        final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
+        if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+        final file = fileById[bookId];
+        if (file == null) continue;
+
+        final payload = row['payload'];
+        final pageOffset = _asInt(row['page_offset']);
+        final bool hasPayload = payload is Map && payload.isNotEmpty;
+        final bool hasMetadata = hasPayload || pageOffset != null;
+        if (!hasMetadata) continue;
+
+        out.add({
+          'book_id': bookId,
+          'book_name': (file['name'] as String?)?.trim() ?? '(이름 없음)',
+          'grade_label': gradeLabel,
+          'page_offset': pageOffset,
+          'payload': payload,
+        });
+      }
+
+      out.sort((a, b) {
+        final an = (a['book_name'] as String?) ?? '';
+        final bn = (b['book_name'] as String?) ?? '';
+        final byName = an.compareTo(bn);
+        if (byName != 0) return byName;
+        final ag = (a['grade_label'] as String?) ?? '';
+        final bg = (b['grade_label'] as String?) ?? '';
+        return ag.compareTo(bg);
+      });
+      return out;
+    } catch (e, st) {
+      print('[RES][textbooksWithMetadata] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(String flowId) async {
+    if (flowId.trim().isEmpty) return <Map<String, dynamic>>[];
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      try {
+        final rows = await supa
+            .from('flow_textbook_links')
+            .select('book_id,grade_label,order_index,resource_files(name,category)')
+            .match({'academy_id': academyId, 'flow_id': flowId})
+            .order('order_index');
+        final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
+        for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+          final bookId = (row['book_id'] as String?) ?? '';
+          final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
+          if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          final info = row['resource_files'];
+          final file = info is Map ? Map<String, dynamic>.from(info) : const <String, dynamic>{};
+          final category = (file['category'] as String?)?.trim();
+          if (category != null && category.isNotEmpty && category != 'textbook') {
+            continue;
+          }
+          out.add({
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+            'order_index': _asInt(row['order_index']) ?? 0,
+            'book_name': (file['name'] as String?)?.trim() ?? '',
+          });
+        }
+        return out;
+      } catch (_) {
+        final rows = await supa
+            .from('flow_textbook_links')
+            .select('book_id,grade_label,order_index')
+            .match({'academy_id': academyId, 'flow_id': flowId})
+            .order('order_index');
+        final textbookFiles = await loadResourceFilesForCategory('textbook');
+        final Map<String, String> nameById = <String, String>{
+          for (final row in textbookFiles)
+            if (((row['id'] as String?) ?? '').isNotEmpty)
+              (row['id'] as String): ((row['name'] as String?)?.trim() ?? ''),
+        };
+        final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
+        for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+          final bookId = (row['book_id'] as String?) ?? '';
+          final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
+          if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+          out.add({
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+            'order_index': _asInt(row['order_index']) ?? 0,
+            'book_name': nameById[bookId] ?? '',
+          });
+        }
+        return out;
+      }
+    } catch (e, st) {
+      print('[RES][flowTextbookLinks] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> saveFlowTextbookLinks(
+    String flowId,
+    List<Map<String, dynamic>> links,
+  ) async {
+    if (flowId.trim().isEmpty) return;
+    final academyId =
+        await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+
+    await supa.from('flow_textbook_links').delete().match({
+      'academy_id': academyId,
+      'flow_id': flowId,
+    });
+
+    if (links.isEmpty) return;
+    final Set<String> dedup = <String>{};
+    final List<Map<String, dynamic>> rows = <Map<String, dynamic>>[];
+    for (final link in links) {
+      final bookId = (link['book_id'] as String?)?.trim() ?? '';
+      final gradeLabel = (link['grade_label'] as String?)?.trim() ?? '';
+      if (bookId.isEmpty || gradeLabel.isEmpty) continue;
+      final key = '$bookId|$gradeLabel';
+      if (!dedup.add(key)) continue;
+      rows.add({
+        'academy_id': academyId,
+        'flow_id': flowId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'order_index': rows.length,
+      });
+    }
+    if (rows.isNotEmpty) {
+      await supa.from('flow_textbook_links').insert(rows);
+    }
+  }
+
+  Future<Map<String, dynamic>?> loadTextbookMetadataPayload({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) return null;
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final row = await supa
+          .from('textbook_metadata')
+          .select('page_offset,payload')
+          .match({
+            'academy_id': academyId,
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+          })
+          .maybeSingle();
+      if (row == null) return null;
+      return Map<String, dynamic>.from(row);
+    } catch (e, st) {
+      print('[RES][textbookMetadataPayload] load failed: $e\n$st');
+      return null;
+    }
   }
 
   Future<void> deleteResourceFile(String fileId) async {

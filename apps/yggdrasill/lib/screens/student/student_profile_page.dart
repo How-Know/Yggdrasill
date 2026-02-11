@@ -1501,7 +1501,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
             ],
           ),
           const SizedBox(height: 12),
-          _FlowTextbookSummary(),
+          _FlowTextbookSummary(flow: widget.flow),
           const SizedBox(height: 12),
           const Text(
             '과제 목록',
@@ -1546,73 +1546,195 @@ class _HomeworkRoundData {
   });
 }
 
-class _FlowTextbookSummary extends StatelessWidget {
+class _FlowTextbookSummary extends StatefulWidget {
+  final StudentFlow flow;
+  const _FlowTextbookSummary({required this.flow});
+
   @override
-  Widget build(BuildContext context) {
-    const bool hasTextbook = false;
-    if (!hasTextbook) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF10171A),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF223131)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.menu_book_outlined,
-                    size: 18, color: Color(0xFF9FB3B3)),
-                const SizedBox(width: 8),
-                const Text(
-                  '교재',
-                  style: TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('교재 추가는 아직 준비 중입니다.')),
-                    );
-                  },
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('추가'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF9FB3B3),
-                    side: const BorderSide(color: Color(0xFF4D5A5A)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    textStyle: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+  State<_FlowTextbookSummary> createState() => _FlowTextbookSummaryState();
+}
+
+class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
+  bool _loading = true;
+  int _reqId = 0;
+  List<Map<String, dynamic>> _linked = const <Map<String, dynamic>>[];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadLinks());
+  }
+
+  @override
+  void didUpdateWidget(covariant _FlowTextbookSummary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.flow.id != widget.flow.id) {
+      unawaited(_loadLinks());
+    }
+  }
+
+  String _keyOf(Map<String, dynamic> row) {
+    final bookId = (row['book_id'] as String?)?.trim() ?? '';
+    final grade = (row['grade_label'] as String?)?.trim() ?? '';
+    return '$bookId|$grade';
+  }
+
+  String _labelOf(Map<String, dynamic> row) {
+    final book = (row['book_name'] as String?)?.trim() ?? '(이름 없음)';
+    final grade = (row['grade_label'] as String?)?.trim() ?? '';
+    return grade.isEmpty ? book : '$book · $grade';
+  }
+
+  Future<void> _loadLinks() async {
+    final id = ++_reqId;
+    if (mounted) setState(() => _loading = true);
+    try {
+      final rows = await DataManager.instance.loadFlowTextbookLinks(widget.flow.id);
+      if (!mounted || id != _reqId) return;
+      final list = List<Map<String, dynamic>>.from(rows);
+      list.sort((a, b) {
+        final ai = (a['order_index'] as int?) ?? 0;
+        final bi = (b['order_index'] as int?) ?? 0;
+        if (ai != bi) return ai.compareTo(bi);
+        return _labelOf(a).compareTo(_labelOf(b));
+      });
+      setState(() => _linked = list);
+    } catch (_) {
+      if (!mounted || id != _reqId) return;
+      setState(() => _linked = const <Map<String, dynamic>>[]);
+    } finally {
+      if (mounted && id == _reqId) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _openLinkDialog() async {
+    final candidates = await DataManager.instance.loadTextbooksWithMetadata();
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('메타데이터가 저장된 교재가 없습니다.')),
+      );
+      return;
+    }
+
+    final selected = <String>{for (final row in _linked) _keyOf(row)};
+    final result = await showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (ctx) {
+        final working = <String>{...selected};
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text(
+                '교재 연결',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+              ),
+              content: SizedBox(
+                width: 640,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '메타데이터가 저장된 교재만 표시됩니다. 여러 개 선택할 수 있어요.',
+                      style: TextStyle(color: kDlgTextSub),
                     ),
-                    visualDensity:
-                        const VisualDensity(horizontal: -3, vertical: -3),
-                  ),
+                    const SizedBox(height: 10),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 420),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: candidates.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(color: kDlgBorder, height: 1),
+                        itemBuilder: (ctx, i) {
+                          final row = candidates[i];
+                          final key = _keyOf(row);
+                          final checked = working.contains(key);
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 4),
+                            value: checked,
+                            onChanged: (v) {
+                              setLocal(() {
+                                if (v == true) {
+                                  working.add(key);
+                                } else {
+                                  working.remove(key);
+                                }
+                              });
+                            },
+                            activeColor: kDlgAccent,
+                            side: const BorderSide(color: kDlgBorder),
+                            title: Text(
+                              _labelOf(row),
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final selectedRows = <Map<String, dynamic>>[];
+                    for (final row in candidates) {
+                      if (working.contains(_keyOf(row))) {
+                        selectedRows.add({
+                          'book_id': row['book_id'],
+                          'grade_label': row['grade_label'],
+                          'book_name': row['book_name'],
+                        });
+                      }
+                    }
+                    Navigator.of(ctx).pop(selectedRows);
+                  },
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                  child: const Text('확인'),
                 ),
               ],
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '등록된 교재가 없습니다.',
-              style: TextStyle(
-                color: Color(0xFF9FB3B3),
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
+            );
+          },
+        );
+      },
+    );
+    if (result == null) return;
+
+    try {
+      await DataManager.instance.saveFlowTextbookLinks(widget.flow.id, result);
+      if (!mounted) return;
+      await _loadLinks();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('교재 연결을 저장했습니다.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('교재 연결 저장 실패: $e')),
       );
     }
-    const String bookName = '교재';
-    const double progress = 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1623,45 +1745,92 @@ class _FlowTextbookSummary extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '교재',
-            style: TextStyle(
-              color: Color(0xFFEAF2F2),
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              const Icon(Icons.menu_book_outlined,
+                  size: 18, color: Color(0xFF9FB3B3)),
+              const SizedBox(width: 8),
+              const Text(
+                '교재',
+                style: TextStyle(
+                  color: Color(0xFFEAF2F2),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: _openLinkDialog,
+                icon: const Icon(Icons.link, size: 16),
+                label: const Text('연결'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF9FB3B3),
+                  side: const BorderSide(color: Color(0xFF4D5A5A)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  visualDensity:
+                      const VisualDensity(horizontal: -3, vertical: -3),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
-          Text(
-            bookName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFFCBD8D8),
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+          if (_loading)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF9FB3B3)),
+              ),
+            )
+          else if (_linked.isEmpty)
+            const Text(
+              '등록된 교재가 없습니다.',
+              style: TextStyle(
+                color: Color(0xFF9FB3B3),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < _linked.length; i++) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Icon(
+                          Icons.circle,
+                          size: 6,
+                          color: Color(0xFF9FB3B3),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _labelOf(_linked[i]),
+                          style: const TextStyle(
+                            color: Color(0xFFCBD8D8),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          softWrap: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (i != _linked.length - 1) const SizedBox(height: 6),
+                ],
+              ],
             ),
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              backgroundColor: const Color(0xFF1C2328),
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(Color(0xFF33A373)),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${(progress * 100).toStringAsFixed(0)}%',
-            style: const TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
         ],
       ),
     );

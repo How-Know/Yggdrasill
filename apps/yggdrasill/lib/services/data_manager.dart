@@ -5512,6 +5512,23 @@ DateTime? _lastClassesOrderSaveStart;
       ResourceService.instance.saveResourceFileLinks(fileId, links);
   Future<Map<String, String>> loadResourceFileLinks(String fileId) =>
       ResourceService.instance.loadResourceFileLinks(fileId);
+  Future<List<Map<String, dynamic>>> loadTextbooksWithMetadata() =>
+      ResourceService.instance.loadTextbooksWithMetadata();
+  Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(String flowId) =>
+      ResourceService.instance.loadFlowTextbookLinks(flowId);
+  Future<void> saveFlowTextbookLinks(
+    String flowId,
+    List<Map<String, dynamic>> links,
+  ) =>
+      ResourceService.instance.saveFlowTextbookLinks(flowId, links);
+  Future<Map<String, dynamic>?> loadTextbookMetadataPayload({
+    required String bookId,
+    required String gradeLabel,
+  }) =>
+      ResourceService.instance.loadTextbookMetadataPayload(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
   Future<void> deleteResourceFile(String fileId) =>
       ResourceService.instance.deleteResourceFile(fileId);
 

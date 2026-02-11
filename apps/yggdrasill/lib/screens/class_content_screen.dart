@@ -268,21 +268,36 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
     );
     if (item is Map<String, dynamic>) {
       if (item['studentId'] == studentId) {
-        final countStr = (item['count'] as String?)?.trim();
-        HomeworkStore.instance.add(
-          item['studentId'],
-          title: item['title'],
-          body: item['body'],
-          color: item['color'],
-          flowId: item['flowId'] as String?,
-          type: (item['type'] as String?)?.trim(),
-          page: (item['page'] as String?)?.trim(),
-          count: (countStr == null || countStr.isEmpty)
-              ? null
-              : int.tryParse(countStr),
-          content: (item['content'] as String?)?.trim(),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과제를 추가했어요.')));
+        final flowId = item['flowId'] as String?;
+        final dynamic multiRaw = item['items'];
+        final entries = <Map<String, dynamic>>[];
+        if (multiRaw is List) {
+          for (final e in multiRaw) {
+            if (e is Map<String, dynamic>) entries.add(e);
+          }
+        } else {
+          entries.add(item);
+        }
+        for (final entry in entries) {
+          final countStr = (entry['count'] as String?)?.trim();
+          HomeworkStore.instance.add(
+            item['studentId'],
+            title: (entry['title'] as String?) ?? '',
+            body: (entry['body'] as String?) ?? '',
+            color: (entry['color'] as Color?) ?? const Color(0xFF1976D2),
+            flowId: flowId,
+            type: (entry['type'] as String?)?.trim(),
+            page: (entry['page'] as String?)?.trim(),
+            count: (countStr == null || countStr.isEmpty)
+                ? null
+                : int.tryParse(countStr),
+            content: (entry['content'] as String?)?.trim(),
+          );
+        }
+        final String msg =
+            entries.length > 1 ? '과제를 ${entries.length}개 추가했어요.' : '과제를 추가했어요.';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
       }
     }
   }
@@ -1237,6 +1252,212 @@ String _formatDurationMs(int totalMs) {
   return '${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 }
 
+String _phaseLabel(int phase) {
+  switch (phase) {
+    case 0:
+      return '종료';
+    case 1:
+      return '대기';
+    case 2:
+      return '수행';
+    case 3:
+      return '제출';
+    case 4:
+      return '확인';
+    default:
+      return '-';
+  }
+}
+
+String _statusLabel(HomeworkStatus status) {
+  switch (status) {
+    case HomeworkStatus.inProgress:
+      return '진행중';
+    case HomeworkStatus.completed:
+      return '완료';
+    case HomeworkStatus.homework:
+      return '숙제';
+  }
+}
+
+String _fmtTimeOpt(DateTime? dt) => dt == null ? '-' : _formatDateTime(dt);
+
+Widget _detailRow(String label, String value) {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 90,
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: kDlgTextSub,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          value.trim().isEmpty ? '-' : value,
+          style: const TextStyle(
+            color: kDlgText,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+          softWrap: true,
+        ),
+      ),
+    ],
+  );
+}
+
+Future<void> _showHomeworkChipDetailDialog(
+  BuildContext context,
+  String studentId,
+  HomeworkItem hw,
+  String flowName,
+  int assignmentCount,
+) async {
+  final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+  final int runningMs = hw.runStart != null
+      ? DateTime.now().difference(hw.runStart!).inMilliseconds
+      : 0;
+  final int totalMs = hw.accumulatedMs + runningMs;
+  final String durationText = _formatDurationMs(totalMs);
+  final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : 'H0';
+  final String displayFlow = flowName.isNotEmpty ? flowName : '플로우 미지정';
+  final String page = (hw.page ?? '').trim();
+  final String count = hw.count?.toString() ?? '';
+  final String content = (hw.content ?? '').trim();
+  final String body = hw.body.trim();
+  final String type = (hw.type ?? '').trim();
+  final String title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text(
+        '과제 상세',
+        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+      ),
+      content: SizedBox(
+        width: 700,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const YggDialogSectionHeader(
+                icon: Icons.info_outline_rounded,
+                title: '기본 정보',
+              ),
+              _detailRow('제목', title),
+              const SizedBox(height: 8),
+              _detailRow('플로우', displayFlow),
+              const SizedBox(height: 8),
+              _detailRow('유형', type),
+              const SizedBox(height: 8),
+              _detailRow('페이지', page),
+              const SizedBox(height: 8),
+              _detailRow('문항수', count.isEmpty ? '-' : '$count문항'),
+              const SizedBox(height: 8),
+              _detailRow('진행시간', durationText),
+              const SizedBox(height: 8),
+              _detailRow('검사횟수', '${hw.checkCount}회'),
+              const SizedBox(height: 8),
+              _detailRow('숙제여부', homeworkText),
+              const SizedBox(height: 8),
+              _detailRow('상태', _statusLabel(hw.status)),
+              const SizedBox(height: 8),
+              _detailRow('단계', _phaseLabel(hw.phase)),
+              const SizedBox(height: 8),
+              _detailRow('진행중', isRunning ? '예' : '아니오'),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 90,
+                    child: Text(
+                      '색상',
+                      style: TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: hw.color,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '0x${hw.color.value.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+                    style: const TextStyle(
+                      color: kDlgText,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Divider(color: kDlgBorder),
+              const SizedBox(height: 10),
+              const YggDialogSectionHeader(
+                icon: Icons.notes_rounded,
+                title: '텍스트',
+              ),
+              _detailRow('내용', content),
+              const SizedBox(height: 8),
+              _detailRow('본문', body),
+              const SizedBox(height: 14),
+              const Divider(color: kDlgBorder),
+              const SizedBox(height: 10),
+              const YggDialogSectionHeader(
+                icon: Icons.schedule_rounded,
+                title: '시간 정보',
+              ),
+              _detailRow('생성', _fmtTimeOpt(hw.createdAt)),
+              const SizedBox(height: 8),
+              _detailRow('수정', _fmtTimeOpt(hw.updatedAt)),
+              const SizedBox(height: 8),
+              _detailRow('첫시작', _fmtTimeOpt(hw.firstStartedAt)),
+              const SizedBox(height: 8),
+              _detailRow('진행시작', _fmtTimeOpt(hw.runStart)),
+              const SizedBox(height: 8),
+              _detailRow('제출', _fmtTimeOpt(hw.submittedAt)),
+              const SizedBox(height: 8),
+              _detailRow('확인', _fmtTimeOpt(hw.confirmedAt)),
+              const SizedBox(height: 8),
+              _detailRow('대기', _fmtTimeOpt(hw.waitingAt)),
+              const SizedBox(height: 8),
+              _detailRow('완료', _fmtTimeOpt(hw.completedAt)),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('닫기'),
+        ),
+      ],
+    ),
+  );
+}
+
 Future<void> _openHomeworkEditDialogForHome(
   BuildContext context,
   String studentId,
@@ -1571,6 +1792,21 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             }
           }
         },
+        onDoubleTap: () {
+          final item = HomeworkStore.instance.getById(studentId, hw.id);
+          if (item == null) return;
+          final flow = flowNames[item.flowId ?? ''] ?? '';
+          final assignmentCountNow = assignmentCounts[item.id] ?? 0;
+          unawaited(
+            _showHomeworkChipDetailDialog(
+              context,
+              studentId,
+              item,
+              flow,
+              assignmentCountNow,
+            ),
+          );
+        },
         child: _buildHomeworkChipVisual(
           context,
           studentId,
@@ -1603,7 +1839,7 @@ Widget _buildHomeworkChipVisual(
   );
   final TextStyle flowStyle = const TextStyle(
     color: Color(0xFF9FB3B3),
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
@@ -1627,21 +1863,38 @@ Widget _buildHomeworkChipVisual(
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
   final String count = hw.count != null ? hw.count.toString() : '';
-  final String line2Left = 'p.${page.isNotEmpty ? page : '-'} / ${count.isNotEmpty ? count : '-'}문항';
-  final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : '';
-  final List<String> rightParts = ['검사 ${hw.checkCount}'];
-  if (homeworkText.isNotEmpty) rightParts.add(homeworkText);
-  final String line2Right = rightParts.join(' · ');
-  final DateTime? startAt = hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
-  final String startText = startAt == null ? '-' : _formatDateTime(startAt);
+
+  String stripUnitPrefix(String raw) {
+    return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
+  }
+
+  String extractBookName() {
+    final contentRaw = (hw.content ?? '').trim();
+    final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)')
+        .firstMatch(contentRaw);
+    final fromContent = match?.group(1)?.trim() ?? '';
+    if (fromContent.isNotEmpty) return fromContent;
+    final stripped = stripUnitPrefix((hw.title).trim());
+    if (stripped.isEmpty) return '-';
+    final idx = stripped.indexOf('·');
+    if (idx == -1) {
+      return (hw.type ?? '').trim() == '교재' ? stripped : '-';
+    }
+    final candidate = stripped.substring(0, idx).trim();
+    return candidate.isEmpty ? '-' : candidate;
+  }
+
+  final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : 'H0';
+  final String titleText = (hw.title).trim();
+  final String line2Left = '교재 ${extractBookName()}';
+  final String line2Right =
+      'p.${page.isNotEmpty ? page : '-'} · ${count.isNotEmpty ? count : '-'}문항';
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
   final int totalMs = hw.accumulatedMs + runningMs;
   final String durationText = _formatDurationMs(totalMs);
-  final String line3 = '시작 $startText · 진행 $durationText';
-
-  final String titleText = (hw.title).trim();
+  final String line3 = '검사 ${hw.checkCount}회 · $homeworkText · 진행 $durationText';
   // 폭 고정: 가장 긴 라인 기준으로 계산
   final titlePainter = TextPainter(
     text: TextSpan(text: titleText, style: titleStyle),
@@ -1662,7 +1915,7 @@ Widget _buildHomeworkChipVisual(
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
   final painter2Right = TextPainter(
-    text: TextSpan(text: line2Right, style: statStyle),
+    text: TextSpan(text: line2Right, style: metaStyle),
     maxLines: 1,
     textDirection: TextDirection.ltr,
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
@@ -1674,8 +1927,9 @@ Widget _buildHomeworkChipVisual(
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
   final double rowWidth = titlePainter.width + 8 + flowPainter.width;
-  final double line2Width = painter2Left.width + (line2Right.isNotEmpty ? (8 + painter2Right.width) : 0);
-  final double maxLineWidth = math.max(rowWidth, math.max(line2Width, painter3.width));
+  final double line2Width = painter2Left.width + 10 + painter2Right.width;
+  final double maxLineWidth =
+      math.max(rowWidth, math.max(line2Width, painter3.width));
   // 여유폭 14px, 최소폭 300px
   final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
 
@@ -1747,27 +2001,29 @@ Widget _buildHomeworkChipVisual(
           ],
         ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                line2Left,
-                style: metaStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+        ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  line2Left,
+                  style: metaStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            if (line2Right.isNotEmpty) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Text(
                 line2Right,
-                style: statStyle,
+                style: metaStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
               ),
             ],
-          ],
+          ),
         ),
         const SizedBox(height: 9),
         ConstrainedBox(
@@ -1844,6 +2100,7 @@ class _AttendingStudent {
 class _SlideableHomeworkChip extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
+  final VoidCallback? onDoubleTap;
   final VoidCallback onSlideDown;
   final Future<void> Function() onSlideUp;
   final bool canSlideDown;
@@ -1858,6 +2115,7 @@ class _SlideableHomeworkChip extends StatefulWidget {
     super.key,
     required this.child,
     required this.onTap,
+    this.onDoubleTap,
     required this.onSlideDown,
     required this.onSlideUp,
     required this.canSlideDown,
@@ -1986,6 +2244,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
           transform: Matrix4.translationValues(0, _offset, 0),
           child: GestureDetector(
             onTap: widget.onTap,
+            onDoubleTap: widget.onDoubleTap,
             onVerticalDragUpdate: (details) {
               final delta = details.delta.dy;
               if (delta > 0) {
