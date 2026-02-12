@@ -114,6 +114,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                                 name: s.name,
                                 color: s.color,
                                 arrivalTime: s.record.arrivalTime,
+                                showHorizontalDivider: i != list.length - 1,
                               ),
                               const SizedBox(width: 12),
                               Column(
@@ -2315,11 +2316,13 @@ class _AttendingButton extends StatelessWidget {
   final Color color;
   final String studentId;
   final DateTime? arrivalTime;
+  final bool showHorizontalDivider;
   const _AttendingButton({
     required this.studentId,
     required this.name,
     required this.color,
     required this.arrivalTime,
+    required this.showHorizontalDivider,
   });
 
   @override
@@ -2333,8 +2336,11 @@ class _AttendingButton extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(22, 0, 32, 0),
         decoration: BoxDecoration(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: color, width: 2),
+          border: showHorizontalDivider
+              ? const Border(
+                  bottom: BorderSide(color: kDlgBorder, width: 1),
+                )
+              : null,
         ),
         child: ValueListenableBuilder<int>(
           valueListenable: HomeworkStore.instance.revision,
