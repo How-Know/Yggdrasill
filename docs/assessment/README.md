@@ -14,6 +14,7 @@
 - `criteria/`: 지표 정의(파일 1개 = 지표 1개)
 - `terms/`: 용어 정의(파일 1개 = 용어 1개)
 - `scoring.md`: 점수화/집계 규칙
+- `scoring_migrations/`: 점수 규칙 변경 로그(마이그레이션 방식)
 - `data_sources.md`: 데이터 소스 및 관찰 근거
 - `glossary.md`: 용어 정리
 - `decisions/`: 의사결정 로그

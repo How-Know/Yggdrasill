@@ -801,6 +801,8 @@ class DataManager {
         loadPaymentRecords: loadPaymentRecords,
         updateSessionOverrideRemote: updateSessionOverride,
         applySessionOverrideLocal: _applySessionOverrideLocal,
+        getLatenessThresholdMinutes: (studentId) =>
+            getStudentPaymentInfo(studentId)?.latenessThreshold ?? 10,
       ),
     );
   }
@@ -2205,6 +2207,175 @@ class DataManager {
     } catch (e) {
       print('[ERROR][updateStudentBasicInfo] 오류 발생: $e');
       rethrow;
+    }
+  }
+
+  List<Map<String, dynamic>> _defaultStudentLevelScalesRows() {
+    return <Map<String, dynamic>>[
+      {'level_code': 1, 'display_name': '1등급', 'upper_percent': 4.0},
+      {'level_code': 2, 'display_name': '2등급', 'upper_percent': 11.0},
+      {'level_code': 3, 'display_name': '3등급', 'upper_percent': 23.0},
+      {'level_code': 4, 'display_name': '4등급', 'upper_percent': 40.0},
+      {'level_code': 5, 'display_name': '5등급', 'upper_percent': 60.0},
+      {'level_code': 6, 'display_name': '6등급', 'upper_percent': 100.0},
+    ];
+  }
+
+  int? _asIntMaybe(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> loadStudentLevelScales() async {
+    final defaults = _defaultStudentLevelScalesRows();
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final rows = await supa
+            .from('student_level_scales')
+            .select('level_code,display_name,upper_percent')
+            .eq('academy_id', academyId)
+            .order('level_code', ascending: true);
+        final Map<int, Map<String, dynamic>> byCode =
+            <int, Map<String, dynamic>>{};
+        for (final row in (rows as List)) {
+          if (row is! Map) continue;
+          final map = Map<String, dynamic>.from(row);
+          final code = _asIntMaybe(map['level_code']);
+          if (code == null || code < 1 || code > 6) continue;
+          byCode[code] = <String, dynamic>{
+            'level_code': code,
+            'display_name':
+                (map['display_name'] as String?)?.trim().isNotEmpty == true
+                ? (map['display_name'] as String).trim()
+                : '${code}등급',
+            'upper_percent': (map['upper_percent'] as num?)?.toDouble() ??
+                (double.tryParse('${map['upper_percent'] ?? ''}') ?? 0.0),
+          };
+        }
+        final List<Map<String, dynamic>> merged = <Map<String, dynamic>>[];
+        final List<Map<String, dynamic>> missingRows = <Map<String, dynamic>>[];
+        for (final d in defaults) {
+          final code = d['level_code'] as int;
+          final existing = byCode[code];
+          if (existing != null) {
+            merged.add(existing);
+          } else {
+            merged.add(Map<String, dynamic>.from(d));
+            missingRows.add({
+              'academy_id': academyId,
+              'level_code': d['level_code'],
+              'display_name': d['display_name'],
+              'upper_percent': d['upper_percent'],
+            });
+          }
+        }
+        if (missingRows.isNotEmpty) {
+          await supa.from('student_level_scales').upsert(
+            missingRows,
+            onConflict: 'academy_id,level_code',
+          );
+        }
+        if (!RuntimeFlags.serverOnly) {
+          await AcademyDbService.instance.saveStudentLevelScales(merged);
+        }
+        return merged;
+      } catch (e, st) {
+        print('[LEVEL][scales][server] load failed: $e\n$st');
+      }
+    }
+
+    if (!RuntimeFlags.serverOnly) {
+      try {
+        final local = await AcademyDbService.instance.getStudentLevelScales();
+        if (local.isNotEmpty) return local;
+        await AcademyDbService.instance.saveStudentLevelScales(defaults);
+        return defaults;
+      } catch (e, st) {
+        print('[LEVEL][scales][local] load failed: $e\n$st');
+      }
+    }
+    return defaults;
+  }
+
+  Future<Map<String, dynamic>?> loadStudentLevelState(String studentId) async {
+    if (studentId.trim().isEmpty) return null;
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final row = await Supabase.instance.client
+            .from('student_level_states')
+            .select('student_id,current_level_code,target_level_code')
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .maybeSingle();
+        if (row != null) {
+          return <String, dynamic>{
+            'student_id': row['student_id'],
+            'current_level_code': _asIntMaybe(row['current_level_code']),
+            'target_level_code': _asIntMaybe(row['target_level_code']),
+          };
+        }
+        return null;
+      } catch (e, st) {
+        print('[LEVEL][state][server] load failed: $e\n$st');
+      }
+    }
+    if (!RuntimeFlags.serverOnly) {
+      try {
+        return await AcademyDbService.instance.getStudentLevelState(studentId);
+      } catch (e, st) {
+        print('[LEVEL][state][local] load failed: $e\n$st');
+      }
+    }
+    return null;
+  }
+
+  Future<void> saveStudentLevelState({
+    required String studentId,
+    int? currentLevelCode,
+    int? targetLevelCode,
+  }) async {
+    if (studentId.trim().isEmpty) return;
+    if (!RuntimeFlags.serverOnly) {
+      await AcademyDbService.instance.saveStudentLevelState(
+        studentId: studentId,
+        currentLevelCode: currentLevelCode,
+        targetLevelCode: targetLevelCode,
+      );
+    }
+
+    if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
+      try {
+        final academyId =
+            await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        if (currentLevelCode == null && targetLevelCode == null) {
+          await supa.from('student_level_states').delete().match({
+            'academy_id': academyId,
+            'student_id': studentId,
+          });
+          return;
+        }
+        await supa.from('student_level_states').upsert({
+          'academy_id': academyId,
+          'student_id': studentId,
+          'current_level_code': currentLevelCode,
+          'target_level_code': targetLevelCode,
+        }, onConflict: 'academy_id,student_id');
+      } catch (e, st) {
+        print('[LEVEL][state][save] failed: $e\n$st');
+        if (TagPresetService.preferSupabaseRead) rethrow;
+      }
     }
   }
 
@@ -5118,6 +5289,106 @@ DateTime? _lastClassesOrderSaveStart;
         studentId: studentId,
         cycle: cycle,
       );
+  Map<String, dynamic> calculateAttendanceScore({
+    required String studentId,
+    DateTime? nowRef,
+  }) =>
+      AttendanceService.instance.calculateAttendanceScore(
+        studentId: studentId,
+        nowRef: nowRef,
+      );
+  Map<String, dynamic> calculateAttendanceScoreWithRank({
+    required String studentId,
+    DateTime? nowRef,
+    bool excludePausedStudents = false,
+  }) {
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    final sid = studentId.trim();
+    final base = Map<String, dynamic>.from(
+      calculateAttendanceScore(studentId: sid, nowRef: nowRef),
+    );
+    if (sid.isEmpty) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': 0,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    final List<String> cohortIds = <String>[];
+    for (final s in _studentsWithInfo) {
+      final id = s.student.id.trim();
+      if (id.isEmpty) continue;
+      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+        continue;
+      }
+      cohortIds.add(id);
+    }
+    if (cohortIds.isEmpty) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': 0,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    final List<MapEntry<String, double>> ranked = <MapEntry<String, double>>[];
+    for (final id in cohortIds) {
+      final scoreMap = calculateAttendanceScore(studentId: id, nowRef: nowRef);
+      final score = asDouble(
+        scoreMap.containsKey('score100AfterMakeup')
+            ? scoreMap['score100AfterMakeup']
+            : scoreMap['score100'],
+      );
+      ranked.add(MapEntry<String, double>(id, score));
+    }
+    ranked.sort((a, b) {
+      final byScore = b.value.compareTo(a.value);
+      if (byScore != 0) return byScore;
+      return a.key.compareTo(b.key);
+    });
+
+    double? targetScore;
+    for (final e in ranked) {
+      if (e.key == sid) {
+        targetScore = e.value;
+        break;
+      }
+    }
+    if (targetScore == null) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': ranked.length,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    const double eps = 1e-9;
+    final double targetScoreValue = targetScore;
+    final int higherCount =
+        ranked.where((e) => e.value > (targetScoreValue + eps)).length;
+    final int rank = higherCount + 1;
+    final int cohortSize = ranked.length;
+    final double topPercent = cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
+
+    base.addAll(<String, dynamic>{
+      'rank': rank,
+      'cohortSize': cohortSize,
+      'topPercent': topPercent,
+      'rankScore100': targetScoreValue,
+    });
+    return base;
+  }
   Future<void> _generatePlannedAttendanceForNextDays({int days = 15}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
   Future<void> _regeneratePlannedAttendanceForSet({

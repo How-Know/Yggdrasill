@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 47,
+      version: 48,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -109,6 +109,21 @@ class AcademyDbService {
             memo TEXT,
             flows TEXT,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS student_level_scales (
+            level_code INTEGER PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            upper_percent REAL NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS student_level_states (
+            student_id TEXT PRIMARY KEY,
+            current_level_code INTEGER,
+            target_level_code INTEGER,
+            updated_at TEXT
           )
         ''');
         // 운영시간: 정규화된 스키마 (정수 시각 + 별도 break_times 테이블)
@@ -1500,6 +1515,23 @@ class AcademyDbService {
           await db.execute('DROP TABLE student_time_blocks_v16_backup');
           print('[DB] 버전 16 마이그레이션 완료: student_time_blocks 재구성');
         }
+        if (oldVersion < 48) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS student_level_scales (
+              level_code INTEGER PRIMARY KEY,
+              display_name TEXT NOT NULL,
+              upper_percent REAL NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS student_level_states (
+              student_id TEXT PRIMARY KEY,
+              current_level_code INTEGER,
+              target_level_code INTEGER,
+              updated_at TEXT
+            )
+          ''');
+        }
       },
     );
   }
@@ -2521,6 +2553,103 @@ class AcademyDbService {
   Future<void> deleteStudentBasicInfo(String studentId) async {
     final dbClient = await db;
     await dbClient.delete('student_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+  }
+
+  Future<void> ensureStudentLevelTables() async {
+    final dbClient = await db;
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS student_level_scales (
+        level_code INTEGER PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        upper_percent REAL NOT NULL
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS student_level_states (
+        student_id TEXT PRIMARY KEY,
+        current_level_code INTEGER,
+        target_level_code INTEGER,
+        updated_at TEXT
+      )
+    ''');
+  }
+
+  Future<List<Map<String, dynamic>>> getStudentLevelScales() async {
+    await ensureStudentLevelTables();
+    final dbClient = await db;
+    return dbClient.query(
+      'student_level_scales',
+      orderBy: 'level_code ASC',
+    );
+  }
+
+  Future<void> saveStudentLevelScales(List<Map<String, dynamic>> rows) async {
+    await ensureStudentLevelTables();
+    final dbClient = await db;
+    await dbClient.transaction((txn) async {
+      await txn.delete('student_level_scales');
+      for (final row in rows) {
+        final int? code = row['level_code'] is int
+            ? row['level_code'] as int
+            : int.tryParse('${row['level_code'] ?? ''}');
+        if (code == null) continue;
+        final String name = (row['display_name'] as String?)?.trim().isNotEmpty == true
+            ? (row['display_name'] as String).trim()
+            : '${code}등급';
+        final double percent = row['upper_percent'] is num
+            ? (row['upper_percent'] as num).toDouble()
+            : (double.tryParse('${row['upper_percent'] ?? ''}') ?? 0);
+        await txn.insert(
+          'student_level_scales',
+          {
+            'level_code': code,
+            'display_name': name,
+            'upper_percent': percent,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<Map<String, dynamic>?> getStudentLevelState(String studentId) async {
+    await ensureStudentLevelTables();
+    final dbClient = await db;
+    final rows = await dbClient.query(
+      'student_level_states',
+      where: 'student_id = ?',
+      whereArgs: [studentId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first;
+  }
+
+  Future<void> saveStudentLevelState({
+    required String studentId,
+    int? currentLevelCode,
+    int? targetLevelCode,
+  }) async {
+    await ensureStudentLevelTables();
+    final dbClient = await db;
+    if (currentLevelCode == null && targetLevelCode == null) {
+      await dbClient.delete(
+        'student_level_states',
+        where: 'student_id = ?',
+        whereArgs: [studentId],
+      );
+      return;
+    }
+    await dbClient.insert(
+      'student_level_states',
+      {
+        'student_id': studentId,
+        'current_level_code': currentLevelCode,
+        'target_level_code': targetLevelCode,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {

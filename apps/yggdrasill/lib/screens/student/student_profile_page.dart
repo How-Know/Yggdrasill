@@ -217,6 +217,9 @@ class _StudentProfileContent extends StatelessWidget {
         flows: safeFlows,
       );
     }
+    if (tabIndex == 2) {
+      return _StudentStatsView(studentWithInfo: studentWithInfo);
+    }
     final String label = tabIndex == 0 ? '요약 준비 중입니다.' : '스탯 준비 중입니다.';
     return Center(
       child: Text(
@@ -229,6 +232,510 @@ class _StudentProfileContent extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StudentStatsView extends StatefulWidget {
+  final StudentWithInfo studentWithInfo;
+
+  const _StudentStatsView({required this.studentWithInfo});
+
+  @override
+  State<_StudentStatsView> createState() => _StudentStatsViewState();
+}
+
+class _StudentStatsViewState extends State<_StudentStatsView> {
+  bool _loading = true;
+  bool _saving = false;
+  String? _errorText;
+  List<_LevelOption> _options = const <_LevelOption>[];
+  int? _currentLevelCode;
+  int? _targetLevelCode;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  List<_LevelOption> _fallbackOptions() {
+    return const <_LevelOption>[
+      _LevelOption(1, '1등급'),
+      _LevelOption(2, '2등급'),
+      _LevelOption(3, '3등급'),
+      _LevelOption(4, '4등급'),
+      _LevelOption(5, '5등급'),
+      _LevelOption(6, '6등급'),
+    ];
+  }
+
+  int? _asInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
+  double _asDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is double) return v;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+    try {
+      final rows = await DataManager.instance.loadStudentLevelScales();
+      final parsed = rows
+          .map((row) {
+            final code = _asInt(row['level_code']);
+            if (code == null || code < 1 || code > 6) return null;
+            final label = (row['display_name'] as String?)?.trim();
+            return _LevelOption(
+              code,
+              (label == null || label.isEmpty) ? '${code}등급' : label,
+            );
+          })
+          .whereType<_LevelOption>()
+          .toList()
+        ..sort((a, b) => a.code.compareTo(b.code));
+
+      final state = await DataManager.instance.loadStudentLevelState(
+        widget.studentWithInfo.student.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _options = parsed.isNotEmpty ? parsed : _fallbackOptions();
+        _currentLevelCode = _asInt(state?['current_level_code']);
+        _targetLevelCode = _asInt(state?['target_level_code']);
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _options = _fallbackOptions();
+        _loading = false;
+        _errorText = '레벨 정보를 불러오지 못했어요: $e';
+      });
+    }
+  }
+
+  String _labelForCode(int? code) {
+    if (code == null) return '미설정';
+    final match = _options.where((o) => o.code == code);
+    if (match.isNotEmpty) return match.first.label;
+    return '${code}등급';
+  }
+
+  List<DropdownMenuItem<int?>> _buildLevelItems() {
+    return <DropdownMenuItem<int?>>[
+      const DropdownMenuItem<int?>(
+        value: null,
+        child: Text('미설정'),
+      ),
+      ..._options.map(
+        (o) => DropdownMenuItem<int?>(
+          value: o.code,
+          child: Text(o.label),
+        ),
+      ),
+    ];
+  }
+
+  InputDecoration _inputDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: kDlgTextSub),
+      filled: true,
+      fillColor: const Color(0xFF15171C),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kDlgBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: kDlgAccent),
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _errorText = null;
+    });
+    try {
+      await DataManager.instance.saveStudentLevelState(
+        studentId: widget.studentWithInfo.student.id,
+        currentLevelCode: _currentLevelCode,
+        targetLevelCode: _targetLevelCode,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('학생 등급을 저장했어요.')),
+      );
+      setState(() {
+        _saving = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _errorText = '저장에 실패했어요: $e';
+      });
+    }
+  }
+
+  Widget _metricChip({
+    required String label,
+    required double value,
+    required double ratio,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Text(
+        '$label ${ratio.toStringAsFixed(1)}% (${value.toStringAsFixed(2)})',
+        style: const TextStyle(
+          color: kDlgText,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAttendanceScoreCard(Map<String, dynamic> scoreMap) {
+    final totalWeight = _asDouble(scoreMap['totalWeight']);
+    final pendingIgnored = _asInt(scoreMap['pendingIgnoredCount']) ?? 0;
+    if (totalWeight <= 0) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: const Text(
+          '출석 점수를 계산할 기록이 아직 충분하지 않아요. 출석/지각/결석 이벤트가 누적되면 점수가 표시됩니다.',
+          style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+        ),
+      );
+    }
+
+    final score100 = _asDouble(scoreMap['score100']);
+    final weightedPresent = _asDouble(scoreMap['weightedPresent']);
+    final weightedLate = _asDouble(scoreMap['weightedLate']);
+    final weightedAbsent = _asDouble(scoreMap['weightedAbsent']);
+    final eventCount = _asInt(scoreMap['eventCount']) ?? 0;
+    final halfLifeDays = _asDouble(scoreMap['halfLifeDays']);
+    final priorRatio = _asDouble(scoreMap['priorRatio']);
+    final smoothingK = _asDouble(scoreMap['smoothingK']);
+    final thresholdMinutes = _asInt(scoreMap['latenessThresholdMinutes']) ?? 10;
+    final makeupCountThisMonth = _asInt(scoreMap['makeupCountThisMonth']) ?? 0;
+    final monthClassCount = _asInt(scoreMap['monthClassCount']) ?? 0;
+    final makeupRatioThisMonth = _asDouble(scoreMap['makeupRatioThisMonth']);
+    final makeupPenalty = _asDouble(scoreMap['makeupPenalty']);
+    final score100BeforeMakeup = _asDouble(scoreMap['score100BeforeMakeup']);
+    final score100AfterMakeup = _asDouble(scoreMap['score100AfterMakeup']);
+    final rank = _asInt(scoreMap['rank']);
+    final cohortSize = _asInt(scoreMap['cohortSize']) ?? 0;
+    final topPercent = _asDouble(scoreMap['topPercent']);
+
+    final double presentRatio =
+        totalWeight > 0 ? (weightedPresent / totalWeight) * 100.0 : 0.0;
+    final double lateRatio =
+        totalWeight > 0 ? (weightedLate / totalWeight) * 100.0 : 0.0;
+    final double absentRatio =
+        totalWeight > 0 ? (weightedAbsent / totalWeight) * 100.0 : 0.0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '출석 점수',
+                      style: TextStyle(
+                        color: kDlgText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '최근 기록일수록 더 크게 반영되고, 수업량/재원기간 편향을 비율+스무딩으로 완화합니다.',
+                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1D473A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF2B7D67)),
+                ),
+                child: Text(
+                  '${score100.toStringAsFixed(1)}점',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _metricChip(
+                label: '출석',
+                value: weightedPresent,
+                ratio: presentRatio,
+                color: const Color(0xFF33A373),
+              ),
+              _metricChip(
+                label: '지각',
+                value: weightedLate,
+                ratio: lateRatio,
+                color: const Color(0xFFE09C3D),
+              ),
+              _metricChip(
+                label: '결석',
+                value: weightedAbsent,
+                ratio: absentRatio,
+                color: const Color(0xFFD95C5C),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · prior ${(priorRatio * 100).toStringAsFixed(0)}점 · k=${smoothingK.toStringAsFixed(0)} · 지각 기준 ${thresholdMinutes}분',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '반영 이벤트 ${eventCount}건 · 미반영 예정 ${pendingIgnored}건',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '보강: 이번달 ${makeupCountThisMonth}회 / 월수업 ${monthClassCount}회 (${(makeupRatioThisMonth * 100).toStringAsFixed(1)}%)',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          Text(
+            '보강 반영: ${score100BeforeMakeup.toStringAsFixed(1)}점 -> ${score100AfterMakeup.toStringAsFixed(1)}점 (감점 ${(makeupPenalty * 100).toStringAsFixed(1)}점)',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            (rank != null && cohortSize > 0)
+                ? '재원생 기준 ${rank}등 / ${cohortSize}명 (상위 ${topPercent.toStringAsFixed(1)}%)'
+                : '재원생 순위 계산을 위한 데이터가 부족해요.',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: kDlgAccent),
+      );
+    }
+
+    return ValueListenableBuilder<List<AttendanceRecord>>(
+      valueListenable: DataManager.instance.attendanceRecordsNotifier,
+      builder: (_, __, ___) {
+        return ValueListenableBuilder<List<StudentWithInfo>>(
+          valueListenable: DataManager.instance.studentsNotifier,
+          builder: (_, ____, _____) {
+            final scoreMap = DataManager.instance.calculateAttendanceScoreWithRank(
+              studentId: widget.studentWithInfo.student.id,
+            );
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                decoration: BoxDecoration(
+                  color: kDlgPanelBg,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: kDlgBorder),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '등급(레벨) 입력',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            color: kDlgText,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      '현재/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
+                      style: TextStyle(color: kDlgTextSub, fontSize: 13),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int?>(
+                            value: _currentLevelCode,
+                            items: _buildLevelItems(),
+                            decoration: _inputDecoration('현재 등급'),
+                            style: const TextStyle(color: kDlgText),
+                            dropdownColor: const Color(0xFF15171C),
+                            onChanged: (value) =>
+                                setState(() => _currentLevelCode = value),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: DropdownButtonFormField<int?>(
+                            value: _targetLevelCode,
+                            items: _buildLevelItems(),
+                            decoration: _inputDecoration('예상 등급'),
+                            style: const TextStyle(color: kDlgText),
+                            dropdownColor: const Color(0xFF15171C),
+                            onChanged: (value) =>
+                                setState(() => _targetLevelCode = value),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '현재: ${_labelForCode(_currentLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
+                      style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+                    ),
+                    if (_errorText != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _errorText!,
+                        style: const TextStyle(color: Color(0xFFEF6A6A), fontSize: 12),
+                      ),
+                    ],
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _saving ? null : () => unawaited(_load()),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: kDlgTextSub,
+                            side: const BorderSide(color: kDlgBorder),
+                          ),
+                          icon: const Icon(Icons.refresh, size: 16),
+                          label: const Text('다시 불러오기'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.icon(
+                          onPressed: _saving ? null : _save,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: kDlgAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: _saving
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.save, size: 16),
+                          label: Text(_saving ? '저장 중...' : '저장'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    const Divider(color: kDlgBorder),
+                    const SizedBox(height: 10),
+                    const YggDialogSectionHeader(
+                      icon: Icons.shield_outlined,
+                      title: '비개입 변수',
+                    ),
+                    const Text(
+                      '통제 어려운 변수를 별도 축으로 관리합니다. (마음/재능/운/학습 환경)',
+                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF15171C),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: kDlgBorder),
+                      ),
+                      child: const Text(
+                        '이번 단계에서는 비개입 변수 세부 지표를 준비 중입니다.',
+                        style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const YggDialogSectionHeader(
+                      icon: Icons.tune,
+                      title: '개입 가능 변수',
+                    ),
+                    const Text(
+                      '의도적 훈련/설계로 바꿀 수 있는 변수입니다. 현재는 출석 점수를 1단계로 반영합니다.',
+                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                    ),
+                    const SizedBox(height: 10),
+                    _buildAttendanceScoreCard(scoreMap),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _LevelOption {
+  final int code;
+  final String label;
+
+  const _LevelOption(this.code, this.label);
 }
 
 class _StudentTimelineView extends StatefulWidget {
