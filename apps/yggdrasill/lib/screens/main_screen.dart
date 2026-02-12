@@ -2063,6 +2063,15 @@ extension on _MainScreenState {
       page: (edited['page'] as String?)?.trim(),
       count: (countStr == null || countStr.isEmpty) ? null : int.tryParse(countStr),
       content: (edited['content'] as String?)?.trim(),
+      bookId: item.bookId,
+      gradeLabel: item.gradeLabel,
+      sourceUnitLevel: item.sourceUnitLevel,
+      sourceUnitPath: item.sourceUnitPath,
+      unitMappings: item.unitMappings == null
+          ? null
+          : List<Map<String, dynamic>>.from(
+              item.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+            ),
       checkCount: item.checkCount,
       createdAt: item.createdAt,
       updatedAt: DateTime.now(),
@@ -2200,6 +2209,17 @@ extension on _MainScreenState {
                 ? null
                 : int.tryParse(countStr),
             content: (entry['content'] as String?)?.trim(),
+            bookId: (entry['bookId'] as String?)?.trim(),
+            gradeLabel: (entry['gradeLabel'] as String?)?.trim(),
+            sourceUnitLevel: (entry['sourceUnitLevel'] as String?)?.trim(),
+            sourceUnitPath: (entry['sourceUnitPath'] as String?)?.trim(),
+            unitMappings: (entry['unitMappings'] is List)
+                ? List<Map<String, dynamic>>.from(
+                    (entry['unitMappings'] as List)
+                        .whereType<Map>()
+                        .map((e) => Map<String, dynamic>.from(e)),
+                  )
+                : null,
           );
         }
         final String msg =

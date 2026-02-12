@@ -18,6 +18,11 @@ class HomeworkItem {
   String? page;
   int? count;
   String? content;
+  String? bookId;
+  String? gradeLabel;
+  String? sourceUnitLevel;
+  String? sourceUnitPath;
+  List<Map<String, dynamic>>? unitMappings;
   int checkCount;
   DateTime? createdAt;
   DateTime? updatedAt;
@@ -41,6 +46,11 @@ class HomeworkItem {
     this.page,
     this.count,
     this.content,
+    this.bookId,
+    this.gradeLabel,
+    this.sourceUnitLevel,
+    this.sourceUnitPath,
+    this.unitMappings,
     this.checkCount = 0,
     this.createdAt,
     this.updatedAt,
@@ -93,7 +103,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       _byStudentId.clear();
@@ -123,6 +133,10 @@ class HomeworkStore {
           page: (r['page'] as String?)?.trim(),
           count: parseInt(r['count']),
           content: (r['content'] as String?)?.trim(),
+          bookId: (r['book_id'] as String?)?.trim(),
+          gradeLabel: (r['grade_label'] as String?)?.trim(),
+          sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
+          sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
           checkCount: parseInt(r['check_count']) ?? 0,
           createdAt: parseTsOpt(r['created_at']),
           updatedAt: parseTsOpt(r['updated_at']),
@@ -180,6 +194,10 @@ class HomeworkStore {
                 page: (r['page'] as String?)?.trim(),
                 count: _asIntOpt(r['count']),
                 content: (r['content'] as String?)?.trim(),
+                bookId: (r['book_id'] as String?)?.trim(),
+                gradeLabel: (r['grade_label'] as String?)?.trim(),
+                sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
+                sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
                 checkCount: _asIntOpt(r['check_count']) ?? 0,
                 createdAt: _parse(r['created_at']),
                 updatedAt: _parse(r['updated_at']),
@@ -230,6 +248,10 @@ class HomeworkStore {
               page: (m['page'] as String?)?.trim(),
               count: m['count'] is num ? (m['count'] as num).toInt() : int.tryParse('${m['count']}'),
               content: (m['content'] as String?)?.trim(),
+              bookId: (m['book_id'] as String?)?.trim(),
+              gradeLabel: (m['grade_label'] as String?)?.trim(),
+              sourceUnitLevel: (m['source_unit_level'] as String?)?.trim(),
+              sourceUnitPath: (m['source_unit_path'] as String?)?.trim(),
               checkCount: m['check_count'] is num
                   ? (m['check_count'] as num).toInt()
                   : int.tryParse('${m['check_count']}') ?? 0,
@@ -295,6 +317,10 @@ class HomeworkStore {
         'page': it.page,
         'count': it.count,
         'content': it.content,
+        'book_id': it.bookId,
+        'grade_label': it.gradeLabel,
+        'source_unit_level': it.sourceUnitLevel,
+        'source_unit_path': it.sourceUnitPath,
         'check_count': it.checkCount,
         'status': it.status.index,
         'phase': it.phase,
@@ -316,6 +342,11 @@ class HomeworkStore {
       if (updatedRows is List && updatedRows.isNotEmpty) {
         final row = (updatedRows.first as Map<String, dynamic>);
         it.version = (row['version'] as num?)?.toInt() ?? (it.version + 1);
+        await _syncUnitMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
         return;
       }
       // Insert if not exists
@@ -332,6 +363,11 @@ class HomeworkStore {
       if (insRows is List && insRows.isNotEmpty) {
         final row = (insRows.first as Map<String, dynamic>);
         it.version = (row['version'] as num?)?.toInt() ?? 1;
+        await _syncUnitMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
         return;
       }
       // Conflict fallback
@@ -340,6 +376,86 @@ class HomeworkStore {
     } catch (e, st) {
       // ignore: avoid_print
       print('[HW][upsert][ERROR] ' + e.toString() + '\n' + st.toString());
+    }
+  }
+
+  Future<void> _syncUnitMappings({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) async {
+    final mappings = item.unitMappings;
+    if (mappings == null) return;
+    final supa = Supabase.instance.client;
+    try {
+      await supa.from('homework_item_units').delete().match({
+        'academy_id': academyId,
+        'homework_item_id': item.id,
+      });
+      final bookId = (item.bookId ?? '').trim();
+      final gradeLabel = (item.gradeLabel ?? '').trim();
+      if (bookId.isEmpty || gradeLabel.isEmpty || mappings.isEmpty) return;
+
+      int? asIntOpt(dynamic v) {
+        if (v == null) return null;
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        if (v is String) return int.tryParse(v);
+        return null;
+      }
+
+      double asDouble(dynamic v, {required double fallback}) {
+        if (v == null) return fallback;
+        if (v is num) return v.toDouble();
+        if (v is String) return double.tryParse(v) ?? fallback;
+        return fallback;
+      }
+
+      String asString(dynamic v, {required String fallback}) {
+        final s = (v == null) ? '' : v.toString().trim();
+        return s.isEmpty ? fallback : s;
+      }
+
+      final rows = <Map<String, dynamic>>[];
+      final seenKeys = <String>{};
+      for (final raw in mappings) {
+        final m = Map<String, dynamic>.from(raw);
+        final bigOrder = asIntOpt(m['bigOrder']);
+        final midOrder = asIntOpt(m['midOrder']);
+        final smallOrder = asIntOpt(m['smallOrder']);
+        if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+        final startPage = asIntOpt(m['startPage']);
+        final endPage = asIntOpt(m['endPage']);
+        final pageCount = asIntOpt(m['pageCount']);
+        final key = '$bigOrder|$midOrder|$smallOrder';
+        if (!seenKeys.add(key)) continue;
+        rows.add({
+          'academy_id': academyId,
+          'homework_item_id': item.id,
+          'student_id': studentId,
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'big_order': bigOrder,
+          'mid_order': midOrder,
+          'small_order': smallOrder,
+          'big_name': asString(m['bigName'], fallback: '대단원'),
+          'mid_name': asString(m['midName'], fallback: '중단원'),
+          'small_name': asString(m['smallName'], fallback: '소단원'),
+          'start_page': startPage,
+          'end_page': endPage,
+          'page_count': pageCount,
+          'weight': asDouble(m['weight'], fallback: 1),
+          'source_scope': asString(
+            m['sourceScope'],
+            fallback: 'direct_small',
+          ),
+        });
+      }
+      if (rows.isNotEmpty) {
+        await supa.from('homework_item_units').insert(rows);
+      }
+    } catch (e, st) {
+      print('[HW][unitMappings][ERROR] $e\n$st');
     }
   }
 
@@ -353,6 +469,11 @@ class HomeworkStore {
     String? page,
     int? count,
     String? content,
+    String? bookId,
+    String? gradeLabel,
+    String? sourceUnitLevel,
+    String? sourceUnitPath,
+    List<Map<String, dynamic>>? unitMappings,
   }) {
     final id = const Uuid().v4();
     final item = HomeworkItem(
@@ -365,6 +486,15 @@ class HomeworkStore {
       page: page,
       count: count,
       content: content,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      sourceUnitLevel: sourceUnitLevel,
+      sourceUnitPath: sourceUnitPath,
+      unitMappings: unitMappings == null
+          ? null
+          : List<Map<String, dynamic>>.from(
+              unitMappings.map((e) => Map<String, dynamic>.from(e)),
+            ),
       checkCount: 0,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
@@ -617,6 +747,15 @@ class HomeworkStore {
       page: page ?? src.page,
       count: count ?? src.count,
       content: content ?? src.content ?? body,
+      bookId: src.bookId,
+      gradeLabel: src.gradeLabel,
+      sourceUnitLevel: src.sourceUnitLevel,
+      sourceUnitPath: src.sourceUnitPath,
+      unitMappings: src.unitMappings == null
+          ? null
+          : List<Map<String, dynamic>>.from(
+              src.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+            ),
     );
     // add()가 서버 upsert를 처리함
     return created;
@@ -728,7 +867,7 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('updated_at', ascending: false);
@@ -746,6 +885,10 @@ class HomeworkStore {
           page: (r['page'] as String?)?.trim(),
           count: _asInt(r['count']),
           content: (r['content'] as String?)?.trim(),
+          bookId: (r['book_id'] as String?)?.trim(),
+          gradeLabel: (r['grade_label'] as String?)?.trim(),
+          sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
+          sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
           checkCount: _asInt(r['check_count']),
           createdAt: _parse(r['created_at']),
           updatedAt: _parse(r['updated_at']),

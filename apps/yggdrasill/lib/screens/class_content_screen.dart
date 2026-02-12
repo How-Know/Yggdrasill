@@ -292,6 +292,17 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                 ? null
                 : int.tryParse(countStr),
             content: (entry['content'] as String?)?.trim(),
+            bookId: (entry['bookId'] as String?)?.trim(),
+            gradeLabel: (entry['gradeLabel'] as String?)?.trim(),
+            sourceUnitLevel: (entry['sourceUnitLevel'] as String?)?.trim(),
+            sourceUnitPath: (entry['sourceUnitPath'] as String?)?.trim(),
+            unitMappings: (entry['unitMappings'] is List)
+                ? List<Map<String, dynamic>>.from(
+                    (entry['unitMappings'] as List)
+                        .whereType<Map>()
+                        .map((e) => Map<String, dynamic>.from(e)),
+                  )
+                : null,
           );
         }
         final String msg =
@@ -1487,6 +1498,15 @@ Future<void> _openHomeworkEditDialogForHome(
     page: (edited['page'] as String?)?.trim(),
     count: (countStr == null || countStr.isEmpty) ? null : int.tryParse(countStr),
     content: (edited['content'] as String?)?.trim(),
+    bookId: item.bookId,
+    gradeLabel: item.gradeLabel,
+    sourceUnitLevel: item.sourceUnitLevel,
+    sourceUnitPath: item.sourceUnitPath,
+    unitMappings: item.unitMappings == null
+        ? null
+        : List<Map<String, dynamic>>.from(
+            item.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+          ),
     checkCount: item.checkCount,
     createdAt: item.createdAt,
     updatedAt: DateTime.now(),
@@ -1884,9 +1904,19 @@ Widget _buildHomeworkChipVisual(
     return candidate.isEmpty ? '-' : candidate;
   }
 
+  String extractCourseName() {
+    final contentRaw = (hw.content ?? '').trim();
+    final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
+    return match?.group(1)?.trim() ?? '';
+  }
+
   final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : 'H0';
   final String titleText = (hw.title).trim();
-  final String line2Left = '교재 ${extractBookName()}';
+  final String bookName = extractBookName();
+  final String courseName = extractCourseName();
+  final String line2Left = (bookName == '-' || bookName.isEmpty)
+      ? (courseName.isEmpty ? '-' : courseName)
+      : (courseName.isEmpty ? bookName : '$bookName · $courseName');
   final String line2Right =
       'p.${page.isNotEmpty ? page : '-'} · ${count.isNotEmpty ? count : '-'}문항';
   final int runningMs = hw.runStart != null

@@ -5529,6 +5529,20 @@ DateTime? _lastClassesOrderSaveStart;
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
+  Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
+    required String bookId,
+    required String gradeLabel,
+    String groupLevel = 'small',
+    DateTime? from,
+    DateTime? to,
+  }) =>
+      ResourceService.instance.loadHomeworkUnitStats(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        groupLevel: groupLevel,
+        from: from,
+        to: to,
+      );
   Future<void> deleteResourceFile(String fileId) =>
       ResourceService.instance.deleteResourceFile(fileId);
 

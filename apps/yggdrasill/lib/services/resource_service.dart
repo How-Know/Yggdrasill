@@ -751,6 +751,48 @@ class ResourceService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
+    required String bookId,
+    required String gradeLabel,
+    String groupLevel = 'small',
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final params = <String, dynamic>{
+        'p_academy_id': academyId,
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+        'p_group_level': groupLevel,
+      };
+      if (from != null) {
+        params['p_from'] = from.toUtc().toIso8601String();
+      }
+      if (to != null) {
+        params['p_to'] = to.toUtc().toIso8601String();
+      }
+      final rows = await supa.rpc('homework_unit_stats', params: params);
+      if (rows is! List) return <Map<String, dynamic>>[];
+      final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
+      for (final row in rows) {
+        if (row is Map) {
+          out.add(Map<String, dynamic>.from(row));
+        }
+      }
+      return out;
+    } catch (e, st) {
+      print('[RES][homeworkUnitStats] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   Future<void> deleteResourceFile(String fileId) async {
     await AcademyDbService.instance.deleteResourceFileLinksByFileId(fileId);
     await AcademyDbService.instance.deleteResourceFileOrdersByFileId(fileId);

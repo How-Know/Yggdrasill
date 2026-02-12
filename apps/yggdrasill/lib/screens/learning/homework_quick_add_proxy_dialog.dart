@@ -494,6 +494,45 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     return sum.toString();
   }
 
+  int? _pageCountForSmall(_SmallUnitSelectionNode small) {
+    if (small.pageCounts.isEmpty) return null;
+    int sum = 0;
+    for (final v in small.pageCounts.values) {
+      sum += v;
+    }
+    return sum;
+  }
+
+  Map<String, dynamic> _unitMappingForSmall(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small, {
+    required String sourceScope,
+  }) {
+    return {
+      'bigOrder': big.orderIndex,
+      'midOrder': mid.orderIndex,
+      'smallOrder': small.orderIndex,
+      'bigName': big.name,
+      'midName': mid.name,
+      'smallName': small.name,
+      'startPage': small.startPage,
+      'endPage': small.endPage,
+      'pageCount': _pageCountForSmall(small),
+      'weight': 1.0,
+      'sourceScope': sourceScope,
+    };
+  }
+
+  String _bookMetaText(_LinkedTextbook book) {
+    final lines = <String>['교재: ${book.bookName}'];
+    final grade = book.gradeLabel.trim();
+    if (grade.isNotEmpty) {
+      lines.add('과정: $grade');
+    }
+    return lines.join('\n');
+  }
+
   _UnitTask _taskFromSmall(
     _LinkedTextbook book,
     _BigUnitSelectionNode big,
@@ -505,7 +544,17 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       title: '${_prefixSmall(big, mid, small)} ${small.name}',
       page: _pageTextForSmall(small),
       count: _countTextForSmall(small),
-      content: '교재: ${book.bookName}\n$path',
+      content: '${_bookMetaText(book)}\n$path',
+      sourceUnitLevel: 'small',
+      sourceUnitPath: _prefixSmall(big, mid, small),
+      unitMappings: [
+        _unitMappingForSmall(
+          big,
+          mid,
+          small,
+          sourceScope: 'direct_small',
+        ),
+      ],
     );
   }
 
@@ -516,11 +565,26 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     List<_SelectedSmallUnit> smalls,
   ) {
     final sorted = _sortedSelectedSmallUnits(smalls);
+    final unitMappings = <Map<String, dynamic>>[];
+    for (final small in mid.smalls) {
+      if (!small.selected) continue;
+      unitMappings.add(
+        _unitMappingForSmall(
+          big,
+          mid,
+          small,
+          sourceScope: 'expanded_from_mid',
+        ),
+      );
+    }
     return _UnitTask(
       title: '${_prefixMid(big, mid)} ${mid.name}',
       page: _mergedPageText(sorted),
       count: _mergedCountText(sorted) ?? '',
-      content: '교재: ${book.bookName}\n${big.name} > ${mid.name}',
+      content: '${_bookMetaText(book)}\n${big.name} > ${mid.name}',
+      sourceUnitLevel: 'mid',
+      sourceUnitPath: _prefixMid(big, mid),
+      unitMappings: unitMappings,
     );
   }
 
@@ -530,11 +594,28 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     List<_SelectedSmallUnit> smalls,
   ) {
     final sorted = _sortedSelectedSmallUnits(smalls);
+    final unitMappings = <Map<String, dynamic>>[];
+    for (final mid in big.middles) {
+      for (final small in mid.smalls) {
+        if (!small.selected) continue;
+        unitMappings.add(
+          _unitMappingForSmall(
+            big,
+            mid,
+            small,
+            sourceScope: 'expanded_from_big',
+          ),
+        );
+      }
+    }
     return _UnitTask(
       title: '${_prefixBig(big)} ${big.name}',
       page: _mergedPageText(sorted),
       count: _mergedCountText(sorted) ?? '',
-      content: '교재: ${book.bookName}\n${big.name}',
+      content: '${_bookMetaText(book)}\n${big.name}',
+      sourceUnitLevel: 'big',
+      sourceUnitPath: _prefixBig(big),
+      unitMappings: unitMappings,
     );
   }
 
@@ -867,9 +948,10 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
         return;
       }
       title = '교재 과제';
+      final bookMeta = _bookMetaText(selectedBook);
       content = content.isEmpty
-          ? '교재: ${selectedBook.bookName}'
-          : '교재: ${selectedBook.bookName}\n$content';
+          ? bookMeta
+          : '$bookMeta\n$content';
     } else {
       final tasks = _buildUnitTasks(selectedBook);
       if (tasks.isEmpty) {
@@ -893,6 +975,11 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           'content': task.content,
           'body': body,
           'color': _colorForType('교재'),
+          'bookId': selectedBook.bookId,
+          'gradeLabel': selectedBook.gradeLabel,
+          'sourceUnitLevel': task.sourceUnitLevel,
+          'sourceUnitPath': task.sourceUnitPath,
+          'unitMappings': task.unitMappings,
         });
       }
       Navigator.pop(context, {
@@ -918,6 +1005,11 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       'content': content,
       'body': body,
       'color': _colorForType('교재'),
+      'bookId': selectedBook.bookId,
+      'gradeLabel': selectedBook.gradeLabel,
+      'sourceUnitLevel': 'manual',
+      'sourceUnitPath': null,
+      'unitMappings': const <Map<String, dynamic>>[],
     });
   }
 
@@ -1096,12 +1188,18 @@ class _UnitTask {
   final String page;
   final String count;
   final String content;
+  final String sourceUnitLevel;
+  final String sourceUnitPath;
+  final List<Map<String, dynamic>> unitMappings;
 
   const _UnitTask({
     required this.title,
     required this.page,
     required this.count,
     required this.content,
+    required this.sourceUnitLevel,
+    required this.sourceUnitPath,
+    required this.unitMappings,
   });
 }
 

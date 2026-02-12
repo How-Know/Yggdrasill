@@ -4612,6 +4612,7 @@ class _GridFileCardState extends State<_GridFileCard> {
       showDialog(
         context: context,
         builder: (ctx) => ResourceFileMetaDialog(
+          bookId: file.id,
           fileName: file.name,
           description: file.description,
           categoryLabel: categoryLabel,
