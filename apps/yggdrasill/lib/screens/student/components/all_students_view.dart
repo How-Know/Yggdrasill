@@ -933,9 +933,11 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       children: [
                     const SizedBox(height: 1),
                     Container(
-                      height: _studentHeaderHeight,
+                      constraints: const BoxConstraints(
+                        minHeight: _studentHeaderHeight,
+                      ),
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 32, vertical: 22),
+                          horizontal: 32, vertical: 19),
                       decoration: BoxDecoration(
                         color: const Color(0xFF223131),
                         borderRadius: BorderRadius.circular(12),

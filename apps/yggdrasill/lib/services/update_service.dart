@@ -18,6 +18,7 @@ class UpdateService {
   // - MSIX로 설치된 경우에도 ZIP 업데이트는 LocalAppData로 "마이그레이션 설치"되며, 이후부터는 동일하게 동작한다.
 
   static const List<String> _arm64ZipCandidates = [
+    'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill_portable_arm64.zip',
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-Windows-ARM64.zip',
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/Yggdrasill-windows-arm64.zip',
     'https://github.com/How-Know/Yggdrasill/releases/latest/download/mneme_flutter_windows_arm64.zip',
@@ -109,12 +110,11 @@ class UpdateService {
       Uri? found;
       http.StreamedResponse? streamResp;
       final arch = _detectWindowsArch();
-      final List<String> candidates = <String>[
-        // x64는 포터블 ZIP이 1순위
-        ..._x64ZipFallbackCandidates,
-        // ARM64 장비는 전용 ZIP을 먼저 시도 후 x64 폴백으로
-        if (arch == _WinArch.arm64) ..._arm64ZipCandidates,
-      ];
+      final List<String> candidates = arch == _WinArch.arm64
+          // ARM64 장비는 전용 ZIP 우선, 없으면 x64 에뮬레이션 ZIP 폴백
+          ? <String>[..._arm64ZipCandidates, ..._x64ZipFallbackCandidates]
+          // x64 장비는 x64 ZIP만 시도
+          : <String>[..._x64ZipFallbackCandidates];
       for (final url in candidates) {
         try {
           final req = http.Request('GET', Uri.parse(url));

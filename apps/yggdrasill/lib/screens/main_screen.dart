@@ -1431,6 +1431,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final hasHomeworkItems = HomeworkStore.instance
                   .items(t.student.id)
                   .any((e) => e.status != HomeworkStatus.completed);
+              final allPendingItemIds = HomeworkStore.instance
+                  .items(t.student.id)
+                  .where((e) => e.status != HomeworkStatus.completed)
+                  .map((e) => e.id)
+                  .toList();
               final HomeworkAssignSelection? selection = hasHomeworkItems
                   ? await showHomeworkAssignDialog(
                       context,
@@ -1470,6 +1475,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     t.student.id,
                     selection.itemIds,
                     dueDate: selection.dueDate,
+                  );
+                }
+                final selectedIds = selection?.itemIds.toSet() ?? const <String>{};
+                final unselectedIds = allPendingItemIds
+                    .where((id) => !selectedIds.contains(id))
+                    .toList();
+                if (unselectedIds.isNotEmpty) {
+                  HomeworkStore.instance.restoreItemsToWaiting(
+                    t.student.id,
+                    unselectedIds,
                   );
                 }
               } catch (e) {
@@ -1724,6 +1739,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  // 왼쪽 사이드시트 과제 칩에서는 단원 숫자 prefix만 숨긴다.
+  // 예) "1.2.(3) 함수의 극한" -> "함수의 극한"
+  String _chipDisplayTitle(String rawTitle) {
+    final trimmed = rawTitle.trim();
+    final stripped = trimmed.replaceFirst(
+      RegExp(r'^\d+(?:\.(?:\d+|\(\d+\)))*\s+'),
+      '',
+    );
+    return stripped.isEmpty ? trimmed : stripped;
+  }
+
   List<Widget> _buildHomeworkChipsOnce(_AttendanceTarget t) {
     final List<Widget> chips = [];
     // 정렬: 수행(2/running) → 대기(1) → 확인(4) → 제출(3).
@@ -1754,6 +1780,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       return ta.compareTo(tb);
     });
     for (final hw in hwList) {
+      final chipTitle = _chipDisplayTitle(hw.title);
       if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
       chips.add(
         MouseRegion(
@@ -1808,7 +1835,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
               // 긴 제목도 잘리지 않도록 실제 텍스트 폭을 모두 반영
               final painter = TextPainter(
-                text: TextSpan(text: hw.title, style: style),
+                text: TextSpan(text: chipTitle, style: style),
                 maxLines: 1,
                 textDirection: TextDirection.ltr,
                 textScaleFactor: MediaQuery.of(context).textScaleFactor,
@@ -1825,7 +1852,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final double width = painter.width + leftPad + rightPad + borderWMax * 2 + 6.0;
               if (!_chipDebugLogged.contains(hw.id)) {
                 _chipDebugLogged.add(hw.id);
-                debugPrint('[CHIP][measure] id=' + hw.id + ' title="' + hw.title + '" w=' +
+                debugPrint('[CHIP][measure] id=' + hw.id + ' title="' + chipTitle + '" w=' +
                     painter.width.toStringAsFixed(1) + ' scale=' + textScale.toStringAsFixed(2) +
                     ' finalW=' + width.toStringAsFixed(1));
               }
@@ -1836,7 +1863,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               final double tick = _uiAnimController.value; // 0..1
 
               final textChild = Text(
-                hw.title,
+                chipTitle,
                 style: style,
                 textAlign: TextAlign.center,
                 maxLines: 1,

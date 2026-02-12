@@ -532,4 +532,27 @@ class HomeworkAssignmentStore {
       print('[HW_ASSIGN][record][ERROR] $e\n$st');
     }
   }
+
+  Future<void> clearActiveAssignmentsForItems(
+    String studentId,
+    List<String> itemIds, {
+    String nextStatus = 'carried_over',
+  }) async {
+    if (itemIds.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa
+          .from('homework_assignments')
+          .update({'status': nextStatus})
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('status', 'assigned')
+          .inFilter('homework_item_id', itemIds);
+      _bump();
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][clear_active][ERROR] $e\n$st');
+    }
+  }
 }

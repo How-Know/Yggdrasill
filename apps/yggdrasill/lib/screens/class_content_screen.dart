@@ -322,6 +322,11 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
     final hasHomeworkItems = HomeworkStore.instance
         .items(studentId)
         .any((e) => e.status != HomeworkStatus.completed);
+    final allPendingItemIds = HomeworkStore.instance
+        .items(studentId)
+        .where((e) => e.status != HomeworkStatus.completed)
+        .map((e) => e.id)
+        .toList();
     final HomeworkAssignSelection? selection = hasHomeworkItems
         ? await showHomeworkAssignDialog(
             context,
@@ -357,6 +362,16 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
           studentId,
           selection.itemIds,
           dueDate: selection.dueDate,
+        );
+      }
+      final selectedIds = selection.itemIds.toSet();
+      final unselectedIds = allPendingItemIds
+          .where((id) => !selectedIds.contains(id))
+          .toList();
+      if (unselectedIds.isNotEmpty) {
+        HomeworkStore.instance.restoreItemsToWaiting(
+          studentId,
+          unselectedIds,
         );
       }
       if (!context.mounted) return;

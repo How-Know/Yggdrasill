@@ -30,6 +30,18 @@ if($LASTEXITCODE -ne 0){ throw "flutter build windows failed (exit=$LASTEXITCODE
 $releaseDir = Join-Path (Get-Location) 'build/windows/x64/runner/Release'
 Copy-Item $envPath (Join-Path $releaseDir 'env.local.json') -Force
 
+# Portable 배포 안정성 체크: VC++ 런타임 DLL이 번들에 존재해야 ARM/x64 신규 PC에서 실행 가능
+$requiredRuntimeDlls = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$missingRuntimeDlls = @()
+foreach($dll in $requiredRuntimeDlls){
+  if(-not (Test-Path (Join-Path $releaseDir $dll))){
+    $missingRuntimeDlls += $dll
+  }
+}
+if($missingRuntimeDlls.Count -gt 0){
+  throw "Missing VC++ runtime DLLs in Release output: $($missingRuntimeDlls -join ', '). windows/CMakeLists.txt runtime bundling 확인 필요"
+}
+
 # Prepare dist directory and copy artifacts
 $dist = Join-Path (Get-Location) 'dist'
 if(-not (Test-Path $dist)) { New-Item -ItemType Directory $dist | Out-Null }

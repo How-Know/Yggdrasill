@@ -859,6 +859,69 @@ class HomeworkStore {
     }
   }
 
+  // 하원 시 선택하지 않은 과제를 즉시 "대기(진행중)"로 복귀시키고
+  // 홈 메뉴 숨김 기준(active assigned)에서도 해제한다.
+  void restoreItemsToWaiting(
+    String studentId,
+    List<String> itemIds,
+  ) {
+    if (itemIds.isEmpty) return;
+    final list = _byStudentId[studentId];
+    if (list == null) {
+      unawaited(
+        HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+          studentId,
+          itemIds,
+        ),
+      );
+      return;
+    }
+
+    final idSet = itemIds.toSet();
+    bool changed = false;
+    final now = DateTime.now();
+    final Map<String, HomeworkItem> toUpsert = {};
+    for (final e in list) {
+      if (!idSet.contains(e.id)) continue;
+      if (e.status == HomeworkStatus.completed) continue;
+      bool updated = false;
+      if (e.runStart != null) {
+        e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
+        e.runStart = null;
+        updated = true;
+      }
+      if (e.phase != 1) {
+        e.phase = 1;
+        e.waitingAt = now;
+        e.submittedAt = null;
+        e.confirmedAt = null;
+        updated = true;
+      }
+      if (e.status != HomeworkStatus.inProgress) {
+        e.status = HomeworkStatus.inProgress;
+        updated = true;
+      }
+      if (updated) {
+        changed = true;
+        toUpsert[e.id] = e;
+      }
+    }
+
+    if (changed) {
+      _bump();
+      for (final e in toUpsert.values) {
+        unawaited(_upsertItem(studentId, e));
+      }
+    }
+
+    unawaited(
+      HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+        studentId,
+        itemIds,
+      ),
+    );
+  }
+
   void _bump() { revision.value++; }
 
   Future<void> _reloadStudent(String studentId) async {
