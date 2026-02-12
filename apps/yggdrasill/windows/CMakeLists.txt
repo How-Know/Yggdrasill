@@ -75,6 +75,7 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 # Bundle MSVC runtime DLLs for portable distribution.
 # This prevents startup failures on machines without VC++ redistributable installed.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
 include(InstallRequiredSystemLibraries)
 if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
   install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
