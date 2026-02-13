@@ -6,6 +6,7 @@ import { tokens } from '../theme';
 type Row = {
   id: string; name: string; email?: string|null; school?: string|null; grade?: string|null;
   level?: string|null; created_at?: string; client_id?: string|null;
+  current_math_percentile?: number | null; current_level_grade?: number | null;
 };
 
 type ItemStat = {
@@ -54,6 +55,20 @@ type Round2LinkStatus = {
   expiresAt: string | null;
   updatedAt: string | null;
 };
+
+type LevelBandCode = 'ALL' | 'NO_VALUE' | 'G0' | 'G1' | 'G2' | 'G3' | 'G4' | 'G5' | 'G6';
+
+const LEVEL_BAND_OPTIONS: Array<{ code: LevelBandCode; label: string }> = [
+  { code: 'ALL', label: '전체' },
+  { code: 'NO_VALUE', label: '미입력' },
+  { code: 'G0', label: '0등급 (상위 1%)' },
+  { code: 'G1', label: '1등급 (상위 4%)' },
+  { code: 'G2', label: '2등급 (상위 11%)' },
+  { code: 'G3', label: '3등급 (상위 23%)' },
+  { code: 'G4', label: '4등급 (상위 40%)' },
+  { code: 'G5', label: '5등급 (상위 60%)' },
+  { code: 'G6', label: '6등급 (그 이하)' },
+];
 
 function parseRoundNo(value: unknown): number | null {
   const raw = String(value ?? '').trim();
@@ -105,6 +120,78 @@ function formatDateTime(value?: string) {
   }
 }
 
+function normalizePercentile(value: unknown): number | null {
+  const n = toNumber(value);
+  if (n == null) return null;
+  if (n < 0 || n > 100) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function normalizeLevelGrade(value: unknown): number | null {
+  const n = toNumber(value);
+  if (n == null) return null;
+  if (!Number.isInteger(n)) return null;
+  if (n < 0 || n > 6) return null;
+  return n;
+}
+
+function formatPercentileInputValue(value: number | null): string {
+  if (value == null) return '';
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function percentileToLevelGrade(percentile: number): number {
+  if (percentile <= 1) return 0;
+  if (percentile <= 4) return 1;
+  if (percentile <= 11) return 2;
+  if (percentile <= 23) return 3;
+  if (percentile <= 40) return 4;
+  if (percentile <= 60) return 5;
+  return 6;
+}
+
+function percentileToBandCode(percentile: number | null): Exclude<LevelBandCode, 'ALL'> {
+  if (percentile == null) return 'NO_VALUE';
+  const grade = percentileToLevelGrade(percentile);
+  return (`G${grade}` as Exclude<LevelBandCode, 'ALL'>);
+}
+
+function deriveParticipantBandCode(levelGrade: unknown, percentile: unknown): Exclude<LevelBandCode, 'ALL'> {
+  const normalizedGrade = normalizeLevelGrade(levelGrade);
+  if (normalizedGrade != null) {
+    return `G${normalizedGrade}` as Exclude<LevelBandCode, 'ALL'>;
+  }
+  return percentileToBandCode(normalizePercentile(percentile));
+}
+
+function matchesLevelBand(levelGrade: unknown, percentile: unknown, code: LevelBandCode): boolean {
+  if (code === 'ALL') return true;
+  return deriveParticipantBandCode(levelGrade, percentile) === code;
+}
+
+function bandCodeToLevelGrade(code: Exclude<LevelBandCode, 'ALL'>): number | null {
+  if (code === 'NO_VALUE') return null;
+  return Number(code.slice(1));
+}
+
+function getLevelBandLabel(code: LevelBandCode): string {
+  return LEVEL_BAND_OPTIONS.find((x) => x.code === code)?.label ?? code;
+}
+
+function formatCurrentLevelDisplay(levelGrade: unknown, percentile: unknown): string {
+  const code = deriveParticipantBandCode(levelGrade, percentile);
+  if (code === 'NO_VALUE') return '미입력';
+  const label = getLevelBandLabel(code);
+
+  // 기존 percentile-only 데이터는 추정치임을 노출해 혼동을 줄인다.
+  const hasExplicitGrade = normalizeLevelGrade(levelGrade) != null;
+  if (hasExplicitGrade) return label;
+
+  const pct = normalizePercentile(percentile);
+  if (pct == null) return label;
+  return `${label} (상위 ${formatPercentileInputValue(pct)}% 추정)`;
+}
+
 export default function ResultsPage() {
   const [rows, setRows] = React.useState<Row[]>([]);
   const [selected, setSelected] = React.useState<Row | null>(null);
@@ -123,13 +210,16 @@ export default function ResultsPage() {
   const [filterTrait, setFilterTrait] = React.useState('ALL');
   const [filterType, setFilterType] = React.useState('ALL');
   const [filterRound, setFilterRound] = React.useState('ALL');
+  const [filterLevelBand, setFilterLevelBand] = React.useState<LevelBandCode>('ALL');
   const [round2LinksByParticipant, setRound2LinksByParticipant] = React.useState<Record<string, Round2LinkStatus>>({});
+  const [savingLevelById, setSavingLevelById] = React.useState<Record<string, boolean>>({});
+  const [levelErrorById, setLevelErrorById] = React.useState<Record<string, string | null>>({});
 
   React.useEffect(() => {
     (async () => {
       const { data } = await supabase
         .from('survey_participants')
-        .select('id, name, email, school, grade, level, created_at, client_id')
+        .select('id, name, email, school, grade, level, created_at, client_id, current_math_percentile, current_level_grade')
         .order('created_at', { ascending: false });
       setRows((data as any[]) || []);
     })();
@@ -284,7 +374,7 @@ export default function ResultsPage() {
             .select('id, text, trait, type, round_label, is_active'),
           supabase
             .from('survey_participants')
-            .select('id'),
+            .select('id, current_math_percentile, current_level_grade'),
         ]);
 
         if (answersRes.error) throw answersRes.error;
@@ -296,8 +386,13 @@ export default function ResultsPage() {
         const participantSet = new Set<string>();
         const validParticipantSet = new Set(
           (participantsRes.data as any[] || [])
-            .map((p) => String(p?.id ?? '').trim())
-            .filter(Boolean),
+            .map((p) => ({
+              id: String(p?.id ?? '').trim(),
+              levelGrade: normalizeLevelGrade(p?.current_level_grade),
+              percentile: normalizePercentile(p?.current_math_percentile),
+            }))
+            .filter((p) => Boolean(p.id) && matchesLevelBand(p.levelGrade, p.percentile, filterLevelBand))
+            .map((p) => p.id),
         );
         let totalAnswers = 0;
         let totalMs = 0;
@@ -413,7 +508,7 @@ export default function ResultsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filterLevelBand, rows]);
 
   const filteredItemStats = React.useMemo(() => {
     const keyword = filterText.trim().toLowerCase();
@@ -466,6 +561,35 @@ export default function ResultsPage() {
     });
   }, [itemStats]);
 
+  const levelBandCounts = React.useMemo(() => {
+    const counts: Record<LevelBandCode, number> = {
+      ALL: rows.length,
+      NO_VALUE: 0,
+      G0: 0,
+      G1: 0,
+      G2: 0,
+      G3: 0,
+      G4: 0,
+      G5: 0,
+      G6: 0,
+    };
+    rows.forEach((row) => {
+      const code = deriveParticipantBandCode(row.current_level_grade, row.current_math_percentile);
+      counts[code] += 1;
+    });
+    return counts;
+  }, [rows]);
+
+  const filteredRows = React.useMemo(
+    () => rows.filter((row) => matchesLevelBand(row.current_level_grade, row.current_math_percentile, filterLevelBand)),
+    [filterLevelBand, rows],
+  );
+
+  const selectedLevelBandLabel = React.useMemo(
+    () => getLevelBandLabel(filterLevelBand),
+    [filterLevelBand],
+  );
+
   function arrayToBase64(arr: ArrayBuffer): string {
     const bytes = new Uint8Array(arr);
     let binary = '';
@@ -483,9 +607,13 @@ export default function ResultsPage() {
     }
     const asOfDate = itemStatsMeta?.asOfDate ?? new Date().toISOString();
     const cumulativeN = itemStatsMeta?.cumulativeParticipants ?? 0;
+    const levelFilterCode = filterLevelBand;
+    const levelFilterLabel = selectedLevelBandLabel;
     const rows = filteredItemStats.map((item) => ({
       as_of_date: asOfDate,
       cumulative_n: cumulativeN,
+      level_filter_code: levelFilterCode,
+      level_filter_label: levelFilterLabel,
       question_id: item.questionId,
       round_label: formatRoundLabel(item.roundLabel),
       trait: item.trait,
@@ -572,6 +700,41 @@ export default function ResultsPage() {
     setAnswers((data as any[]) || []);
   }
 
+  async function saveCurrentLevelGrade(participantId: string, code: Exclude<LevelBandCode, 'ALL'>) {
+    const nextLevelGrade = bandCodeToLevelGrade(code);
+    const currentLevelGrade = normalizeLevelGrade(
+      rows.find((row) => row.id === participantId)?.current_level_grade,
+    );
+    if (currentLevelGrade === nextLevelGrade) {
+      setLevelErrorById((prev) => ({ ...prev, [participantId]: null }));
+      return;
+    }
+
+    setSavingLevelById((prev) => ({ ...prev, [participantId]: true }));
+    setLevelErrorById((prev) => ({ ...prev, [participantId]: null }));
+    try {
+      const { error } = await supabase
+        .from('survey_participants')
+        .update({ current_level_grade: nextLevelGrade })
+        .eq('id', participantId);
+      if (error) throw error;
+      setRows((prev) => prev.map((row) => (
+        row.id === participantId
+          ? { ...row, current_level_grade: nextLevelGrade }
+          : row
+      )));
+      setSelected((prev) => {
+        if (!prev || prev.id !== participantId) return prev;
+        return { ...prev, current_level_grade: nextLevelGrade };
+      });
+    } catch (error: any) {
+      const message = (error?.message as string | undefined) ?? '저장에 실패했습니다.';
+      setLevelErrorById((prev) => ({ ...prev, [participantId]: message }));
+    } finally {
+      setSavingLevelById((prev) => ({ ...prev, [participantId]: false }));
+    }
+  }
+
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
@@ -639,6 +802,7 @@ export default function ResultsPage() {
                 setFilterTrait('ALL');
                 setFilterType('ALL');
                 setFilterRound('ALL');
+                setFilterLevelBand('ALL');
               }}
               style={{ height:36, padding:'0 12px', background:'#1E1E1E', border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.textDim, cursor:'pointer' }}>
               필터 초기화
@@ -699,13 +863,26 @@ export default function ResultsPage() {
                 ))}
               </div>
             </div>
+            <div>
+              <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>현재 수준</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                {LEVEL_BAND_OPTIONS.map((opt) => (
+                  <button
+                    key={`level_band_${opt.code}`}
+                    onClick={() => setFilterLevelBand(opt.code)}
+                    style={{ ...chipBaseStyle, ...(filterLevelBand === opt.code ? chipActiveStyle : {}) }}>
+                    {opt.label} ({levelBandCounts[opt.code] ?? 0})
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div style={{ marginTop: 8, color: tokens.textDim, fontSize: 12 }}>
             {itemStatsLoading
               ? 'Item_Stats 집계 중...'
               : itemStatsError
                 ? `Item_Stats 오류: ${itemStatsError}`
-                : `표시 ${filteredItemStats.length.toLocaleString('ko-KR')} / ${itemStats.length.toLocaleString('ko-KR')}`}
+                : `표시 ${filteredItemStats.length.toLocaleString('ko-KR')} / ${itemStats.length.toLocaleString('ko-KR')} · 수준 필터: ${selectedLevelBandLabel}`}
           </div>
         </div>
         <div style={{ maxHeight: 480, overflow: 'auto' }}>
@@ -755,22 +932,28 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: 12, fontSize: 18, fontWeight: 900 }}>참여자</div>
+      <div style={{ marginBottom: 12, fontSize: 18, fontWeight: 900 }}>
+        참여자
+        <span style={{ marginLeft: 8, color: tokens.textDim, fontSize: 12, fontWeight: 500 }}>
+          표시 {filteredRows.length.toLocaleString('ko-KR')} / {rows.length.toLocaleString('ko-KR')} · {selectedLevelBandLabel}
+        </span>
+      </div>
       <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel }}>
-        <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1.4fr 1.6fr 1.6fr 110px', gap:12, padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, color:tokens.textDim, fontSize:13, background: tokens.panelAlt }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1.4fr 1.6fr 1.5fr 1.2fr 110px', gap:12, padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, color:tokens.textDim, fontSize:13, background: tokens.panelAlt }}>
           <div>참여자</div>
           <div>이메일 · 참여일시</div>
           <div>회차별 진행률</div>
           <div>요약</div>
+          <div>현재 수준</div>
           <div>삭제</div>
         </div>
-        {rows.map(r => (
+        {filteredRows.map(r => (
           <div
             key={r.id}
             onClick={()=>openDetails(r)}
             style={{
               display:'grid',
-              gridTemplateColumns:'1.2fr 1.4fr 1.6fr 1.6fr 110px',
+              gridTemplateColumns:'1.2fr 1.4fr 1.6fr 1.5fr 1.2fr 110px',
               gap:12,
               padding:'12px 14px',
               borderBottom:`1px solid ${tokens.border}`,
@@ -841,6 +1024,47 @@ export default function ResultsPage() {
             </div>
             <div
               onClick={(e) => e.stopPropagation()}
+              style={{ color: tokens.textDim, fontSize: 12 }}
+            >
+              <select
+                value={deriveParticipantBandCode(r.current_level_grade, r.current_math_percentile)}
+                onChange={(e) => {
+                  const nextCode = e.target.value as Exclude<LevelBandCode, 'ALL'>;
+                  void saveCurrentLevelGrade(r.id, nextCode);
+                }}
+                disabled={savingLevelById[r.id] === true}
+                style={{
+                  width: '100%',
+                  height: 30,
+                  padding: '0 8px',
+                  borderRadius: 8,
+                  border: `1px solid ${tokens.border}`,
+                  background: tokens.field,
+                  color: tokens.text,
+                  cursor: savingLevelById[r.id] ? 'default' : 'pointer',
+                  opacity: savingLevelById[r.id] ? 0.6 : 1,
+                }}
+              >
+                {LEVEL_BAND_OPTIONS.filter((opt) => opt.code !== 'ALL').map((opt) => (
+                  <option key={`row_level_${r.id}_${opt.code}`} value={opt.code}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <div style={{ marginTop: 6 }}>
+                {formatCurrentLevelDisplay(r.current_level_grade, r.current_math_percentile)}
+              </div>
+              {savingLevelById[r.id] ? (
+                <div style={{ marginTop: 4 }}>저장 중...</div>
+              ) : null}
+              {levelErrorById[r.id] ? (
+                <div style={{ marginTop: 4, color: tokens.danger }}>
+                  {levelErrorById[r.id]}
+                </div>
+              ) : null}
+            </div>
+            <div
+              onClick={(e) => e.stopPropagation()}
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}
             >
               <button
@@ -872,7 +1096,13 @@ export default function ResultsPage() {
             <div>
               <div style={{ fontWeight:900 }}>{selected.name} · 상세 응답</div>
               <div style={{ color: tokens.textDim, fontSize:12, marginTop: 4 }}>
-                {(selected.school ?? '-') + ' · ' + (selected.level ?? '-') + ' ' + (selected.grade ?? '-')} · {selected.email || '-'} · {formatDateTime(selected.created_at)}
+                {(selected.school ?? '-') + ' · ' + (selected.level ?? '-') + ' ' + (selected.grade ?? '-')}
+                {' · '}
+                {formatCurrentLevelDisplay(selected.current_level_grade, selected.current_math_percentile)}
+                {' · '}
+                {selected.email || '-'}
+                {' · '}
+                {formatDateTime(selected.created_at)}
               </div>
               <div style={{ color: tokens.textDim, fontSize:12, marginTop: 4 }}>
                 {(() => {
