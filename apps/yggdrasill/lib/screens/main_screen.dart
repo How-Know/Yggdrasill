@@ -29,6 +29,7 @@ import '../services/student_flow_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
+import 'timetable/components/student_time_info_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
 import '../widgets/dialog_tokens.dart';
@@ -44,6 +45,11 @@ class MainScreen extends StatefulWidget {
 
   @override
   State<MainScreen> createState() => _MainScreenState();
+}
+
+enum _SideSheetBottomView {
+  waiting,
+  allStudents,
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
@@ -73,6 +79,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Map<String, DateTime?> _arrivalBySetCache = const {};
   Map<String, DateTime?> _departureBySetCache = const {};
   Map<DateTime, List<_AttendanceTarget>> _waitingByTimeCache = SplayTreeMap();
+  _SideSheetBottomView _sideSheetBottomView = _SideSheetBottomView.waiting;
+  final Map<String, bool> _allStudentsExpandedByGrade = <String, bool>{};
+  final Map<String, GlobalKey> _allStudentsGradeAnchorKeys = <String, GlobalKey>{};
   late final ScrollController _attendedScrollCtrl;
   late final ScrollController _waitingScrollCtrl;
   DateTime? _lastPlannedEnsureDay; // 날짜가 바뀔 때만 오늘 planned를 보강 생성
@@ -501,15 +510,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _openStudentProfileFromAttendance(
-    _AttendanceTarget target,
-  ) async {
-    final info = DataManager.instance.students.firstWhereOrNull(
-      (s) => s.student.id == target.student.id,
-    );
-    if (info == null) return;
-    final flows =
-        await StudentFlowStore.instance.loadForStudent(target.student.id);
+  Future<void> _openStudentProfile(StudentWithInfo info) async {
+    final flows = await StudentFlowStore.instance.loadForStudent(info.student.id);
     if (!mounted) return;
     Navigator.of(context).push(
       DarkPanelRoute(
@@ -519,6 +521,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       ),
     );
+  }
+
+  Future<void> _openStudentProfileFromAttendance(
+    _AttendanceTarget target,
+  ) async {
+    final info = DataManager.instance.students.firstWhereOrNull(
+      (s) => s.student.id == target.student.id,
+    );
+    if (info == null) return;
+    await _openStudentProfile(info);
   }
 
   void _handleAttendedCardTap(_AttendanceTarget target) {
@@ -556,6 +568,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   static const double _attendedRunSpacing = 16.0;
   static const int _attendedMaxLines = 15;
   static double get _cardActualHeight => _cardHeight;
+  static double get _allStudentsListRowHeight => (_cardActualHeight * 1.3) + 12;
 
   static String _educationLevelToKorean(EducationLevel level) {
     switch (level) {
@@ -567,6 +580,300 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return '고등';
     }
     return '';
+  }
+
+  static String _educationLevelPrefix(EducationLevel level) {
+    switch (level) {
+      case EducationLevel.elementary:
+        return '초';
+      case EducationLevel.middle:
+        return '중';
+      case EducationLevel.high:
+        return '고';
+    }
+  }
+
+  Map<String, List<StudentWithInfo>> _groupStudentsByGradeForSideSheet(
+    List<StudentWithInfo> students,
+  ) {
+    final Map<String, List<StudentWithInfo>> grouped = <String, List<StudentWithInfo>>{};
+    for (final s in students) {
+      final key = '${_educationLevelPrefix(s.student.educationLevel)}${s.student.grade}';
+      grouped.putIfAbsent(key, () => <StudentWithInfo>[]).add(s);
+    }
+
+    for (final list in grouped.values) {
+      list.sort((a, b) => a.student.name.compareTo(b.student.name));
+    }
+
+    int levelOrder(String key) {
+      if (key.startsWith('초')) return 0;
+      if (key.startsWith('중')) return 1;
+      if (key.startsWith('고')) return 2;
+      return 3;
+    }
+
+    int gradeNum(String key) {
+      final m = RegExp(r'\d+').firstMatch(key);
+      if (m == null) return 0;
+      return int.tryParse(m.group(0)!) ?? 0;
+    }
+
+    final sortedKeys = grouped.keys.toList()
+      ..sort((a, b) {
+        final byLevel = levelOrder(a).compareTo(levelOrder(b));
+        if (byLevel != 0) return byLevel;
+        return gradeNum(a).compareTo(gradeNum(b));
+      });
+    return <String, List<StudentWithInfo>>{
+      for (final k in sortedKeys) k: grouped[k]!,
+    };
+  }
+
+  void _toggleSideSheetBottomView() {
+    setState(() {
+      if (_sideSheetBottomView == _SideSheetBottomView.waiting) {
+        _sideSheetBottomView = _SideSheetBottomView.allStudents;
+        if (_allStudentsExpandedByGrade.isEmpty) {
+          final grouped = _groupStudentsByGradeForSideSheet(DataManager.instance.students);
+          if (grouped.isNotEmpty) {
+            _allStudentsExpandedByGrade[grouped.keys.first] = true;
+          }
+        }
+      } else {
+        _sideSheetBottomView = _SideSheetBottomView.waiting;
+      }
+    });
+  }
+
+  void _toggleAllStudentsGrade(String key) {
+    final nextExpanded = !(_allStudentsExpandedByGrade[key] ?? false);
+    setState(() {
+      _allStudentsExpandedByGrade.clear();
+      if (nextExpanded) {
+        _allStudentsExpandedByGrade[key] = true;
+      }
+    });
+    if (!nextExpanded) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final targetContext = _allStudentsGradeAnchorKeys[key]?.currentContext;
+      if (targetContext == null) return;
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.0,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  Widget _buildAllStudentsBottomPanel({
+    required double containerWidth,
+  }) {
+    final scale = ((containerWidth / 420.0).clamp(0.78, 1.0));
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 12.0),
+        child: ValueListenableBuilder<List<StudentWithInfo>>(
+          valueListenable: DataManager.instance.studentsNotifier,
+          builder: (context, students, _) {
+            final grouped = _groupStudentsByGradeForSideSheet(students);
+            if (grouped.isEmpty) {
+              return const Center(
+                child: Text(
+                  '등록된 학생이 없습니다.',
+                  style: TextStyle(
+                    color: Color(0xFF9FB3B3),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            }
+            final gradeEntries = grouped.entries.toList();
+
+            return Scrollbar(
+              controller: _waitingScrollCtrl,
+              thumbVisibility: true,
+              child: ListView(
+                controller: _waitingScrollCtrl,
+                padding: EdgeInsets.zero,
+                children: [
+                  for (int i = 0; i < gradeEntries.length; i++) ...[
+                    _buildAllStudentsGradeTile(
+                      gradeEntries[i].key,
+                      gradeEntries[i].value,
+                      scale: scale,
+                    ),
+                    if (i != gradeEntries.length - 1)
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: Color(0xFF223131),
+                      ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAllStudentsGradeTile(
+    String gradeKey,
+    List<StudentWithInfo> students, {
+    required double scale,
+  }) {
+    final isExpanded = _allStudentsExpandedByGrade[gradeKey] ?? false;
+    final String levelName = students.isEmpty
+        ? gradeKey
+        : _educationLevelToKorean(students.first.student.educationLevel);
+    final int grade = students.isEmpty ? 0 : students.first.student.grade;
+    final String gradeLabel = grade > 0 ? '$levelName $grade학년' : levelName;
+    return Padding(
+      key: _allStudentsGradeAnchorKeys.putIfAbsent(gradeKey, () => GlobalKey()),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => _toggleAllStudentsGrade(gradeKey),
+            child: SizedBox(
+              height: _allStudentsListRowHeight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  children: [
+                    Text(
+                      gradeLabel,
+                      style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 19,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${students.length}명',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14 * scale,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (isExpanded) ...[
+            const Divider(
+              height: 1,
+              thickness: 1,
+              color: Color(0xFF223131),
+            ),
+            const SizedBox(height: 6),
+            for (int i = 0; i < students.length; i++) ...[
+              _buildAllStudentsStudentRow(
+                students[i],
+                scale: scale,
+              ),
+            ],
+            const SizedBox(height: 6),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAllStudentsStudentRow(
+    StudentWithInfo info, {
+    required double scale,
+  }) {
+    final schoolText = info.student.school.trim().isEmpty ? '학교 정보 없음' : info.student.school.trim();
+    final String initial = info.student.name.characters.take(1).toString();
+    return SizedBox(
+      height: _allStudentsListRowHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 15,
+              backgroundColor: info.student.groupInfo?.color ?? const Color(0xFF2C3A3A),
+              child: Text(
+                initial,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: info.student.name,
+                      style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 19,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '  $schoolText',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13 * scale,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Tooltip(
+              message: '학생정보 상세내역',
+              child: IconButton(
+                onPressed: () => unawaited(_openStudentProfile(info)),
+                icon: const Icon(Icons.badge_outlined, size: 22, color: Colors.white70),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+                splashRadius: 22,
+                visualDensity: VisualDensity.standard,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Tooltip(
+              message: '시간 기록',
+              child: IconButton(
+                onPressed: () => unawaited(StudentTimeInfoDialog.show(context, info)),
+                icon: const Icon(Icons.schedule_outlined, size: 22, color: Colors.white70),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+                splashRadius: 22,
+                visualDensity: VisualDensity.standard,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1155,6 +1462,26 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Tooltip(
+                                            message: _sideSheetBottomView == _SideSheetBottomView.waiting
+                                                ? '모든 학생 리스트 보기'
+                                                : '출석 페이지 보기',
+                                            child: IconButton(
+                                              icon: Icon(
+                                                _sideSheetBottomView == _SideSheetBottomView.waiting
+                                                    ? Icons.groups_outlined
+                                                    : Icons.groups,
+                                                color: _sideSheetBottomView == _SideSheetBottomView.waiting
+                                                    ? Colors.white70
+                                                    : const Color(0xFF33A373),
+                                                size: 22,
+                                              ),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                                              onPressed: _toggleSideSheetBottomView,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Tooltip(
                                             message: '보강 관리',
                                             child: IconButton(
                                               icon: const Icon(Icons.event_repeat, color: Colors.white70, size: 22),
@@ -1197,140 +1524,146 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 padding: EdgeInsets.symmetric(horizontal: 24.0),
                                 child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
                               ),
-                              // 출석 박스
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                                child: Container(
-                                  // 헤더(날짜+버튼)와의 간격을 절반으로 축소
-                                  margin: const EdgeInsets.only(top: 0, bottom: 0),
-                                  width: double.infinity,
-                                  constraints: BoxConstraints(
-                                    minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                    maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
-                                  ),
-                                  // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
-                                  padding: const EdgeInsets.fromLTRB(0, 22.0, 16.0, 24.0),
-                                  child: Scrollbar(
-                                    controller: _attendedScrollCtrl,
-                                    thumbVisibility: true,
-                                    child: SingleChildScrollView(
+                              if (_sideSheetBottomView == _SideSheetBottomView.waiting) ...[
+                                // 출석 박스
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                                  child: Container(
+                                    // 헤더(날짜+버튼)와의 간격을 절반으로 축소
+                                    margin: const EdgeInsets.only(top: 0, bottom: 0),
+                                    width: double.infinity,
+                                    constraints: BoxConstraints(
+                                      minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                      maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
+                                    ),
+                                    // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
+                                    padding: const EdgeInsets.fromLTRB(0, 22.0, 16.0, 24.0),
+                                    child: Scrollbar(
                                       controller: _attendedScrollCtrl,
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          if (attended.isEmpty && trialAttended.isEmpty)
-                                            const Center(
-                                              child: Padding(
-                                                padding: EdgeInsets.only(left: 14.0),
-                                                child: Text(
-                                                  '출석',
-                                                  style: TextStyle(
-                                                    color: Color(0xFF9FB3B3),
-                                                    fontSize: 22,
-                                                    fontWeight: FontWeight.bold,
+                                      thumbVisibility: true,
+                                      child: SingleChildScrollView(
+                                        controller: _attendedScrollCtrl,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            if (attended.isEmpty && trialAttended.isEmpty)
+                                              const Center(
+                                                child: Padding(
+                                                  padding: EdgeInsets.only(left: 14.0),
+                                                  child: Text(
+                                                    '출석',
+                                                    style: TextStyle(
+                                                      color: Color(0xFF9FB3B3),
+                                                      fontSize: 22,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                          if (attended.isNotEmpty)
-                                            Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                for (int i = 0; i < attended.length; i++) ...[
-                                                  _buildAttendanceCard(
-                                                    attended[i],
-                                                    status: 'attended',
-                                                    key: ValueKey('attended_${attended[i].setId}'),
-                                                    scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                    arrival: arrivalBySet[attended[i].setId],
-                                                    departure: departureBySet[attended[i].setId],
-                                                  ),
-                                                  if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                                ]
-                                              ],
-                                            ),
-                                          if (trialAttended.isNotEmpty) ...[
-                                            if (attended.isNotEmpty) const SizedBox(height: 8),
-                                            for (int i = 0; i < trialAttended.length; i++) ...[
-                                              _buildTrialLessonAttendanceCard(
-                                                trialAttended[i],
-                                                status: 'attended',
-                                                key: ValueKey('trial_attended_${trialAttended[i].id}'),
-                                                scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                            if (attended.isNotEmpty)
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  for (int i = 0; i < attended.length; i++) ...[
+                                                    _buildAttendanceCard(
+                                                      attended[i],
+                                                      status: 'attended',
+                                                      key: ValueKey('attended_${attended[i].setId}'),
+                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                      arrival: arrivalBySet[attended[i].setId],
+                                                      departure: departureBySet[attended[i].setId],
+                                                    ),
+                                                    if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                                  ]
+                                                ],
                                               ),
-                                              if (i != trialAttended.length - 1)
-                                                SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                            if (trialAttended.isNotEmpty) ...[
+                                              if (attended.isNotEmpty) const SizedBox(height: 8),
+                                              for (int i = 0; i < trialAttended.length; i++) ...[
+                                                _buildTrialLessonAttendanceCard(
+                                                  trialAttended[i],
+                                                  status: 'attended',
+                                                  key: ValueKey('trial_attended_${trialAttended[i].id}'),
+                                                  scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                ),
+                                                if (i != trialAttended.length - 1)
+                                                  SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                              ],
                                             ],
                                           ],
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                              // 출석(등원한) 영역과 등원 예정 영역 구분선
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 24.0),
-                                child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
-                              ),
-                              // 출석 전 학생 리스트
-                              if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 8, left: 24.0, right: 24.0, bottom: 24.0),
-                                    child: Scrollbar(
-                                      controller: _waitingScrollCtrl,
-                                      thumbVisibility: true,
-                                      child: ListView(
+                                // 출석(등원한) 영역과 등원 예정 영역 구분선
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 24.0),
+                                  child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
+                                ),
+                                // 출석 전 학생 리스트
+                                if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 8, left: 24.0, right: 24.0, bottom: 24.0),
+                                      child: Scrollbar(
                                         controller: _waitingScrollCtrl,
-                                        padding: EdgeInsets.zero,
-                                        children: [
-                                          for (final t in (<DateTime>{
-                                            ...waitingByTime.keys,
-                                            ...trialWaitingByTime.keys,
-                                          }.toList()
-                                            ..sort((a, b) => a.compareTo(b)))) ...[
-                                            Padding(
-                                              padding: const EdgeInsets.only(bottom: 4.0),
-                                              child: Center(
-                                                child: Text(
-                                                  _formatTime(t),
-                                                  style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                        thumbVisibility: true,
+                                        child: ListView(
+                                          controller: _waitingScrollCtrl,
+                                          padding: EdgeInsets.zero,
+                                          children: [
+                                            for (final t in (<DateTime>{
+                                              ...waitingByTime.keys,
+                                              ...trialWaitingByTime.keys,
+                                            }.toList()
+                                              ..sort((a, b) => a.compareTo(b)))) ...[
+                                              Padding(
+                                                padding: const EdgeInsets.only(bottom: 4.0),
+                                                child: Center(
+                                                  child: Text(
+                                                    _formatTime(t),
+                                                    style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                            Center(
-                                              child: Wrap(
-                                                alignment: WrapAlignment.center,
-                                                spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                children: [
-                                                  for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
-                                                    _buildAttendanceCard(
-                                                      w,
-                                                      status: 'waiting',
-                                                      key: ValueKey('waiting_${w.setId}'),
-                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                      arrival: arrivalBySet[w.setId],
-                                                      departure: departureBySet[w.setId],
-                                                    ),
-                                                  for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
-                                                    _buildTrialLessonAttendanceCard(
-                                                      s,
-                                                      status: 'waiting',
-                                                      key: ValueKey('trial_waiting_${s.id}'),
-                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                    ),
-                                                ],
+                                              Center(
+                                                child: Wrap(
+                                                  alignment: WrapAlignment.center,
+                                                  spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                  runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                  children: [
+                                                    for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
+                                                      _buildAttendanceCard(
+                                                        w,
+                                                        status: 'waiting',
+                                                        key: ValueKey('waiting_${w.setId}'),
+                                                        scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                        arrival: arrivalBySet[w.setId],
+                                                        departure: departureBySet[w.setId],
+                                                      ),
+                                                    for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
+                                                      _buildTrialLessonAttendanceCard(
+                                                        s,
+                                                        status: 'waiting',
+                                                        key: ValueKey('trial_waiting_${s.id}'),
+                                                        scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                      ),
+                                                  ],
+                                                ),
                                               ),
-                                            ),
-                                            const SizedBox(height: 8),
+                                              const SizedBox(height: 8),
+                                            ],
                                           ],
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
+                              ],
+                              if (_sideSheetBottomView == _SideSheetBottomView.allStudents)
+                                _buildAllStudentsBottomPanel(
+                                  containerWidth: containerWidth,
                                 ),
                             ],
                           ),
