@@ -1921,6 +1921,12 @@ void _showHomeworkChipSnackBar(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
+bool _hasDirectHomeworkTextbookLink(HomeworkItem hw) {
+  final bookId = (hw.bookId ?? '').trim();
+  final gradeLabel = (hw.gradeLabel ?? '').trim();
+  return bookId.isNotEmpty && gradeLabel.isNotEmpty;
+}
+
 String _normalizePageRangeForPrint(String raw) {
   final cleaned = raw.trim();
   if (cleaned.isEmpty) return '';
@@ -2077,12 +2083,17 @@ Future<void> _openPrintDialogForPath(String path) async {
   await OpenFilex.open(target);
 }
 
-Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(HomeworkItem hw) async {
+Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
+  HomeworkItem hw, {
+  bool allowFlowFallback = false,
+}) async {
   String bookId = (hw.bookId ?? '').trim();
   String gradeLabel = (hw.gradeLabel ?? '').trim();
   final flowId = (hw.flowId ?? '').trim();
 
-  if ((bookId.isEmpty || gradeLabel.isEmpty) && flowId.isNotEmpty) {
+  if (allowFlowFallback &&
+      (bookId.isEmpty || gradeLabel.isEmpty) &&
+      flowId.isNotEmpty) {
     try {
       final rows = await DataManager.instance.loadFlowTextbookLinks(flowId);
       if (rows.isNotEmpty) {
@@ -2270,7 +2281,11 @@ Future<void> _handleWaitingChipLongPressPrint({
   required HomeworkItem hw,
 }) async {
   if (hw.phase != 1) return;
-  final resolved = await _resolveHomeworkPdfLinks(hw);
+  if (!_hasDirectHomeworkTextbookLink(hw)) {
+    _showHomeworkChipSnackBar(context, '해당 과제에는 연결된 교재가 없어 인쇄할 수 없습니다.');
+    return;
+  }
+  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
   if (!context.mounted) return;
 
   final bodyRaw = resolved.bodyPathRaw;
@@ -2333,7 +2348,11 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
   required String studentId,
   required HomeworkItem hw,
 }) async {
-  final resolved = await _resolveHomeworkPdfLinks(hw);
+  if (!_hasDirectHomeworkTextbookLink(hw)) {
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+    return;
+  }
+  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
   if (!context.mounted) return;
 
   final answerRaw = resolved.answerPathRaw;
