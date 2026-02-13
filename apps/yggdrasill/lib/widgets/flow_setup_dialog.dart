@@ -116,6 +116,7 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final showSaveButton = _hasEnabled || _saving;
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -208,20 +209,21 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
           style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
           child: const Text('취소'),
         ),
-        FilledButton(
-          onPressed: _saving || !_hasEnabled ? null : _save,
-          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          child: _saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                )
-              : const Text('저장'),
-        ),
+        if (showSaveButton)
+          FilledButton(
+            onPressed: _saving || !_hasEnabled ? null : _save,
+            style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Text('저장'),
+          ),
       ],
     );
   }

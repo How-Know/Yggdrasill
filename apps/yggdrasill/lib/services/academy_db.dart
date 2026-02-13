@@ -123,6 +123,7 @@ class AcademyDbService {
             student_id TEXT PRIMARY KEY,
             current_level_code INTEGER,
             target_level_code INTEGER,
+            desired_level_code INTEGER,
             updated_at TEXT
           )
         ''');
@@ -1528,6 +1529,7 @@ class AcademyDbService {
               student_id TEXT PRIMARY KEY,
               current_level_code INTEGER,
               target_level_code INTEGER,
+              desired_level_code INTEGER,
               updated_at TEXT
             )
           ''');
@@ -2569,9 +2571,17 @@ class AcademyDbService {
         student_id TEXT PRIMARY KEY,
         current_level_code INTEGER,
         target_level_code INTEGER,
+        desired_level_code INTEGER,
         updated_at TEXT
       )
     ''');
+    final cols = await dbClient.rawQuery('PRAGMA table_info(student_level_states)');
+    final hasDesired = cols.any((c) => '${c['name'] ?? ''}' == 'desired_level_code');
+    if (!hasDesired) {
+      await dbClient.execute(
+        'ALTER TABLE student_level_states ADD COLUMN desired_level_code INTEGER',
+      );
+    }
   }
 
   Future<List<Map<String, dynamic>>> getStudentLevelScales() async {
@@ -2628,11 +2638,14 @@ class AcademyDbService {
   Future<void> saveStudentLevelState({
     required String studentId,
     int? currentLevelCode,
+    int? desiredLevelCode,
     int? targetLevelCode,
   }) async {
     await ensureStudentLevelTables();
     final dbClient = await db;
-    if (currentLevelCode == null && targetLevelCode == null) {
+    if (currentLevelCode == null &&
+        desiredLevelCode == null &&
+        targetLevelCode == null) {
       await dbClient.delete(
         'student_level_states',
         where: 'student_id = ?',
@@ -2645,6 +2658,7 @@ class AcademyDbService {
       {
         'student_id': studentId,
         'current_level_code': currentLevelCode,
+        'desired_level_code': desiredLevelCode,
         'target_level_code': targetLevelCode,
         'updated_at': DateTime.now().toIso8601String(),
       },

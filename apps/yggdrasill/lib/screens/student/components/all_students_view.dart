@@ -268,13 +268,24 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         final bool hovering =
             candidateData.isNotEmpty && activeTextbookDragPayload.value != null;
         if (!hovering) return child;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF33A373), width: 1.2),
-          ),
-          child: child,
+        return Stack(
+          fit: StackFit.passthrough,
+          children: [
+            child,
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: SizedBox(
+                  height: 2,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: Color(0xFF33A373)),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

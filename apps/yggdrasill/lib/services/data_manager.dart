@@ -2313,7 +2313,7 @@ class DataManager {
             await TenantService.instance.ensureActiveAcademy();
         final row = await Supabase.instance.client
             .from('student_level_states')
-            .select('student_id,current_level_code,target_level_code')
+            .select('student_id,current_level_code,desired_level_code,target_level_code')
             .eq('academy_id', academyId)
             .eq('student_id', studentId)
             .maybeSingle();
@@ -2321,6 +2321,7 @@ class DataManager {
           return <String, dynamic>{
             'student_id': row['student_id'],
             'current_level_code': _asIntMaybe(row['current_level_code']),
+            'desired_level_code': _asIntMaybe(row['desired_level_code']),
             'target_level_code': _asIntMaybe(row['target_level_code']),
           };
         }
@@ -2342,13 +2343,18 @@ class DataManager {
   Future<void> saveStudentLevelState({
     required String studentId,
     int? currentLevelCode,
+    int? desiredLevelCode,
     int? targetLevelCode,
   }) async {
     if (studentId.trim().isEmpty) return;
+    print(
+      '[LEVEL][state][save] request student=$studentId current=$currentLevelCode desired=$desiredLevelCode target=$targetLevelCode',
+    );
     if (!RuntimeFlags.serverOnly) {
       await AcademyDbService.instance.saveStudentLevelState(
         studentId: studentId,
         currentLevelCode: currentLevelCode,
+        desiredLevelCode: desiredLevelCode,
         targetLevelCode: targetLevelCode,
       );
     }
@@ -2359,19 +2365,24 @@ class DataManager {
             await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        if (currentLevelCode == null && targetLevelCode == null) {
+        if (currentLevelCode == null &&
+            desiredLevelCode == null &&
+            targetLevelCode == null) {
           await supa.from('student_level_states').delete().match({
             'academy_id': academyId,
             'student_id': studentId,
           });
+          print('[LEVEL][state][save] server delete student=$studentId');
           return;
         }
         await supa.from('student_level_states').upsert({
           'academy_id': academyId,
           'student_id': studentId,
           'current_level_code': currentLevelCode,
+          'desired_level_code': desiredLevelCode,
           'target_level_code': targetLevelCode,
         }, onConflict: 'academy_id,student_id');
+        print('[LEVEL][state][save] server upsert success student=$studentId');
       } catch (e, st) {
         print('[LEVEL][state][save] failed: $e\n$st');
         if (TagPresetService.preferSupabaseRead) rethrow;

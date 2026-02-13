@@ -981,21 +981,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _ResourceFile file, {
     required double maxWidth,
   }) {
-    final double width = math.min(maxWidth * 0.72, 196.0);
+    final double width = math.min(maxWidth * 0.7, 188.0);
     final String grade = (_effectiveGradeLabelForFile(file) ?? file.primaryGrade ?? '-').trim();
     return Container(
       width: width,
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      height: 54,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: const Color(0xFF111A1D),
+        color: const Color(0xFF141E22),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF33A373), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.32),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
+            color: Colors.black.withOpacity(0.28),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -1003,8 +1002,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         children: [
           Icon(
             file.icon ?? Icons.menu_book_rounded,
-            size: 18,
-            color: const Color(0xFF9FD5C0),
+            size: 17,
+            color: const Color(0xFF8FD0B5),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -1014,7 +1013,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: _rsText,
-                fontSize: 13,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -2611,10 +2610,14 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 final bool compact =
                     hoveringSideSheet && payload != null && payload.bookId == fi.id;
                 if (!compact) return normal;
-                return Center(
-                  child: _buildCompactTextbookDragFeedback(
-                    fi,
-                    maxWidth: gridCardWidth,
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Transform.translate(
+                    offset: const Offset(8, 8),
+                    child: _buildCompactTextbookDragFeedback(
+                      fi,
+                      maxWidth: gridCardWidth,
+                    ),
                   ),
                 );
               },
@@ -2638,6 +2641,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           itemId: (file) => file.id,
                           itemBuilder: (context, file) => buildCardCell(file),
                           feedbackBuilder: (context, file) => buildFeedbackCell(file),
+                          dragAnchorStrategy: pointerDragAnchorStrategy,
                           cardWidth: gridCardWidth,
                           cardHeight: gridCardHeight,
                           spacing: spacing,

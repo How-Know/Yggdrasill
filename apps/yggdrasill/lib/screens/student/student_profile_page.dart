@@ -12,6 +12,7 @@ import '../../services/homework_store.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/tag_store.dart';
 import '../../services/student_flow_store.dart';
+import '../../services/tag_preset_service.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
@@ -249,6 +250,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   String? _errorText;
   List<_LevelOption> _options = const <_LevelOption>[];
   int? _currentLevelCode;
+  int? _desiredLevelCode;
   int? _targetLevelCode;
 
   @override
@@ -312,6 +314,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       setState(() {
         _options = parsed.isNotEmpty ? parsed : _fallbackOptions();
         _currentLevelCode = _asInt(state?['current_level_code']);
+        _desiredLevelCode = _asInt(state?['desired_level_code']);
         _targetLevelCode = _asInt(state?['target_level_code']);
         _loading = false;
       });
@@ -371,16 +374,39 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       _errorText = null;
     });
     try {
+      final studentId = widget.studentWithInfo.student.id;
       await DataManager.instance.saveStudentLevelState(
-        studentId: widget.studentWithInfo.student.id,
+        studentId: studentId,
         currentLevelCode: _currentLevelCode,
+        desiredLevelCode: _desiredLevelCode,
         targetLevelCode: _targetLevelCode,
       );
+      final readBack = await DataManager.instance.loadStudentLevelState(studentId);
+      final rbCurrent = _asInt(readBack?['current_level_code']);
+      final rbDesired = _asInt(readBack?['desired_level_code']);
+      final rbTarget = _asInt(readBack?['target_level_code']);
+      final bool verified = rbCurrent == _currentLevelCode &&
+          rbDesired == _desiredLevelCode &&
+          rbTarget == _targetLevelCode;
+      final bool serverReadback = TagPresetService.preferSupabaseRead;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('학생 등급을 저장했어요.')),
+        SnackBar(
+          content: Text(
+            verified
+                ? (serverReadback
+                    ? '학생 등급(현재/희망/예상)을 저장했고 서버 반영까지 확인했어요.'
+                    : '학생 등급(현재/희망/예상)을 저장했고 재조회로 확인했어요.')
+                : (serverReadback
+                    ? '학생 등급은 저장했지만 서버 확인값이 달라요. 다시 불러와 확인해 주세요.'
+                    : '학생 등급은 저장했지만 확인값이 달라요. 다시 불러와 확인해 주세요.'),
+          ),
+        ),
       );
       setState(() {
+        _currentLevelCode = rbCurrent;
+        _desiredLevelCode = rbDesired;
+        _targetLevelCode = rbTarget;
         _saving = false;
       });
     } catch (e) {
@@ -588,17 +614,24 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
             );
             return SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                decoration: BoxDecoration(
-                  color: kDlgPanelBg,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: kDlgBorder),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double panelWidth = constraints.maxWidth * 0.5;
+                  return Align(
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: panelWidth,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                        decoration: BoxDecoration(
+                          color: kDlgPanelBg,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: kDlgBorder),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                     Text(
                       '등급(레벨) 입력',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -608,7 +641,7 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      '현재/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
+                      '현재/희망/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
                       style: TextStyle(color: kDlgTextSub, fontSize: 13),
                     ),
                     const SizedBox(height: 18),
@@ -628,20 +661,30 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<int?>(
-                            value: _targetLevelCode,
+                            value: _desiredLevelCode,
                             items: _buildLevelItems(),
-                            decoration: _inputDecoration('예상 등급'),
+                            decoration: _inputDecoration('희망 등급'),
                             style: const TextStyle(color: kDlgText),
                             dropdownColor: const Color(0xFF15171C),
                             onChanged: (value) =>
-                                setState(() => _targetLevelCode = value),
+                                setState(() => _desiredLevelCode = value),
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
+                    DropdownButtonFormField<int?>(
+                      value: _targetLevelCode,
+                      items: _buildLevelItems(),
+                      decoration: _inputDecoration('예상 등급'),
+                      style: const TextStyle(color: kDlgText),
+                      dropdownColor: const Color(0xFF15171C),
+                      onChanged: (value) =>
+                          setState(() => _targetLevelCode = value),
+                    ),
+                    const SizedBox(height: 12),
                     Text(
-                      '현재: ${_labelForCode(_currentLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
+                      '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_labelForCode(_desiredLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
                       style: const TextStyle(color: kDlgTextSub, fontSize: 12),
                     ),
                     if (_errorText != null) ...[
@@ -720,8 +763,12 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     ),
                     const SizedBox(height: 10),
                     _buildAttendanceScoreCard(scoreMap),
-                  ],
-                ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             );
           },

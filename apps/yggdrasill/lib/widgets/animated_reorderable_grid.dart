@@ -22,6 +22,7 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
     this.autoScrollEdge = 60.0,
     this.autoScrollStep = 18.0,
     this.enableReorder = true,
+    this.dragAnchorStrategy = childDragAnchorStrategy,
     this.onDragStarted,
     this.onDragEnded,
   });
@@ -42,6 +43,7 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
   final double autoScrollEdge;
   final double autoScrollStep;
   final bool enableReorder;
+  final DragAnchorStrategy dragAnchorStrategy;
   final void Function(T item)? onDragStarted;
   final void Function(T item)? onDragEnded;
 
@@ -193,7 +195,7 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
         key: ValueKey('reorder-drag-${widget.itemId(item)}'),
         data: item,
         hapticFeedbackOnStart: true,
-        dragAnchorStrategy: childDragAnchorStrategy,
+        dragAnchorStrategy: widget.dragAnchorStrategy,
         feedback: Material(
           color: Colors.transparent,
           child: Opacity(

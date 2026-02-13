@@ -447,13 +447,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         final bool hovering =
             candidateData.isNotEmpty && activeTextbookDragPayload.value != null;
         if (!hovering) return child;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF33A373), width: 1.2),
-          ),
-          child: child,
+        return Stack(
+          fit: StackFit.passthrough,
+          children: [
+            child,
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: SizedBox(
+                  height: 2,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: Color(0xFF33A373)),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -801,7 +812,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }) {
     final schoolText = info.student.school.trim().isEmpty ? '학교 정보 없음' : info.student.school.trim();
     final String initial = info.student.name.characters.take(1).toString();
-    return SizedBox(
+    final row = SizedBox(
       height: _allStudentsListRowHeight,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -873,6 +884,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
+    );
+    return _wrapTextbookDropTargetForStudent(
+      studentId: info.student.id,
+      child: row,
     );
   }
 
